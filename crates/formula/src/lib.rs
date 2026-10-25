@@ -23,18 +23,20 @@ pub fn same_name(a: &str, b: &str) -> bool {
     if a.is_ascii() && b.is_ascii() {
         return a.eq_ignore_ascii_case(b);
     }
-    let fold = |s: &str| -> String {
-        s.chars()
-            .flat_map(char::to_lowercase)
-            .flat_map(|c| match c {
-                'ß' => ['s', 's'].into_iter().take(2),
-                'ſ' => ['s', 's'].into_iter().take(1),
-                'ς' => ['σ', 'σ'].into_iter().take(1),
-                c => [c, c].into_iter().take(1),
-            })
-            .collect()
-    };
-    a == b || fold(a) == fold(b)
+    a == b || fold_name(a) == fold_name(b)
+}
+
+/// The case-folded form of a name: two names are [`same_name`] when their folded forms are equal.
+pub fn fold_name(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .flat_map(|c| match c {
+            'ß' => ['s', 's'].into_iter().take(2),
+            'ſ' => ['s', 's'].into_iter().take(1),
+            'ς' => ['σ', 'σ'].into_iter().take(1),
+            c => [c, c].into_iter().take(1),
+        })
+        .collect()
 }
 
 #[cfg(test)]

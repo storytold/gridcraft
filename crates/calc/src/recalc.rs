@@ -44,7 +44,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Area, Evaluator, Host, precedents};
+use crate::eval::{Area, Evaluator, Host, precedents, stack_position};
 
 pub type Key = (usize, CellRef);
 
@@ -432,6 +432,10 @@ struct PassHost<'a> {
     tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// `stack_position()` where the outermost formula being calculated started.
+    stack_top: usize,
+    /// Whether an evaluation ran past the stack budget since the innermost formula started.
+    out_of_stack: bool,
 }
 
 impl<'a> PassHost<'a> {
@@ -462,6 +466,8 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            stack_top: 0,
+            out_of_stack: false,
         }
     }
 }
@@ -580,6 +586,9 @@ impl PassHost<'_> {
             self.suspend = Some(k);
             return Value::Error(CellError::Calc);
         }
+        if self.depth == 0 {
+            self.stack_top = stack_position();
+        }
         self.in_progress.insert(k);
         self.depth += 1;
         let outer_taint = std::mem::replace(&mut self.taint, false);
@@ -587,10 +596,24 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
+        if out_of_stack && self.depth > 1 && self.suspend.is_none() {
+            // It ran out of the stack left below the formulas that read it: it is calculated
+            // from the top instead, as a formula needed at `MAX_NESTED` levels deep is.
+            self.suspend = Some(k);
+            self.depth -= 1;
+            self.in_progress.remove(&k);
+            if self.iterate {
+                self.stack.pop();
+            }
+            self.taint = outer_taint;
+            return Value::Error(CellError::Calc);
+        }
         if self.suspend.is_some() {
             // Abandoned: `calculate` evaluates this formula again once the one it needs is done.
             self.depth -= 1;
@@ -744,6 +767,12 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
+    }
+    fn stack_top(&self) -> Option<usize> {
+        (self.depth > 1).then_some(self.stack_top)
+    }
+    fn stack_exhausted(&mut self) {
+        self.out_of_stack = true;
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
@@ -913,6 +942,7 @@ impl Calc {
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
+        let mut circ = Vec::new();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if let Some(f) = &cell.formula
@@ -920,10 +950,106 @@ impl Calc {
                 {
                     let (areas, dynamic) = precedents(wb, si, &e);
                     self.graph.insert((si, c), Node { areas, dynamic });
+                    if cell.value == Value::Error(CellError::Circ) {
+                        circ.push((si, c));
+                    }
                 }
             }
         }
         self.graph.settle();
+        self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
+    }
+
+    /// The circular references of a rebuilt workbook (after undo, redo or a rollback, which put
+    /// back cells without calculating them), from the formulas whose cached value is `#CIRC!`:
+    /// the listed cells still on a loop, and one cell of each loop none of them is on.
+    fn loops_among(&self, circ: &[Key]) -> Vec<Key> {
+        if circ.is_empty() {
+            return Vec::new();
+        }
+        let index: HashMap<Key, usize> = circ.iter().enumerate().map(|(i, k)| (*k, i)).collect();
+        // Edges from a cell to the `#CIRC!` formulas that read it; loops are the same either way.
+        let mut deps = Vec::new();
+        let edges: Vec<Vec<usize>> = circ
+            .iter()
+            .map(|k| {
+                deps.clear();
+                self.graph.dependents(k.0, k.1, &mut deps);
+                let mut e: Vec<usize> = deps.iter().filter_map(|d| index.get(d).copied()).collect();
+                e.sort_unstable();
+                e.dedup();
+                e
+            })
+            .collect();
+        // Tarjan's strongly connected components, iterative.
+        let n = circ.len();
+        let (mut low, mut num) = (vec![0usize; n], vec![usize::MAX; n]);
+        let (mut on_stack, mut stack, mut comp) = (vec![false; n], Vec::new(), vec![usize::MAX; n]);
+        let (mut next, mut comps) = (0usize, 0usize);
+        for root in 0..n {
+            if num[root] != usize::MAX {
+                continue;
+            }
+            let mut call: Vec<(usize, usize)> = vec![(root, 0)];
+            num[root] = next;
+            low[root] = next;
+            next += 1;
+            stack.push(root);
+            on_stack[root] = true;
+            while let Some(top) = call.last_mut() {
+                let v = top.0;
+                if let Some(&w) = edges.get(v).and_then(|e| e.get(top.1)) {
+                    top.1 += 1;
+                    if num[w] == usize::MAX {
+                        num[w] = next;
+                        low[w] = next;
+                        next += 1;
+                        stack.push(w);
+                        on_stack[w] = true;
+                        call.push((w, 0));
+                    } else if on_stack[w] {
+                        low[v] = low[v].min(num[w]);
+                    }
+                    continue;
+                }
+                call.pop();
+                if let Some(&(u, _)) = call.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == num[v] {
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        comp[w] = comps;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    comps += 1;
+                }
+            }
+        }
+        let mut size = vec![0usize; comps];
+        for &c in &comp {
+            if let Some(s) = size.get_mut(c) {
+                *s += 1;
+            }
+        }
+        let on_loop = |i: usize| comp.get(i).and_then(|c| size.get(*c)).is_some_and(|s| *s > 1) || edges.get(i).is_some_and(|e| e.contains(&i));
+        // A formula with dynamic references (INDIRECT, OFFSET) may close a loop the graph can't see.
+        let mut out: Vec<Key> =
+            self.circular.iter().copied().filter(|k| index.get(k).is_some_and(|&i| on_loop(i) || self.graph.dynamic.contains(k))).collect();
+        let mut covered: HashSet<usize> = out.iter().filter_map(|k| index.get(k)).filter_map(|&i| comp.get(i).copied()).collect();
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by_key(|&i| circ.get(i).map(|(s, c)| (*s, c.row, c.col)));
+        for i in order {
+            if let (Some(&c), Some(&k)) = (comp.get(i), circ.get(i))
+                && on_loop(i)
+                && covered.insert(c)
+            {
+                out.push(k);
+            }
+        }
+        out
     }
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
@@ -1103,7 +1229,12 @@ impl Calc {
             }
             let tw = prof_now();
             self.last_recalc_cells += results.len();
-            self.circular = cycles;
+            // The loops this round finds replace the ones listed for the formulas it evaluated.
+            if !self.circular.is_empty() {
+                let evaluated: HashSet<Key> = dirty.iter().copied().collect();
+                self.circular.retain(|k| !evaluated.contains(k));
+            }
+            self.circular.extend(cycles);
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
@@ -1215,6 +1346,13 @@ impl Calc {
                 break;
             }
             dirty = self.dirty_closure(wb, &spill_changes);
+        }
+        // Loops among formulas the run did not evaluate stay listed while they are still formulas.
+        // Iterative calculation reports none.
+        if wb.calc.iterative {
+            self.circular.clear();
+        } else {
+            self.circular.retain(|k| self.graph.nodes.contains_key(k));
         }
     }
 }

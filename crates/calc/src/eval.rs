@@ -58,6 +58,24 @@ fn err(e: CellError) -> Ev {
     Ev::V(Value::Error(e))
 }
 
+/// LAMBDA calls that one formula may have in progress at once, counted the same way on every build.
+/// The next call answers `#NUM!`. A countdown from 131, the deepest that `MAX_DEPTH` allows, has 132
+/// calls in progress, so it still runs.
+const MAX_LAMBDA_CALLS: usize = 140;
+
+/// Native stack, in bytes, that one formula's evaluation may use below its first `eval`. Past it,
+/// `eval` answers `#NUM!`. It guards the stack and leaves 128 KiB of a 1 MiB thread for the frames
+/// above the formula. A cell that another cell's formula computes on demand shares the budget of the
+/// outermost formula ([`Host::stack_top`]).
+const STACK_BUDGET: usize = 896 * 1024;
+
+/// The address of a local variable, which shows how far down the native stack this call is.
+#[inline(always)]
+pub(crate) fn stack_position() -> usize {
+    let marker = 0u8;
+    std::hint::black_box(&marker) as *const u8 as usize
+}
+
 /// What the evaluator needs from its surroundings.
 pub trait Host {
     fn workbook(&self) -> &Workbook;
@@ -85,6 +103,13 @@ pub trait Host {
     fn visit_range(&mut self, _sheet: usize, _range: RangeRef, _f: &mut dyn FnMut(&Value) -> bool) -> bool {
         false
     }
+    /// While a formula is calculated on demand inside another one: `stack_position()` where the
+    /// outermost one started, which the stack budget is counted from.
+    fn stack_top(&self) -> Option<usize> {
+        None
+    }
+    /// Called when a formula's evaluation runs past the stack budget.
+    fn stack_exhausted(&mut self) {}
 }
 
 pub struct Evaluator<'h> {
@@ -93,6 +118,10 @@ pub struct Evaluator<'h> {
     pub at: CellRef,
     env: Vec<(String, Ev)>,
     depth: usize,
+    /// LAMBDA calls in progress.
+    calls: usize,
+    /// `stack_position()` at the outermost `eval`.
+    stack_top: usize,
     /// Lambda invocations this cell still has left. Every call spends one charge, so a
     /// compact hostile formula (a LAMBDA that calls itself, nested `MAP`s over big arrays)
     /// runs out of work after the same number of calls that a legitimately wide one could
@@ -137,7 +166,16 @@ impl Ctx for FnCtx<'_, '_> {
                 _ => None,
             })
             .collect();
-        let mut ev = Evaluator { host: &mut *self.ev.host, sheet: area.sheet, at, env, depth: self.ev.depth, fuel: self.ev.fuel };
+        let mut ev = Evaluator {
+            host: &mut *self.ev.host,
+            sheet: area.sheet,
+            at,
+            env,
+            depth: self.ev.depth,
+            calls: self.ev.calls,
+            stack_top: self.ev.stack_top,
+            fuel: self.ev.fuel,
+        };
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
@@ -160,7 +198,7 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, fuel: LAMBDA_FUEL }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -246,10 +284,18 @@ impl<'h> Evaluator<'h> {
     }
 
     pub fn eval(&mut self, e: &Expr) -> Ev {
+        let here = stack_position();
+        if self.depth == 0 {
+            self.stack_top = self.host.stack_top().unwrap_or(here);
+        }
+        if self.stack_top.abs_diff(here) > STACK_BUDGET {
+            self.host.stack_exhausted();
+            return err(CellError::Num);
+        }
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             self.depth -= 1;
-            return err(CellError::Calc);
+            return err(CellError::Num);
         }
         let r = self.eval_inner(e);
         self.depth -= 1;
@@ -533,7 +579,7 @@ impl<'h> Evaluator<'h> {
             }
             _ => {
                 // A long chain such as A1+A2+…+A500 nests to the left: fold it in a loop instead
-                // of one level of recursion per operator (past the depth limit it was #CALC!).
+                // of one level of recursion per operator (past the depth limit it was an error).
                 let mut rest = vec![(op, b)];
                 let mut left = a;
                 while let Expr::Binary(o, l, r) = left
@@ -842,10 +888,11 @@ impl<'h> Evaluator<'h> {
     fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
             // A defined name holding a LAMBDA, or a LET-bound lambda.
-            if let Ev::L(l) = self.name(name) {
-                return self.apply_lambda(&l, args);
-            }
-            return err(CellError::Name);
+            return match self.name(name) {
+                Ev::L(l) => self.apply_lambda(&l, args),
+                Ev::V(Value::Error(x)) => err(x),
+                _ => err(CellError::Name),
+            };
         };
         if args.len() < spec.min_args || args.len() > spec.max_args {
             return err(CellError::Value);
@@ -996,6 +1043,9 @@ impl<'h> Evaluator<'h> {
     }
 
     fn call_lambda_values(&mut self, l: &Lambda, bound: Vec<(String, Ev)>) -> Ev {
+        if self.calls >= MAX_LAMBDA_CALLS {
+            return err(CellError::Num);
+        }
         // #2382: one charge per invocation, so a cell's total work stays bounded however the
         // lambdas nest. Foregrounding the charge here means every path into a body (direct
         // `(2,3)` application, `MAP`/`REDUCE`/`BYROW` helpers, D-function criteria) meters.
@@ -1003,10 +1053,12 @@ impl<'h> Evaluator<'h> {
             Some(f) => f,
             None => return err(CellError::Calc),
         };
+        self.calls += 1;
         let saved = std::mem::replace(&mut self.env, l.env.clone());
         self.env.extend(bound);
         let r = self.eval(&l.body);
         self.env = saved;
+        self.calls -= 1;
         r
     }
 

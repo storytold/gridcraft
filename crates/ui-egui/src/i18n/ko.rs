@@ -151,6 +151,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "화살표 제거",
         "Show Formulas" => "수식 표시",
         "Error Checking" => "오류 검사",
+        "Circular References" => "순환 참조",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",
@@ -332,6 +333,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "머리글로 이동",
         "Different First Page" => "첫 페이지를 다르게 지정",
         "Different Odd & Even Pages" => "짝수와 홀수 페이지를 다르게 지정",
+        "Scale with Document" => "문서에 맞게 배율 조정",
+        "Align with Page Margins" => "페이지 여백에 맞추기",
         "Go to Footer" => "바닥글로 이동",
         "Ruler" => "눈금자",
         // File › Backstage view.

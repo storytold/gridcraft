@@ -1,5 +1,6 @@
 //! Double-clicking a PivotTable's value cell shows its source records on a new sheet (Excel's
-//! Show Details); a label of the report still opens the cell for editing.
+//! Show Details) unless its Enable show details option is off; a label of the report still opens
+//! the cell for editing.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use gridcraft_engine::Session;
@@ -102,5 +103,19 @@ fn double_click_in_an_out_of_date_report_asks_for_a_refresh() {
     let app = h.state();
     assert!(app.editor.is_none(), "the cell must not open for editing");
     assert!(app.message.as_ref().is_some_and(|(_, m)| m.contains("out of date")), "{:?}", app.message);
+    assert_eq!(app.session.active().unwrap().wb.sheets.len(), 1);
+}
+
+#[test]
+fn double_click_with_enable_show_details_off_says_why_and_does_not_edit() {
+    let mut h = harness();
+    h.state_mut().session.execute("pivot.options", json!({"pivot": "PivotTable1", "enableShowDetails": false})).unwrap();
+    h.run_steps(2);
+    let pos = center(&h, "E4");
+    double_click(&mut h, pos);
+
+    let app = h.state();
+    assert!(app.editor.is_none(), "the value cell must not open for editing");
+    assert!(app.message.as_ref().is_some_and(|(_, m)| m == "Show Details is turned off for this PivotTable."), "{:?}", app.message);
     assert_eq!(app.session.active().unwrap().wb.sheets.len(), 1);
 }

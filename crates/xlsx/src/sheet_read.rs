@@ -120,6 +120,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 if let Some(t) = e.child("tabColor") {
                     sheet.tab_color = Some(read_color(t, &cx.palette));
                 }
+                if let Some(o) = e.child("outlinePr") {
+                    sheet.summary_below = o.flag("summaryBelow", true);
+                    sheet.summary_right = o.flag("summaryRight", true);
+                }
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetViews" => read_views(e, &mut sheet),

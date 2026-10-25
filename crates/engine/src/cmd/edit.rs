@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "selection.currentRegion", "Select Current Region", [], Some("Ctrl+Shift+8"), "{}", has_doc, select_region),
         cmd!(noundo "selection.row", "Select Entire Row", [], Some("Shift+Space"), "{}", has_doc, select_row),
         cmd!(noundo "selection.column", "Select Entire Column", [], Some("Ctrl+Space"), "{}", has_doc, select_col),
-        cmd!(noundo "edit.goTo", "Go To…", ["Home", "Editing", "Find & Select"], Some("Ctrl+G"), "{reference: \"B5\" | \"Sheet2!A1:C3\" | name}", has_doc, go_to),
+        cmd!(noundo "edit.goTo", "Go To…", ["Home", "Editing", "Find & Select"], Some("Ctrl+G"), "{reference: \"B5\" | \"Sheet2!A1:C3\" | name | \"Sheet2!Name\" | \"B14:C22,F19:G30\" | \"Price, Type\", record?: bool} (record: keep a reference without names among the recent ones) or {list: true} → {names, recent}", has_doc, go_to),
         cmd!(noundo "edit.goToSpecial", "Go To Special…", ["Home", "Editing", "Find & Select"], None, "{kind: blanks|constants|formulas|comments|lastCell|currentRegion|visible|conditionalFormats|dataValidation|errors|numbers|text}", has_doc, go_to_special),
         cmd!(noundo "edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{steps?: 1}", can_undo, undo),
         cmd!(noundo "edit.redo", "Redo", ["Edit"], Some("Cmd+Y"), "{steps?: 1}", can_redo, redo),
@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AutoFill",
             [],
             None,
-            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up)",
+            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday)",
             has_doc,
             auto_fill
         ),
@@ -577,26 +577,154 @@ fn select_col(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(json!({"selection": d.selection.a1()}))
 }
 
+/// How many references the Go To dialog keeps for going back to.
+const GO_TO_RECENT: usize = 10;
+/// The most areas one Go To selects.
+const GO_TO_MAX_AREAS: usize = 2000;
+/// How deep a name that refers to other names is followed.
+const GO_TO_NAME_DEPTH: usize = 8;
+
 pub(super) fn go_to(s: &mut Session, p: &Json) -> Result<Json> {
+    if bool_param(p, "list") == Some(true) {
+        let d = s.doc()?;
+        return Ok(json!({"names": go_to_names(&d.wb, d.wb.active_sheet), "recent": d.go_to_recent}));
+    }
     let Some(reference) = str_param(p, "reference").or_else(|| str_param(p, "range")) else { return Err(bad("edit.goTo", "missing `reference`")) };
-    // A defined name or table?
     let d = s.doc()?;
-    let resolved = if RangeRef::parse(split_sheet(reference).1).is_none() {
-        let sheet = d.wb.active_sheet;
-        if let Some(n) = d.wb.name(reference, sheet) {
-            n.formula.clone()
-        } else if let Some((si, ti)) = d.wb.table(reference) {
-            // As in Excel, a table's name stands for its data, without the header and totals rows.
-            let t = d.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).map(|t| t.data_range().unwrap_or(t.range).a1()).unwrap_or_default();
-            format!("{}!{}", gridcraft_core::quote_sheet(&d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default()), t)
-        } else {
+    let mut target: Option<usize> = None;
+    let mut areas: Vec<RangeRef> = Vec::new();
+    let mut named = false;
+    for part in reference_parts(reference) {
+        let Some((sheet, found, by_name)) = go_to_target(&d.wb, d.wb.active_sheet, part, 0) else {
+            return Err(EngineError::Other("Reference isn't valid.".into()));
+        };
+        // One selection holds the areas of one sheet.
+        if target.is_some_and(|t| t != sheet) {
             return Err(EngineError::Other("Reference isn't valid.".into()));
         }
-    } else {
-        reference.to_string()
+        target = Some(sheet);
+        named |= by_name;
+        areas.extend(found);
+        if areas.len() > GO_TO_MAX_AREAS {
+            return Err(EngineError::Other(format!("Go To selects at most {GO_TO_MAX_AREAS} areas.")));
+        }
+    }
+    let Some(sheet) = target else { return Err(EngineError::Other("Reference isn't valid.".into())) };
+    let range = areas.iter().map(RangeRef::a1).collect::<Vec<_>>().join(",");
+    let out = selection_set(s, &json!({"sheet": sheet, "range": range}))?;
+    if bool_param(p, "record") == Some(true) && !named {
+        let d = s.doc_mut()?;
+        let prefix = gridcraft_core::quote_sheet(&d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default());
+        let entry = areas.iter().map(|r| format!("{prefix}!{}", r.a1())).collect::<Vec<_>>().join(",");
+        d.go_to_recent.retain(|r| !r.eq_ignore_ascii_case(&entry));
+        d.go_to_recent.insert(0, entry);
+        d.go_to_recent.truncate(GO_TO_RECENT);
+    }
+    Ok(out)
+}
+
+/// The parts of a Go To reference, split at the commas outside quoted sheet names and
+/// parentheses: `Price, Type` or `B14:C22,F19:G30`. The parts are read one at a time, so a caller
+/// that stops at an invalid part or at `GO_TO_MAX_AREAS` does not split the rest of the text.
+fn reference_parts(text: &str) -> impl Iterator<Item = &str> {
+    let (mut depth, mut quoted, mut start, mut done) = (0usize, false, 0, false);
+    let mut chars = text.char_indices();
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        for (i, c) in chars.by_ref() {
+            match c {
+                '\'' => quoted = !quoted,
+                '(' if !quoted => depth += 1,
+                ')' if !quoted => depth = depth.saturating_sub(1),
+                ',' if !quoted && depth == 0 => {
+                    let part = text.get(start..i).unwrap_or("").trim();
+                    start = i + 1;
+                    return Some(part);
+                }
+                _ => {}
+            }
+        }
+        done = true;
+        Some(text.get(start..).unwrap_or("").trim())
+    })
+}
+
+/// Where one part of a Go To reference points, seen from sheet `sheet`: the sheet, its areas,
+/// and whether a defined name or a table gave them. `Sheet2!Name` is the name scoped to Sheet2.
+/// A name counts when what it refers to is a reference; a constant or a formula is not one.
+fn go_to_target(wb: &gridcraft_model::Workbook, sheet: usize, part: &str, depth: usize) -> Option<(usize, Vec<RangeRef>, bool)> {
+    if part.is_empty() || depth > GO_TO_NAME_DEPTH {
+        return None;
+    }
+    let (prefix, body) = split_sheet(part);
+    let on = match &prefix {
+        Some(n) => wb.sheet_index(n)?,
+        None => sheet,
     };
-    let resolved = resolved.replace('$', "");
-    selection_set(s, &json!({"range": resolved}))
+    if let Some(r) = RangeRef::parse(&body.replace('$', "")) {
+        return Some((on, vec![r], false));
+    }
+    let name = match prefix {
+        Some(_) => wb.names.iter().find(|n| n.scope == Some(on) && gridcraft_formula::same_name(&n.name, body)),
+        None => wb.name(body, sheet),
+    };
+    if let Some(n) = name {
+        return name_areas(wb, n, sheet, depth).map(|(t, areas)| (t, areas, true));
+    }
+    if prefix.is_none()
+        && let Some((si, ti)) = wb.table(body)
+    {
+        // As in Excel, a table's name stands for its data, without the header and totals rows.
+        let t = wb.sheet(si)?.tables.get(ti)?;
+        return Some((si, vec![t.data_range().unwrap_or(t.range)], true));
+    }
+    None
+}
+
+/// The sheet and areas defined name `n` refers to, seen from sheet `sheet`, when that is a
+/// reference.
+fn name_areas(wb: &gridcraft_model::Workbook, n: &gridcraft_model::DefinedName, sheet: usize, depth: usize) -> Option<(usize, Vec<RangeRef>)> {
+    let from = n.scope.unwrap_or(sheet);
+    let formula = n.formula.trim().trim_start_matches('=');
+    let mut target: Option<usize> = None;
+    let mut areas = Vec::new();
+    for p in reference_parts(formula) {
+        let (s, found, _) = go_to_target(wb, from, p, depth + 1)?;
+        if target.is_some_and(|t| t != s) {
+            return None;
+        }
+        target = Some(s);
+        areas.extend(found);
+        if areas.len() > GO_TO_MAX_AREAS {
+            return None;
+        }
+    }
+    target.map(|t| (t, areas))
+}
+
+/// The names the Go To dialog lists, seen from sheet `sheet`: the named ranges of the workbook and
+/// of every sheet, in alphabetical order. A name scoped to another sheet is written `Sheet2!Name`,
+/// and the active sheet's own name hides the workbook name it shares. Hidden names and names that
+/// do not refer to a range are left out.
+pub fn go_to_names(wb: &gridcraft_model::Workbook, sheet: usize) -> Vec<String> {
+    let own: std::collections::HashSet<String> =
+        wb.names.iter().filter(|n| n.scope == Some(sheet)).map(|n| gridcraft_formula::fold_name(&n.name)).collect();
+    let mut out: Vec<String> = wb
+        .names
+        .iter()
+        .filter(|n| !n.hidden && name_areas(wb, n, sheet, 0).is_some())
+        .filter_map(|n| match n.scope {
+            None if own.contains(&gridcraft_formula::fold_name(&n.name)) => None,
+            None => Some(n.name.clone()),
+            Some(s) if s == sheet => Some(n.name.clone()),
+            Some(s) => Some(format!("{}!{}", gridcraft_core::quote_sheet(&wb.sheet(s)?.name), n.name)),
+        })
+        .collect();
+    out.sort_by_cached_key(|n| gridcraft_formula::fold_name(n));
+    out.dedup_by(|a, b| gridcraft_formula::same_name(a, b));
+    out
 }
 
 fn go_to_special(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1462,6 +1590,10 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         "formats" => crate::fill::FillMode::Formats,
         "values" => crate::fill::FillMode::ValuesOnly,
         "extend" => crate::fill::FillMode::Extend,
+        "days" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Day),
+        "weekdays" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Weekday),
+        "months" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Month),
+        "years" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Year),
         _ => crate::fill::FillMode::Series,
     };
     if target.count() > crate::fill::MAX_FILL_CELLS || src.count() > crate::fill::MAX_FILL_CELLS {
@@ -1785,6 +1917,132 @@ fn begin_edit(s: &mut Session, _: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sheet1 and Sheet2 with a workbook range name, a name scoped to each sheet, a constant, a
+    /// formula and a hidden name.
+    fn go_to_workbook() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+        s.execute("selection.set", json!({"sheet": 0})).unwrap();
+        let define = |s: &mut Session, name: &str, refers: &str, scope: &str| {
+            s.execute("formulas.defineName", json!({"name": name, "refersTo": refers, "scope": scope})).unwrap();
+        };
+        define(&mut s, "Price", "=Sheet1!$B$2:$B$5", "Workbook");
+        define(&mut s, "type", "=Sheet1!$D$2:$D$5", "Workbook");
+        define(&mut s, "Areas", "=Sheet1!$A$1,Sheet1!$C$3:$C$4", "Workbook");
+        define(&mut s, "Local", "=Sheet2!$C$3", "Sheet2");
+        define(&mut s, "Own", "=Sheet1!$E$1", "Sheet1");
+        define(&mut s, "Rate", "=0.07", "Workbook");
+        define(&mut s, "Total", "=SUM(Sheet1!$B$2:$B$5)", "Workbook");
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.names.push(gridcraft_model::DefinedName {
+            name: "Secret".into(),
+            scope: None,
+            formula: "Sheet1!$Z$9".into(),
+            comment: String::new(),
+            hidden: true,
+        });
+        s
+    }
+
+    /// "The Go to popup window shows named ranges on every worksheet in your workbook." Names
+    /// that are not ranges, and hidden names, are not listed.
+    #[test]
+    fn go_to_lists_the_named_ranges_of_every_sheet() {
+        let mut s = go_to_workbook();
+        let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+        assert_eq!(list["names"], json!(["Areas", "Own", "Price", "Sheet2!Local", "type"]), "{list}");
+        assert_eq!(list["recent"], json!([]), "{list}");
+        // Seen from Sheet2, its own name is bare and Sheet1's is qualified.
+        s.execute("selection.set", json!({"sheet": 1})).unwrap();
+        let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+        assert_eq!(list["names"], json!(["Areas", "Local", "Price", "Sheet1!Own", "type"]), "{list}");
+    }
+
+    #[test]
+    fn go_to_a_name_scoped_to_another_sheet_goes_to_that_sheet() {
+        let mut s = go_to_workbook();
+        let out = s.execute("edit.goTo", json!({"reference": "Sheet2!Local"})).unwrap();
+        assert_eq!(out["selection"], "C3", "{out}");
+        assert_eq!(s.doc().unwrap().wb.active_sheet, 1);
+        // A name of several areas selects all of them.
+        let out = s.execute("edit.goTo", json!({"reference": "Areas"})).unwrap();
+        assert_eq!(out["selection"], "A1,C3:C4", "{out}");
+        assert_eq!(s.doc().unwrap().wb.active_sheet, 0);
+    }
+
+    /// A name matches in any case and any script, as a formula matches it.
+    #[test]
+    fn go_to_matches_a_sheet_name_in_any_case() {
+        let mut s = go_to_workbook();
+        s.execute("formulas.defineName", json!({"name": "Größe", "refersTo": "=Sheet2!$D$4", "scope": "Sheet2"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "GRÖSSE", "refersTo": "=Sheet1!$F$6", "scope": "Workbook"})).unwrap();
+        let out = s.execute("edit.goTo", json!({"reference": "Sheet2!GRÖSSE"})).unwrap();
+        assert_eq!(out["selection"], "D4", "{out}");
+        // Seen from Sheet2, its own name hides the workbook name it shares.
+        let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+        assert_eq!(list["names"], json!(["Areas", "Größe", "Local", "Price", "Sheet1!Own", "type"]), "{list}");
+    }
+
+    /// "You can enter multiple named ranges or cell references in the Reference box. Separating
+    /// each with a comma ... Excel will highlight all the ranges."
+    #[test]
+    fn go_to_selects_every_reference_and_name_in_a_list() {
+        let mut s = go_to_workbook();
+        let out = s.execute("edit.goTo", json!({"reference": "B14:C22,F19:G30,H21:H29"})).unwrap();
+        assert_eq!(out["selection"], "B14:C22,F19:G30,H21:H29", "{out}");
+        let out = s.execute("edit.goTo", json!({"reference": "Price, Type"})).unwrap();
+        assert_eq!(out["selection"], "B2:B5,D2:D5", "{out}");
+        let out = s.execute("edit.goTo", json!({"reference": "Sheet2!$A$1,Sheet2!B2"})).unwrap();
+        assert_eq!(out["selection"], "A1,B2", "{out}");
+        assert_eq!(s.doc().unwrap().wb.active_sheet, 1);
+        // Areas on two sheets, and a part that is not a reference, leave the selection alone.
+        for bad in ["A1,Sheet1!B2", "A1,Rate", "A1,", "Total"] {
+            assert!(s.execute("edit.goTo", json!({"reference": bad})).is_err(), "{bad}");
+            assert_eq!(s.doc().unwrap().selection.a1(), "A1,B2", "{bad}");
+        }
+    }
+
+    #[test]
+    fn go_to_reads_the_parts_of_a_long_reference_one_at_a_time() {
+        let mut parts = reference_parts("A1, 'Q1, Q2'!B2,SUM(C3,D4)");
+        assert_eq!(parts.next(), Some("A1"));
+        assert_eq!(parts.next(), Some("'Q1, Q2'!B2"));
+        assert_eq!(parts.next(), Some("SUM(C3,D4)"));
+        assert_eq!(parts.next(), None);
+        assert_eq!(reference_parts("").collect::<Vec<_>>(), vec![""]);
+        let mut s = go_to_workbook();
+        let err = s.execute("edit.goTo", json!({"reference": "A1,".repeat(GO_TO_MAX_AREAS + 1)})).unwrap_err();
+        assert!(err.to_string().contains("at most"), "{err}");
+        let bad = format!("Total{}", ",".repeat(1_000_000));
+        assert!(s.execute("edit.goTo", json!({"reference": bad})).is_err());
+    }
+
+    /// "The Go to box keeps track of ranges as you enter them, and you can return to any of them."
+    #[test]
+    fn go_to_keeps_the_references_entered_newest_first() {
+        let mut s = go_to_workbook();
+        s.execute("edit.goTo", json!({"reference": "B14:C22,F19:G30", "record": true})).unwrap();
+        s.execute("edit.goTo", json!({"reference": "Sheet2!A5", "record": true})).unwrap();
+        // Names are listed already; a call without `record` (the Name Box) is not kept.
+        s.execute("edit.goTo", json!({"reference": "Price", "record": true})).unwrap();
+        s.execute("edit.goTo", json!({"reference": "Z9"})).unwrap();
+        s.execute("edit.goTo", json!({"reference": "b14:c22,f19:g30", "record": true})).unwrap();
+        let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+        assert_eq!(list["recent"], json!(["Sheet1!B14:C22,Sheet1!F19:G30", "Sheet2!A5"]), "{list}");
+        // Going back from Sheet2 to a recent reference returns to its sheet.
+        s.execute("selection.set", json!({"sheet": 1})).unwrap();
+        let out = s.execute("edit.goTo", json!({"reference": "Sheet1!B14:C22,Sheet1!F19:G30", "record": true})).unwrap();
+        assert_eq!(out["selection"], "B14:C22,F19:G30", "{out}");
+        assert_eq!(s.doc().unwrap().wb.active_sheet, 0);
+        for i in 0..GO_TO_RECENT + 2 {
+            s.execute("edit.goTo", json!({"reference": format!("A{}", i + 1), "record": true})).unwrap();
+        }
+        let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+        assert_eq!(list["recent"].as_array().map(Vec::len), Some(GO_TO_RECENT), "{list}");
+        assert_eq!(list["recent"][0], format!("Sheet1!A{}", GO_TO_RECENT + 2), "{list}");
+    }
 
     #[test]
     fn cell_set_takes_numbers_for_input_and_value() {

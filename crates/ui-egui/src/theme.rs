@@ -4,6 +4,11 @@
 //! operating system at runtime (nothing bundled): the UI uses the platform UI font, cells use the
 //! best available match for the workbook font (Calibri/Carlito/Aptos/Arial…) with egui's built-in
 //! fonts as the last resort.
+//!
+//! Chrome colours belong in [`Tokens`], each with a light and a dark value; colours
+//! drawn on the sheet keep their light value in both themes, because the sheet stays white. The
+//! foreground/background pairs are listed in `contrast_tests`, which holds them to WCAG 2 (4.5:1
+//! for text, 3:1 for glyphs) in both themes: a new token goes there too.
 
 use std::sync::Arc;
 
@@ -54,7 +59,73 @@ pub struct Tokens {
     pub notice_warn_border: Color32,
     pub notice_info_bg: Color32,
     pub notice_info_border: Color32,
+    /// Text and glyphs drawn on an `accent` fill (primary buttons, switched-on toggles).
+    pub on_accent: Color32,
+    /// The category palette, indexed by [`Cat`]: the coloured parts of icons, gallery highlights.
+    pub cat: [Color32; 8],
+    /// The page colour inside icons (documents, cells, clipboards).
+    pub paper: Color32,
+    /// Reference colours for formulas edited in the window-coloured formula bar.
+    pub ref_colors: [Color32; 8],
+    /// Reference colours on the sheet (outlines and the in-cell editor). The sheet stays white.
+    pub sheet_ref_colors: [Color32; 8],
+    /// Code colours in the code editor (and the window-coloured fields it sits in).
+    pub syntax: Syntax,
+    /// The message box warning disc and its glyph.
+    pub warning: Color32,
+    pub on_warning: Color32,
+    /// Controls drawn on the sheet (filter and validation buttons, object handles). They follow
+    /// the sheet, so they are light in both themes.
+    pub sheet_control_bg: Color32,
+    pub sheet_control_border: Color32,
+    pub sheet_control_text: Color32,
+    /// A placeholder fill on the sheet (a picture that has not loaded).
+    pub sheet_track: Color32,
 }
+
+/// The eight category colours, in the order of [`Tokens::cat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Cat {
+    Blue,
+    Green,
+    Orange,
+    Red,
+    Purple,
+    Teal,
+    Amber,
+    Slate,
+}
+
+impl Cat {
+    pub const ALL: [Cat; 8] = [Cat::Blue, Cat::Green, Cat::Orange, Cat::Red, Cat::Purple, Cat::Teal, Cat::Amber, Cat::Slate];
+}
+
+const fn rgb(hex: u32) -> Color32 {
+    Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
+}
+
+/// Reference colours on the white sheet, the same in both themes (the sheet does not follow the
+/// theme). The light theme's formula bar is white too, so it uses them as well.
+const SHEET_REF_COLORS: [Color32; 8] =
+    [rgb(0x2E6FD8), rgb(0xD03C3C), rgb(0x7A4FC9), rgb(0x23803D), rgb(0xB5531A), rgb(0x16798A), rgb(0xB83B8E), rgb(0x77681A)];
+/// Code colours for one background; plain text uses the surface's own text colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Syntax {
+    pub keyword: Color32,
+    pub string: Color32,
+    pub number: Color32,
+    pub comment: Color32,
+    pub builtin: Color32,
+}
+
+const LIGHT_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x0B57B3), string: rgb(0xA3361B), number: rgb(0x157A5A), comment: rgb(0x6B7280), builtin: rgb(0x7B3FB5) };
+const DARK_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x6FAEFF), string: rgb(0xF09A7A), number: rgb(0x7FD1A8), comment: rgb(0x9AA3AE), builtin: rgb(0xC69BF2) };
+const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
+const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
+const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
+const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -79,7 +150,7 @@ impl Tokens {
             header_text: Color32::from_rgb(0x42, 0x42, 0x42),
             header_line: Color32::from_rgb(0xD6, 0xD6, 0xD6),
             header_sel_bg: Color32::from_rgb(0xE1, 0xE1, 0xE1),
-            header_sel_text: Color32::from_rgb(0x10, 0x7C, 0x41),
+            header_sel_text: Color32::from_rgb(0x0B, 0x5E, 0x31),
             header_all_bg: Color32::from_rgb(0xC8, 0xE6, 0xD3),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
@@ -99,6 +170,18 @@ impl Tokens {
             notice_warn_border: Color32::from_rgb(0xF0, 0xC3, 0x6E),
             notice_info_bg: Color32::from_rgb(0xEA, 0xF2, 0xFB),
             notice_info_border: Color32::from_rgb(0xB9, 0xD2, 0xEC),
+            on_accent: Color32::WHITE,
+            cat: [rgb(0x2F6FCF), rgb(0x1E8A4C), rgb(0xC8601A), rgb(0xC8372D), rgb(0x8350C8), rgb(0x13808A), rgb(0x9C6C00), rgb(0x5A6B7D)],
+            paper: Color32::WHITE,
+            ref_colors: SHEET_REF_COLORS,
+            sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: LIGHT_SYNTAX,
+            warning: rgb(0xF2C32E),
+            on_warning: rgb(0x1F1F1F),
+            sheet_control_bg: SHEET_CONTROL_BG,
+            sheet_control_border: SHEET_CONTROL_BORDER,
+            sheet_control_text: SHEET_CONTROL_TEXT,
+            sheet_track: SHEET_TRACK,
         }
     }
 
@@ -124,7 +207,7 @@ impl Tokens {
             header_text: Color32::from_rgb(0xCC, 0xCC, 0xCC),
             header_line: Color32::from_rgb(0x45, 0x45, 0x45),
             header_sel_bg: Color32::from_rgb(0x45, 0x45, 0x45),
-            header_sel_text: Color32::from_rgb(0x5C, 0xC5, 0x87),
+            header_sel_text: Color32::from_rgb(0x6F, 0xD3, 0x9A),
             header_all_bg: Color32::from_rgb(0x2E, 0x55, 0x3E),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
@@ -136,7 +219,7 @@ impl Tokens {
             cell_text: Color32::BLACK,
             menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
             shadow: Color32::from_black_alpha(90),
-            danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            danger: Color32::from_rgb(0xFF, 0x95, 0x85),
             error_check_green: Color32::from_rgb(0x4C, 0xC2, 0x6B),
             warning_fill: Color32::from_rgb(0xF2, 0xB7, 0x05),
             warning_ink: Color32::BLACK,
@@ -144,12 +227,50 @@ impl Tokens {
             notice_warn_border: Color32::from_rgb(0x7A, 0x67, 0x30),
             notice_info_bg: Color32::from_rgb(0x24, 0x33, 0x44),
             notice_info_border: Color32::from_rgb(0x3B, 0x55, 0x72),
+            on_accent: rgb(0x0F2A1A),
+            cat: [rgb(0x6EA8F7), rgb(0x5CC587), rgb(0xF0965A), rgb(0xF07B6E), rgb(0xB394EE), rgb(0x4CC7CF), rgb(0xF2C14E), rgb(0xA9B6C4)],
+            paper: rgb(0x454545),
+            ref_colors: [rgb(0x6FA3F5), rgb(0xF27C7C), rgb(0xB394EE), rgb(0x6CCB85), rgb(0xF0A061), rgb(0x5CC9DA), rgb(0xE77FC4), rgb(0xD4C25A)],
+            sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: DARK_SYNTAX,
+            warning: rgb(0xF2C32E),
+            on_warning: rgb(0x1F1F1F),
+            sheet_control_bg: SHEET_CONTROL_BG,
+            sheet_control_border: SHEET_CONTROL_BORDER,
+            sheet_control_text: SHEET_CONTROL_TEXT,
+            sheet_track: SHEET_TRACK,
         }
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
         if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
     }
+
+    /// One colour of the category palette.
+    pub fn cat(&self, c: Cat) -> Color32 {
+        self.cat.get(c as usize).copied().unwrap_or(self.text)
+    }
+
+    /// The reference colour for a formula's `index`-th reference, on the bar or on the sheet.
+    pub fn ref_color(&self, index: usize, on_sheet: bool) -> Color32 {
+        let set = if on_sheet { &self.sheet_ref_colors } else { &self.ref_colors };
+        set.get(index % set.len()).copied().unwrap_or(self.text)
+    }
+}
+
+/// WCAG 2 relative luminance of an opaque colour.
+pub fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG 2 contrast ratio between two opaque colours (1 to 21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 pub const UI: &str = "ui";
@@ -887,6 +1008,104 @@ mod font_binding_tests {
                 (0..(seed % 40)).map(|k| char::from_u32(0x20 + (seed.wrapping_mul(31).wrapping_add(k) % 0x5F)).unwrap_or('x')).collect();
             let FontFamily::Name(fam) = cell_family(&name, seed % 2 == 0, seed % 3 == 0) else { continue };
             assert!(crate::fonts::is_bound(&fam), "{name:?} → unbound {fam:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    /// Body text needs 4.5:1 (WCAG AA); glyphs, icons and other graphics need 3:1.
+    const TEXT: f32 = 4.5;
+    const GLYPH: f32 = 3.0;
+
+    /// Every foreground/background pair the chrome draws: ribbon, popups, dialogs, panes, formula
+    /// bar, status bar, plus the colours that sit on the white sheet.
+    fn pairs(t: &Tokens) -> Vec<(String, Color32, Color32, f32)> {
+        let mut v: Vec<(String, Color32, Color32, f32)> = Vec::new();
+        let mut add = |name: &str, fg: Color32, bg: Color32, min: f32| v.push((name.to_string(), fg, bg, min));
+        let surfaces = [
+            ("window", t.window),
+            ("ribbon", t.ribbon),
+            ("menu", t.menu_bg),
+            ("input", t.input_bg),
+            ("status bar", t.status_bar),
+            ("tab bar", t.tab_bar),
+            ("active tab", t.tab_active),
+            ("hover", t.hover),
+        ];
+        for (name, bg) in surfaces {
+            add(&format!("text on {name}"), t.text, bg, TEXT);
+            add(&format!("dim text on {name}"), t.text_dim, bg, TEXT);
+            add(&format!("accent glyph on {name}"), t.accent, bg, GLYPH);
+            add(&format!("danger on {name}"), t.danger, bg, TEXT);
+        }
+        add("text on pressed", t.text, t.pressed, TEXT);
+        add("accent text (File, contextual tabs) on window", t.accent, t.window, TEXT);
+        for (name, bg) in [("ribbon", t.ribbon), ("menu", t.menu_bg), ("hover", t.hover), ("pressed", t.pressed)] {
+            for c in Cat::ALL {
+                add(&format!("{c:?} icon colour on {name}"), t.cat(c), bg, GLYPH);
+            }
+        }
+        add("icon stroke on paper", t.text, t.paper, GLYPH);
+        add("on_accent on accent", t.on_accent, t.accent, TEXT);
+        add("warning glyph", t.on_warning, t.warning, TEXT);
+        add("notice text (warning)", t.text, t.notice_warn_bg, TEXT);
+        add("notice text (info)", t.text, t.notice_info_bg, TEXT);
+        add("header text", t.header_text, t.header_bg, TEXT);
+        add("selected header text", t.header_sel_text, t.header_sel_bg, TEXT);
+        for (i, c) in t.ref_colors.iter().enumerate() {
+            add(&format!("formula bar reference {i}"), *c, t.input_bg, TEXT);
+        }
+        let s = t.syntax;
+        for (name, c) in [("keyword", s.keyword), ("string", s.string), ("number", s.number), ("comment", s.comment), ("builtin", s.builtin)] {
+            add(&format!("code {name} on input"), c, t.input_bg, TEXT);
+        }
+        // On the sheet.
+        add("cell text", t.cell_text, t.grid_bg, TEXT);
+        for (i, c) in t.sheet_ref_colors.iter().enumerate() {
+            add(&format!("sheet reference {i}"), *c, t.grid_bg, TEXT);
+        }
+        add("selection border on sheet", t.sel_border, t.grid_bg, GLYPH);
+        add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
+        add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
+        v
+    }
+
+    #[test]
+    fn token_pairs_meet_wcag_contrast_in_both_themes() {
+        let mut failures = Vec::new();
+        for t in [Tokens::light(), Tokens::dark()] {
+            for (name, fg, bg, min) in pairs(&t) {
+                let ratio = contrast(fg, bg);
+                if ratio < min {
+                    failures.push(format!("{} theme: {name} is {ratio:.2}:1, needs {min}:1", if t.dark { "dark" } else { "light" }));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "contrast failures:\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn contrast_matches_wcag_reference_values() {
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.001);
+        // #767676 on white is the classic 4.54:1 grey.
+        assert!((contrast(rgb(0x767676), Color32::WHITE) - 4.54).abs() < 0.01);
+    }
+
+    #[test]
+    fn sheet_tokens_follow_the_sheet_not_the_theme() {
+        let (l, d) = (Tokens::light(), Tokens::dark());
+        assert_eq!(l.grid_bg, d.grid_bg);
+        assert_eq!(l.sheet_ref_colors, d.sheet_ref_colors);
+        assert_eq!(
+            (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track),
+            (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track)
+        );
+        for c in Cat::ALL {
+            assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
         }
     }
 }

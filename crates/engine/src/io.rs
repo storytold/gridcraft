@@ -770,7 +770,7 @@ mod tests {
     fn save_fails_upfront_when_the_temp_name_is_taken() {
         // Another local user who can write the directory must not be able to point the
         // save's predictable temporary name at their own file: creation is exclusive.
-        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let victim = dir.join("victim.txt");
@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn save_keeps_the_destination_access_restrictions() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-permissions-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("private.xlsx");
@@ -808,7 +808,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn open_refuses_directories_and_unknowable_lengths() {
-        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");

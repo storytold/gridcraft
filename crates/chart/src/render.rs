@@ -868,6 +868,7 @@ enum Fam {
     LineStack,
     Area,
     AreaStack,
+    Area100,
 }
 
 fn family(k: ChartKind) -> Fam {
@@ -879,8 +880,14 @@ fn family(k: ChartKind) -> Fam {
         LineStacked => Fam::LineStack,
         Area => Fam::Area,
         AreaStacked => Fam::AreaStack,
+        AreaStacked100 => Fam::Area100,
         _ => Fam::Col,
     }
+}
+
+/// Families stacked to 100%: each category's values are shares of its total.
+fn is_100(f: Fam) -> bool {
+    matches!(f, Fam::Col100 | Fam::Area100)
 }
 
 fn is_col(f: Fam) -> bool {
@@ -900,25 +907,38 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
 
-    // Totals for 100% stacking, per axis.
-    let mut totals = [vec![0.0f64; ncat], vec![0.0f64; ncat]];
+    // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
+    let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
-        if fams.get(i) == Some(&Fam::Col100) {
-            let a = sec.get(i).copied().unwrap_or(false) as usize;
+        let fam = fams.get(i).copied().unwrap_or(Fam::Col);
+        if is_100(fam) {
+            let key = (sec.get(i).copied().unwrap_or(false), fam);
+            let p = match totals.iter().position(|(k, _)| *k == key) {
+                Some(p) => p,
+                None => {
+                    totals.push((key, vec![0.0; ncat]));
+                    totals.len() - 1
+                }
+            };
             for (j, v) in s.values.iter().take(ncat).enumerate() {
-                if let (Some(v), Some(t)) = (v, totals.get_mut(a).and_then(|t| t.get_mut(j))) {
+                if let (Some(v), Some(t)) = (v, totals.get_mut(p).and_then(|(_, t)| t.get_mut(j))) {
                     *t += v.abs();
                 }
             }
         }
     }
+    // A value's share of its category's total, for the 100% families.
+    let share = |key: (bool, Fam), j: usize, v: f64| {
+        let t = totals.iter().find(|(k, _)| *k == key).and_then(|(_, t)| t.get(j)).copied().unwrap_or(0.0);
+        if t > 0.0 { v / t } else { 0.0 }
+    };
     // Stack accumulators keyed by (axis, family): positive and negative running sums.
     let mut stacks: Vec<((bool, Fam), Vec<f64>, Vec<f64>)> = Vec::new();
     let mut spans: Vec<Vec<Option<(f64, f64)>>> = Vec::with_capacity(data.series.len());
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -936,12 +956,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             let v = s.values.get(j).copied().flatten();
             let span = match (si.and_then(|p| stacks.get_mut(p)), fam) {
                 (Some((_, pos, neg)), Fam::ColStack | Fam::Col100) => v.and_then(|v| {
-                    let v = if fam == Fam::Col100 {
-                        let t = totals.get(a as usize).and_then(|t| t.get(j)).copied().unwrap_or(0.0);
-                        if t > 0.0 { v / t } else { 0.0 }
-                    } else {
-                        v
-                    };
+                    let v = if fam == Fam::Col100 { share(key, j, v) } else { v };
                     let acc = if v >= 0.0 { pos.get_mut(j) } else { neg.get_mut(j) }?;
                     let base = *acc;
                     *acc += v;
@@ -949,6 +964,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }),
                 (Some((_, pos, _)), _) => {
                     let v = v.unwrap_or(0.0);
+                    let v = if fam == Fam::Area100 { share(key, j, v) } else { v };
                     pos.get_mut(j).map(|acc| {
                         let base = *acc;
                         *acc = clean(*acc + v);
@@ -970,7 +986,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             continue;
         }
         let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
-        let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
+        let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
@@ -1044,7 +1060,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         for (i, s) in data.series.iter().enumerate() {
             let fam = fams.get(i).copied().unwrap_or(Fam::Col);
             let want = match pass {
-                0 => matches!(fam, Fam::Area | Fam::AreaStack),
+                0 => matches!(fam, Fam::Area | Fam::AreaStack | Fam::Area100),
                 1 => is_col(fam),
                 _ => is_line(fam),
             };

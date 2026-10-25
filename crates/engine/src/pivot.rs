@@ -816,11 +816,30 @@ pub const NOT_A_VALUE_CELL: &str = "select a value cell in a PivotTable";
 /// on the sheet is no longer what the source computes: the cell's records would be another cell's.
 pub fn detail_records(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, row: u32, col: u32) -> Result<Option<(Source, Vec<usize>)>, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
-    let mut probe = Probe { at: (row as usize, col as usize), hit: None, paths: Vec::new() };
+    let mut probe = Probe { at: Some((row as usize, col as usize)), hit: None, paths: Some(Vec::new()), cells: None };
     let out = compute_from(wb, pt, &src, Some(&mut probe))?;
-    // Excel reads its PivotTable cache; without one, the report written by the last refresh
-    // must still be what the source gives. Checked first: in a stale report even a cell that
-    // computes as a label may show a value.
+    // Checked first: in a stale report even a cell that computes as a label may show a value.
+    check_current(wb, pt, pivot_sheet, &out)?;
+    let Some((rp, cp)) = probe.hit else { return Ok(None) };
+    let records =
+        probe.paths.unwrap_or_default().into_iter().filter(|(_, r, c)| r.starts_with(&rp) && c.starts_with(&cp)).map(|(i, _, _)| i).collect();
+    Ok(Some((src, records)))
+}
+
+/// The cells of the report grid (relative to its top-left) where [`detail_records`] finds
+/// records: its value, subtotal and grand total cells, from one computation of the report. The
+/// same errors as [`detail_records`].
+pub fn detail_cells(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<HashSet<(u32, u32)>, String> {
+    let src = read_source(wb, &pt.source, pivot_sheet)?;
+    let mut probe = Probe { at: None, hit: None, paths: None, cells: Some(HashSet::new()) };
+    let out = compute_from(wb, pt, &src, Some(&mut probe))?;
+    check_current(wb, pt, pivot_sheet, &out)?;
+    Ok(probe.cells.unwrap_or_default().into_iter().map(|(r, c)| (r as u32, c as u32)).collect())
+}
+
+/// An error when the report on the sheet is not what `out` computes. Excel reads its PivotTable
+/// cache; without one, the report written by the last refresh must still be what the source gives.
+fn check_current(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, out: &Output) -> Result<(), String> {
     let sh = wb.sheet(pivot_sheet).ok_or("There's no such sheet.")?;
     let current = pt.last_range.is_some_and(|r| {
         r.height() == out.height().max(1)
@@ -834,17 +853,17 @@ pub fn detail_records(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, row: u
     if !current {
         return Err("The PivotTable report is out of date. Refresh it first.".into());
     }
-    let Some((rp, cp)) = probe.hit else { return Ok(None) };
-    let records = probe.paths.into_iter().filter(|(_, r, c)| r.starts_with(&rp) && c.starts_with(&cp)).map(|(i, _, _)| i).collect();
-    Ok(Some((src, records)))
+    Ok(())
 }
 
-/// What [`detail_records`] asks of a report computation: the row and column item paths of the
-/// value cell at `at`, and the paths of every record the filters let through.
+/// What [`detail_records`] and [`detail_cells`] ask of a report computation: the row and column
+/// item paths of the value cell at `at`, the paths of every record the filters let through (when
+/// `paths` is set), and every value cell (when `cells` is set).
 struct Probe {
-    at: (usize, usize),
+    at: Option<(usize, usize)>,
     hit: Option<(Vec<u32>, Vec<u32>)>,
-    paths: Vec<(usize, Vec<u32>, Vec<u32>)>,
+    paths: Option<Vec<(usize, Vec<u32>, Vec<u32>)>>,
+    cells: Option<HashSet<(usize, usize)>>,
 }
 
 fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<&mut Probe>) -> Result<Output, String> {
@@ -959,8 +978,8 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
         if !col_leaves.contains(&cp[..shown]) {
             col_leaves.insert(cp[..shown].to_vec());
         }
-        if let Some(pr) = probe.as_deref_mut() {
-            pr.paths.push((ri, rp.clone(), cp.clone()));
+        if let Some(paths) = probe.as_deref_mut().and_then(|pr| pr.paths.as_mut()) {
+            paths.push((ri, rp.clone(), cp.clone()));
         }
         row_set.insert(rp);
         col_set.insert(cp);
@@ -1326,10 +1345,13 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
                     _ => raw,
                 },
             };
-            if let Some(pr) = probe.as_deref_mut()
-                && pr.at == (r, l + j)
-            {
-                pr.hit = Some((rp.to_vec(), cp.to_vec()));
+            if let Some(pr) = probe.as_deref_mut() {
+                if pr.at == Some((r, l + j)) {
+                    pr.hit = Some((rp.to_vec(), cp.to_vec()));
+                }
+                if let Some(cells) = pr.cells.as_mut() {
+                    cells.insert((r, l + j));
+                }
             }
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }

@@ -107,6 +107,15 @@ pub fn specs() -> Vec<CommandSpec> {
             show_levels
         ),
         cmd!(
+            "data.outlineSettings",
+            "Outline Settings",
+            ["Data", "Outline"],
+            None,
+            "{sheet?, summaryBelow?: bool, summaryRight?: bool} (summary rows below their detail, summary columns right of it; off puts them above / left) → {summaryBelow, summaryRight}",
+            has_doc,
+            outline_settings
+        ),
+        cmd!(
             "data.subtotal",
             "Subtotal",
             ["Data", "Outline"],
@@ -1329,6 +1338,7 @@ fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
     let (rows, a, b) = outline_lines(s, p)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
+        let before = outline::summary_before(sh, rows);
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
         let b = b.min(a.saturating_add(1_048_575));
         for i in a..=b {
@@ -1339,9 +1349,10 @@ fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
             }
         }
         // A summary line whose group is gone has nothing left to collapse.
+        let summary = if before { a.checked_sub(1) } else { b.checked_add(1) };
         if !on
-            && !outline::groups(map).iter().any(|g| g.end == b)
-            && let Some(e) = map.get_mut(&b.saturating_add(1))
+            && !outline::groups_with(map, before).iter().any(|g| if before { g.start == a } else { g.end == b })
+            && let Some(e) = summary.and_then(|i| map.get_mut(&i))
         {
             e.collapsed = false;
         }
@@ -1359,8 +1370,9 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
     edit(s, |cx| {
         let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
+        let before = outline::summary_before(sh, rows);
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
-        let all = outline::groups(map);
+        let all = outline::groups_with(map, before);
         let level_ok = |g: &outline::OutlineGroup| want.is_none_or(|l| g.level == l);
         let pick = |hit: &dyn Fn(&outline::OutlineGroup) -> bool| -> Vec<outline::OutlineGroup> {
             let hits: Vec<_> = all.iter().filter(|g| level_ok(g) && hit(g)).copied().collect();
@@ -1369,13 +1381,13 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
         };
         let mut chosen = pick(&|g| g.start <= b && g.end >= a);
         if chosen.is_empty() {
-            chosen = pick(&|g| g.summary() >= a && g.summary() <= b);
+            chosen = pick(&|g| g.has_summary() && g.summary() >= a && g.summary() <= b);
         }
         for g in chosen {
             // Inner groups collapsed on their own (their summary marked), before this one changes.
             let inner: Vec<outline::OutlineGroup> = all
                 .iter()
-                .filter(|o| o.level > g.level && o.start >= g.start && o.end <= g.end && o.summary() != g.summary())
+                .filter(|o| o.level > g.level && o.start >= g.start && o.end <= g.end && o.has_summary() && o.summary() != g.summary())
                 .filter(|o| map.get(&o.summary()).is_some_and(|e| e.collapsed))
                 .copied()
                 .collect();
@@ -1383,6 +1395,9 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
                 if let Some(e) = map.get_mut(&i) {
                     set_hidden(e, hide || inner.iter().any(|o| o.contains(i)));
                 }
+            }
+            if !g.has_summary() {
+                continue;
             }
             if hide {
                 map.entry(g.summary()).or_default().collapsed = true;
@@ -1419,20 +1434,68 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
-        for (map, n) in [(&mut sh.rows, rows), (&mut sh.cols, cols)] {
+        let before = (outline::summary_before(sh, true), outline::summary_before(sh, false));
+        for (map, n, before) in [(&mut sh.rows, rows, before.0), (&mut sh.cols, cols, before.1)] {
             let Some(n) = n else { continue };
-            let groups = outline::groups(map);
+            let groups = outline::groups_with(map, before);
             for e in map.values_mut().filter(|e| e.outline > 0) {
                 set_hidden(e, e.outline >= n);
             }
             // Inner groups come first, so a summary line shared with the group around it ends up
             // as that outer group says.
-            for g in groups {
+            for g in groups.into_iter().filter(|g| g.has_summary()) {
                 map.entry(g.summary()).or_default().collapsed = g.level >= n;
             }
         }
         cx.structural = true;
         Ok(Json::Null)
+    })
+}
+
+/// Data ▸ Outline ▸ Settings: whether summary rows sit below their detail and summary columns
+/// right of it. A changed direction moves each collapsed group's mark (+) to its new summary line.
+fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        for (rows, key) in [(true, "summaryBelow"), (false, "summaryRight")] {
+            let Some(on) = bool_param(p, key) else { continue };
+            let was_before = outline::summary_before(sh, rows);
+            if rows {
+                sh.summary_below = on;
+            } else {
+                sh.summary_right = on;
+            }
+            if was_before != on {
+                continue;
+            }
+            let map = if rows { &mut sh.rows } else { &mut sh.cols };
+            let mut marked: Vec<outline::OutlineGroup> = outline::groups_with(map, was_before)
+                .into_iter()
+                .filter(|g| g.has_summary() && map.get(&g.summary()).is_some_and(|e| e.collapsed))
+                .collect();
+            // A mark on a line that nested groups share moves with the outermost of them whose
+            // detail is all hidden, or with the outermost when none is.
+            let mut owner: std::collections::BTreeMap<u32, (bool, u8)> = std::collections::BTreeMap::new();
+            for g in &marked {
+                let key = (!g.collapsed, g.level);
+                let best = owner.entry(g.summary()).or_insert(key);
+                *best = (*best).min(key);
+            }
+            marked.retain(|g| owner.get(&g.summary()) == Some(&(!g.collapsed, g.level)));
+            for g in &marked {
+                if let Some(e) = map.get_mut(&g.summary()) {
+                    e.collapsed = false;
+                }
+            }
+            for g in marked {
+                let g = outline::OutlineGroup { summary_before: !on, ..g };
+                if g.has_summary() {
+                    map.entry(g.summary()).or_default().collapsed = true;
+                }
+            }
+        }
+        Ok(json!({"summaryBelow": sh.summary_below, "summaryRight": sh.summary_right}))
     })
 }
 
@@ -1475,6 +1538,11 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
             groups.push((start, row - 1, prev));
             start = row;
         }
+    }
+    // The totals go below each group, so the outline puts summary rows below their detail (the
+    // Subtotal dialog's "Summary below data"), in the same undo step.
+    if !sh.summary_below {
+        s.execute("data.outlineSettings", json!({"sheet": sheet, "summaryBelow": true}))?;
     }
     // Insert a total row after each group, bottom-up so indices stay valid.
     let mut inserted = 0;
@@ -1538,6 +1606,28 @@ mod tests {
         assert_eq!(get(&mut s, "B3")["value"], json!(30.0), "East's subtotal counts both East rows");
         assert_eq!(get(&mut s, "A7")["text"], json!("Grand Total"));
         assert_eq!(get(&mut s, "B7")["value"], json!(100.0), "the grand total counts every data row");
+    }
+
+    #[test]
+    fn subtotal_puts_summary_rows_below_their_detail() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["East", 10], ["East", 20], ["West", 30]]})).unwrap();
+        s.execute("data.outlineSettings", json!({"summaryBelow": false})).unwrap();
+        s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"]})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap().clone();
+        assert!(sh.summary_below, "the totals sit below their groups");
+        // East's detail is rows 2–3 and its total row 4: collapsing level 1 keeps the total showing.
+        s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+        let hidden = |s: &Session, row: u32| s.doc().unwrap().wb.active().unwrap().is_row_hidden(row);
+        assert!(hidden(&s, 1) && hidden(&s, 2), "East's detail rows are hidden");
+        assert!(!hidden(&s, 3), "East Total stays visible");
+        // One undo takes the subtotals and the setting back.
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(!sh.summary_below);
+        assert_eq!(sh.value(CellRef::new(3, 0)).display(), "West");
     }
 
     #[test]
@@ -1769,6 +1859,73 @@ mod tests {
         let sc = |id: &str| specs().into_iter().find(|c| c.id == id).and_then(|c| c.shortcut);
         assert_eq!(sc("data.group"), Some("Alt+Shift+Right"));
         assert_eq!(sc("data.ungroup"), Some("Alt+Shift+Left"));
+    }
+
+    #[test]
+    fn summary_rows_above_the_detail_take_the_collapsed_mark() {
+        let mut s = nested_rows();
+        let r = s.execute("data.outlineSettings", json!({"summaryBelow": false})).unwrap();
+        assert_eq!(r, json!({"summaryBelow": false, "summaryRight": true}));
+        // Row 4 (index 3) is the outer group's summary, row 5 the inner one's.
+        s.execute("data.hideDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, true), (true, false), (true, false), (true, false), (true, false), (false, false)]);
+        s.execute("data.showDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, false); 6]);
+        // Hide Detail on the summary row collapses the group below it.
+        s.execute("data.hideDetail", json!({"rows": "4:4"})).unwrap();
+        assert_eq!(row_state(&s, 3..=4), [(false, true), (true, false)]);
+        s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, true), (true, true), (true, false), (true, false), (true, false), (false, false)]);
+        // Ungrouping the outer group clears its mark on the row above.
+        s.execute("data.showLevels", json!({"rows": 3})).unwrap();
+        s.execute("data.hideDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        s.execute("data.ungroup", json!({"rows": "5:8"})).unwrap();
+        assert_eq!(row_state(&s, 3..=3), [(false, false)]);
+    }
+
+    #[test]
+    fn changing_the_summary_direction_moves_collapsed_marks() {
+        let mut s = nested_rows();
+        s.execute("data.group", json!({"cols": "C:E"})).unwrap();
+        s.execute("data.hideDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        s.execute("data.hideDetail", json!({"cols": "C:E"})).unwrap();
+        s.execute("data.outlineSettings", json!({"summaryBelow": false, "summaryRight": false})).unwrap();
+        let col_marked = |s: &Session, c: u32| s.doc().unwrap().wb.active().unwrap().cols.get(&c).is_some_and(|l| l.collapsed);
+        assert_eq!(row_state(&s, 3..=8).iter().map(|r| r.1).collect::<Vec<_>>(), [true, false, false, false, false, false]);
+        assert!(col_marked(&s, 1) && !col_marked(&s, 5));
+        s.execute("data.outlineSettings", json!({"summaryBelow": true})).unwrap();
+        assert_eq!(row_state(&s, 3..=8).iter().map(|r| r.1).collect::<Vec<_>>(), [false, false, false, false, false, true]);
+        assert!(col_marked(&s, 1), "columns keep their direction");
+        // One undo step per change; no params leaves the settings as they are.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(row_state(&s, 3..=3)[0].1);
+        assert_eq!(s.execute("data.outlineSettings", json!({})).unwrap(), json!({"summaryBelow": false, "summaryRight": false}));
+        // Nested groups that end on one row share its mark: it moves to the outer group only.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("data.group", json!({"rows": "5:8"})).unwrap();
+        s.execute("data.group", json!({"rows": "6:8"})).unwrap();
+        s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+        s.execute("data.outlineSettings", json!({"summaryBelow": false})).unwrap();
+        assert_eq!(row_state(&s, 3..=8).iter().map(|r| r.1).collect::<Vec<_>>(), [true, false, false, false, false, false]);
+        s.execute("data.showDetail", json!({"rows": "4:4"})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, false); 6]);
+        // With only the inner group collapsed, its mark goes to row 5, and the outer group's
+        // Hide and Show Detail keep it collapsed.
+        s.execute("data.outlineSettings", json!({"summaryBelow": true})).unwrap();
+        s.execute("data.hideDetail", json!({"rows": "6:8", "level": 2})).unwrap();
+        s.execute("data.outlineSettings", json!({"summaryBelow": false})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, false), (false, true), (true, false), (true, false), (true, false), (false, false)]);
+        s.execute("data.hideDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        s.execute("data.showDetail", json!({"rows": "5:8", "level": 1})).unwrap();
+        assert_eq!(row_state(&s, 3..=8), [(false, false), (false, true), (true, false), (true, false), (true, false), (false, false)]);
+        // A group on the first row has no row above it to mark.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("data.group", json!({"rows": "1:3"})).unwrap();
+        s.execute("data.outlineSettings", json!({"summaryBelow": false})).unwrap();
+        s.execute("data.hideDetail", json!({"rows": "1:3"})).unwrap();
+        assert_eq!(row_state(&s, 0..=3), [(true, false), (true, false), (true, false), (false, false)]);
     }
 
     #[test]

@@ -80,6 +80,13 @@ pub struct Sheet {
     /// outline itself stays.
     #[serde(default = "yes")]
     pub show_outline_symbols: bool,
+    /// Outline summary rows sit below their detail, and summary columns right of it (Data ▸
+    /// Outline ▸ Settings; off puts them above / left). Saved as `outlinePr summaryBelow` and
+    /// `summaryRight`.
+    #[serde(default = "yes")]
+    pub summary_below: bool,
+    #[serde(default = "yes")]
+    pub summary_right: bool,
     pub right_to_left: bool,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
@@ -149,6 +156,8 @@ impl Sheet {
             visibility: Visibility::Visible,
             show_gridlines: true,
             show_outline_symbols: true,
+            summary_below: true,
+            summary_right: true,
             show_headings: true,
             show_formulas: false,
             show_zeros: true,

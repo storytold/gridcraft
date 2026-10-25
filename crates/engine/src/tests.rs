@@ -942,6 +942,86 @@ fn fill_without_formatting_extends_the_series_and_keeps_the_target_formats() {
 }
 
 #[test]
+fn fill_days_weekdays_months_and_years_step_a_date_by_that_unit() {
+    let mut s = s();
+    let serials = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    // Friday 1/30/2026 is serial 46052.
+    s.execute("cell.set", json!({"cell": "A1", "input": "1/30/2026"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(46052.0), "setup: a date");
+    s.execute("edit.autoFill", json!({"source": "A1", "target": "A1:A4", "mode": "days"})).unwrap();
+    assert_eq!(serials(&s, &["A2", "A3", "A4"]), n(&[46053.0, 46054.0, 46055.0]));
+    // Fill Weekdays skips Saturday 1/31 and Sunday 2/1.
+    s.execute("edit.autoFill", json!({"source": "A1", "target": "A1:A4", "mode": "weekdays"})).unwrap();
+    assert_eq!(serials(&s, &["A2", "A3", "A4"]), n(&[46055.0, 46056.0, 46057.0]));
+    // From Saturday 1/31, the first weekday is Monday 2/2.
+    s.execute("cell.set", json!({"cell": "B1", "input": "1/31/2026"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "B1", "target": "B1:B3", "mode": "weekdays"})).unwrap();
+    assert_eq!(serials(&s, &["B2", "B3"]), n(&[46055.0, 46056.0]));
+    // Fill Months keeps the day, clamped to the month's last day: Feb 28, Mar 31, Apr 30.
+    s.execute("edit.autoFill", json!({"source": "B1", "target": "B1:B4", "mode": "months"})).unwrap();
+    assert_eq!(serials(&s, &["B2", "B3", "B4"]), n(&[46081.0, 46112.0, 46142.0]));
+    s.execute("edit.autoFill", json!({"source": "B1", "target": "B1:B3", "mode": "years"})).unwrap();
+    assert_eq!(serials(&s, &["B2", "B3"]), n(&[46418.0, 46783.0]));
+    // Two dates step by their difference in the unit: 1/15 and 3/15 by two months.
+    s.execute("cell.set", json!({"cell": "C1", "input": "1/15/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "3/15/2026"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "C1:C2", "target": "C1:C4", "mode": "months"})).unwrap();
+    assert_eq!(serials(&s, &["C3", "C4"]), n(&[46157.0, 46218.0]));
+    // Monday 2/2 and Wednesday 2/4 step by two weekdays: Friday 2/6, Tuesday 2/10.
+    s.execute("cell.set", json!({"cell": "D1", "input": "2/2/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "2/4/2026"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "D1:D2", "target": "D1:D4", "mode": "weekdays"})).unwrap();
+    assert_eq!(serials(&s, &["D3", "D4"]), n(&[46059.0, 46063.0]));
+    // Upward from Monday 2/2: Friday 1/30, Thursday 1/29.
+    s.execute("cell.set", json!({"cell": "E5", "input": "2/2/2026"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "E5", "target": "E3:E5", "mode": "weekdays"})).unwrap();
+    assert_eq!(serials(&s, &["E4", "E3"]), n(&[46052.0, 46051.0]));
+    // A number that isn't a date fills as a plain drag does: a lone number copies.
+    s.execute("cell.set", json!({"cell": "F1", "input": "7"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "F1", "target": "F1:F2", "mode": "days"})).unwrap();
+    assert_eq!(v(&s, "F2"), Value::Number(7.0));
+    // An upper-case date format is a date: 1/31/2026 as YYYY-MM-DD fills by months.
+    s.execute("cell.set", json!({"cell": "G1", "input": "1/31/2026"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "G1", "code": "YYYY-MM-DD"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "G1", "target": "G1:G2", "mode": "months"})).unwrap();
+    assert_eq!(v(&s, "G2"), Value::Number(46081.0));
+    // A date with a time keeps the time: Fill Months and Fill Weekdays, a plain drag of two dates
+    // a month apart, and the Series dialog by months.
+    s.execute("cell.set", json!({"cell": "H1", "input": "1/31/2026 12:00"})).unwrap();
+    assert_eq!(v(&s, "H1"), Value::Number(46053.5), "setup: a date and time");
+    s.execute("edit.autoFill", json!({"source": "H1", "target": "H1:H2", "mode": "months"})).unwrap();
+    assert_eq!(v(&s, "H2"), Value::Number(46081.5));
+    s.execute("edit.autoFill", json!({"source": "H1", "target": "H1:H2", "mode": "weekdays"})).unwrap();
+    assert_eq!(v(&s, "H2"), Value::Number(46055.5));
+    s.execute("cell.set", json!({"cell": "I1", "input": "1/15/2026 6:00"})).unwrap();
+    s.execute("cell.set", json!({"cell": "I2", "input": "2/15/2026 6:00"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "I1:I2", "target": "I1:I3"})).unwrap();
+    assert_eq!(v(&s, "I3"), Value::Number(46096.25));
+    s.execute("cell.set", json!({"cell": "J1", "input": "1/31/2026 12:00"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "J1:J2", "type": "date", "dateUnit": "month"})).unwrap();
+    assert_eq!(v(&s, "J2"), Value::Number(46081.5));
+}
+
+#[test]
+fn only_a_number_in_a_date_format_offers_the_date_fills() {
+    let mut s = s();
+    let dates = |s: &Session, a: &str| crate::fill::starts_with_date(&s.doc().unwrap().wb, 0, gridcraft_core::RangeRef::parse(a).unwrap());
+    s.execute("cell.set", json!({"cell": "A1", "input": "1/31/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "7"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2", "code": "0 \"days\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "46053"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A3", "code": "YYYY-MM-DD"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "=A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A5", "input": "13:30"})).unwrap();
+    assert!(dates(&s, "A1") && dates(&s, "A3"), "m/d/yyyy and YYYY-MM-DD are dates");
+    assert!(!dates(&s, "A2"), "quoted text in a number format is not a date field");
+    assert!(!dates(&s, "A4"), "a formula is not offered");
+    assert!(!dates(&s, "A5"), "a time is not a date");
+    assert!(!dates(&s, "A6"), "an empty cell is not a date");
+}
+
+#[test]
 fn insert_delete_cells_adjust() {
     let formula = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["formula"].clone();
     let mut s = s();
@@ -2782,6 +2862,42 @@ fn calculation_options_enable_iterative_calculation() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.calc.iterative);
     near(&s, "A1", 10.0);
+}
+
+#[test]
+fn error_checking_quotes_sheet_names_in_circular_references() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Bob's Q1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    let r = s.execute("formulas.errorChecking", json!({})).unwrap();
+    assert_eq!(r["circular"], json!(["'Bob''s Q1'!B2"]));
+    // The reference reads back in a formula and in Go To.
+    let reference = r["circular"][0].as_str().unwrap().to_string();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": format!("=ROW({reference})")})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+    s.execute("edit.goTo", json!({"reference": reference})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.active_sheet, d.selection.active.a1()), (1, "B2".to_string()));
+}
+
+/// Undo and redo put cells back without calculating them; the circular references listed are
+/// those of the restored cells.
+#[test]
+fn undo_and_redo_list_the_circular_references_of_the_restored_cells() {
+    let mut s = s();
+    let listed = |s: &Session| s.doc().unwrap().calc.circular.iter().map(|(si, c)| (*si, c.a1())).collect::<Vec<_>>();
+    s.execute("cell.set", json!({"cell": "A5", "input": "=A5+1"})).unwrap();
+    assert_eq!(listed(&s), vec![(0, "A5".to_string())]);
+    s.execute("home.insertRows", json!({"rows": "2"})).unwrap();
+    assert_eq!(listed(&s), vec![(0, "A6".to_string())]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(listed(&s), vec![(0, "A5".to_string())]);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(listed(&s), vec![(0, "A6".to_string())]);
+    // Undoing the loop itself lists none.
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    assert!(listed(&s).is_empty());
 }
 
 fn chart_data(s: &mut Session) {
