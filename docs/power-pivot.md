@@ -191,5 +191,5 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Pivot Preview | Not present: the window has no separate preview surface |
 | Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook |
 
-DAX support is partial: the catalog parses 484 functions and evaluates 123 of them. See
+DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
 [DAX functions](dax-functions.md) for the per-category breakdown.
