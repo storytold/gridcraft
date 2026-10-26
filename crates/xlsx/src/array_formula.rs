@@ -247,8 +247,10 @@ fn scalar_arg(name: &str, i: usize) -> bool {
         "FORECAST" | "FORECAST.LINEAR" => i == 0,
         "FORECAST.ETS" | "FORECAST.ETS.CONFINT" => i != 1 && i != 2,
         "FORECAST.ETS.SEASONALITY" | "FORECAST.ETS.STAT" => i > 1,
-        "DSUM" | "DCOUNT" | "DCOUNTA" | "DGET" | "DAVERAGE" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DVAR" | "DVARP" | "GCD"
-        | "LCM" | "MODE.MULT" | "F.TEST" | "FTEST" | "CHISQ.TEST" | "CHITEST" => false,
+        // Database functions keep the database and criteria ranges; only the field argument
+        // is consumed as a value, so a multi-cell field reference intersects at the formula row.
+        "DSUM" | "DCOUNT" | "DCOUNTA" | "DGET" | "DAVERAGE" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DVAR" | "DVARP" => i == 1,
+        "GCD" | "LCM" | "MODE.MULT" | "F.TEST" | "FTEST" | "CHISQ.TEST" | "CHITEST" => false,
         "PERCENTRANK" | "PERCENTRANK.INC" | "PERCENTRANK.EXC" | "TRIMMEAN" | "ZTEST" | "Z.TEST" => i != 0,
         "PROB" | "TTEST" | "T.TEST" => i > 1,
         "FVSCHEDULE" | "CELL" => i == 0,
@@ -465,6 +467,9 @@ mod tests {
             ("FVSCHEDULE(A:A,B:B)", "FVSCHEDULE(@A:A,B:B)"),
             ("NETWORKDAYS(A:A,B:B,C:C)", "NETWORKDAYS(@A:A,@B:B,C:C)"),
             ("WORKDAY.INTL(A:A,B:B,C:C,D:D)", "WORKDAY.INTL(@A:A,@B:B,@C:C,D:D)"),
+            // The database field is a value; the database and criteria ranges are not.
+            ("DSUM(A1:C5,B:B,E1:F2)", "DSUM(A1:C5,@B:B,E1:F2)"),
+            ("DCOUNT(A1:C5,B:B,E1:F2)", "DCOUNT(A1:C5,@B:B,E1:F2)"),
         ] {
             assert_eq!(rewrite(before).as_deref(), Some(after), "{before}");
         }
