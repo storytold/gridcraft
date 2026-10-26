@@ -6,6 +6,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod assets;
+mod bench;
 mod i18n_report;
 mod ico;
 mod keytips;
@@ -36,6 +37,9 @@ commands:
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
+  bench [--quick] [--rows N] [--reps N] [--filter NAME] [--save] [--baseline PATH]
+                  release-build calculation benchmarks on fixed in-code workbooks; compares
+                  with <target>/bench/baseline.json (--save: make this run the baseline)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
@@ -51,6 +55,7 @@ fn main() -> ExitCode {
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
         Some("ci") => cmd_ci(),
+        Some("bench") => bench::run(&root(), &rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
