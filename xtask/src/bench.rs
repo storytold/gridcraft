@@ -12,7 +12,9 @@ use serde_json::Value;
 const PASS: [&str; 3] = ["--rows", "--reps", "--filter"];
 
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
-    let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
+    // Cargo resolves a relative CARGO_TARGET_DIR against the directory it runs in, which for the
+    // bench is the workspace root; resolve it the same way here.
+    let target = std::env::var_os("CARGO_TARGET_DIR").map(|d| root.join(d)).unwrap_or_else(|| root.join("target"));
     let dir = target.join("bench");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let latest = dir.join("latest.json");
@@ -51,9 +53,11 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         println!("\nSaved as the baseline: {}", baseline.display());
         return Ok(());
     }
-    match read(&baseline) {
-        Ok(base) => compare(&base, &now),
-        Err(_) => println!("\nNo baseline at {} (run `cargo xtask bench --save` to make one).", baseline.display()),
+    if baseline.exists() {
+        // A baseline that is there but unreadable is an error, not a missing one.
+        compare(&read(&baseline)?, &now);
+    } else {
+        println!("\nNo baseline at {} (run `cargo xtask bench --save` to make one).", baseline.display());
     }
     status
 }
