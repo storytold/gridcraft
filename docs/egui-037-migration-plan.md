@@ -1013,8 +1013,8 @@ Fixtures are built in code and never committed as large binaries:
 
 - `Session::new()` + `file.new {sample: "sales"|"budget"|"grades"}` for the three samples.
 - A 100,000-row × 6-column workbook built through `range.setValues` in 10,000-row chunks, plus
-  formulas `G=B*C+D`, a chained running sum, `SUM`/`SUMIFS`/`XLOOKUP` and a sort, mirroring
-  `crates/engine/examples/perf.rs`.
+  formulas `G=B*C+D`, a chained running sum, `SUM`/`SUMIFS`/`XLOOKUP` and a sort, like the
+  workloads in `crates/engine/examples/bench.rs` (`cargo xtask bench`).
 - A two-sheet workbook with a formula being pointed across sheets, a right-to-left sheet, frozen
   panes, merged cells, a table, a chart, comments/notes, validation and a cell picture.
 - Password-protected and corrupt-font fixtures through `gridcraft-xlsx`'s `test-support` feature
