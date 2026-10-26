@@ -1,4 +1,10 @@
-use super::{Json, SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
+use super::{SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
+
+/// Why a draft whose sheet was deleted while it was open is dropped.
+pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited was deleted, so the entry was discarded.";
+
+/// Why a draft of Python code that sheet protection hid while it was open is dropped.
+pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code of the cell being edited, so the entry was discarded.";
 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
@@ -28,6 +34,22 @@ impl SheetApp {
         if text.is_none() && sh.cell_pictures.contains_key(&at) {
             return;
         }
+        // Editing a Python cell edits its code, in Python mode; typing replaces it as in Excel.
+        if text.is_none()
+            && let Some(py) = sh.cell(at).and_then(|c| c.py.as_deref())
+        {
+            // Code hidden on a protected sheet isn't loaded into an edit, and a blank edit would
+            // write over it on commit: no edit starts. Typing still replaces the cell.
+            if gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+                return;
+            }
+            let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, py.code.clone()).on_sheet(&d.wb);
+            ed.py_cell = true;
+            ed.window = self.session.active_window();
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()
@@ -41,8 +63,7 @@ impl SheetApp {
             Some(t) => (t, true),
             None => (current.clone(), false),
         };
-        let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar);
-        ed.code_edit = !replace && sh.cell(at).is_some_and(|c| c.py.is_some());
+        let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -97,15 +118,27 @@ impl SheetApp {
     }
 
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
-        let Some(ed) = self.editor.take() else { return true };
+        // Python code goes in through `python.set`, whichever way the edit is committed (the
+        // formula bar's Enter button, a click on the sheet).
+        if self.editor.as_ref().is_some_and(|e| e.python) {
+            let ok = self.commit_python_edit();
+            if ok && (dr != 0 || dc != 0) {
+                self.move_after_enter(dr, dc);
+            }
+            return ok;
+        }
+        let Some(mut ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
+        if !self.follow_draft_sheet(&mut ed) {
+            return true;
+        }
         let text = match &ed.completion {
             // A code edit commits the code as typed, whatever a completion holds.
-            Some(full) if !ed.code_edit && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+            Some(full) if !ed.python && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
-        if (ed.code_edit || (!fill_selection && !array)) && ed.original.as_ref() == Some(&text) {
+        if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
             }
@@ -117,11 +150,6 @@ impl SheetApp {
         if let Some(m) = self.session.locked_cell_message(ed.sheet, ed.cell) {
             self.message = Some(("GridCraft".into(), m));
             return true;
-        }
-        // All the code deleted: the cell is cleared through cell.set, as an empty entry clears any
-        // other cell. Code of spaces is still code.
-        if ed.code_edit && !text.is_empty() {
-            return self.commit_code_edit(ed, text, dr, dc);
         }
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
@@ -187,29 +215,55 @@ impl SheetApp {
         }
     }
 
-    /// Commits a changed edit of a Python cell's code through `python.set`, which keeps the cell's
-    /// return type; `cell.set` would replace the Python cell with an ordinary one holding the code
-    /// as text. When the command refuses the code, its message shows and the edit stays open.
-    fn commit_code_edit(&mut self, ed: editor::EditState, code: String, dr: i64, dc: i64) -> bool {
-        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
-        let r = if self.session.active().is_some_and(|d| d.wb.active_sheet() != ed.sheet) {
-            self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
-        } else {
-            Ok(Json::Null)
+    /// After a command, keeps the open draft on its own sheet: a sheet inserted, deleted or moved
+    /// before it (an undo or a macro too) changes which sheet sits at its index. The draft is then
+    /// drawn, pointed from and committed on its sheet, and the point-mode anchor, held by sheet
+    /// index, is let go. A draft is dropped at once with a message when its sheet is gone, or when
+    /// it holds Python code that sheet protection now hides (a draft in Python mode, or one that
+    /// began on a Python cell): neither editor shows hidden code, as the Python editor window
+    /// closes then too.
+    pub(crate) fn follow_open_draft(&mut self) {
+        let Some(ed) = self.editor.as_ref() else { return };
+        let Some(d) = self.session.documents().iter().find(|d| d.uid == ed.doc) else { return };
+        let order = editor::sheet_order(&d.wb);
+        let moved = ed.sheet_uid != 0 && order != ed.sheet_order;
+        let found = if moved { ed.sheet_in(&d.wb) } else { Some(ed.sheet) };
+        let hidden = found.and_then(|i| d.wb.sheet(i)).is_some_and(|sh| {
+            (ed.python || ed.py_cell || sh.cell(ed.cell).is_some_and(|c| c.py.is_some()))
+                && gridcraft_engine::display::formula_hidden(&d.wb, sh, ed.cell)
+        });
+        let why = match found {
+            None => Some(DRAFT_SHEET_GONE),
+            Some(_) if hidden => Some(DRAFT_CODE_HIDDEN),
+            Some(_) => None,
         };
-        let r = r.and_then(|_| self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": code})));
-        match r {
-            Ok(_) => {
-                if dr != 0 || dc != 0 {
-                    self.move_after_enter(dr, dc);
-                }
-                self.after_engine();
+        if let Some(why) = why {
+            self.editor = None;
+            self.session.mode = gridcraft_engine::Mode::Ready;
+            self.message = Some(("GridCraft".into(), why.into()));
+            return;
+        }
+        if let (true, Some(sheet), Some(ed)) = (moved, found, self.editor.as_mut()) {
+            ed.sheet = sheet;
+            ed.sheet_order = order;
+            ed.point_anchor = None;
+        }
+    }
+
+    /// Points a draft being committed at its sheet, found by identity: commands (a sheet inserted
+    /// or deleted before it, a move, an undo, a macro) change which sheet sits at its index while
+    /// it is open. A draft whose sheet is gone is dropped with a message, as one whose cell
+    /// protection locks is, rather than being entered on whichever sheet took its place; `false`
+    /// then.
+    fn follow_draft_sheet(&mut self, ed: &mut editor::EditState) -> bool {
+        let Some(d) = self.session.active() else { return true };
+        match ed.sheet_in(&d.wb) {
+            Some(sheet) => {
+                ed.sheet = sheet;
                 true
             }
-            Err(e) => {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
-                self.editor = Some(ed);
-                self.session.mode = gridcraft_engine::Mode::Edit;
+            None => {
+                self.message = Some(("GridCraft".into(), DRAFT_SHEET_GONE.into()));
                 false
             }
         }
@@ -227,6 +281,97 @@ impl SheetApp {
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
+    }
+
+    /// Starts editing the active cell in Python mode, in the formula bar: its code, or no code
+    /// yet for a cell that isn't a Python cell. A cell inside a spill isn't edited, as with the
+    /// formula bar's other entry paths.
+    pub fn begin_python_edit(&mut self) {
+        if formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        let Some(d) = self.session.active() else { return };
+        let Some(sh) = d.wb.active() else { return };
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        // A locked cell on a protected sheet is refused before a draft exists, as `begin_edit`
+        // refuses it (#2945).
+        if let Some(m) = self.session.locked_cell_message(d.wb.active_sheet(), at) {
+            self.message = Some(("GridCraft".into(), m));
+            return;
+        }
+        let py = sh.cell(at).and_then(|c| c.py.as_deref());
+        // A Python cell's code hidden on a protected sheet stays out of view, and Python mode
+        // doesn't start on it with no code, which a commit would write over the hidden code.
+        if py.is_some() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
+        let code = py.map(|py| py.code.clone()).unwrap_or_default();
+        // The draft belongs to this window, as `begin_edit`'s do: switching windows commits it here.
+        let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, code).on_sheet(&d.wb);
+        ed.py_cell = py.is_some();
+        ed.window = self.session.active_window();
+        self.editor = Some(ed);
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Ctrl+Alt+Shift+P (and the PY badge): Python mode on or off. An edit in progress keeps its
+    /// text; with no edit, Python mode starts on the active cell.
+    pub fn toggle_python_mode(&mut self) {
+        match self.editor.as_mut() {
+            Some(ed) if ed.python => ed.leave_python(),
+            Some(ed) => ed.enter_python(),
+            None => return self.begin_python_edit(),
+        }
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Commits a Python mode edit through `python.set`, on the sheet the edit started on; with no
+    /// code left, a Python cell is cleared through `cell.set`. When the command refuses (code
+    /// longer than a cell holds), its message shows and the edit stays open with the code as
+    /// typed.
+    pub fn commit_python_edit(&mut self) -> bool {
+        let Some(mut ed) = self.editor.take() else { return true };
+        self.session.mode = gridcraft_engine::Mode::Ready;
+        if !self.follow_draft_sheet(&mut ed) {
+            return true;
+        }
+        // The code of a Python cell committed unchanged: nothing to write (no undo step, the
+        // workbook stays clean), as with F2 then Enter on any other cell.
+        let code = gridcraft_engine::model::python::normalize_code(&ed.text);
+        let old = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).and_then(|sh| sh.cell(ed.cell)).and_then(|c| c.py.as_deref());
+        let python_cell = old.is_some();
+        if old.is_some_and(|py| py.code == code) {
+            return true;
+        }
+        // A draft on a cell sheet protection now locks can never be entered: it is dropped with
+        // the warning, as `commit_edit_here` drops an ordinary one (#2945).
+        if let Some(m) = self.session.locked_cell_message(ed.sheet, ed.cell) {
+            self.message = Some(("GridCraft".into(), m));
+            return true;
+        }
+        // No code at all: a Python cell is cleared through cell.set, as an empty entry clears any
+        // other cell (code of spaces is still code). On another cell there is nothing to write.
+        let r = match (ed.text.is_empty(), python_cell) {
+            (true, false) => return true,
+            (true, true) => self.session.run("cell.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "input": ""})),
+            (false, _) => self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text})),
+        };
+        match r {
+            Ok(_) => {
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
     }
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.

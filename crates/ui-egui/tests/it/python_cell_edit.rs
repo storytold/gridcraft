@@ -1,5 +1,5 @@
-//! Editing a Python cell's content (F2, the formula bar) edits its code; typing over it replaces
-//! it, as typing over a formula does.
+//! Editing a Python cell's content (F2, the formula bar) edits its code, in Python mode; typing
+//! over it replaces it, as typing over a formula does.
 
 use egui::{Event, Key, Modifiers};
 use gridcraft_engine::Session;
@@ -22,11 +22,20 @@ fn text(h: &mut Harness, text: &str) {
     h.run_steps(2);
 }
 
-fn key(h: &mut Harness, key: Key) {
+fn key_with(h: &mut Harness, key: Key, modifiers: Modifiers) {
     for pressed in [true, false] {
-        h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
     }
     h.run_steps(2);
+}
+
+fn key(h: &mut Harness, key: Key) {
+    key_with(h, key, Modifiers::NONE);
+}
+
+/// Ctrl+Enter (Cmd+Enter on macOS): commits Python mode, where Enter starts a new line.
+fn commit(h: &mut Harness) {
+    key_with(h, Key::Enter, Modifiers::COMMAND);
 }
 
 /// A1's code and return type (true: a Python object), or `None` when it isn't a Python cell.
@@ -46,10 +55,10 @@ fn f2_edits_a_python_cells_code_and_typing_replaces_it() {
     let undo_depth = |h: &Harness| h.state().session.active().unwrap().undo.len();
     let before = undo_depth(&h);
 
-    // F2 and Enter without a change writes nothing.
+    // F2 and a commit without a change writes nothing.
     key(&mut h, Key::F2);
-    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("1 + 1"));
-    key(&mut h, Key::Enter);
+    assert_eq!(h.state().editor.as_ref().map(|e| (e.text.as_str(), e.python)), Some(("1 + 1", true)));
+    commit(&mut h);
     assert!(h.state().editor.is_none());
     assert_eq!(undo_depth(&h), before, "an unchanged edit is no undo step");
     assert_eq!(python(&h), Some(("1 + 1".into(), true)));
@@ -58,7 +67,7 @@ fn f2_edits_a_python_cells_code_and_typing_replaces_it() {
     select_a1(&mut h);
     key(&mut h, Key::F2);
     text(&mut h, " + 2");
-    key(&mut h, Key::Enter);
+    commit(&mut h);
     assert!(h.state().editor.is_none(), "{:?}", h.state().message);
     assert_eq!(python(&h), Some(("1 + 1 + 2".into(), true)), "the cell stays a Python cell with the new code");
 
@@ -123,6 +132,6 @@ fn a_code_edit_is_never_completed_from_the_column() {
     key(&mut h, Key::F2);
     text(&mut h, " ");
     assert_eq!(h.state().editor.as_ref().and_then(|e| e.completion.clone()), None, "no completion while code is edited");
-    key(&mut h, Key::Enter);
+    commit(&mut h);
     assert_eq!(python(&h), Some(("1 + 1 ".into(), true)), "the typed code is kept");
 }
