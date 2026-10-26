@@ -792,7 +792,7 @@ impl Session {
                 // A toggle (Bold) is recorded with the state it set, as Excel records
                 // `Bold = True`: playing it back sets that state rather than flipping it again.
                 let params = match &result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(cmd::journal_params(&params), r),
+                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(&params), r),
                     _ => cmd::journal_params(&params),
                 };
                 let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
