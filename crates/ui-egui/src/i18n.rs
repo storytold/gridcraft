@@ -393,14 +393,15 @@ mod tests {
     fn paste_special_add_and_text_to_columns_comma_have_their_own_keys() {
         // "Add" is also the Solver button and "Comma" also the cell style (Spanish Excel: Sumar
         // vs Agregar, Coma vs Millares), so the two dialog options are keyed by context. English
-        // shows the plain label, and every catalog shows what it showed before the split.
+        // shows the plain label, and a catalog that translates the plain label translates the
+        // keyed one too, so the dialog option doesn't fall back to English.
         for (keyed, plain) in [("Paste Special|Add", "Add"), ("Text to Columns|Comma", "Comma")] {
             assert_eq!(Language::En.tr(keyed), plain);
             for language in Language::ALL {
                 let shown = language.tr(keyed);
                 assert!(!shown.contains('|'), "{} shows a context prefix for {keyed}: {shown}", language.code());
                 if language.tr(plain) != plain {
-                    assert_eq!(shown, language.tr(plain), "{}: {keyed}", language.code());
+                    assert_ne!(shown, plain, "{} translates {plain:?} but not {keyed:?}", language.code());
                 }
             }
         }
