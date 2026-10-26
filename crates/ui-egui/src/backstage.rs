@@ -985,10 +985,8 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
-    let mut autosave = app.ui.autosave;
-    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
-        app.ui.autosave = autosave;
-        app.grid.last_autosave = 0.0;
+    if ui.checkbox(&mut app.ui.autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
+        app.run_or_alert("app.autosave.set", json!({"enabled": app.ui.autosave}));
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);

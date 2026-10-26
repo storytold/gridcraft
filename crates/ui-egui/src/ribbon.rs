@@ -60,8 +60,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
             ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
             if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
-                app.ui.autosave = !app.ui.autosave;
-                app.grid.last_autosave = 0.0;
+                app.run_or_alert("app.autosave.set", json!({"enabled": !app.ui.autosave}));
             }
             ui.add_space(6.0);
             let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));

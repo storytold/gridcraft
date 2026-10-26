@@ -176,11 +176,8 @@ impl WheelZoom {
     }
 }
 
-impl GridState {
-    pub fn toggle_autosave(&mut self) {
-        self.last_autosave = 0.0;
-    }
-}
+// GridState manages per-session grid state (selection, scrolling, etc.).
+// User preferences live in UiState, not here.
 
 /// Geometry of the grid for one frame (handles zoom and frozen panes).
 #[derive(Clone)]
