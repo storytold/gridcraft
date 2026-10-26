@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Paste Special's Add and Text to Columns' Comma get their own keys) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Spanish catalog covers every interface key: 1,163 strings, ~53%) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -70,7 +70,7 @@ separators, number/date formats, machine translation with agent review, and scri
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| Spanish | es | 1,163 (~53%) | dialogs, messages and tooltips (dialogs take effect with #669); function help for 10 functions | Latin: yes | no | menus, ribbon, File view, dialogs, Spanish formula names and `;` separators | 2–4 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
@@ -110,6 +110,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Spanish catalog (`i18n/es.rs`) covers every key the other catalogs translate: 700 labels added (dialogs, messages, tooltips, chart types, cell styles, Analysis Tools, Solver, printing) to the 463 it had, 1,163 keys, ~21% → ~53% (the row had said 0). Wording follows Excel's Spanish (libro, hoja, Buscar objetivo, Segmentación de datos); dialog text shows once #669 routes dialogs through the catalog. AI-assisted draft pending native-speaker review |
 | 2026-10-26 | minor | Paste Special's Add operation and Text to Columns' Comma delimiter are keyed `Paste Special\|Add` and `Text to Columns\|Comma`, so they can be translated apart from the Solver's Add button and the Comma cell style (Spanish: Sumar vs Agregar, Coma vs Millares); every catalog keeps the text it showed |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
