@@ -68,10 +68,12 @@ fn run() -> R<()> {
     // A failed scenario is reported and the others still run, so one regression doesn't hide
     // the numbers for everything else.
     let mut failed = Vec::new();
-    for (name, f) in scenarios {
-        if cfg.filter.as_deref().is_some_and(|p| !name.contains(p)) {
-            continue;
-        }
+    let selected: Vec<_> = scenarios.into_iter().filter(|(name, _)| cfg.filter.as_deref().is_none_or(|p| name.contains(p))).collect();
+    if selected.is_empty() {
+        // An empty run would otherwise save as a baseline with nothing in it.
+        return Err(format!("--filter {} matches no scenario", cfg.filter.as_deref().unwrap_or("")));
+    }
+    for (name, f) in selected {
         let o = match f(&cfg) {
             Ok(o) => o,
             Err(e) => {
@@ -149,12 +151,24 @@ fn recalc_cells(s: &Session) -> usize {
 fn time(
     cfg: &Cfg,
     s: &mut Session,
+    op: impl FnMut(&mut Session, usize) -> R<()>,
+    check: impl Fn(&Session, usize) -> R<()>,
+) -> R<(Vec<Duration>, usize)> {
+    time_prepared(cfg, s, |_| Ok(()), op, check)
+}
+
+/// [`time`] with `prep` run (untimed) before each call, to put back the state `op` starts from.
+fn time_prepared(
+    cfg: &Cfg,
+    s: &mut Session,
+    mut prep: impl FnMut(&mut Session) -> R<()>,
     mut op: impl FnMut(&mut Session, usize) -> R<()>,
     check: impl Fn(&Session, usize) -> R<()>,
 ) -> R<(Vec<Duration>, usize)> {
     let mut times = Vec::with_capacity(cfg.reps);
     let mut cells = 0;
     for rep in 0..=cfg.reps {
+        prep(s)?;
         let t = Instant::now();
         op(s, rep)?;
         let dt = t.elapsed();
@@ -226,7 +240,8 @@ fn edit_sumifs(cfg: &Cfg) -> R<Outcome> {
     let mut s = session()?;
     fill(&mut s, "A", n, |i| json!([1, (i % 100) as f64]))?;
     fill(&mut s, "D", 100, |k| json!([format!("=SUMIFS(A:A,B:B,{k})")]))?;
-    let per = (n / 100) as f64;
+    // Rows whose category is 0 (i % 100 == 0), A1 among them.
+    let per = n.div_ceil(100) as f64;
     let (times, cells) = time(
         cfg,
         &mut s,
@@ -242,13 +257,21 @@ fn edit_lookup(cfg: &Cfg) -> R<Outcome> {
     let mut s = session()?;
     fill(&mut s, "A", n, |i| json!([(i + 1) as f64, (2 * (i + 1)) as f64]))?;
     let step = n / 100;
-    fill(&mut s, "D", 100, |k| json!([format!("=XLOOKUP({},A:A,B:B)", (k + 1) * step)]))?;
+    fill(&mut s, "D", 100, |k| json!([format!("=XLOOKUP({},A:A,B:B,0)", (k + 1) * step)]))?;
+    let last = (2 * 100 * step) as f64;
     let (times, cells) = time(
         cfg,
         &mut s,
-        // A1's key alternates between 1 and -1, so A:A changes but the lookups' answers don't.
-        |s, r| exec(s, "cell.set", json!({"cell": "A1", "input": if r % 2 == 0 { "-1" } else { "1" }})).map(drop),
-        |s, _| expect(s, "D100", (2 * n) as f64),
+        // D1 looks up the key in A{step}: removing it (-step) makes D1 fall back to 0, putting it
+        // back finds it again. Every lookup reads A:A, so all 100 recalculate either way.
+        |s, r| {
+            let key = if r % 2 == 0 { format!("-{step}") } else { step.to_string() };
+            exec(s, "cell.set", json!({"cell": format!("A{step}"), "input": key})).map(drop)
+        },
+        |s, r| {
+            expect(s, "D1", if r % 2 == 0 { 0.0 } else { (2 * step) as f64 })?;
+            expect(s, "D100", last)
+        },
     )?;
     Ok(Outcome { name: "edit.lookup", what: format!("edit a key under 100 XLOOKUPs over {n} rows"), times, cells })
 }
@@ -259,9 +282,11 @@ fn enter_formulas(cfg: &Cfg) -> R<Outcome> {
     let mut s = session()?;
     fill(&mut s, "A", n, |i| json!([(i % 97) as f64]))?;
     let vals: Vec<Json> = (0..n).map(|i| json!([format!("=A{}*2+1", i + 1)])).collect();
-    let (times, cells) = time(
+    let (times, cells) = time_prepared(
         cfg,
         &mut s,
+        // Each run enters the formulas into empty cells, not over the previous run's.
+        |s| exec(s, "edit.clearAll", json!({"range": format!("B1:B{n}")})).map(drop),
         |s, _| exec(s, "range.setValues", json!({"range": "B1", "values": vals})).map(drop),
         |s, _| expect(s, &format!("B{n}"), ((n - 1) % 97) as f64 * 2.0 + 1.0),
     )?;
