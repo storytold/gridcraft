@@ -357,6 +357,13 @@ impl SheetApp {
         locked.unwrap_or_else(|| "Python mode can't start on this cell: its code is hidden on a protected sheet.".into())
     }
 
+    /// Formulas › Insert Python: Python mode on the active cell, through `ui.pythonMode`, so a
+    /// refused start (a cell inside a spill, a locked cell, hidden code) shows its reason. An entry
+    /// in progress becomes code; Python mode already on stays on.
+    pub fn insert_python(&mut self) {
+        self.run_or_alert("ui.pythonMode", json!({"on": true}));
+    }
+
     /// Commits a Python mode edit through `python.set`, on the sheet the edit started on; with no
     /// code left, a Python cell is cleared through `cell.set`. When the command refuses (code
     /// longer than a cell holds), its message shows and the edit stays open with the code as

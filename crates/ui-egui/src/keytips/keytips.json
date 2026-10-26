@@ -1784,6 +1784,13 @@
    "note": "Calculation options: Partial"
   },
   {
+   "seq": "MY",
+   "kind": "control",
+   "target": "python.insert",
+   "excel": "Insert Python",
+   "note": "Python group: starts Python mode on the active cell"
+  },
+  {
    "seq": "AB",
    "kind": "dialog",
    "target": "subtotal",

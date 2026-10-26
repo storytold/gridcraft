@@ -260,6 +260,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MXA", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Automatic Calculation; Calculation options: Automatic
     ("MXM", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Manual Calculation; Calculation options: Manual
     ("MXP", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Partial Calculation; Calculation options: Partial
+    ("MY", Entry::Finish(Action::Control("python.insert"))),   // Excel: Insert Python; Python group: starts Python mode on the active cell
     ("AB", Entry::Finish(Action::Dialog("subtotal"))),         // Excel: Subtotal
     ("AC", Entry::Finish(Action::Command("data.clearFilter"))), // Excel: Clear Filter
     ("AD", Entry::Finish(Action::Command("data.consolidate"))), // Excel: Consolidate

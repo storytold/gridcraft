@@ -180,6 +180,8 @@ pub enum Icon {
     RunTo,
     /// Stop: a square.
     StopSquare,
+    /// Python in cells: a cell with a green PY tag over its corner (original; no language logo).
+    Python,
 }
 
 struct G<'a> {
@@ -888,6 +890,15 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
         }
         Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
+        Icon::Python => {
+            // A cell of a sheet, its row of code marked by short lines, and the PY tag a Python
+            // cell carries.
+            g.rect(1.5, 1.5, 11.0, 9.0, Some(paper), Some(c));
+            g.line(&[(3.5, 4.5), (6.0, 4.5)], light, 1.1);
+            g.line(&[(5.0, 7.0), (9.5, 7.0)], light, 1.1);
+            g.p.rect_filled(Rect::from_min_max(g.pt(4.5, 8.5), g.pt(15.0, 15.0)), 1.6 * g.s, green);
+            g.text(9.75, 11.85, "PY", 6.2, paper, (true, false));
+        }
     }
 }
 
