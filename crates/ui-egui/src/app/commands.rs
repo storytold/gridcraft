@@ -261,6 +261,7 @@ impl SheetApp {
                 }
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }
+            "ui.pythonCard" => crate::python_card::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)

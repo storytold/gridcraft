@@ -2,10 +2,14 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer]
+//!  [--ui 'id={json}']... out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
+//!
+//! `--cmd` runs an engine command on the session before the app starts; `--ui` runs a command
+//! through the app (UI commands too, such as `ui.pythonMode` or `ui.pythonCard`) after it starts.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -18,6 +22,7 @@ fn main() {
     let mut size = (1440.0f32, 900.0f32);
     let mut scale = 2.0f32;
     let mut cmds: Vec<String> = vec![];
+    let mut ui_cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
     let mut pane: Option<String> = None;
@@ -59,6 +64,12 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--ui" => {
+                i += 1;
+                if let Some(c) = args.get(i) {
+                    ui_cmds.push(c.clone());
+                }
+            }
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -135,6 +146,15 @@ fn main() {
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
+                }
+                for c in &ui_cmds {
+                    let (id, p) = c
+                        .split_once('=')
+                        .map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({}))))
+                        .unwrap_or((c.clone(), json!({})));
+                    if let Err(e) = app.run(&id, p) {
+                        eprintln!("{id}: {e}");
+                    }
                 }
                 app
             },

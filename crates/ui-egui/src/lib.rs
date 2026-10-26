@@ -47,6 +47,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod python_card;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;

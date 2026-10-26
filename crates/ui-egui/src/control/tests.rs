@@ -987,7 +987,10 @@ fn python_ui_commands_are_listed() {
         panic!("command discovery must return immediately");
     };
     let commands = reply["result"].as_array().cloned().unwrap_or_default();
-    let listed = [("ui.pythonMode", "{on?: bool} (toggles without it) → {on}; a refused start is an error")];
+    let listed = [
+        ("ui.pythonMode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
+        ("ui.pythonCard", "{on?: bool} (false closes it; otherwise opens the active Python cell's card) → {open, cell?}"),
+    ];
     for (id, docs) in listed {
         let command = commands.iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("engine.commands lists {id}"));
         assert_eq!(command["ui"], true, "{id}");

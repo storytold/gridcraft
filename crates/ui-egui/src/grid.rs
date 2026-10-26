@@ -245,6 +245,8 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The Python cell whose card is open (its cached result's type and preview).
+    pub py_card: Option<crate::python_card::Card>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.

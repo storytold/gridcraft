@@ -398,6 +398,17 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
         return;
     }
+    // A Python cell's PY tag selects the cell and opens its card.
+    if primary_clicked
+        && app.editor.is_none()
+        && app.dialog.is_none()
+        && !mods.any()
+        && crate::python_card::tag_at(geo, wb, sh, c).is_some_and(|tag| tag.contains(p))
+    {
+        let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+        let _ = crate::python_card::open(app);
+        return;
+    }
     // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
     // selection, which the dialog acts on, stays.
     if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
