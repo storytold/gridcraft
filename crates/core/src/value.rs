@@ -359,8 +359,9 @@ pub fn number_to_text(n: f64) -> String {
     if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
         return sci_text(n, 15);
     }
-    // A value just below 1e15 can round up to 1e15 at 15 significant digits.
-    if format!("{:.14e}", a).parse::<f64>().is_ok_and(|r| r >= 1e15) {
+    // A value just below 1e15 can round up to 1e15 at 15 significant digits. Only that narrow
+    // band pays for the exact formatting: it runs for every number literal a formula prints.
+    if a >= 9.999_999_999_999_9e14 && format!("{:.14e}", a).parse::<f64>().is_ok_and(|r| r >= 1e15) {
         return sci_text(n, 15);
     }
     // 15 significant digits, trailing zeros trimmed.
@@ -411,6 +412,9 @@ mod tests {
         assert_eq!(number_to_text(999999999999999.9), "1E+15");
         assert_eq!(number_to_text(-999999999999999.9), "-1E+15");
         assert_eq!(number_to_text(999999999999999.0), "999999999999999");
+        assert_eq!(number_to_text(999999999999999.5), "1E+15");
+        assert_eq!(number_to_text(999999999999999.4), "999999999999999");
+        assert_eq!(number_to_text(999999999999989.9), "999999999999990");
     }
 
     #[test]
