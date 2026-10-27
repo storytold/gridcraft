@@ -144,6 +144,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Zobrazit vzorce",
         "Error Checking" => "Kontrola chyb",
         "Circular References" => "Cyklické odkazy",
+        "Python Mode" => "Režim Pythonu",
         "Evaluate Formula" => "Vyhodnotit vzorec",
         "Watch Window" => "Okno sledování",
         "Calculation\nOptions" => "Možnosti\nvýpočtu",

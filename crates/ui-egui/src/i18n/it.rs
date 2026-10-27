@@ -151,6 +151,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Mostra formule",
         "Error Checking" => "Controllo errori",
         "Circular References" => "Riferimenti circolari",
+        "Python Mode" => "Modalità Python",
         "Evaluate Formula" => "Valuta formula",
         "Watch Window" => "Finestra controlli",
         "Calculation\nOptions" => "Opzioni di\ncalcolo",

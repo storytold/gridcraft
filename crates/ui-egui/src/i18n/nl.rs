@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
         "Circular References" => "Kringverwijzingen",
+        "Python Mode" => "Python-modus",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",
