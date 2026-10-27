@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -179,7 +179,8 @@ through the same code as a formula's. The xlsx reader and writer map Python cell
 the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
 size). This build runs no Python: `python.set` stores code, and new or changed code shows
-`#BLOCKED!`.
+`#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
+a cached result of the old type goes, so the cell shows `#BLOCKED!` until it runs.
 
 In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
 the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
@@ -196,6 +197,9 @@ at its sheet again, so it is drawn, pointed from and committed there, and its po
 (held by sheet index) is let go when the sheet order changed. A draft is dropped then, with a
 message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
 cell) that sheet protection now hides, as the Python editor window closes then.
+`python_card.rs` holds the PY tag (painted in the grid's
+logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
+(`ui.pythonCard`) and the cell menu's return-type items.
 
 ## Equations
 
@@ -236,6 +240,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
