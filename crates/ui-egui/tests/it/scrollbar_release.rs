@@ -62,7 +62,12 @@ fn begin_drag(h: &mut Harness, axis: Axis) -> Pos2 {
 }
 
 fn dragging(axis: Axis) -> (Harness, Pos2) {
+    dragging_with_policy(axis, false)
+}
+
+fn dragging_with_policy(axis: Axis, release_on_pointer_gone: bool) -> (Harness, Pos2) {
     let mut h = crate::support::blank_harness(4);
+    h.state_mut().services.scrollbar_release_on_pointer_gone = release_on_pointer_gone;
     let p = begin_drag(&mut h, axis);
     (h, p)
 }
@@ -121,8 +126,7 @@ fn a_release_after_pointer_gone_ends_both_scrollbar_drags() {
 #[test]
 fn the_wayland_fallback_does_not_leave_either_scrollbar_captured_after_a_lost_release() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
-        let (mut h, p) = dragging(axis);
-        h.state_mut().services.scrollbar_release_on_pointer_gone = true;
+        let (mut h, p) = dragging_with_policy(axis, true);
         // egui-winit can discard MouseInput after CursorLeft clears its pointer position.
         events(&mut h, [Event::PointerGone]);
         let stopped = axis.scroll(&h);
@@ -191,8 +195,7 @@ fn a_new_press_after_pointer_loss_in_the_same_frame_still_starts_a_drag() {
 
 fn interrupted_capture_cannot_steal_a_new_press(interruption: &[Event]) {
     for axis in [Axis::Vertical, Axis::Horizontal] {
-        let (mut h, p) = dragging(axis);
-        h.state_mut().services.scrollbar_release_on_pointer_gone = true;
+        let (mut h, p) = dragging_with_policy(axis, true);
         let next_press = axis.outside_track(p);
         let mut batch = interruption.to_vec();
         batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
@@ -232,5 +235,95 @@ fn a_focused_logic_tick_does_not_replay_old_interruption_events() {
             events(&mut h, [Event::PointerMoved(p + axis.movement())]);
             assert!(axis.scroll(&h) > 0.0, "{axis:?}: stale events in a focused hidden tick must not cancel a valid held press");
         }
+    }
+}
+
+fn child_harness(release_on_pointer_gone: bool) -> (Harness, std::sync::Arc<std::sync::Mutex<Vec<Event>>>) {
+    let queued = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let input = queued.clone();
+    egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {
+        let mut raw = egui::RawInput {
+            viewport_id: viewport.ids.this,
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+            events: std::mem::take(&mut *input.lock().unwrap()),
+            ..Default::default()
+        };
+        raw.viewports.entry(viewport.ids.this).or_default().parent = Some(viewport.ids.parent);
+        let mut draw = viewport.viewport_ui_cb;
+        // As in eframe's immediate renderer, there is no App::raw_input_hook here.
+        let mut out = ctx.run_ui(raw, |ui| draw(ui));
+        out.textures_delta.clear(); // no renderer in this input test
+    });
+    let mut app = crate::common::app(crate::support::blank_session());
+    app.services.scrollbar_release_on_pointer_gone = release_on_pointer_gone;
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut gridcraft_ui_egui::SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("scrollbar child"), Default::default(), |child, _| app.ui(child));
+        },
+        app,
+    );
+    h.ctx.set_embed_viewports(false);
+    h.run_steps(4);
+    (h, queued)
+}
+
+fn child_events(h: &mut Harness, queued: &std::sync::Mutex<Vec<Event>>, events: impl IntoIterator<Item = Event>) {
+    queued.lock().unwrap().extend(events);
+    h.run_steps(2);
+}
+
+#[test]
+fn immediate_child_windows_keep_the_new_gesture_after_scrollbar_interruption() {
+    for interruption in [vec![Event::PointerGone], vec![Event::WindowFocused(false), Event::WindowFocused(true)]] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let (mut h, queued) = child_harness(true);
+            let start = axis.start(&h);
+            child_events(&mut h, &queued, [Event::PointerMoved(start), button(start, true)]);
+            let p = start + axis.movement();
+            child_events(&mut h, &queued, [Event::PointerMoved(p)]);
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: the child scrollbar started dragging");
+            let next_press = axis.outside_track(p);
+            let mut batch = interruption.clone();
+            batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
+            child_events(&mut h, &queued, batch);
+            let stopped = axis.scroll(&h);
+            child_events(&mut h, &queued, [Event::PointerMoved(next_press + axis.movement())]);
+            assert_eq!(axis.scroll(&h), stopped, "{axis:?}: the child scrollbar stopped");
+            assert_ne!(
+                h.state().session.active().unwrap().selection.active,
+                CellRef::new(0, 0),
+                "{axis:?}: the child's new cell gesture still works"
+            );
+        }
+    }
+}
+
+#[test]
+fn immediate_child_windows_preserve_held_drags_without_the_wayland_fallback() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(false);
+        let start = axis.start(&h);
+        child_events(&mut h, &queued, [Event::PointerMoved(start), button(start, true)]);
+        let p = start + axis.movement();
+        child_events(&mut h, &queued, [Event::PointerMoved(p)]);
+        let before = axis.scroll(&h);
+        child_events(&mut h, &queued, [Event::PointerGone]);
+        child_events(&mut h, &queued, [Event::PointerMoved(p + axis.movement())]);
+        child_events(&mut h, &queued, [Event::PointerMoved(p + axis.movement() * 2.0)]);
+        assert!(axis.scroll(&h) > before, "{axis:?}: a held child drag must survive window exit on capture-capable hosts");
+    }
+}
+
+#[test]
+fn a_child_release_and_repress_on_the_same_thumb_starts_a_fresh_capture() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(true);
+        let p = axis.start(&h);
+        child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+        child_events(&mut h, &queued, [button(p, false), Event::PointerGone, Event::PointerMoved(p), button(p, true)]);
+        child_events(&mut h, &queued, [Event::PointerMoved(p + axis.movement())]);
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: a delivered release must give the next child press a fresh capture");
     }
 }
