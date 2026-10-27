@@ -385,6 +385,12 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    use winit::raw_window_handle::{HasDisplayHandle as _, RawDisplayHandle};
+                    app.services.scrollbar_release_on_pointer_gone =
+                        cc.display_handle().is_ok_and(|h| matches!(h.as_raw(), RawDisplayHandle::Wayland(_)));
+                }
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {

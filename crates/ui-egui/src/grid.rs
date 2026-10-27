@@ -47,6 +47,7 @@ pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};
+pub(crate) use show::cancel_scrollbar_drag;
 pub(crate) use show::horizontal_scrollbar;
 pub use show::show;
 #[cfg(test)]

@@ -417,6 +417,39 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     quads
 }
 
+/// Both worksheet scrollbars share capture cleanup. `PointerGone` alone is not a release on
+/// hosts with working pointer capture. The native shell enables that fallback only on Wayland:
+/// egui-winit drops MouseInput without a pointer position, leaving primary_down stale on return.
+pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context, release_on_pointer_gone: bool) {
+    let capture = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
+    let Some(id) = ctx.data(|d| d.get_temp::<egui::Id>(capture)) else { return };
+    let cancelled = ctx.input(|i| {
+        let interrupted = i.events.iter().rev().find_map(|event| match event {
+            // A new gesture after an interruption in the same frame is still valid.
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } => Some(false),
+            egui::Event::WindowFocused(false) => Some(true),
+            egui::Event::PointerGone if release_on_pointer_gone => Some(true),
+            _ => None,
+        });
+        !i.focused || !i.pointer.primary_down() || interrupted.unwrap_or(false)
+    });
+    if cancelled {
+        ctx.data_mut(|d| d.remove::<egui::Id>(capture));
+        if ctx.dragged_id().is_none_or(|dragged| dragged == id) {
+            ctx.stop_dragging();
+        }
+    }
+}
+
+fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_gone: bool) -> bool {
+    if resp.is_pointer_button_down_on() || resp.dragged_by(egui::PointerButton::Primary) {
+        let capture = egui::Id::unique(("worksheet_scrollbar_capture", ui.ctx().viewport_id()));
+        ui.ctx().data_mut(|d| d.insert_temp(capture, resp.id));
+    }
+    cancel_scrollbar_drag(ui.ctx(), release_on_pointer_gone);
+    resp.dragged_by(egui::PointerButton::Primary) && ui.ctx().dragged_id() == Some(resp.id)
+}
+
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
@@ -431,19 +464,20 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     let extent = (content - visible).max(scroll).max(0.0).min(limit);
     let id = ui.scope_id().with("vscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
+    let dragging = scrollbar_dragging(ui, &resp, app.services.scrollbar_release_on_pointer_gone);
     let drag_id = id.with("extent");
     if resp.drag_started() {
         ui.ctx().data_mut(|d| d.insert_temp(drag_id, extent));
     }
-    let extent = if resp.dragged() { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
+    let extent = if dragging { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
     let thumb_h = (track.height() * visible / (extent + visible)).clamp(24.0_f32.min(track.height()), track.height());
     let travel = track.height() - thumb_h;
     let thumb_top = track.top() + if extent > 0.0 { travel * (scroll / extent).clamp(0.0, 1.0) } else { 0.0 };
     let thumb = Rect::from_min_size(pos2(track.left() + 3.0, thumb_top), vec2((track.width() - 6.0).max(0.0), thumb_h));
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || dragging { t.text_dim } else { t.text_disabled });
     let mut next = scroll;
-    if resp.dragged() && travel > 0.0 {
+    if dragging && travel > 0.0 {
         next += resp.drag_delta().y / travel * extent;
     } else if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -484,11 +518,12 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let extent = (content - visible).max(scroll).max(0.0);
     let id = ui.scope_id().with("hscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
+    let dragging = scrollbar_dragging(ui, &resp, app.services.scrollbar_release_on_pointer_gone);
     let drag_id = id.with("extent");
     if resp.drag_started() {
         ui.ctx().data_mut(|d| d.insert_temp(drag_id, extent));
     }
-    let extent = if resp.dragged() { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
+    let extent = if dragging { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
     let thumb_w = (track.width() * visible / (extent + visible).max(1.0)).clamp(24.0_f32.min(track.width()), track.width());
     let travel = track.width() - thumb_w;
     let offset = if extent > 0.0 { travel * (scroll / extent).clamp(0.0, 1.0) } else { 0.0 };
@@ -497,9 +532,9 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let thumb_left = if geo.rtl { track.right() - thumb_w - offset } else { track.left() + offset };
     let thumb = Rect::from_min_size(pos2(thumb_left, track.top() + 3.0), vec2(thumb_w, (track.height() - 6.0).max(0.0)));
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || dragging { t.text_dim } else { t.text_disabled });
     let mut next = scroll;
-    if resp.dragged() && travel > 0.0 {
+    if dragging && travel > 0.0 {
         next += dir * resp.drag_delta().x / travel * extent;
     } else if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
