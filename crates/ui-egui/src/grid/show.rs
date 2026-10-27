@@ -448,13 +448,23 @@ impl egui::plugin::Plugin for ScrollbarInput {
         } else {
             // Immediate viewports enter here while their parent is current. End only the
             // child's owned drag through its input, before egui assigns any later press.
-            // A pending track click keeps its existing release semantics.
             let released = ctx.viewport_for(raw.viewport_id, |v| {
-                (v.interact_widgets.dragged == Some(capture.id) && v.input.pointer.primary_down() && !v.input.pointer.could_any_button_be_click())
-                    .then(|| (v.input.pointer.interact_pos().unwrap_or_default(), v.input.modifiers))
+                (v.interact_widgets.dragged.is_none_or(|id| id == capture.id) && v.input.pointer.primary_down()).then(|| {
+                    let pos = v.input.pointer.interact_pos().or_else(|| v.input.pointer.press_origin()).unwrap_or_default();
+                    let cancel_click = v.input.pointer.could_any_button_be_click().then(|| v.input.pointer.press_origin().unwrap_or(pos));
+                    (pos, v.input.modifiers, cancel_click)
+                })
             });
-            if let Some((pos, modifiers)) = released {
-                raw.events.insert(0, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            if let Some((pos, modifiers, cancel_click)) = released {
+                let release = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers };
+                if let Some(origin) = cancel_click {
+                    // egui has no cancelled release. Invalidate the old click without net
+                    // pointer movement before releasing; a later real press resets this state.
+                    let distance = ctx.options(|o| o.input_options.max_click_dist) + 1.0;
+                    raw.events.splice(0..0, [egui::Event::PointerMoved(origin + vec2(distance, 0.0)), egui::Event::PointerMoved(pos), release]);
+                } else {
+                    raw.events.insert(0, release);
+                }
             }
             if raw.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }))
             {
