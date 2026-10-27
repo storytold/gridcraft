@@ -20,6 +20,8 @@ thread_local! {
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// Input events for the root window's next frame (a key pressed in it).
     static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
+    /// Each viewport's builder as last drawn (how its native window is created).
+    static BUILT: RefCell<egui::ViewportIdMap<egui::ViewportBuilder>> = RefCell::new(egui::ViewportIdMap::default());
 }
 
 fn record(mut out: egui::FullOutput) {
@@ -30,6 +32,7 @@ fn record(mut out: egui::FullOutput) {
             s.extend(v.commands.iter().map(|c| (*id, c.clone())));
         }
     });
+    BUILT.with(|b| b.borrow_mut().extend(out.viewport_output.iter().map(|(id, v)| (*id, v.builder.clone()))));
 }
 
 struct Desk {
@@ -40,7 +43,13 @@ struct Desk {
 
 impl Desk {
     fn new(quit_with_last_window: bool) -> Desk {
+        Desk::with_window_controls(quit_with_last_window, None)
+    }
+
+    /// `controls`: the title bar carries these window buttons, as on GNOME's Wayland session.
+    fn with_window_controls(quit_with_last_window: bool, controls: Option<gridcraft_ui_egui::window_controls::Layout>) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
+        BUILT.with(|b| b.borrow_mut().clear());
         let ctx = Context::default();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
@@ -54,6 +63,7 @@ impl Desk {
         let mut session = Session::new();
         session.new_workbook();
         let mut app = SheetApp::new(session, Default::default());
+        app.window_controls = controls;
         let windows = DocWindows::new(&mut app, egui::ViewportBuilder::default(), quit_with_last_window);
         let mut desk = Desk { ctx, app, windows };
         desk.frames(3);
@@ -574,4 +584,33 @@ fn quit_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_an
     assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no Save Changes question followed");
     assert_eq!(desk.app.session.documents().len(), 2);
     assert_eq!(desk.windows.shown_windows(), [w1, w2]);
+}
+
+/// GNOME on Wayland: GridCraft draws the window buttons, so every window opens without winit's
+/// frame, as the first does; it showed both sets of buttons. Use system title bar gives every
+/// window its frame back, one opened after the change too.
+#[test]
+fn every_window_follows_the_app_drawn_frame_and_use_system_title_bar() {
+    let decorated = |vp: ViewportId| BUILT.with(|b| b.borrow().get(&vp).and_then(|v| v.decorations));
+    let mut desk = Desk::with_window_controls(true, Some(gridcraft_ui_egui::window_controls::Layout::default()));
+    desk.app.run("file.new", json!({})).unwrap();
+    let sent = desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    let second = desk.viewport(w2);
+    assert_ne!(desk.viewport(w1), second, "the second workbook has a native window");
+    assert_eq!(decorated(second), Some(false), "the second window opens without winit's frame");
+    assert!(!sent.iter().any(|(_, c)| matches!(c, ViewportCommand::Decorations(_))), "windows already have the right frame");
+
+    desk.app.run("view.systemTitleBar", json!({"on": true})).unwrap();
+    let sent = desk.frames(3);
+    for w in [w1, w2] {
+        assert!(sent_to(&sent, desk.viewport(w), &ViewportCommand::Decorations(true)), "window {w} gets its frame back");
+    }
+
+    desk.app.run("file.new", json!({})).unwrap();
+    let sent = desk.frames(3);
+    let third = desk.viewport(desk.window_of(2));
+    assert_eq!(decorated(third), Some(false), "a new window is built as at launch");
+    assert!(sent_to(&sent, third, &ViewportCommand::Decorations(true)), "and then given its frame");
+    assert!(!sent_to(&sent, second, &ViewportCommand::Decorations(true)), "the others are asked only once");
 }
