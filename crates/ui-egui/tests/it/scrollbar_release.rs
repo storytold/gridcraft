@@ -132,7 +132,7 @@ fn the_wayland_fallback_does_not_leave_either_scrollbar_captured_after_a_lost_re
         let stopped = axis.scroll(&h);
         events(&mut h, [Event::PointerMoved(p + axis.movement())]);
         events(&mut h, [Event::PointerMoved(p + axis.movement() * 2.0)]);
-        assert!(h.ctx.input(|i| i.pointer.primary_down()), "the bridge's missing release leaves the reported button down");
+        assert!(!h.ctx.input(|i| i.pointer.primary_down()), "the app releases the owned gesture even when the bridge missed its release");
         assert_eq!(axis.scroll(&h), stopped, "{axis:?}: a missing outside release must not leave the thumb captured");
     }
 }
@@ -393,6 +393,70 @@ fn a_new_child_click_after_cancellation_is_not_a_double_click() {
             assert!(input.pointer.primary_clicked(), "the new click must work");
             assert!(!input.pointer.button_double_clicked(PointerButton::Primary), "the cancelled press must not count towards a double-click");
         });
+    }
+}
+
+#[test]
+fn ordinary_child_track_clicks_page_when_released_in_a_later_frame() {
+    for fallback in [false, true] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let (mut h, queued) = child_harness(fallback);
+            let p = track_end(axis, &h);
+            child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+            assert_eq!(axis.scroll(&h), 0.0, "the track waits for the release");
+            child_events(&mut h, &queued, [button(p, false)]);
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: an ordinary child track click must page");
+        }
+    }
+}
+
+#[test]
+fn a_child_track_click_completed_before_pointer_exit_still_pages() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(true);
+        let p = track_end(axis, &h);
+        child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+        child_events(&mut h, &queued, [button(p, false), Event::PointerGone]);
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: a release before exit is a completed click");
+    }
+}
+
+#[test]
+fn a_root_pending_thumb_press_does_not_steal_a_later_cell_click() {
+    for interruption in [vec![Event::PointerGone], vec![Event::WindowFocused(false), Event::WindowFocused(true)]] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let mut h = crate::support::blank_harness(4);
+            h.state_mut().services.scrollbar_release_on_pointer_gone = true;
+            let p = axis.start(&h);
+            events(&mut h, [Event::PointerMoved(p), button(p, true)]);
+            let next_press = axis.outside_track(p) + axis.movement() * 2.0;
+            let mut batch = interruption.clone();
+            batch.extend([Event::PointerMoved(next_press), button(next_press, true), button(next_press, false)]);
+            events(&mut h, batch);
+            assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: the old thumb must stay stopped");
+            assert_ne!(h.state().session.active().unwrap().selection.active, CellRef::new(0, 0), "{axis:?}: the new root click must select its cell");
+        }
+    }
+}
+
+#[test]
+fn a_hidden_root_focus_loss_does_not_let_a_pending_press_steal_the_next_click() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        let p = axis.start(&h);
+        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
+        let ctx = h.ctx.clone();
+        let hidden = egui::RawInput { focused: false, events: vec![Event::WindowFocused(false)], ..Default::default() };
+        let _ = ctx.run_logic(&hidden, |ctx| h.state_mut().logic(ctx));
+        h.input_mut().events.extend(hidden.events);
+        let next_press = axis.outside_track(p) + axis.movement() * 2.0;
+        events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(next_press), button(next_press, true), button(next_press, false)]);
+        assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: hidden cancellation must not page the old thumb");
+        assert_ne!(
+            h.state().session.active().unwrap().selection.active,
+            CellRef::new(0, 0),
+            "{axis:?}: the next root click must work after a hidden tick"
+        );
     }
 }
 
