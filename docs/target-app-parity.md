@@ -207,7 +207,7 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
-| Full recalc, synthetic #2751 profile (2,860 × 61 data, 165,880 criteria formulas) | 287.02 s → 1.096 s | not timed | measured, Windows x64 release build; `cargo test --release -p gridcraft-calc criteria_profile_recalc_finishes -- --ignored --nocapture` |
+| Full recalc, synthetic #2751 profile (2,860 × 61 data, 165,880 criteria formulas) | 287.02 s → 0.551 s (0.498 s with an unrelated array) | not timed | measured, Windows x64 release build; `cargo test --release -p gridcraft-calc criteria_profile_recalc_finishes -- --ignored --nocapture` |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
@@ -217,9 +217,12 @@ clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measu
 Literal text equality in COUNTIF/SUMIF/AVERAGEIF and single-pair COUNTIFS/SUMIFS/AVERAGEIFS/
 MINIFS/MAXIFS uses a pass-local index over constant reference ranges. It retains row-major
 summation and the criteria matcher's one-character Unicode folding. Formula-containing ranges,
-spills, iterative calculation, numeric/wildcard/comparison criteria, multiple criteria pairs and
+overlapping spills, iterative calculation, numeric/wildcard/comparison criteria, multiple criteria pairs and
 computed criteria retain the ordinary evaluator. Cache allowances (one million range cells,
-8 MB of folded keys, 1,024 entries per pass) fall back without changing results. The synthetic
+8 MB of folded keys, 100,000 groups to bound per-group/map overhead, 1,024 entries per pass)
+fall back without changing results; the cell allowance includes eligibility inspections.
+The timing above is Windows x64 release, not CPU-pinned, with other builds active during
+portions of the baseline run. The synthetic
 profile reproduces a criteria recalculation stall; the private XLS workbook and its sampled
 `lookup_equal` path have not been verified with this change. File opening still recalculates
 synchronously; this does not implement background opening or change the lookup functions.
@@ -351,6 +354,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-31 | minor | What-if and analysis: Solver Options (no score change) |
 | 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |
 | 2026-10-27 | minor | Index literal text criteria over constant ranges per recalc pass; synthetic #2751 profile 287.02 s → 1.096 s, with unchanged results and conservative fallbacks |
+| 2026-10-27 | minor | Index literal text criteria over constant ranges per recalc pass; synthetic #2751 profile 287.02 s → 0.551 s, with unchanged results, unrelated-spill support and conservative fallbacks |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |

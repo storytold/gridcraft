@@ -29,6 +29,7 @@ pub(super) struct PassHost<'a> {
     text_criteria: HashMap<(Area, Area), Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>>>,
     criteria_cells: u64,
     criteria_bytes: usize,
+    criteria_groups: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -84,6 +85,7 @@ impl<'a> PassHost<'a> {
             text_criteria: HashMap::default(),
             criteria_cells: 0,
             criteria_bytes: 0,
+            criteria_groups: 0,
             rng,
             now,
             cycle: false,
@@ -309,6 +311,12 @@ impl PassHost<'_> {
             }
             _ => v,
         };
+        if let Some(a) = self.spills.get(&k) {
+            let area = spill_area(k, a);
+            // A spill can fill cells that were empty when an index was built. Drop only
+            // intersecting indexes, so unrelated arrays do not disable criteria acceleration.
+            self.text_criteria.retain(|(source, target), _| !overlaps(*source, area) && !overlaps(*target, area));
+        }
         self.results.insert(k, v.clone());
         v
     }
@@ -376,6 +384,16 @@ impl PassHost<'_> {
     }
 }
 
+fn spill_area((sheet, anchor): Key, a: &Array) -> Area {
+    let end =
+        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
+    Area { sheet, range: RangeRef::new(anchor, end) }
+}
+
+fn overlaps(a: Area, b: Area) -> bool {
+    a.sheet == b.sheet && a.range.intersects(&b.range)
+}
+
 /// A legacy (Ctrl+Shift+Enter) array formula's result fitted to the range it was entered in, as
 /// Excel does: a single row or column repeats across the range, a single value fills it, cells
 /// past the result show `#N/A`, and a result larger than the range is cut off.
@@ -403,32 +421,30 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 impl Host for PassHost<'_> {
     fn constant_value(&self, area: Area) -> Option<Value> {
         let sh = self.wb.sheet(area.sheet)?;
-        if self.iterate || !area.range.is_single() || !self.spills.is_empty() || !sh.spill.is_empty() {
+        if self.iterate || !area.range.is_single() {
             return None;
         }
+        // A spill cannot overwrite a nonempty stored constant (spill_blocked). Empty cells
+        // may be covered by a new spill, so decline them without reading/evaluating anything.
         match sh.cell(area.range.start) {
-            Some(cell) if cell.formula.is_some() || matches!(cell.value, Value::Array(_)) => None,
+            Some(cell) if cell.formula.is_some() || matches!(cell.value, Value::Array(_) | Value::Empty) => None,
             Some(cell) => Some(cell.value.clone()),
-            None => Some(Value::Empty),
+            None => None,
         }
     }
     fn text_criteria_index(&mut self, range: Area, target: Area) -> Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>> {
-        // A new spill can overwrite a previously constant range, even if the cached index was
-        // built before its anchor ran. Decline before consulting the cache in that case.
-        if self.iterate || !self.spills.is_empty() {
+        if self.iterate {
             return None;
         }
         let source = self.wb.sheet(range.sheet)?;
         let dest = self.wb.sheet(target.sheet)?;
-        if !source.spill.is_empty() || !dest.spill.is_empty() {
-            return None;
-        }
         let key = (range, target);
         if let Some(index) = self.text_criteria.get(&key) {
             return index.clone();
         }
-        // Optional acceleration has a pass-wide cell and text budget. Reaching it changes no
-        // results: the ordinary evaluator remains the fallback. Limit cache metadata as well.
+        // Bound the cells inspected for optional builds, including ineligible ranges. Text
+        // and group allowances also bound retained keys and per-group/map overhead. Reaching
+        // any allowance changes no results: the ordinary evaluator remains the fallback.
         let cells = u64::from(range.range.height()) * u64::from(range.range.width());
         if self.text_criteria.len() >= 1_024 || self.criteria_cells.saturating_add(cells) > 1_000_000 {
             return None;
@@ -439,18 +455,30 @@ impl Host for PassHost<'_> {
                 .sheet(area.sheet)
                 .is_some_and(|sh| sh.cells.iter_range(area.range).all(|(_, cell)| cell.formula.is_none() && !matches!(cell.value, Value::Array(_))))
         };
-        let index = if constant(range) && constant(target) {
+        let spill_overlaps = |area: Area| {
+            self.wb.sheet(area.sheet).is_some_and(|sh| {
+                sh.spill_ranges.values().any(|r| r.intersects(&area.range))
+                    || sh.spill.range(area.range.start..=area.range.end).any(|(c, _)| area.range.contains(*c))
+            }) || self.spills.iter().any(|(k, a)| overlaps(area, spill_area(*k, a)))
+        };
+        let index = if constant(range) && constant(target) && !spill_overlaps(range) && !spill_overlaps(target) {
             let cells = source.cells.iter_range(range.range).map(|(at, cell)| {
                 let target_cell =
                     CellRef::new(target.range.start.row + at.row - range.range.start.row, target.range.start.col + at.col - range.range.start.col);
                 (&cell.value, dest.value_ref(target_cell).unwrap_or(&Value::Empty))
             });
-            gridcraft_functions::TextCriteriaIndex::new(cells, 8_000_000usize.saturating_sub(self.criteria_bytes)).map(std::sync::Arc::new)
+            gridcraft_functions::TextCriteriaIndex::new(
+                cells,
+                8_000_000usize.saturating_sub(self.criteria_bytes),
+                100_000usize.saturating_sub(self.criteria_groups),
+            )
+            .map(std::sync::Arc::new)
         } else {
             None
         };
         if let Some(index) = &index {
             self.criteria_bytes += index.text_bytes();
+            self.criteria_groups += index.groups();
         }
         self.text_criteria.insert(key, index.clone());
         index
@@ -620,34 +648,73 @@ impl Host for PassHost<'_> {
 #[cfg(test)]
 mod criteria_tests {
     use super::*;
-    use gridcraft_model::Cell;
+    use gridcraft_model::{Cell, Formula};
 
     #[test]
-    fn text_criteria_ranges_are_indexed_once_per_pass() {
+    fn text_criteria_formulas_index_their_ranges_once_per_pass() {
         use crate::eval::Area;
         let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
         for r in 0..500 {
             wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 0), Cell::value(Value::from(format!("key{r}"))));
             wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 1), Cell::value(Value::Number(f64::from(r))));
-        }
-        let range = Area { sheet: 0, range: RangeRef::parse("A1:A500").unwrap() };
-        let target = Area { sheet: 0, range: RangeRef::parse("B1:B500").unwrap() };
-        let exprs = HashMap::default();
-        let mut rng = 1;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
-        for _ in 0..3 {
-            for r in 0..500 {
-                let index = host.text_criteria_index(range, target).unwrap();
-                assert_eq!(index.aggregate("SUMIF", &format!("key{r}")), Value::Number(f64::from(r)));
+            for col in 2..5 {
+                let at = CellRef::new(r, col);
+                let formula = Formula::new(&format!("=SUMIF(A$1:A$500,A{},B$1:B$500)", r + 1));
+                exprs.insert((0, at), formula.expr_arc().unwrap());
+                wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(formula));
             }
         }
-        // Deterministic complexity guard, alongside the opt-in wall-clock profile test.
+        let spill_anchor = CellRef::new(0, 25);
+        let formula = Formula::new("=SEQUENCE(2)");
+        exprs.insert((0, spill_anchor), formula.expr_arc().unwrap());
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(spill_anchor, Cell::formula(formula));
+        sh.spill.insert(CellRef::new(1, 25), Value::Number(2.0));
+        sh.spill_ranges.insert(spill_anchor, RangeRef::parse("Z1:Z2").unwrap());
+        let range = Area { sheet: 0, range: RangeRef::parse("A1:A500").unwrap() };
+        let target = Area { sheet: 0, range: RangeRef::parse("B1:B500").unwrap() };
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        host.calculate((0, spill_anchor));
+        for col in 2..5 {
+            for r in 0..500 {
+                let key = (0, CellRef::new(r, col));
+                host.calculate(key);
+                assert_eq!(host.results.get(&key), Some(&Value::Number(f64::from(r))));
+            }
+        }
+        // Exercise the real evaluator, so bypassing the fast path fails this active guard too.
         assert_eq!(host.criteria_cells, 500);
         assert_eq!(host.text_criteria.len(), 1);
         host.iterate = true;
         assert!(host.text_criteria_index(range, target).is_none());
-        host.iterate = false;
-        host.spills.insert((0, CellRef::new(0, 3)), std::sync::Arc::new(gridcraft_core::Array::scalar(Value::Number(1.0))));
-        assert!(host.text_criteria_index(range, target).is_none());
+    }
+
+    #[test]
+    fn a_new_overlapping_spill_invalidates_a_text_criteria_index() {
+        for source_spills in [false, true] {
+            let mut wb = Workbook::new();
+            let mut exprs = HashMap::default();
+            let (anchor, array) = if source_spills { ("A1", "={\"header\";\"key\";\"key\"}") } else { ("B1", "={0;1;2}") };
+            for (at, text) in [("C1", "=SUMIF(A2:A3,\"key\",B2:B3)"), (anchor, array), ("C2", "=SUMIF(A2:A3,\"key\",B2:B3)")] {
+                let cell = CellRef::parse(at).unwrap();
+                let formula = Formula::new(text);
+                exprs.insert((0, cell), formula.expr_arc().unwrap());
+                wb.sheet_mut(0).unwrap().cells.set(cell, Cell::formula(formula));
+            }
+            for r in 1..=2 {
+                let (col, value) = if source_spills { (1, Value::Number(f64::from(r))) } else { (0, Value::from("key")) };
+                wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, col), Cell::value(value));
+            }
+            let mut rng = 1;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+            host.calculate((0, CellRef::new(0, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(0, 2))), Some(&Value::Number(0.0)));
+            assert_eq!(host.criteria_cells, 2);
+            host.calculate((0, CellRef::parse(anchor).unwrap()));
+            host.calculate((0, CellRef::new(1, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(1, 2))), Some(&Value::Number(3.0)));
+        }
     }
 }
