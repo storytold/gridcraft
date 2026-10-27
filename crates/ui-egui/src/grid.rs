@@ -49,6 +49,7 @@ pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};
 pub(crate) use show::cancel_scrollbar_drag;
 pub(crate) use show::horizontal_scrollbar;
+pub(crate) use show::prepare_scrollbar_input;
 pub use show::show;
 #[cfg(test)]
 use tables::filter_table_range;

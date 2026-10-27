@@ -420,9 +420,39 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
 /// Both worksheet scrollbars share capture cleanup. `PointerGone` alone is not a release on
 /// hosts with working pointer capture. The native shell enables that fallback only on Wayland:
 /// egui-winit drops MouseInput without a pointer position, leaving primary_down stale on return.
-pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context, release_on_pointer_gone: bool) {
+fn stop_scrollbar_drag(ctx: &egui::Context) {
     let capture = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
-    let Some((id, started)) = ctx.data(|d| d.get_temp::<(egui::Id, u64)>(capture)) else { return };
+    let Some((id, _)) = ctx.data(|d| d.get_temp::<(egui::Id, u64)>(capture)) else { return };
+    ctx.data_mut(|d| d.remove::<(egui::Id, u64)>(capture));
+    if ctx.dragged_id().is_none_or(|dragged| dragged == id) {
+        ctx.stop_dragging();
+    }
+}
+
+/// Logic-only ticks refresh raw focus but retain the previous full pass's UI events.
+pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context) {
+    if !ctx.input(|i| i.raw.focused) {
+        stop_scrollbar_drag(ctx);
+    }
+}
+
+/// End the old capture before egui assigns a later press in the same native input batch.
+pub(crate) fn prepare_scrollbar_input(ctx: &egui::Context, raw: &egui::RawInput, release_on_pointer_gone: bool) {
+    if raw.viewport_id == ctx.viewport_id()
+        && (!raw.focused
+            || raw.events.iter().any(|event| match event {
+                egui::Event::WindowFocused(false) | egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => true,
+                egui::Event::PointerGone => release_on_pointer_gone,
+                _ => false,
+            }))
+    {
+        stop_scrollbar_drag(ctx);
+    }
+}
+
+fn cancel_scrollbar_capture(ctx: &egui::Context, release_on_pointer_gone: bool) {
+    let capture = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
+    let Some((_, started)) = ctx.data(|d| d.get_temp::<(egui::Id, u64)>(capture)) else { return };
     let frame = ctx.cumulative_frame_nr();
     let cancelled = ctx.input(|i| {
         let interrupted = i.events.iter().rev().find_map(|event| match event {
@@ -432,14 +462,10 @@ pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context, release_on_pointer_gone
             egui::Event::PointerGone if release_on_pointer_gone => Some(true),
             _ => None,
         });
-        // A native logic-only tick refreshes raw.focused, leaving the other input stale.
         !i.raw.focused || !i.focused || !i.pointer.primary_down() || interrupted.unwrap_or(false)
     });
     if cancelled {
-        ctx.data_mut(|d| d.remove::<(egui::Id, u64)>(capture));
-        if ctx.dragged_id().is_none_or(|dragged| dragged == id) {
-            ctx.stop_dragging();
-        }
+        stop_scrollbar_drag(ctx);
     }
 }
 
@@ -453,7 +479,7 @@ fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_g
             }
         });
     }
-    cancel_scrollbar_drag(ui.ctx(), release_on_pointer_gone);
+    cancel_scrollbar_capture(ui.ctx(), release_on_pointer_gone);
     resp.dragged_by(egui::PointerButton::Primary) && ui.ctx().dragged_id() == Some(resp.id)
 }
 
