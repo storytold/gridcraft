@@ -41,19 +41,56 @@ fn criteria_profile(rows: u32, formula_cols: u32) -> Workbook {
 #[ignore = "timing-sensitive; run with --ignored in release"]
 #[allow(clippy::disallowed_methods)]
 fn criteria_profile_recalc_finishes() {
-    let mut wb = criteria_profile(2_860, 58);
-    let start = std::time::Instant::now();
-    Calc::new().recalc_all(&mut wb);
-    let elapsed = start.elapsed();
-    eprintln!("criteria profile: {elapsed:?}");
-    for r in 0..2_860 {
-        let count = (2_860 - 1 - r % 97) / 97 + 1;
-        for col in 1..=58 {
-            let expected = if col % 3 == 2 { 1.0 } else { f64::from(count) };
-            assert_eq!(wb.sheet(1).unwrap().value(CellRef::new(r, col)), Value::Number(expected));
+    for unrelated_array in [false, true] {
+        let mut wb = criteria_profile(2_860, 58);
+        if unrelated_array {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.remove(CellRef::new(1, 25));
+            sh.cells.set(CellRef::new(0, 25), Cell::formula(Formula::new("=SEQUENCE(2)")));
         }
+        let start = std::time::Instant::now();
+        Calc::new().recalc_all(&mut wb);
+        let elapsed = start.elapsed();
+        eprintln!("criteria profile (unrelated array={unrelated_array}): {elapsed:?}");
+        for r in 0..2_860 {
+            let count = (2_860 - 1 - r % 97) / 97 + 1;
+            for col in 1..=58 {
+                let expected = if col % 3 == 2 { 1.0 } else { f64::from(count) };
+                assert_eq!(wb.sheet(1).unwrap().value(CellRef::new(r, col)), Value::Number(expected));
+            }
+        }
+        assert!(elapsed < std::time::Duration::from_secs(20), "criteria recalc took {elapsed:?}");
     }
-    assert!(elapsed < std::time::Duration::from_secs(20), "criteria recalc took {elapsed:?}");
+}
+
+#[test]
+fn indexed_text_criteria_resize_two_dimensional_targets_and_propagate_errors() {
+    let mut t = T::new();
+    for (at, input) in [
+        ("A1", "apple"),
+        ("B1", "pear"),
+        ("A2", "APPLE"),
+        ("B2", "Apple"),
+        ("B3", "pear"),
+        ("D5", "1"),
+        ("E5", "2"),
+        ("D6", "3"),
+        ("E6", "4"),
+        ("D7", "5"),
+        ("E7", "#N/A"),
+    ] {
+        t.set(at, input);
+    }
+    t.set("G1", "=SUMIF(A1:B3,\"apple\",D5)");
+    t.set("G2", "=AVERAGEIF(A1:B3,\"apple\",D5)");
+    t.set("H1", "=SUMIF(A1:B3,\"\"&\"apple\",D5)");
+    t.set("H2", "=AVERAGEIF(A1:B3,\"\"&\"apple\",D5)");
+    assert_eq!((t.num("G1"), t.num("G2")), (8.0, 8.0 / 3.0));
+    assert_eq!((t.get("G1"), t.get("G2")), (t.get("H1"), t.get("H2")));
+    t.set("B3", "apple");
+    for at in ["G1", "G2", "H1", "H2"] {
+        assert_eq!(t.get(at), Value::Error(CellError::NA));
+    }
 }
 
 #[test]
