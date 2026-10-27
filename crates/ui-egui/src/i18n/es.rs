@@ -2,6 +2,7 @@
 //! wording (sentence case, «Inmovilizar paneles», «Combinar y centrar»); anything absent falls back
 //! to English. Formula names and separators are localized separately (`formula_locale`).
 
+/// Returns the Spanish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Pegar",
@@ -145,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Quitar flechas",
         "Show Formulas" => "Mostrar fórmulas",
         "Error Checking" => "Comprobación de errores",
+        "Circular References" => "Referencias circulares",
         "Evaluate Formula" => "Evaluar fórmula",
         "Watch Window" => "Ventana Inspección",
         "Calculation\nOptions" => "Opciones\nde cálculo",
@@ -189,6 +191,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Vista previa de\nsalto de página",
         "Page\nLayout" => "Diseño\nde página",
         "Formula Bar" => "Barra de fórmulas",
+        "Name Box" => "Cuadro de nombre",
+        "Cell Editor" => "Editor de celda",
+        "Font Size" => "Tamaño de fuente",
         "Gridlines" => "Líneas de cuadrícula",
         "Headings" => "Encabezados",
         "Zoom" => "Zoom",
@@ -209,6 +214,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Pie de página",
         "Different First Page" => "Primera página diferente",
         "Different Odd & Even Pages" => "Páginas pares e impares diferentes",
+        "Scale with Document" => "Escalar con el documento",
+        "Align with Page Margins" => "Alinear con los márgenes de página",
         "Go to Footer" => "Ir al pie de página",
         "Go to Header" => "Ir al encabezado",
         "Go to\nFooter" => "Ir al pie\nde página",
@@ -330,6 +337,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Guardar automáticamente los libros .xlsx tras cada cambio",
         "Workbook calculation" => "Cálculo del libro",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
+        "Maximum Iterations:" => "Iteraciones máximas:",
+        "Maximum Change:" => "Cambio máximo:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Las iteraciones máximas deben ser un número entero de 1 a 32767.",
+        "Maximum Change must be a number of 0 or more." => "El cambio máximo debe ser un número igual o mayor que 0.",
         "Calculation settings are saved with the workbook." => "La configuración de cálculo se guarda con el libro.",
         "Interface size" => "Tamaño de la interfaz",
         "Auto" => "Automático",
@@ -418,6 +429,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Oscuro",
         "Sheet Options|View" => "Ver",
         "Print" => "Imprimir",
+        "Print What" => "Qué imprimir",
         "PivotTable Fields" => "Campos de tabla dinámica",
         "Choose fields to add to report:" => "Seleccione los campos para agregar al informe:",
         "Use a field's menu to move it between areas:" => "Use el menú de un campo para moverlo entre áreas:",
@@ -465,6 +477,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Hoja siguiente",
         "All sheets" => "Todas las hojas",
         "New sheet (⇧F11)" => "Nueva hoja (⇧F11)",
+        "Text Box" => "Cuadro de texto",
         _ => return None,
     })
 }

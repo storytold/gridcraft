@@ -44,6 +44,15 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
+        cmd!(
+            query "view.statusBar",
+            "Customize Status Bar",
+            [],
+            None,
+            "{average?, count?, numericalCount?, minimum?, maximum?, sum?: bool (the statistics shown for a selection; returns all six)}",
+            always,
+            status_bar
+        ),
         cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
         cmd!(
@@ -115,7 +124,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Header & Footer",
             ["Insert", "Text"],
             None,
-            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, firstHeader, firstFooter, evenHeader, evenFooter}",
+            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, scaleWithDoc?: bool, alignWithMargins?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, scaleWithDoc, alignWithMargins, firstHeader, firstFooter, evenHeader, evenFooter}",
             has_doc,
             header_footer
         ),
@@ -140,7 +149,7 @@ fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let at = match cell_param_on(s, p, "cell", si)? {
         Some(c) => c,
-        None if si == d.wb.active_sheet => d.selection.active,
+        None if si == d.wb.active_sheet() => d.selection.active,
         // The selection belongs to the active sheet.
         None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
     };
@@ -187,12 +196,36 @@ fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+fn status_bar(s: &mut Session, p: &Json) -> Result<Json> {
+    let st = &mut s.prefs.status_bar;
+    for (key, flag) in [
+        ("average", &mut st.average),
+        ("count", &mut st.count),
+        ("numericalCount", &mut st.numerical_count),
+        ("minimum", &mut st.minimum),
+        ("maximum", &mut st.maximum),
+        ("sum", &mut st.sum),
+    ] {
+        if let Some(on) = bool_param(p, key) {
+            *flag = on;
+        }
+    }
+    Ok(json!({
+        "average": st.average,
+        "count": st.count,
+        "numericalCount": st.numerical_count,
+        "minimum": st.minimum,
+        "maximum": st.maximum,
+        "sum": st.sum,
+    }))
+}
+
 fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
     let z = f64_param(p, "percent").ok_or_else(|| bad("view.zoom", "missing `percent`"))?.clamp(10.0, 400.0) as u16;
     let d = s.doc_mut()?;
     let dirty = d.is_dirty();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     if let Some(sh) = wb.sheet_mut(si) {
         sh.zoom = z;
     }
@@ -392,6 +425,12 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(on) = bool_param(p, "differentOddEven") {
             pr.different_odd_even = on;
         }
+        if let Some(on) = bool_param(p, "scaleWithDoc") {
+            pr.hf_scale_with_doc = on;
+        }
+        if let Some(on) = bool_param(p, "alignWithMargins") {
+            pr.hf_align_with_margins = on;
+        }
         if let Some((page, footer, idx, text)) = &section {
             let spec = pr.hf_mut(*page, *footer);
             let mut parts = super::print::split_header_footer(spec);
@@ -405,6 +444,8 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
             "footer": pr.footer,
             "differentFirst": pr.different_first,
             "differentOddEven": pr.different_odd_even,
+            "scaleWithDoc": pr.hf_scale_with_doc,
+            "alignWithMargins": pr.hf_align_with_margins,
             "firstHeader": pr.first_header,
             "firstFooter": pr.first_footer,
             "evenHeader": pr.even_header,
@@ -477,5 +518,23 @@ mod tests {
         // A prefs.json saved before the option existed keeps the formula bar shown.
         let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
         assert!(old.formula_bar);
+    }
+
+    #[test]
+    fn status_bar_statistics_default_to_average_count_and_sum_and_turn_on_one_at_a_time() {
+        let mut s = Session::new();
+        let all = json!({"average": true, "count": true, "numericalCount": false, "minimum": false, "maximum": false, "sum": true});
+        assert_eq!(s.execute("view.statusBar", json!({})).unwrap(), all);
+        let r = s.execute("view.statusBar", json!({"minimum": true, "sum": false, "count": "yes"})).unwrap();
+        assert_eq!(r, json!({"average": true, "count": true, "numericalCount": false, "minimum": true, "maximum": false, "sum": false}));
+        assert!(s.prefs.status_bar.minimum && !s.prefs.status_bar.sum);
+        // A prefs.json saved before the option existed, or with only some of the six, keeps the defaults for the rest.
+        let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
+        assert_eq!(old.status_bar, crate::StatusBarStats::default());
+        let part: crate::Prefs = serde_json::from_str(r#"{"statusBar": {"maximum": true}}"#).unwrap();
+        assert!(part.status_bar.maximum && part.status_bar.average && part.status_bar.sum && !part.status_bar.minimum);
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        assert_eq!(saved["statusBar"]["minimum"], true);
+        assert_eq!(saved["statusBar"]["numericalCount"], false);
     }
 }

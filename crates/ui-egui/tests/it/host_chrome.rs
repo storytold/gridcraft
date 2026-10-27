@@ -7,9 +7,9 @@ use gridcraft_ui_egui::{Chrome, Services, SheetApp, backstage::Page};
 fn harness(chrome: Chrome) -> egui_kittest::Harness<'static, SheetApp> {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Services::default());
+    let mut app = crate::common::prepare(SheetApp::new(session, Services::default()));
     app.chrome = chrome;
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

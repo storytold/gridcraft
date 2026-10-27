@@ -1,6 +1,7 @@
 //! German translations for the interface strings in i18n.rs. Labels follow the wording German
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Einfügen",
@@ -146,6 +147,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pfeile entfernen",
         "Show Formulas" => "Formeln anzeigen",
         "Error Checking" => "Fehlerüberprüfung",
+        "Circular References" => "Zirkelbezüge",
         "Evaluate Formula" => "Formel auswerten",
         "Watch Window" => "Überwachungsfenster",
         "Calculation\nOptions" => "Berechnungs-\noptionen",
@@ -190,6 +192,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Seitenumbruch-\nvorschau",
         "Page\nLayout" => "Seiten-\nlayout",
         "Formula Bar" => "Formelleiste",
+        "Name Box" => "Namensfeld",
+        "Cell Editor" => "Zelleneditor",
+        "Font Size" => "Schriftgröße",
         "Gridlines" => "Gitternetzlinien",
         "Headings" => "Überschriften",
         "Zoom" => "Zoom",
@@ -210,6 +215,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Fußzeile",
         "Different First Page" => "Erste Seite anders",
         "Different Odd & Even Pages" => "Gerade und ungerade Seiten anders",
+        "Scale with Document" => "Mit Dokument skalieren",
+        "Align with Page Margins" => "An Seitenrändern ausrichten",
         "Go to Footer" => "Zur Fußzeile wechseln",
         "Go to Header" => "Zur Kopfzeile wechseln",
         "Go to\nFooter" => "Zur\nFußzeile",
@@ -333,6 +340,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => ".xlsx-Arbeitsmappen nach jeder Änderung automatisch speichern",
         "Workbook calculation" => "Arbeitsmappenberechnung",
         "Enable iterative calculation" => "Iterative Berechnung aktivieren",
+        "Maximum Iterations:" => "Maximale Iterationszahl:",
+        "Maximum Change:" => "Maximale Änderung:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Die maximale Iterationszahl muss eine ganze Zahl von 1 bis 32767 sein.",
+        "Maximum Change must be a number of 0 or more." => "Die maximale Änderung muss eine Zahl größer oder gleich 0 sein.",
         "Calculation settings are saved with the workbook." => "Berechnungseinstellungen werden mit der Arbeitsmappe gespeichert.",
         "Interface size" => "Größe der Benutzeroberfläche",
         "Auto" => "Automatisch",
@@ -421,6 +432,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        "Print What" => "Was drucken",
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",
         "Copy" => "Kopieren",
@@ -449,6 +461,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Nächstes Blatt",
         "All sheets" => "Alle Blätter",
         "New sheet (⇧F11)" => "Neues Blatt (⇧F11)",
+        "Text Box" => "Textfeld",
         _ => return None,
     })
 }

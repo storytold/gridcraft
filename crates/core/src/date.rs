@@ -174,6 +174,9 @@ pub fn datetime_from_serial(sys: DateSystem, serial: f64) -> Option<DateTime> {
     if frac_ms >= 86_400_000 {
         frac_ms -= 86_400_000;
         day += 1;
+        if day > max_serial(sys) {
+            return None;
+        }
     }
     let (y, m, d, weekday) = match sys {
         DateSystem::D1900 => {
@@ -220,6 +223,14 @@ pub const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Th
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_rounding_into_next_day_past_max_is_none() {
+        for sys in [DateSystem::D1900, DateSystem::D1904] {
+            let serial = max_serial(sys) as f64 + 0.9999999995;
+            assert_eq!(datetime_from_serial(sys, serial), None);
+        }
+    }
 
     #[test]
     fn leap_and_month_length_outside_chrono_range() {

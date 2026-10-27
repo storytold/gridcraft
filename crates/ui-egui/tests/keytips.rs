@@ -1,5 +1,8 @@
 //! Ribbon access keys through the complete egui input and UI path.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use egui::{Event, Key, Modifiers, PointerButton, os::OperatingSystem};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
@@ -15,15 +18,7 @@ fn harness(session: Session) -> Harness {
 }
 
 fn harness_on(session: Session, os: OperatingSystem) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_os(os).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::common::os_harness(session, os)
 }
 
 fn blank() -> Session {

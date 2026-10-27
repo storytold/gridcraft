@@ -40,7 +40,9 @@ fn group_kind(g: &El) -> Option<ChartKind> {
         "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
         "doughnutChart" => ChartKind::Doughnut,
         "areaChart" | "area3DChart" => {
-            if stacked || pct {
+            if pct {
+                ChartKind::AreaStacked100
+            } else if stacked {
                 ChartKind::AreaStacked
             } else {
                 ChartKind::Area
@@ -284,7 +286,7 @@ enum G {
     Line { stacked: bool, markers: bool },
     Pie,
     Doughnut,
-    Area { stacked: bool },
+    Area { grouping: &'static str },
     Scatter { lines: bool },
     Bubble,
     Radar,
@@ -303,8 +305,9 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::LineStacked => G::Line { stacked: true, markers: false },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
-        ChartKind::Area => G::Area { stacked: false },
-        ChartKind::AreaStacked => G::Area { stacked: true },
+        ChartKind::Area => G::Area { grouping: "standard" },
+        ChartKind::AreaStacked => G::Area { grouping: "stacked" },
+        ChartKind::AreaStacked100 => G::Area { grouping: "percentStacked" },
         ChartKind::Scatter => G::Scatter { lines: false },
         ChartKind::ScatterLines => G::Scatter { lines: true },
         ChartKind::Bubble => G::Bubble,
@@ -671,10 +674,7 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
-        G::Area { stacked } => format!(
-            "<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>",
-            if stacked { "stacked" } else { "standard" }
-        ),
+        G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
         G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")

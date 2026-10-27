@@ -1,3 +1,4 @@
+/// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Wklej",
@@ -145,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Usuń strzałki",
         "Show Formulas" => "Pokaż formuły",
         "Error Checking" => "Sprawdzanie błędów",
+        "Circular References" => "Odwołania cykliczne",
         "Evaluate Formula" => "Szacuj formułę",
         "Watch Window" => "Okno czujki",
         "Calculation\nOptions" => "Opcje\nobliczania",
@@ -200,6 +202,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Podgląd\npodziału stron",
         "Page\nLayout" => "Układ\nstrony",
         "Formula Bar" => "Pasek formuły",
+        "Name Box" => "Pole nazwy",
+        "Cell Editor" => "Edytor komórki",
+        "Font Size" => "Rozmiar czcionki",
         "Gridlines" => "Linie siatki",
         "Headings" => "Nagłówki",
         "Zoom" => "Powiększenie",
@@ -297,6 +302,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Ciemny",
         "Sheet Options|View" => "Wyświetl",
         "Print" => "Drukuj",
+        "Print What" => "Co drukować",
         "Click to add data" => "Kliknij, aby dodać dane",
         "Add header" => "Dodaj nagłówek",
         "Add footer" => "Dodaj stopkę",
@@ -322,6 +328,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Przejdź do nagłówka",
         "Different First Page" => "Inna pierwsza strona",
         "Different Odd & Even Pages" => "Inne strony nieparzyste i parzyste",
+        "Scale with Document" => "Skaluj z dokumentem",
+        "Align with Page Margins" => "Wyrównaj do marginesów strony",
         "Go to Footer" => "Przejdź do stopki",
         "Ruler" => "Linijka",
         "File" => "Plik",
@@ -755,6 +763,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut" => "Pierścieniowy",
         "Area" => "Warstwowy",
         "Stacked Area" => "Warstwowy skumulowany",
+        "100% Stacked Area" => "Warstwowy 100% skumulowany",
         "Scatter" => "Punktowy",
         "Scatter with Lines" => "Punktowy z liniami",
         "Radar" => "Radarowy",

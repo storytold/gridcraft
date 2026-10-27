@@ -1,7 +1,7 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, DefinedName, Formula, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -55,6 +55,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             create_from_selection
         ),
+        cmd!(
+            "formulas.pasteName",
+            "Paste Names…",
+            ["Formulas", "Defined Names"],
+            Some("F3"),
+            "{name?: \"Sales\" (one of the names listed; OK: puts the name at the caret of the cell being edited, or starts `=Sales` in the active cell), list?: true (Paste List: writes each name and what it refers to in two columns, from `at`), at?: cell (default the active cell)} → {names: [{name, refersTo}]}: the names the Paste Name dialog lists (workbook names and the active sheet's own, hidden names left out, in alphabetical order). With neither nothing changes; the menu opens the dialog.",
+            has_doc,
+            paste_name
+        ),
         cmd!(query "formulas.tracePrecedents", "Trace Precedents", ["Formulas", "Formula Auditing"], None, "{cell?} → ranges", has_doc, trace_precedents),
         cmd!(query "formulas.traceDependents", "Trace Dependents", ["Formulas", "Formula Auditing"], None, "{cell?} → cells", has_doc, trace_dependents),
         cmd!(noundo "formulas.selectPrecedents", "Select Precedents", ["Formulas", "Formula Auditing"], Some("Ctrl+["), "{cell?, all?: true = every level (Ctrl+Shift+[)} → selects the precedent cells", has_doc, select_precedents),
@@ -87,42 +96,73 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
-    let func = str_param(p, "function").unwrap_or("SUM").to_ascii_uppercase();
-    let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-    let sel = match str_param(p, "range") {
-        Some(_) => target_range(s, p)?,
-        None => d.selection.current(),
-    };
-    if !sel.is_single() {
-        // A block: totals below each column (and to the right when a blank column is included).
-        // Columns past the sheet's data get no total (a whole-row selection doesn't write 16,384
-        // formulas), and all totals are one edit (one undo step).
-        let Some(last_col) = sh.cells.used_range().map(|u| u.end.col.min(sel.end.col)) else { return ok() };
-        let last_row_blank = (sel.start.col..=last_col).all(|c| sh.value(CellRef::new(sel.end.row, c)).is_empty());
-        let (data_end_row, out_row) = if last_row_blank { (sel.end.row.saturating_sub(1), sel.end.row) } else { (sel.end.row, sel.end.row + 1) };
+/// Whether a cell on the active sheet is empty.
+fn blank(sh: &gridcraft_model::sheet::Sheet, row: u32, col: u32) -> bool {
+    sh.value(CellRef::new(row, col)).is_empty()
+}
+
+fn sum_formula(func: &str, from: CellRef, to: CellRef) -> String {
+    format!("={func}({})", RangeRef::new(from, to).a1())
+}
+
+/// Totals for a multi-cell selection as `(cell, formula)` writes. `None` when the sheet has no data.
+fn selection_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, func: &str) -> Result<Option<Vec<(CellRef, String)>>> {
+    // A selection: totals go in its empty last row or column, as Excel's do, and otherwise
+    // past it: to the right of a single row, below each column of anything taller. Columns
+    // past the sheet's data get no total (a whole-row selection doesn't write 16,384
+    // formulas), nor do rows past it, and all totals are one edit (one undo step).
+    let Some(used) = sh.cells.used_range() else { return Ok(None) };
+    if sel.start.row == sel.end.row { single_row_totals(sh, sel, used, func).map(Some) } else { block_totals(sh, sel, used, func).map(Some) }
+}
+
+/// One row: its total goes in its last cell when that is empty, else just after it.
+fn single_row_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, used: RangeRef, func: &str) -> Result<Vec<(CellRef, String)>> {
+    let row = sel.start.row;
+    let last_col = used.end.col.min(sel.end.col);
+    let end_col = if sel.is_full_rows() { last_col } else { sel.end.col };
+    let (data_end, out) = if end_col > sel.start.col && blank(sh, row, end_col) { (end_col - 1, end_col) } else { (end_col, end_col + 1) };
+    if out >= gridcraft_core::MAX_COLS {
+        return Err(EngineError::Other("There's no room to the right of the selection for the total.".into()));
+    }
+    Ok(vec![(CellRef::new(row, out), sum_formula(func, CellRef::new(row, sel.start.col), CellRef::new(row, data_end)))])
+}
+
+/// A block of rows: each column's total below it, and each row's total in an empty last column.
+fn block_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, used: RangeRef, func: &str) -> Result<Vec<(CellRef, String)>> {
+    let mut writes: Vec<(CellRef, String)> = Vec::new();
+    let last_col = used.end.col.min(sel.end.col);
+    // An empty last column takes each row's total; rows past the data get none.
+    let rows_end = sel.end.row.min(used.end.row);
+    let right_blank = !sel.is_full_rows() && sel.end.col > sel.start.col && (sel.start.row..=rows_end).all(|r| blank(sh, r, sel.end.col));
+    let data_end_col = if right_blank { sel.end.col - 1 } else { last_col };
+    let last_row_blank = (sel.start.col..=last_col).all(|c| blank(sh, sel.end.row, c));
+    let (data_end_row, out_row) = if last_row_blank { (sel.end.row.saturating_sub(1), sel.end.row) } else { (sel.end.row, sel.end.row + 1) };
+    // Each column's total, below it: unless only the last column is there to take totals.
+    if last_row_blank || !right_blank {
         if out_row >= gridcraft_core::MAX_ROWS {
             return Err(EngineError::Other("There's no room below the selection for the totals.".into()));
         }
-        let writes: Vec<(CellRef, String)> = (sel.start.col..=last_col)
-            .map(|c| {
-                (CellRef::new(out_row, c), format!("={func}({})", RangeRef::new(CellRef::new(sel.start.row, c), CellRef::new(data_end_row, c)).a1()))
-            })
-            .collect();
-        let sheet = d.wb.active_sheet;
-        edit(s, |cx| {
-            for (c, f) in &writes {
-                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
-                cx.sheet_mut(sheet)?.set_cell(*c, cell);
-                cx.touch(sheet, *c);
-            }
-            Ok(())
-        })?;
-        return ok();
+        for c in sel.start.col..=data_end_col.min(last_col) {
+            writes.push((CellRef::new(out_row, c), sum_formula(func, CellRef::new(sel.start.row, c), CellRef::new(data_end_row, c))));
+        }
     }
-    // Single cell: guess the range above, else to the left.
-    let at = sel.start;
+    if right_blank {
+        for r in sel.start.row..=data_end_row.min(rows_end) {
+            writes.push((CellRef::new(r, sel.end.col), sum_formula(func, CellRef::new(r, sel.start.col), CellRef::new(r, data_end_col))));
+        }
+        // Both empty: the corner takes the total of the whole block.
+        if last_row_blank {
+            writes.push((
+                CellRef::new(sel.end.row, sel.end.col),
+                sum_formula(func, CellRef::new(sel.start.row, sel.start.col), CellRef::new(data_end_row, data_end_col)),
+            ));
+        }
+    }
+    Ok(writes)
+}
+
+/// The range a single cell's AutoSum guesses: the numbers above it, else the numbers to its left.
+fn guessed_range(sh: &gridcraft_model::sheet::Sheet, at: CellRef) -> Option<RangeRef> {
     let numeric = |c: CellRef| sh.value(c).is_number();
     let mut range = None;
     if at.row > 0 && (numeric(CellRef::new(at.row - 1, at.col)) || at.col == 0 || !numeric(CellRef::new(at.row, at.col - 1))) {
@@ -144,7 +184,33 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
         }
         range = Some(RangeRef::new(CellRef::new(at.row, left), CellRef::new(at.row, at.col - 1)));
     }
-    let text = match range {
+    range
+}
+
+fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
+    let func = str_param(p, "function").unwrap_or("SUM").to_ascii_uppercase();
+    let d = s.doc()?;
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sel = match str_param(p, "range") {
+        Some(_) => target_range(s, p)?,
+        None => d.selection.current(),
+    };
+    if !sel.is_single() {
+        let Some(writes) = selection_totals(sh, sel, &func)? else { return ok() };
+        let sheet = d.wb.active_sheet();
+        edit(s, |cx| {
+            for (c, f) in &writes {
+                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
+                cx.sheet_mut(sheet)?.set_cell(*c, cell);
+                cx.touch(sheet, *c);
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
+    // Single cell: guess the range above, else to the left.
+    let at = sel.start;
+    let text = match guessed_range(sh, at) {
         Some(r) => format!("={func}({})", r.a1()),
         None => {
             s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={func}()"))));
@@ -432,7 +498,7 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .iter()
         .filter(|n| !n.hidden)
         .map(|n| {
-            let sheet = n.scope.unwrap_or(d.wb.active_sheet);
+            let sheet = n.scope.unwrap_or(d.wb.active_sheet());
             // parse_name, not evaluate's parse: a name's top-level commas are unions.
             let v = gridcraft_formula::parse_name(&n.formula)
                 .map_or(Value::Error(CellError::Name), |e| gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, CellRef::default(), &e));
@@ -510,10 +576,65 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The names Paste Names lists, as (name, refers-to text with `=`): the workbook's names and the
+/// active sheet's own, without hidden names, in alphabetical order. A sheet's name hides the
+/// workbook name it shares.
+pub fn pasteable_names(wb: &Workbook) -> Vec<(String, String)> {
+    let sheet = wb.active_sheet();
+    let shown = |local: bool| wb.names.iter().filter(move |n| !n.hidden && n.scope.is_some() == local && n.scope.is_none_or(|i| i == sheet));
+    let local: std::collections::HashSet<String> = shown(true).map(|n| gridcraft_formula::fold_name(&n.name)).collect();
+    let mut out: Vec<(String, String)> = shown(true).map(|n| (n.name.clone(), format!("={}", n.formula))).collect();
+    for n in shown(false) {
+        if !local.contains(&gridcraft_formula::fold_name(&n.name)) {
+            out.push((n.name.clone(), format!("={}", n.formula)));
+        }
+    }
+    out.sort_by_cached_key(|(n, _)| n.to_lowercase());
+    out
+}
+
+fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let names = pasteable_names(&d.wb);
+    let listed: Vec<Json> = names.iter().map(|(n, r)| json!({"name": n, "refersTo": r})).collect();
+    if !bool_param(p, "list").unwrap_or(false) {
+        if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
+            let Some((listed_name, _)) = names.iter().find(|(n, _)| gridcraft_formula::same_name(n, name)) else {
+                return Err(EngineError::Other(format!("There's no name \"{name}\" to paste.")));
+            };
+            s.ui_requests.push(crate::UiRequest::InsertName(listed_name.clone()));
+        }
+        return Ok(json!({"names": listed}));
+    }
+    if names.is_empty() {
+        return Err(EngineError::Other("This workbook has no names to paste.".into()));
+    }
+    let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
+    let rows = u32::try_from(names.len()).unwrap_or(u32::MAX);
+    if at.row.saturating_add(rows) > gridcraft_core::MAX_ROWS || at.col.saturating_add(2) > gridcraft_core::MAX_COLS {
+        return Err(EngineError::Other("There isn't room on the sheet for the list of names.".into()));
+    }
+    let sheet = d.wb.active_sheet();
+    let range = RangeRef::new(at, CellRef::new(at.row + rows - 1, at.col + 1));
+    edit(s, |cx| {
+        for (row, (name, refers)) in (at.row..).zip(&names) {
+            for (col, text) in [(at.col, name), (at.col + 1, refers)] {
+                let c = CellRef::new(row, col);
+                let sh = cx.sheet_mut(sheet)?;
+                let style = sh.style_id(c);
+                // The second column holds the refers-to text as a text value, with no formula.
+                sh.set_cell(c, Cell { value: Value::text(text.as_str()), formula: None, style });
+                cx.touch(sheet, c);
+            }
+        }
+        Ok(json!({"names": listed, "range": range.a1()}))
+    })
+}
+
 fn trace_precedents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let areas = d.calc.graph.precedents_of((d.wb.active_sheet, at));
+    let areas = d.calc.graph.precedents_of((d.wb.active_sheet(), at));
     let v: Vec<Json> = areas.iter().map(|a| json!({"sheet": d.wb.sheet(a.sheet).map(|s| s.name.clone()), "range": a.range.a1()})).collect();
     Ok(Json::Array(v))
 }
@@ -522,7 +643,7 @@ fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let mut deps = Vec::new();
-    d.calc.graph.dependents(d.wb.active_sheet, at, &mut deps);
+    d.calc.graph.dependents(d.wb.active_sheet(), at, &mut deps);
     deps.sort();
     deps.dedup();
     let v: Vec<Json> = deps.iter().map(|(si, c)| json!({"sheet": d.wb.sheet(*si).map(|s| s.name.clone()), "cell": c.a1()})).collect();
@@ -535,7 +656,7 @@ fn select_trace_cells(s: &mut Session, p: &Json, precedents: bool) -> Result<Jso
     use std::collections::BTreeSet;
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let all = bool_param(p, "all").unwrap_or(false);
     // (sheet, a1) pairs to select; direct level keeps whole precedent ranges, transitive cells.
     let mut found: BTreeSet<(usize, String)> = BTreeSet::new();
@@ -606,7 +727,7 @@ fn select_dependents(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let cur = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.show_formulas);
     let on = bool_param(p, "on").unwrap_or(!cur);
     edit(s, |cx| {
@@ -664,15 +785,19 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
             }
         }
     }
-    let circ: Vec<String> =
-        d.calc.circular.iter().map(|(si, c)| format!("{}!{}", d.wb.sheet(*si).map(|s| s.name.clone()).unwrap_or_default(), c.a1())).collect();
+    let circ: Vec<String> = d
+        .calc
+        .circular
+        .iter()
+        .map(|(si, c)| format!("{}!{}", d.wb.sheet(*si).map(|s| gridcraft_formula::quote_sheet(&s.name)).unwrap_or_default(), c.a1()))
+        .collect();
     Ok(json!({"errors": out, "circular": circ}))
 }
 
 fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let text = match str_param(p, "formula") {
         Some(f) => f.trim_start_matches('=').to_string(),
         None => {
@@ -711,7 +836,7 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let expr = crate::cmd::edit::parse_typed_formula(f.strip_prefix('=').unwrap_or(f))?;
     crate::cmd::edit::check_arg_counts(&expr)?;
-    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet, at, &expr);
+    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet(), at, &expr);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 
@@ -876,5 +1001,93 @@ mod tests {
         let u = list.as_array().and_then(|l| l.iter().find(|n| n["name"] == "u")).cloned().unwrap();
         // The union parses as one, so the preview is what the union gives in a cell, not #NAME?.
         assert_eq!(u["value"], json!({"error": "#VALUE!"}));
+    }
+
+    /// A workbook with `Sales` and `rate`, a hidden name, a name of Sheet1 that hides a workbook
+    /// `Tax`, and a name of another sheet.
+    fn named_workbook() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("formulas.defineName", json!({"name": "Sales", "refersTo": "=Sheet1!$A$1:$A$3"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "rate", "refersTo": "=0.07"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "Tax", "refersTo": "=0.2"})).unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let name = |name: &str, scope, formula: &str, hidden| DefinedName {
+            name: name.into(),
+            scope,
+            formula: formula.into(),
+            comment: String::new(),
+            hidden,
+        };
+        wb.names.push(name("_Filter", None, "Sheet1!$A$1:$B$9", true));
+        wb.names.push(name("TAX", Some(0), "0.25", false));
+        wb.names.push(name("Other", Some(1), "1", false));
+        s
+    }
+
+    fn text_at(s: &Session, cell: &str) -> Value {
+        s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
+    }
+
+    #[test]
+    fn paste_names_lists_the_names_the_active_sheet_can_use() {
+        let mut s = named_workbook();
+        let r = s.execute("formulas.pasteName", json!({})).unwrap();
+        assert_eq!(
+            r["names"],
+            json!([
+                {"name": "rate", "refersTo": "=0.07"},
+                {"name": "Sales", "refersTo": "=Sheet1!$A$1:$A$3"},
+                {"name": "TAX", "refersTo": "=0.25"},
+            ])
+        );
+        assert_eq!(text_at(&s, "A1"), Value::Empty, "listing the names writes nothing");
+    }
+
+    #[test]
+    fn paste_names_and_use_in_formula_ask_the_ui_to_insert_the_name() {
+        let mut s = named_workbook();
+        s.take_ui_requests();
+        s.execute("formulas.pasteName", json!({"name": "Sales"})).unwrap();
+        s.execute("formulas.useInFormula", json!({"name": "rate"})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::InsertName("Sales".into()), crate::UiRequest::InsertName("rate".into())]);
+        assert_eq!(text_at(&s, "A1"), Value::Empty, "the cell changes only when the edit is entered");
+        // A name Paste Name doesn't list is refused; one typed in another case is pasted as listed.
+        assert!(s.execute("formulas.pasteName", json!({"name": "NoSuchName"})).is_err());
+        s.execute("formulas.pasteName", json!({"name": "SALES"})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::InsertName("Sales".into())]);
+    }
+
+    #[test]
+    fn paste_list_writes_each_name_and_what_it_refers_to() {
+        let mut s = named_workbook();
+        s.execute("selection.set", json!({"range": "D2"})).unwrap();
+        let r = s.execute("formulas.pasteName", json!({"list": true})).unwrap();
+        assert_eq!(r["range"], json!("D2:E4"));
+        let rows = [("D2", "rate"), ("E2", "=0.07"), ("D3", "Sales"), ("E3", "=Sheet1!$A$1:$A$3"), ("D4", "TAX"), ("E4", "=0.25")];
+        for (cell, text) in rows {
+            assert_eq!(text_at(&s, cell), Value::text(text), "{cell}");
+        }
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("E3").unwrap()).is_some_and(|c| c.formula.is_none()), "refers-to is text");
+        s.execute("edit.undo", json!({})).unwrap();
+        for (cell, _) in rows {
+            assert_eq!(text_at(&s, cell), Value::Empty, "{cell} after Undo");
+        }
+        s.execute("formulas.pasteName", json!({"list": true, "at": "B7"})).unwrap();
+        assert_eq!(text_at(&s, "B7"), Value::text("rate"));
+    }
+
+    #[test]
+    fn paste_list_needs_names_and_room() {
+        let mut s = named_workbook();
+        let last = format!("A{}", gridcraft_core::MAX_ROWS - 1);
+        assert!(s.execute("formulas.pasteName", json!({"list": true, "at": last})).is_err(), "three rows don't fit below the second-to-last row");
+        let last_col = format!("{}1", gridcraft_core::col_to_letters(gridcraft_core::MAX_COLS - 1));
+        assert!(s.execute("formulas.pasteName", json!({"list": true, "at": last_col})).is_err(), "two columns don't fit in the last column");
+        let mut empty = Session::new();
+        empty.new_workbook();
+        assert!(empty.execute("formulas.pasteName", json!({"list": true})).is_err());
+        assert_eq!(empty.execute("formulas.pasteName", json!({})).unwrap()["names"], json!([]));
     }
 }

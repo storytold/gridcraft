@@ -246,7 +246,7 @@ fn is_r1c1_token(name: &str) -> bool {
         if chars.peek().is_some_and(|c| c.to_ascii_lowercase() == letter) {
             chars.next();
             letters += 1;
-            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
                 chars.next();
             }
         }

@@ -243,7 +243,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MP", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Trace Precedents
     ("MQ", Entry::Finish(Action::Control("formulas.moreFunctions"))), // Excel: More Functions Menu; group level: containment(More Functions)
     ("MS", Entry::Continue),                                   // Excel: Use in Formula Menu; group level: containment(Use in Formula)
-    ("MSP", Entry::Finish(Action::Pending("formulas.pasteName"))), // pending; Excel: Paste Names; reserved until the command lands
+    ("MSP", Entry::Finish(Action::Dialog("pasteName"))),       // Excel: Paste Names
     ("MT", Entry::Finish(Action::Control("formulas.text"))),   // Excel: Text Menu; group level: containment(Text)
     ("MU", Entry::Continue),                                   // Excel: AutoSum Menu; group level:
     ("MUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Average; AutoSum: Average (variant TBD)
@@ -356,7 +356,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WVH", Entry::Finish(Action::Command("view.headings"))),       // Excel: Toggle Headings; containment(Headings)
     ("WVN", Entry::Finish(Action::Pending("view.navigation"))),     // pending; Excel: Navigation; Navigation pane; reserved until the command lands
     ("WVR", Entry::Finish(Action::Command("view.ruler"))),          // Excel: Ruler
-    ("WW", Entry::Finish(Action::Command("view.switchWindows"))),   // Excel: Switch Windows
+    ("WW", Entry::Finish(Action::Control("view.switchWindows"))),   // Excel: Switch Windows
     ("JAM", Entry::Finish(Action::Command("chart.formatSelection"))), // Excel: Chart format: Format Selection pane; containment(Format Selection)
     ("JCA", Entry::Finish(Action::Command("chart.addElement"))),    // Excel: Chart: Add Chart Element; containment(Add Chart Element)
     ("JCC", Entry::Finish(Action::Command("chart.changeType"))),    // Excel: Chart: Change Chart Type; containment(Change Chart Type)

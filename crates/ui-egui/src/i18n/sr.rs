@@ -1,5 +1,6 @@
 //! Serbian (Latin script, ekavian) translations for the interface strings in i18n.rs.
 
+/// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Nalepi",
@@ -146,6 +147,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Ukloni strelice",
         "Show Formulas" => "Prikaži formule",
         "Error Checking" => "Provera grešaka",
+        "Circular References" => "Kružne reference",
         "Evaluate Formula" => "Proceni formulu",
         "Watch Window" => "Prozor za praćenje",
         "Calculation\nOptions" => "Opcije\nizračunavanja",
@@ -202,6 +204,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Pregled preloma\nstranica",
         "Page\nLayout" => "Izgled\nstranice",
         "Formula Bar" => "Traka formule",
+        "Name Box" => "Polje imena",
+        "Cell Editor" => "Uređivač ćelije",
+        "Font Size" => "Veličina fonta",
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
         "Zoom" => "Uvećanje",
@@ -300,6 +305,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Još\nfunkcija",
         "Sheet Options|View" => "Prikaz",
         "Print" => "Štampaj",
+        "Print What" => "Šta štampati",
         "Click to add data" => "Kliknite da dodate podatke",
         "Add header" => "Dodaj zaglavlje",
         "Add footer" => "Dodaj podnožje",
@@ -325,6 +331,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Idi na zaglavlje",
         "Different First Page" => "Drugačija prva stranica",
         "Different Odd & Even Pages" => "Drugačije neparne i parne stranice",
+        "Scale with Document" => "Skaliraj sa dokumentom",
+        "Align with Page Margins" => "Poravnaj sa marginama stranice",
         "Go to Footer" => "Idi na podnožje",
         "Ruler" => "Lenjir",
         "File" => "Datoteka",
@@ -409,6 +417,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Automatski sačuvaj .xlsx radne sveske posle svake izmene",
         "Workbook calculation" => "Izračunavanje radne sveske",
         "Enable iterative calculation" => "Omogući iterativno izračunavanje",
+        "Maximum Iterations:" => "Maksimalan broj iteracija:",
+        "Maximum Change:" => "Maksimalna promena:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Maksimalan broj iteracija mora biti ceo broj od 1 do 32767.",
+        "Maximum Change must be a number of 0 or more." => "Maksimalna promena mora biti broj veći ili jednak 0.",
         "Calculation settings are saved with the workbook." => "Podešavanja izračunavanja se čuvaju sa radnom sveskom.",
         "Left Margin" => "Leva margina",
         "Right Margin" => "Desna margina",
@@ -433,6 +445,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Следећи лист",
         "All sheets" => "Сви листови",
         "New sheet (⇧F11)" => "Нови лист (⇧F11)",
+        "Text Box" => "Текстуално поље",
         _ => return None,
     })
 }

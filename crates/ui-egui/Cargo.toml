@@ -9,10 +9,15 @@ description = "GridCraft egui frontend (Excel-style UI); swappable — nothing b
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+# The shared capture slot (`craft_ui::capture`) comes from the one craft-libs revision every
+# craft-libs dependency uses (see the root Cargo.toml).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "b926b5c03e256c86ca10934f58d03f628810b5b7" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
-egui = { workspace = true }
+# `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
+# this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
+# harness (and a host with no symbol font) renders them as tofu.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -31,12 +36,14 @@ epaint_default_fonts = { workspace = true }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
+craft-window = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.
-web-sys = { version = "0.3", features = ["Window", "Navigator"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Performance"] }
 
 [build-dependencies]
 serde_json = { workspace = true }

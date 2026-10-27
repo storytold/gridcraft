@@ -8,10 +8,11 @@ fn margins(app: &SheetApp) -> [f32; 6] {
     app.session.active().and_then(|d| d.wb.active()).map(|s| s.print.margins).unwrap_or_default()
 }
 
+/// Applies six custom page margins and asserts the engine stored them.
 fn app_with_custom_margins() -> SheetApp {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     app.run("pageLayout.margins", json!({"left": 2.0, "right": 2.5, "top": 3.0, "bottom": 0.25, "header": 0.1, "footer": 0.2})).unwrap();
     assert_eq!(margins(&app), [2.0, 2.5, 3.0, 0.25, 0.1, 0.2]);
     app

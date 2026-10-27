@@ -1,6 +1,6 @@
 //! Freezing panes by dragging the freeze handles on the header edges (#195).
 
-use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2, pos2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::SheetApp;
@@ -11,15 +11,7 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 fn geo(h: &Harness) -> Geo {

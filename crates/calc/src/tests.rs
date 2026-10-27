@@ -384,6 +384,32 @@ fn circular_references_without_iterative_calculation() {
     assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
 }
 
+/// The list of circular references keeps the loops that a recalculation of other cells does not
+/// reach, and drops a loop once a constant is typed over one of its cells.
+#[test]
+fn circular_references_stay_listed_until_the_loop_is_removed() {
+    let mut t = T::new();
+    t.set("A1", "=A1+1");
+    t.set("B1", "=B2");
+    t.set("B2", "=B1");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    t.set("D4", "7");
+    t.set("D5", "=D4*2");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("A1", "5");
+    assert!(!t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("B2", "3");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+    // In manual calculation only the edited formulas are evaluated; a constant typed over the listed cell removes it.
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("C1", "=C1+1");
+    assert_eq!(t.calc.circular, vec![(0, c("C1"))]);
+    t.set("C1", "1");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+}
+
 #[test]
 fn date_text_coerces_in_the_workbook_date_system() {
     for (sys, serial) in [(gridcraft_core::DateSystem::D1900, 1462.0), (gridcraft_core::DateSystem::D1904, 0.0)] {
@@ -1023,6 +1049,100 @@ fn lambda_argument_count() {
     assert_eq!(t.num("A8"), 5.0);
     t.set("A9", "=LAMBDA(x,ISOMITTED(x))()");
     assert_eq!(t.get("A9"), Value::Bool(true));
+}
+
+#[test]
+fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
+    // 1 MiB is the main thread's stack on Windows, where commands, recalculation and file open run.
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let mut t = T::new();
+            t.wb.names.push(gridcraft_model::DefinedName {
+                name: "LOOP".into(),
+                scope: None,
+                formula: "LAMBDA(n,LOOP(n))".into(),
+                comment: String::new(),
+                hidden: false,
+            });
+            t.calc.rebuild(&t.wb);
+            let endless = "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))";
+            t.set("A1", endless);
+            t.set("A2", "=LOOP(1)");
+            t.set("A3", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+SUM(MAP({1},LAMBDA(v,me(me,n-1)))))),F(F,100000))");
+            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,131))");
+            let evaluated = crate::evaluate(&t.wb, 0, c("B1"), endless);
+            [t.get("A1"), t.get("A2"), t.get("A3"), evaluated, t.get("A4")]
+        })
+        .expect("spawn");
+    let [endless, endless_name, through_map, evaluated, countdown] = handle.join().expect("recursion must not overflow the stack");
+    assert_eq!(endless, Value::Error(CellError::Num));
+    assert_eq!(endless_name, Value::Error(CellError::Num));
+    assert_eq!(through_map, Value::Error(CellError::Num));
+    assert_eq!(evaluated, Value::Error(CellError::Num));
+    assert_eq!(countdown, Value::Number(131.0));
+}
+
+#[test]
+fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                let mut wb = Workbook::new();
+                wb.names.push(gridcraft_model::DefinedName {
+                    name: "CNT".into(),
+                    scope: None,
+                    formula: "LAMBDA(n,IF(n=0,0,1+CNT(n-1)))".into(),
+                    comment: String::new(),
+                    hidden: false,
+                });
+                // F(F,n) has n + 1 calls in progress at its deepest; W adds one more call per step.
+                let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
+                let wrapped = |n: u32| format!("=LET(W,LAMBDA(f,k,f(f,k)),F,LAMBDA(me,n,IF(n<=0,0,1+W(me,n-1))),F(F,{n}))");
+                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(run(64 << 20), small);
+}
+
+#[test]
+fn a_recursive_lambda_that_reads_another_cells_recursive_lambda_shares_the_stack() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                // Row-major order calculates A1 first, so each cell below is calculated on demand
+                // at the deepest call of the one above it.
+                let countdown = |then: &str| format!("=LET(F,LAMBDA(me,n,IF(n<=0,{then},1+me(me,n-1))),F(F,131))");
+                let mut wb = Workbook::new();
+                let sheet = wb.sheet_mut(0).expect("sheet");
+                for (at, f) in [
+                    ("A1", countdown("A2")),
+                    ("A2", countdown("A3")),
+                    ("A3", countdown("0")),
+                    ("B1", countdown("B2")),
+                    ("B2", "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))".to_string()),
+                ] {
+                    sheet.cells.set(c(at), Cell::formula(Formula::new(&f)));
+                }
+                let mut calc = Calc::new();
+                calc.recalc_all(&mut wb);
+                ["A1", "A2", "A3", "B1", "B2"].map(|at| wb.sheet(0).map(|s| s.value(c(at))).unwrap_or_default())
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    let num = Value::Error(CellError::Num);
+    assert_eq!(small, [Value::Number(393.0), Value::Number(262.0), Value::Number(131.0), num.clone(), num]);
+    assert_eq!(run(64 << 20), small);
 }
 
 #[test]

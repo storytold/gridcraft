@@ -3,6 +3,9 @@
 //! `header_autofit_fonts.rs` and `keytips.rs` stay separate binaries: they set process-wide state
 //! (the installed-font catalog, a registered test command) that would leak into these tests.
 
+#[path = "../common/mod.rs"]
+mod common;
+
 mod accounting_fill;
 mod advanced_filter;
 mod argument_names;
@@ -24,6 +27,7 @@ mod dialog_confirm;
 mod dialog_focus;
 mod dialog_move;
 mod drag_cursor;
+mod error_checking_menu;
 mod file_menu;
 mod fill_handle_double_click;
 mod fill_handle_right_drag;
@@ -34,10 +38,13 @@ mod find_dialog_focus;
 mod floating_pictures;
 mod font_size_box;
 mod format_painter;
+mod formula_bar;
+mod formula_bar_expand;
 mod formula_locale;
 mod formula_point_headers;
 mod formula_popup;
 mod freeze_handles;
+mod go_to_dialog;
 mod header_autofit;
 mod header_column_drag;
 mod host_chrome;
@@ -59,11 +66,14 @@ mod open_encrypted;
 mod outline;
 mod page_layout_view;
 mod page_setup_margins;
+mod paste_names;
 mod paste_special_dialog;
 mod pivot_pane;
 mod pivot_show_details;
+mod pivot_show_details_menu;
 mod popup_dismissal;
 mod protect_password;
+mod ribbon_layout;
 mod right_to_left;
 mod scroll_position;
 mod scrollbar_column_fill;
@@ -77,8 +87,11 @@ mod sheet_tabs;
 mod show_objects;
 mod shrink_to_fit;
 mod sort_dialog_columns;
+mod status_bar_menu;
+mod support;
 mod symbol_glyphs;
 mod system_theme;
+mod tab_split;
 mod table_headings;
 mod text_box_editing;
 mod text_overflow_scroll;

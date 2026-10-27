@@ -72,7 +72,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         str_param(p, "color").map(str::to_string).unwrap_or_else(|| if s.draw_color.is_empty() { "#1F5FC9".into() } else { s.draw_color.clone() });
     let width = f64_param(p, "width").map(|w| w as f32).unwrap_or(if s.draw_width <= 0.0 { 2.0 } else { s.draw_width }).clamp(0.5, 40.0);
     let d = s.doc()?;
-    let si = d.wb.active_sheet;
+    let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let cell = CellRef::new(sh.row_at(miny), sh.col_at(minx));
     let dx = (minx - sh.col_left(cell.col)) as f32;
@@ -115,7 +115,7 @@ pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
 }
 
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
-    let si = s.doc()?.wb.active_sheet;
+    let si = s.doc()?.wb.active_sheet();
     let id = u32_param(p, "id");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;

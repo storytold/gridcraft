@@ -11,16 +11,7 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn book(selected: &str) -> Session {
@@ -151,6 +142,7 @@ fn space_shortcuts_per_platform() {
 }
 
 #[test]
+/// Alt+Down opens the active header's filter menu in LTR and RTL without editing the workbook; typing goes to the search box and Esc dismisses it.
 fn alt_down_opens_autofilter_headers_without_changing_the_workbook() {
     for rtl in [false, true] {
         for cell in ["A1", "B1"] {
@@ -172,7 +164,7 @@ fn alt_down_opens_autofilter_headers_without_changing_the_workbook() {
             // Opening focuses the existing search box; typing must not edit the header.
             h.input_mut().events.push(Event::Text("1".into()));
             h.run_steps(2);
-            assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::new(("filter_search", column)))).as_deref(), Some("1"));
+            assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::unique(("filter_search", column)))).as_deref(), Some("1"));
             assert!(h.state().editor.is_none());
             assert_eq!(h.state().session.active().unwrap().wb, before);
             key(&mut h, Key::Escape, Modifiers::NONE);

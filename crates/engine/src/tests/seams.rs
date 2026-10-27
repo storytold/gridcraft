@@ -837,7 +837,7 @@ fn the_recorder_keeps_top_level_calls_with_where_they_ran() {
     assert_eq!(recorded_ids(&s), ["cell.set", "view.customViews", "view.customViews"]);
     let first = &s.recorder.as_ref().unwrap().steps[0];
     let d = s.doc().unwrap();
-    assert_eq!((first.doc, first.sheet), (d.uid, d.wb.active_sheet));
+    assert_eq!((first.doc, first.sheet), (d.uid, d.wb.active_sheet()));
     assert_eq!(first.sheet_name, d.wb.active().unwrap().name);
     assert_eq!(first.selection.a1(), "B2:C3", "the selection before the command ran");
     assert_eq!(first.params, json!({"cell": "B2", "input": "10"}));

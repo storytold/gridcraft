@@ -27,11 +27,11 @@ fn editor_rect(wrap: bool) -> Rect {
     session.new_workbook();
     session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 12})).unwrap();
     session.execute("home.wrapText", json!({"range": "A1", "on": wrap})).unwrap();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     frames(&ctx, &mut app);
     app.begin_edit(Some(TEXT.into()), false);
     frames(&ctx, &mut app);
-    ctx.read_response(Id::new("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect
+    ctx.read_response(Id::unique("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect
 }
 
 #[test]
@@ -50,11 +50,11 @@ fn a_short_wrap_text_edit_stays_one_line_tall() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     frames(&ctx, &mut app);
     app.begin_edit(Some("short".into()), false);
     frames(&ctx, &mut app);
-    let field = ctx.read_response(Id::new("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect;
+    let field = ctx.read_response(Id::unique("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect;
     assert!(field.height() < 30.0, "a one-line edit doesn't reach over the rows below: {field:?}");
 }
 
@@ -68,11 +68,11 @@ fn the_editor_measures_the_text_at_the_fields_wrap_width() {
     session.new_workbook();
     session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 12})).unwrap();
     session.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     frames(&ctx, &mut app);
     app.begin_edit(Some(TEXT.into()), false);
     frames(&ctx, &mut app);
-    let field = ctx.read_response(Id::new("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect;
+    let field = ctx.read_response(Id::unique("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect;
     let sheet = app.session.active().unwrap().wb.active().unwrap().clone();
     let st = app.session.active().unwrap().wb.styles.get(sheet.style_id(gridcraft_engine::cell(0, 0))).clone();
     // The grid draws at its zoom: the cell is the field plus the 2 px inset a side, the font scales.
@@ -93,14 +93,21 @@ fn an_unwrapped_multiline_edit_shows_every_line() {
         let ctx = Context::default();
         let mut session = Session::new();
         session.new_workbook();
-        let mut app = SheetApp::new(session, Default::default());
+        let mut app = crate::common::app(session);
         frames(&ctx, &mut app);
         app.begin_edit(Some(text.into()), false);
         frames(&ctx, &mut app);
-        ctx.read_response(Id::new("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect
+        ctx.read_response(Id::unique("gridcraft.cell_editor")).expect("the in-cell editor is shown").rect
     };
     let one = field("one").height();
+    let two = field("one\ntwo").height();
     let three = field("one\ntwo\nthree").height();
-    assert!(three > 2.5 * one, "three lines are shown: {three} vs one line {one}");
-    assert!(three < 3.5 * one, "and no more rows are reserved: {three} vs one line {one}");
+    let four = field("one\ntwo\nthree\nfour").height();
+    // egui 0.37 gives a one-line TextEdit a widget-height floor, so compare the increments from
+    // two lines up rather than a fraction of the one-line field.
+    let line = three - two;
+    assert!(line > 0.0, "a third line adds height: {two} then {three}");
+    assert!((four - three - line).abs() < 1.0, "each extra line takes the same height: {two}, {three}, {four}");
+    assert!(three > one + line / 2.0, "the third line is taller than the one-line floor: {one} then {three}");
+    assert!(four < three + line + 1.0, "and no more rows are reserved: {three} then {four}");
 }

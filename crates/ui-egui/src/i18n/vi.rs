@@ -1,6 +1,7 @@
 //! Vietnamese translations for the interface strings in i18n.rs. Labels follow the wording
 //! Vietnamese spreadsheet users know; anything absent falls back to English.
 
+/// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Dán",
@@ -153,6 +154,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Circular References" => "Tham chiếu vòng",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
@@ -208,6 +210,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Xem trước\nngắt trang",
         "Page\nLayout" => "Bố trí\ntrang",
         "Formula Bar" => "Thanh công thức",
+        "Name Box" => "Hộp tên",
+        "Cell Editor" => "Trình soạn thảo ô",
+        "Font Size" => "Cỡ chữ",
         "Gridlines" => "Đường lưới",
         "Headings" => "Tiêu đề hàng/cột",
         "Zoom" => "Thu phóng",
@@ -304,6 +309,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Hàm\nkhác",
         "Sheet Options|View" => "Xem",
         "Print" => "In",
+        "Print What" => "Nội dung in",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Bấm để thêm dữ liệu",
         "Add header" => "Thêm đầu trang",
@@ -330,6 +336,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Đi tới đầu trang",
         "Different First Page" => "Trang đầu khác",
         "Different Odd & Even Pages" => "Trang chẵn lẻ khác nhau",
+        "Scale with Document" => "Co giãn theo tài liệu",
+        "Align with Page Margins" => "Căn theo lề trang",
         "Go to Footer" => "Đi tới chân trang",
         "Ruler" => "Thước",
         // File › Backstage view.
@@ -409,6 +417,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Tính toán sổ làm việc",
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
+        "Text Box" => "Hộp văn bản",
         _ => return None,
     })
 }

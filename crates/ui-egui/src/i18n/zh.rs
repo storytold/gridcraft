@@ -1,5 +1,6 @@
 //! Simplified Chinese translations for the interface strings in i18n.rs.
 
+/// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "粘贴",
@@ -151,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "删除箭头",
         "Show Formulas" => "显示公式",
         "Error Checking" => "错误检查",
+        "Circular References" => "循环引用",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",
         "Calculation\nOptions" => "计算\n选项",
@@ -207,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "分页符\n预览",
         "Page\nLayout" => "页面\n布局",
         "Formula Bar" => "编辑栏",
+        "Name Box" => "名称框",
+        "Cell Editor" => "单元格编辑器",
+        "Font Size" => "字号",
         "Gridlines" => "网格线",
         "Headings" => "标题",
         "Zoom" => "缩放",
@@ -304,6 +309,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "深色",
         "Sheet Options|View" => "屏幕",
         "Print" => "打印",
+        "Print What" => "打印内容",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "单击可添加数据",
         "Add header" => "添加页眉",
@@ -330,6 +336,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "转至页眉",
         "Different First Page" => "首页不同",
         "Different Odd & Even Pages" => "奇偶页不同",
+        "Scale with Document" => "随文档缩放",
+        "Align with Page Margins" => "与页边距对齐",
         "Go to Footer" => "转至页脚",
         "Ruler" => "标尺",
         // File › Backstage view.
@@ -409,6 +417,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "每次更改后自动保存 .xlsx 工作簿",
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
+        "Maximum Iterations:" => "最多迭代次数:",
+        "Maximum Change:" => "最大误差:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "最多迭代次数必须是 1 到 32767 之间的整数。",
+        "Maximum Change must be a number of 0 or more." => "最大误差必须是大于或等于 0 的数字。",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
         "Insert Sheet" => "插入工作表",
         "Rename" => "重命名",
@@ -425,6 +437,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "下一个工作表",
         "All sheets" => "所有工作表",
         "New sheet (⇧F11)" => "新建工作表 (⇧F11)",
+        "Text Box" => "文本框",
         _ => return None,
     })
 }

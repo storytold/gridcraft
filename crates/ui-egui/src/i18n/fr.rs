@@ -1,9 +1,12 @@
 //! French translations for the interface strings in i18n.rs.
 
+/// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Different First Page" => "Première page différente",
         "Different Odd & Even Pages" => "Pages paires et impaires différentes",
+        "Scale with Document" => "Mettre à l'échelle avec le document",
+        "Align with Page Margins" => "Aligner sur les marges de la page",
         "Paste" => "Coller",
         "Paste Values" => "Coller les valeurs",
         "Paste Formulas" => "Coller les formules",
@@ -154,6 +157,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Supprimer les flèches",
         "Show Formulas" => "Afficher les formules",
         "Error Checking" => "Vérification des erreurs",
+        "Circular References" => "Références circulaires",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
         "Calculation\nOptions" => "Options de\ncalcul",
@@ -210,6 +214,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Aperçu des sauts\nde page",
         "Page\nLayout" => "Mise en\npage",
         "Formula Bar" => "Barre de formule",
+        "Name Box" => "Zone de nom",
+        "Cell Editor" => "Éditeur de cellule",
+        "Font Size" => "Taille de police",
         "Gridlines" => "Quadrillage",
         "Headings" => "En-têtes",
         "Zoom" => "Zoom",
@@ -308,6 +315,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Autres\nfonctions",
         "Sheet Options|View" => "Affichage",
         "Print" => "Impression",
+        "Print What" => "Quoi imprimer",
         "Click to add data" => "Cliquez pour ajouter des données",
         "Add header" => "Ajouter un en-tête",
         "Add footer" => "Ajouter un pied de page",
@@ -417,6 +425,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Enregistrer automatiquement les classeurs .xlsx après chaque modification",
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
+        "Maximum Iterations:" => "Nombre maximal d'itérations :",
+        "Maximum Change:" => "Écart maximal :",
+        "Maximum Iterations must be a whole number from 1 to 32767." => {
+            "Le nombre maximal d'itérations doit être un entier compris entre 1 et 32767."
+        }
+        "Maximum Change must be a number of 0 or more." => "L'écart maximal doit être un nombre supérieur ou égal à 0.",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
         "Insert Sheet" => "Insérer une feuille",
         "Rename" => "Renommer",
@@ -435,6 +449,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Feuille suivante",
         "All sheets" => "Toutes les feuilles",
         "New sheet (⇧F11)" => "Nouvelle feuille (⇧F11)",
+        "Text Box" => "Zone de texte",
         _ => return None,
     })
 }

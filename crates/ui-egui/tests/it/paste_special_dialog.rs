@@ -14,13 +14,13 @@ fn harness() -> Harness {
     s.execute("range.setValues", json!({"range": "C1", "values": [[10], [10]]})).unwrap();
     s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
     s.execute("selection.set", json!({"cell": "C1"})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.state_mut().open_dialog("pasteSpecial", json!({}));
     h.run_steps(4);
