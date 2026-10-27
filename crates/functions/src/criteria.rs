@@ -42,8 +42,8 @@ impl TextCriteriaIndex {
     }
 
     /// Builds from scalar cells and their aligned targets. `None` means the optional index
-    /// exceeded its text-storage allowance; callers must then use the ordinary calculation.
-    pub fn new<'a>(cells: impl Iterator<Item = (&'a Value, &'a Value)>, max_text_bytes: usize) -> Option<Self> {
+    /// exceeded its text or group storage allowance; callers use the ordinary calculation.
+    pub fn new<'a>(cells: impl Iterator<Item = (&'a Value, &'a Value)>, max_text_bytes: usize, max_groups: usize) -> Option<Self> {
         let mut index = Self::default();
         for (source, target) in cells {
             let Value::Text(text) = source else { continue };
@@ -52,6 +52,9 @@ impl TextCriteriaIndex {
             }
             let key: String = text.chars().map(lower_char).collect();
             if !index.groups.contains_key(&key) {
+                if index.groups.len() >= max_groups {
+                    return None;
+                }
                 index.text_bytes = index.text_bytes.checked_add(key.len())?;
                 if index.text_bytes > max_text_bytes {
                     return None;
@@ -76,6 +79,11 @@ impl TextCriteriaIndex {
     /// Bytes of folded text retained, for the host's pass-wide index allowance.
     pub fn text_bytes(&self) -> usize {
         self.text_bytes
+    }
+
+    /// Number of distinct groups retained, for the host's per-group memory allowance.
+    pub fn groups(&self) -> usize {
+        self.groups.len()
     }
 
     /// Answers one of the criteria aggregates for an already-parsed literal text key.
@@ -495,7 +503,7 @@ mod tests {
             Value::Error(CellError::NA),
             Value::Error(CellError::Div0),
         ];
-        let index = TextCriteriaIndex::new(keys.iter().zip(&values), 1024).unwrap();
+        let index = TextCriteriaIndex::new(keys.iter().zip(&values), 1024, 100).unwrap();
         for criterion in ["apple", "=APPLE", "i", "i\u{307}", "é", "missing", "bad"] {
             let key = TextCriteriaIndex::key(&Value::from(criterion)).unwrap();
             for name in ["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MINIFS", "MAXIFS"] {
@@ -512,9 +520,10 @@ mod tests {
         for criterion in ["12", "TRUE", "#N/A", "", "=", "<>apple", "a*", "?", "~*", &"x".repeat(256)] {
             assert!(TextCriteriaIndex::key(&Value::from(criterion)).is_none(), "{criterion}");
         }
-        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 2).is_none());
+        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 2, 100).is_none());
         // An exhausted optional cache must not return a partial set of groups.
-        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 0).is_none());
+        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 0, 100).is_none());
+        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 1024, 1).is_none());
     }
 
     fn m(c: &str, v: Value) -> bool {
