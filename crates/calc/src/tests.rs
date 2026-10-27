@@ -52,6 +52,9 @@ fn criteria_profile_recalc_finishes() {
         Calc::new().recalc_all(&mut wb);
         let elapsed = start.elapsed();
         eprintln!("criteria profile (unrelated array={unrelated_array}): {elapsed:?}");
+        if unrelated_array {
+            assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 25)), Value::Number(2.0), "the unrelated array must actually spill");
+        }
         for r in 0..2_860 {
             let count = (2_860 - 1 - r % 97) / 97 + 1;
             for col in 1..=58 {
