@@ -196,10 +196,14 @@ fn interrupted_capture_cannot_steal_a_new_press(interruption: &[Event]) {
         let next_press = axis.outside_track(p);
         let mut batch = interruption.to_vec();
         batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
-        events(&mut h, batch);
+        let ctx = h.ctx.clone();
+        let mut raw = egui::RawInput { events: batch, ..Default::default() };
+        h.state_mut().raw_input_hook(&ctx, &mut raw);
+        events(&mut h, raw.events);
         let stopped = axis.scroll(&h);
         events(&mut h, [Event::PointerMoved(next_press + axis.movement())]);
         assert_eq!(axis.scroll(&h), stopped, "{axis:?}: the old capture must not steal a new press after interruption");
+        assert_ne!(h.state().session.active().unwrap().selection.active, CellRef::new(0, 0), "{axis:?}: the new cell gesture must still work");
     }
 }
 
@@ -211,4 +215,22 @@ fn pointer_loss_ends_the_old_capture_before_a_new_press_in_the_same_frame() {
 #[test]
 fn focus_loss_ends_the_old_capture_before_a_new_press_in_the_same_frame() {
     interrupted_capture_cannot_steal_a_new_press(&[Event::WindowFocused(false), Event::WindowFocused(true)]);
+}
+
+#[test]
+fn a_focused_logic_tick_does_not_replay_old_interruption_events() {
+    for interruption in [vec![Event::PointerGone], vec![Event::WindowFocused(false), Event::WindowFocused(true)]] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let mut h = crate::support::blank_harness(4);
+            h.state_mut().services.scrollbar_release_on_pointer_gone = true;
+            let p = axis.start(&h);
+            h.input_mut().events.extend(interruption.iter().cloned());
+            h.input_mut().events.extend([Event::PointerMoved(p), button(p, true)]);
+            h.run_steps(1);
+            let ctx = h.ctx.clone();
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| h.state_mut().logic(ctx));
+            events(&mut h, [Event::PointerMoved(p + axis.movement())]);
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: stale events in a focused hidden tick must not cancel a valid held press");
+        }
+    }
 }
