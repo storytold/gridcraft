@@ -136,21 +136,16 @@ fn the_wayland_fallback_does_not_leave_either_scrollbar_captured_after_a_lost_re
 #[test]
 fn focus_loss_cancels_capture_even_when_the_window_does_not_paint() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
-        let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-            |ui, app: &mut gridcraft_ui_egui::SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                // Native eframe can run logic without UI for a hidden window.
-                if !ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::WindowFocused(false)))) {
-                    app.ui(ui);
-                }
-            },
-            crate::common::app(crate::support::blank_session()),
-        );
-        h.run_steps(4);
-        let p = begin_drag(&mut h, axis);
-        events(&mut h, [Event::WindowFocused(false)]);
+        let (mut h, p) = dragging(axis);
+        let ctx = h.ctx.clone();
+        let hidden = egui::RawInput { focused: false, events: vec![Event::WindowFocused(false)], ..Default::default() };
+        assert!(ctx.dragged_id().is_some());
+        // eframe's hidden tick updates raw.focused without interpreting the UI events.
+        let _ = ctx.run_logic(&hidden, |ctx| h.state_mut().logic(ctx));
+        assert!(ctx.dragged_id().is_none(), "{axis:?}: the logic-only tick must release capture immediately");
         let stopped = axis.scroll(&h);
+        // eframe retains the unconsumed events for the next full pass.
+        h.input_mut().events.extend(hidden.events);
         events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
         assert_eq!(axis.scroll(&h), stopped, "{axis:?}: logic-only focus loss must release capture");
     }
@@ -192,4 +187,28 @@ fn a_new_press_after_pointer_loss_in_the_same_frame_still_starts_a_drag() {
         assert!(axis.scroll(&h) > 0.0, "{axis:?}: an earlier pointer exit must not cancel a new press");
         events(&mut h, [button(p + axis.movement(), false)]);
     }
+}
+
+fn interrupted_capture_cannot_steal_a_new_press(interruption: &[Event]) {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, p) = dragging(axis);
+        h.state_mut().services.scrollbar_release_on_pointer_gone = true;
+        let next_press = axis.outside_track(p);
+        let mut batch = interruption.to_vec();
+        batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
+        events(&mut h, batch);
+        let stopped = axis.scroll(&h);
+        events(&mut h, [Event::PointerMoved(next_press + axis.movement())]);
+        assert_eq!(axis.scroll(&h), stopped, "{axis:?}: the old capture must not steal a new press after interruption");
+    }
+}
+
+#[test]
+fn pointer_loss_ends_the_old_capture_before_a_new_press_in_the_same_frame() {
+    interrupted_capture_cannot_steal_a_new_press(&[Event::PointerGone]);
+}
+
+#[test]
+fn focus_loss_ends_the_old_capture_before_a_new_press_in_the_same_frame() {
+    interrupted_capture_cannot_steal_a_new_press(&[Event::WindowFocused(false), Event::WindowFocused(true)]);
 }
