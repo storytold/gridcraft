@@ -863,10 +863,8 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         if !sweep.charge(row_merges.len()) {
             return;
         }
-        // Hidden columns have no displayed text to fit. Measuring their zero width would
-        // wrap even a short header to the row-height limit and consume a frozen viewport.
-        // Merged cells never auto-fit their rows (column autofit skips them too).
-        if sh.col_width(c) == 0.0 || row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
+        // Merged cells never auto-fit their rows, like Excel (column autofit skips them too).
+        if row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
             continue;
         }
         let st = wb.styles.get(cell.style);
@@ -880,7 +878,9 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
             // starts one, and each line folds at the column width.
             if st.align.wrap {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
-                let w = sh.col_width(c).max(1.0) - 6.0;
+                // Hidden columns have zero display width, but their cells still wrap at
+                // the stored (or sheet-default) width when fitting a row.
+                let w = sh.cols.get(&c).and_then(|info| info.size).unwrap_or(sh.default_col_width).max(1.0) - 6.0;
                 lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {

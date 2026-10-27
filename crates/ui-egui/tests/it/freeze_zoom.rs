@@ -21,7 +21,9 @@ fn imported_hidden_header_keeps_data_visible_below_freeze_at_different_zooms() {
     sh.set_value(CellRef::new(3967, 46), Value::text("last cell"));
     sh.set_value(CellRef::new(7, 46), Value::text("Hidden wrapped budget heading"));
     sh.set_style(CellRef::new(7, 46), wrapped);
-    sh.cols.entry(46).or_default().hidden = true;
+    let col = sh.cols.entry(46).or_default();
+    col.size = Some(64.0);
+    col.hidden = true;
     sh.rows.entry(7).or_default().size = Some(70.0);
     sh.freeze = Some((8, 10));
     sh.zoom = 130;
@@ -41,10 +43,13 @@ fn imported_hidden_header_keeps_data_visible_below_freeze_at_different_zooms() {
                 h.run_steps(4);
                 let app = h.state();
                 let sh = app.session.active().unwrap().wb.active().unwrap();
-                assert_eq!(sh.row_height(7), 70.0, "the frozen header keeps its saved height");
+                assert_eq!(sh.row_height(7), 77.0, "the frozen header fits its hidden text at the stored width");
                 let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
-                let mut checked = 0;
-                for row in 8..40 {
+                let mut checked_data = 0;
+                let mut checked_header = 0;
+                let freezes_header = matches!(freeze, "A9" | "K9");
+                let first_row = if freezes_header { 7 } else { 8 };
+                for row in first_row..40 {
                     for col in [0, 9, 10, 11] {
                         let cell = CellRef::new(row, col);
                         let rect = geo.cell_rect(sh, cell);
@@ -59,10 +64,17 @@ fn imported_hidden_header_keeps_data_visible_below_freeze_at_different_zooms() {
                             _ => false,
                         });
                         assert!(painted, "{} must paint at zoom {zoom}, freeze {freeze}, scroll {scroll:?}", cell.a1());
-                        checked += 1;
+                        if row == 7 {
+                            checked_header += 1;
+                        } else {
+                            checked_data += 1;
+                        }
                     }
                 }
-                assert!(checked > 0, "data rows are visible at zoom {zoom}, freeze {freeze}, scroll {scroll:?}");
+                if freezes_header {
+                    assert!(checked_header > 0, "the frozen header paints at zoom {zoom}, freeze {freeze}, scroll {scroll:?}");
+                }
+                assert!(checked_data > 0, "data rows are visible at zoom {zoom}, freeze {freeze}, scroll {scroll:?}");
             }
         }
     }
