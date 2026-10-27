@@ -27,6 +27,9 @@ pub(super) struct PassHost<'a> {
     /// Optional constant-range indexes live only for this pass. None remembers an ineligible
     /// range too, so thousands of calls do not repeatedly check the same formula cells.
     text_criteria: HashMap<(Area, Area), Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>>>,
+    /// First requests do not build indexes: running COUNTIF ranges are often used only once.
+    criteria_seen: HashSet<(Area, Area)>,
+    criteria_recent: VecDeque<(Area, Area)>,
     criteria_cells: u64,
     criteria_bytes: usize,
     criteria_groups: usize,
@@ -83,6 +86,8 @@ impl<'a> PassHost<'a> {
             spills: HashMap::default(),
             used: HashMap::default(),
             text_criteria: HashMap::default(),
+            criteria_seen: HashSet::default(),
+            criteria_recent: VecDeque::new(),
             criteria_cells: 0,
             criteria_bytes: 0,
             criteria_groups: 0,
@@ -442,6 +447,16 @@ impl Host for PassHost<'_> {
         if let Some(index) = self.text_criteria.get(&key) {
             return index.clone();
         }
+        if !self.criteria_seen.contains(&key) {
+            if self.criteria_recent.len() >= 1_024
+                && let Some(old) = self.criteria_recent.pop_front()
+            {
+                self.criteria_seen.remove(&old);
+            }
+            self.criteria_seen.insert(key);
+            self.criteria_recent.push_back(key);
+            return None;
+        }
         // Bound the cells inspected for optional builds, including ineligible ranges. Text
         // and group allowances also bound retained keys and per-group/map overhead. Reaching
         // any allowance changes no results: the ordinary evaluator remains the fallback.
@@ -651,6 +666,64 @@ mod criteria_tests {
     use gridcraft_model::{Cell, Formula};
 
     #[test]
+    fn one_off_running_counts_do_not_exhaust_the_repeated_range_cache() {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        for r in 0..1_500 {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::new(r, 0), Cell::value(Value::from(format!("key{r}"))));
+            sh.cells.set(CellRef::new(r, 1), Cell::value(Value::Number(1.0)));
+            for (col, text) in [(2, format!("=COUNTIF(A$1:A{0},A{0})", r + 1)), (3, format!("=SUMIF(A$1:A$1500,A{},B$1:B$1500)", r + 1))] {
+                let at = CellRef::new(r, col);
+                let formula = Formula::new(&text);
+                exprs.insert((0, at), formula.expr_arc().unwrap());
+                sh.cells.set(at, Cell::formula(formula));
+            }
+        }
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for col in [2, 3] {
+            for r in 0..1_500 {
+                let key = (0, CellRef::new(r, col));
+                host.calculate(key);
+                assert_eq!(host.results.get(&key), Some(&Value::Number(1.0)));
+            }
+            if col == 2 {
+                assert_eq!(host.criteria_cells, 0, "one-off ranges spent the build allowance");
+            }
+        }
+        assert_eq!(host.criteria_cells, 1_500);
+        assert_eq!(host.text_criteria.len(), 1);
+        assert!(host.criteria_seen.len() <= 1_024);
+    }
+
+    #[test]
+    fn saved_spill_values_are_not_indexed_as_empty_stored_cells() {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("={\"header\";\"key\";\"key\"}")));
+        for r in 0..3 {
+            let at = CellRef::new(r, 2);
+            let formula = Formula::new("=COUNTIF(A2:A3,\"key\")");
+            exprs.insert((0, at), formula.expr_arc().unwrap());
+            wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(formula));
+        }
+        Calc::new().recalc_all(&mut wb);
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(2, 0)), Value::from("key"));
+        // Only the criteria formulas are dirty in this pass. Their array precedent is saved.
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for r in 0..3 {
+            let key = (0, CellRef::new(r, 2));
+            host.calculate(key);
+            assert_eq!(host.results.get(&key), Some(&Value::Number(2.0)));
+        }
+        assert!(host.spills.is_empty());
+        assert_eq!(host.criteria_cells, 2);
+        assert!(host.text_criteria.values().all(Option::is_none));
+    }
+
+    #[test]
     fn text_criteria_formulas_index_their_ranges_once_per_pass() {
         use crate::eval::Area;
         let mut wb = Workbook::new();
@@ -697,7 +770,9 @@ mod criteria_tests {
             let mut wb = Workbook::new();
             let mut exprs = HashMap::default();
             let (anchor, array) = if source_spills { ("A1", "={\"header\";\"key\";\"key\"}") } else { ("B1", "={0;1;2}") };
-            for (at, text) in [("C1", "=SUMIF(A2:A3,\"key\",B2:B3)"), (anchor, array), ("C2", "=SUMIF(A2:A3,\"key\",B2:B3)")] {
+            for (at, text) in
+                [("C1", "=SUMIF(A2:A3,\"key\",B2:B3)"), (anchor, array), ("C2", "=SUMIF(A2:A3,\"key\",B2:B3)"), ("C3", "=SUMIF(A2:A3,\"key\",B2:B3)")]
+            {
                 let cell = CellRef::parse(at).unwrap();
                 let formula = Formula::new(text);
                 exprs.insert((0, cell), formula.expr_arc().unwrap());
@@ -711,10 +786,12 @@ mod criteria_tests {
             let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
             host.calculate((0, CellRef::new(0, 2)));
             assert_eq!(host.results.get(&(0, CellRef::new(0, 2))), Some(&Value::Number(0.0)));
+            host.calculate((0, CellRef::new(1, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(1, 2))), Some(&Value::Number(0.0)));
             assert_eq!(host.criteria_cells, 2);
             host.calculate((0, CellRef::parse(anchor).unwrap()));
-            host.calculate((0, CellRef::new(1, 2)));
-            assert_eq!(host.results.get(&(0, CellRef::new(1, 2))), Some(&Value::Number(3.0)));
+            host.calculate((0, CellRef::new(2, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(2, 2))), Some(&Value::Number(3.0)));
         }
     }
 }
