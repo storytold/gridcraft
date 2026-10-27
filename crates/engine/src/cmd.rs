@@ -863,8 +863,10 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         if !sweep.charge(row_merges.len()) {
             return;
         }
-        // Merged cells never auto-fit their rows, like Excel (column autofit skips them too).
-        if row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
+        // Hidden columns have no displayed text to fit. Measuring their zero width would
+        // wrap even a short header to the row-height limit and consume a frozen viewport.
+        // Merged cells never auto-fit their rows (column autofit skips them too).
+        if sh.col_width(c) == 0.0 || row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
             continue;
         }
         let st = wb.styles.get(cell.style);
