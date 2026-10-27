@@ -83,18 +83,23 @@ impl FormulaLocale {
             Self::PtBr => PORTUGUESE_BR,
         }
     }
+    /// Separates function arguments and reference unions: `,` in English, `;` otherwise.
     pub fn list_separator(self) -> char {
         if self == Self::En { ',' } else { ';' }
     }
+    /// The decimal mark of number literals: `.` in English, `,` otherwise.
     pub fn decimal_separator(self) -> char {
         if self == Self::En { '.' } else { ',' }
     }
+    /// Separates columns inside an array constant: `,` in English, `\` otherwise (rows use `;`).
     pub fn array_column_separator(self) -> char {
         if self == Self::En { ',' } else { '\\' }
     }
+    /// The localized name of a canonical English function, or `canonical` when untranslated.
     pub fn function_name(self, canonical: &str) -> &str {
         self.table().iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, local)| *local).unwrap_or(canonical)
     }
+    /// The canonical English name of a localized function (any case), or `localized` unchanged.
     pub fn canonical_name(self, localized: &str) -> &str {
         self.table().iter().find(|(_, local)| crate::same_name(local, localized)).map(|(en, _)| *en).unwrap_or(localized)
     }
@@ -211,6 +216,8 @@ impl Bindings {
     }
 }
 
+/// Rewrites function names and boolean literals between the canonical and `locale` spellings:
+/// to canonical on input, to localized for `display`. Defined names and LET/LAMBDA bindings win.
 fn normalize(
     expr: &mut Expr,
     locale: FormulaLocale,

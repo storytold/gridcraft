@@ -11,7 +11,7 @@ Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic g
 
 Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
 
-## Where we are (measured from source on `main`, after the 2026-10-10 merges)
+## Where we are (baseline measured from source on `main` after the 2026-10-10 merges; updated through 2026-11-24)
 
 - **Current state (2026-11-08).** The counts, labels and per-language rows in this section and in
   the Languages table are a snapshot from the dates given there; every language since added a
