@@ -147,6 +147,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Εντοπισμός σφάλματος",
         "Circular References" => "Κυκλικές αναφορές",
         "Python Mode" => "Λειτουργία Python",
+        "Python Object" => "Αντικείμενο Python",
+        "Excel Value" => "Τιμή Excel",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Αυτή η έκδοση του GridCraft αποθηκεύει κώδικα Python αλλά δεν τον εκτελεί."
+        }
+        "Insert\nPython" => "Εισαγωγή\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Εισαγωγή Python (Ctrl+Alt+Shift+P)",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",

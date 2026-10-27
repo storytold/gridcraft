@@ -151,6 +151,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Śledź błąd",
         "Circular References" => "Odwołania cykliczne",
         "Python Mode" => "Tryb Python",
+        "Python Object" => "Obiekt języka Python",
+        "Excel Value" => "Wartość programu Excel",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Ta wersja GridCraft zapisuje kod języka Python, ale go nie uruchamia."
+        }
+        "Insert\nPython" => "Wstaw\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Wstaw Python (Ctrl+Alt+Shift+P)",
         "Evaluate Formula" => "Szacuj formułę",
         "Watch Window" => "Okno czujki",
         "Calculation\nOptions" => "Opcje\nobliczania",
