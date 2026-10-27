@@ -422,6 +422,7 @@ struct ScrollbarCapture {
     id: egui::Id,
     started: u64,
     release_on_pointer_gone: bool,
+    cancelled: bool,
 }
 
 struct ScrollbarInput;
@@ -434,43 +435,41 @@ impl egui::plugin::Plugin for ScrollbarInput {
     fn input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let key = egui::Id::unique(("worksheet_scrollbar_capture", raw.viewport_id));
         let Some(capture) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(key)) else { return };
-        let interrupted = !raw.focused
-            || raw.events.iter().any(|event| match event {
-                egui::Event::WindowFocused(false) | egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => true,
-                egui::Event::PointerGone => capture.release_on_pointer_gone,
-                _ => false,
-            });
-        if !interrupted {
-            return;
-        }
-        if raw.viewport_id == ctx.viewport_id() {
-            stop_scrollbar_drag(ctx);
-        } else {
-            // Immediate viewports enter here while their parent is current. End only the
-            // child's owned drag through its input, before egui assigns any later press.
-            let released = ctx.viewport_for(raw.viewport_id, |v| {
-                (v.interact_widgets.dragged.is_none_or(|id| id == capture.id) && v.input.pointer.primary_down()).then(|| {
-                    let pos = v.input.pointer.interact_pos().or_else(|| v.input.pointer.press_origin()).unwrap_or_default();
-                    let cancel_click = v.input.pointer.could_any_button_be_click().then(|| v.input.pointer.press_origin().unwrap_or(pos));
-                    (pos, v.input.modifiers, cancel_click)
-                })
-            });
-            if let Some((pos, modifiers, cancel_click)) = released {
-                let release = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers };
-                if let Some(origin) = cancel_click {
-                    // egui has no cancelled release. Invalidate the old click without net
-                    // pointer movement before releasing; a later real press resets this state.
-                    let distance = ctx.options(|o| o.input_options.max_click_dist) + 1.0;
-                    raw.events.splice(0..0, [egui::Event::PointerMoved(origin + vec2(distance, 0.0)), egui::Event::PointerMoved(pos), release]);
-                } else {
-                    raw.events.insert(0, release);
-                }
-            }
-            if raw.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }))
-            {
+        // A delivered release completes the old gesture. Only an interruption that
+        // comes first cancels it; later events must not erase a completed track click.
+        let ending = raw.events.iter().find_map(|event| match event {
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => Some(false),
+            egui::Event::WindowFocused(false) => Some(true),
+            egui::Event::PointerGone if capture.release_on_pointer_gone => Some(true),
+            _ => None,
+        });
+        if !capture.cancelled && !ending.unwrap_or(!raw.focused) {
+            if ending == Some(false) {
                 ctx.data_mut(|d| d.remove::<ScrollbarCapture>(key));
             }
+            return;
         }
+        // Use the affected viewport's input for root and immediate windows alike,
+        // before egui assigns any later press. Never alter another widget's drag.
+        let released = ctx.viewport_for(raw.viewport_id, |v| {
+            (v.interact_widgets.dragged.is_none_or(|id| id == capture.id) && v.input.pointer.primary_down()).then(|| {
+                let pos = v.input.pointer.interact_pos().or_else(|| v.input.pointer.press_origin()).unwrap_or_default();
+                let cancel_click = v.input.pointer.could_any_button_be_click().then(|| v.input.pointer.press_origin().unwrap_or(pos));
+                (pos, v.input.modifiers, cancel_click)
+            })
+        });
+        if let Some((pos, modifiers, cancel_click)) = released {
+            let release = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers };
+            if let Some(origin) = cancel_click {
+                // egui has no cancelled release. Invalidate the old click without net
+                // pointer movement before releasing; a later real press resets this state.
+                let distance = ctx.options(|o| o.input_options.max_click_dist) + 1.0;
+                raw.events.splice(0..0, [egui::Event::PointerMoved(origin + vec2(distance, 0.0)), egui::Event::PointerMoved(pos), release]);
+            } else {
+                raw.events.insert(0, release);
+            }
+        }
+        ctx.data_mut(|d| d.remove::<ScrollbarCapture>(key));
     }
 }
 
@@ -479,10 +478,19 @@ impl egui::plugin::Plugin for ScrollbarInput {
 /// egui-winit drops MouseInput without a pointer position, leaving primary_down stale on return.
 fn stop_scrollbar_drag(ctx: &egui::Context) {
     let capture = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
-    let Some(state) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(capture)) else { return };
-    ctx.data_mut(|d| d.remove::<ScrollbarCapture>(capture));
+    let Some(mut state) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(capture)) else { return };
     if ctx.dragged_id().is_none_or(|dragged| dragged == state.id) {
+        if ctx.input(|i| i.pointer.primary_down()) {
+            // A logic-only tick cannot process a release. Remember the cancellation
+            // until the next full pass also clears the old pending click target.
+            state.cancelled = true;
+            ctx.data_mut(|d| d.insert_temp(capture, state));
+        } else {
+            ctx.data_mut(|d| d.remove::<ScrollbarCapture>(capture));
+        }
         ctx.stop_dragging();
+    } else {
+        ctx.data_mut(|d| d.remove::<ScrollbarCapture>(capture));
     }
 }
 
@@ -521,7 +529,7 @@ fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_g
         let frame = ui.ctx().cumulative_frame_nr();
         ui.ctx().data_mut(|d| {
             if d.get_temp::<ScrollbarCapture>(capture).is_none_or(|state| state.id != resp.id) {
-                d.insert_temp(capture, ScrollbarCapture { id: resp.id, started: frame, release_on_pointer_gone });
+                d.insert_temp(capture, ScrollbarCapture { id: resp.id, started: frame, release_on_pointer_gone, cancelled: false });
             }
         });
     }
