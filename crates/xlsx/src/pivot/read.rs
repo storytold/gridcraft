@@ -272,6 +272,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,
                     Some("descending") => PivotSort::Desc,
+                    Some("manual") => PivotSort::None,
+                    _ if group != PivotDateGroup::None => PivotSort::Asc,
                     _ => PivotSort::None,
                 };
                 let items = items_of(e);
