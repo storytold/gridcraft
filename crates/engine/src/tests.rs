@@ -2482,6 +2482,16 @@ fn csv_export_with_semicolons_decimal_commas_and_a_byte_order_mark() {
     let (wb, _) = crate::io::open_bytes("back.csv", &semi).unwrap();
     assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("città"));
     assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 1)), Value::Number(1.5));
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 2)), Value::Number(1234.5));
+    // A sheet of numbers only: the decimal commas outnumber the semicolons, and the columns stay.
+    let mut n = crate::Session::new();
+    n.new_workbook();
+    n.execute("range.setValues", json!({"range": "A1", "values": [[1.5, 2.25, 3.125], [4.1, 5.2, 6.3]]})).unwrap();
+    let nums = bytes(&mut n, json!({"format": "csv", "delimiter": ";", "decimal": ","}));
+    assert_eq!(String::from_utf8(nums.clone()).unwrap(), "1,5;2,25;3,125\r\n4,1;5,2;6,3\r\n");
+    let (wb, _) = crate::io::open_bytes("nums.csv", &nums).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(1, 2)), Value::Number(6.3));
     // A file opened with tabs keeps them when only the byte order mark is asked for.
     std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).csv_delimiter = Some(b'\t');
     let tabs = bytes(&mut s, json!({"format": "csv", "bom": true}));

@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (CSV export: comma and semicolon types named after what the file holds, with decimal commas and a UTF-8 BOM for the semicolon one; previously: .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (CSV import reads decimal-comma numbers in semicolon files; previously minor: CSV export: comma and semicolon types named after what the file holds, with decimal commas and a UTF-8 BOM for the semicolon one; previously: .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -98,6 +98,10 @@ shows outside English-language regions:
 - Scripts and agents choose explicitly: `file.exportCsv {path, delimiter: ";", decimal: ",",
   bom: true}` (also `file.saveBytes`). Without these parameters the export is unchanged: the
   separator a file was opened with (else `,`), a decimal point and no BOM.
+- Opening such a file reads it back as written: in a semicolon file a field with one decimal
+  comma (`1,5`, `-1.234,50`, `12,5%`) is a number, and semicolons on every line win over commas
+  that all sit between digits (`1,5;2,25`), so a sheet of numbers keeps its columns. Fields
+  without a comma, and every field of a comma or tab file, read as before.
 
 ## Export and print
 
@@ -132,6 +136,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | CSV import reads GridCraft's semicolon CSV back: decimal-comma numbers in a semicolon file are numbers, and delimiter sniffing picks the semicolon when every comma sits between digits |
 | 2026-10-24 | minor | CSV export: **CSV UTF-8 (Semicolon delimited)** next to **CSV UTF-8 (Comma delimited)** in File › Export and Save As, both with a UTF-8 BOM so Excel reads accents; the semicolon one writes decimal commas. The comma one now writes commas even for a workbook opened from a `;` file. `file.exportCsv` / `file.saveBytes` take `delimiter`, `decimal` and `bom` (unchanged output without them). Why the names differ from Excel's: [CSV names](#csv-names-what-the-file-holds) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
