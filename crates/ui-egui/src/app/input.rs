@@ -3,7 +3,6 @@ use super::{SheetApp, control};
 impl SheetApp {
     /// Records capture geometry from the fresh raw frame, then offers exactly one pending synthetic batch and tracks whether it was applied.
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        grid::prepare_scrollbar_input(ctx, raw, self.services.scrollbar_release_on_pointer_gone);
         // Capture geometry from this frame's real input before any synthetic event is added. This
         // runs on every native frame, including hidden/minimized logic-only ticks, so a resize,
         // DPI/zoom change, Wayland frame without `inner_rect`, or minimize/restore is recorded
