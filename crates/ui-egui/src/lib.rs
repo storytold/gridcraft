@@ -282,6 +282,9 @@ pub struct SheetApp {
     /// Whether each window has the app's header bar, by viewport; a window not listed yet has
     /// the frame it opened with.
     app_frame_shown: HashMap<egui::ViewportId, bool>,
+    /// Whether windows open with the app's header bar: the preference at launch, which every new
+    /// window's builder carries (`None` until the first frame).
+    window_frame_at_launch: Option<bool>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,

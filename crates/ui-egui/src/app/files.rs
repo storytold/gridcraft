@@ -139,8 +139,10 @@ impl SheetApp {
             return;
         }
         let app_frame = self.draws_window_frame();
-        // Windows open with the frame the launch preference gave the root window's builder.
-        let opened_with = self.app_frame_shown.get(&egui::ViewportId::ROOT).copied().unwrap_or(app_frame);
+        // Every window opens with the frame the preference gave at launch (the root window's
+        // builder, which later windows copy), even one opened after the preference changed. The
+        // first call is the root window's first frame, so it records that frame.
+        let opened_with = *self.window_frame_at_launch.get_or_insert(app_frame);
         let shown = self.app_frame_shown.get(&ctx.viewport_id()).copied().unwrap_or(opened_with);
         if shown != app_frame {
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));

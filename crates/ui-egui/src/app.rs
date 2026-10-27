@@ -66,6 +66,7 @@ impl SheetApp {
             desktop_dark: None,
             window_controls: None,
             app_frame_shown: HashMap::new(),
+            window_frame_at_launch: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
