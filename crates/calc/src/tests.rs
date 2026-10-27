@@ -7,6 +7,106 @@ fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
 
+/// Synthetic only: two large sheets and a small summary, shaped like #2751's private file.
+fn criteria_profile(rows: u32, formula_cols: u32) -> Workbook {
+    let mut wb = Workbook::new();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Criteria")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Summary")));
+    for r in 0..rows {
+        let key = format!("Customer-{:05}-North", r % 97);
+        let data = wb.sheet_mut(0).unwrap();
+        data.cells.set(CellRef::new(r, 0), Cell::value(Value::from(key.clone())));
+        for col in 1..61 {
+            data.cells.set(CellRef::new(r, col), Cell::value(Value::Number(1.0)));
+        }
+        let sheet = wb.sheet_mut(1).unwrap();
+        sheet.cells.set(CellRef::new(r, 0), Cell::value(Value::from(key)));
+        for col in 1..=formula_cols {
+            let row = r + 1;
+            let formula = match col % 3 {
+                0 => format!("=COUNTIF(Sheet1!A:A,A{row})"),
+                1 => format!("=SUMIF(Sheet1!A$1:A${rows},A{row},Sheet1!B$1:B${rows})"),
+                _ => format!("=AVERAGEIF(Sheet1!A:A,A{row},Sheet1!B:B)"),
+            };
+            sheet.cells.set(CellRef::new(r, col), Cell::formula(Formula::new(&formula)));
+        }
+    }
+    wb.sheet_mut(1).unwrap().cells.set(CellRef::new(rows + 10, 58), Cell::value(Value::Number(1.0)));
+    wb.sheet_mut(2).unwrap().cells.set(CellRef::new(6, 16), Cell::value(Value::Number(1.0)));
+    wb
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+#[ignore = "timing-sensitive; run with --ignored in release"]
+#[allow(clippy::disallowed_methods)]
+fn criteria_profile_recalc_finishes() {
+    let mut wb = criteria_profile(2_860, 58);
+    let start = std::time::Instant::now();
+    Calc::new().recalc_all(&mut wb);
+    let elapsed = start.elapsed();
+    eprintln!("criteria profile: {elapsed:?}");
+    for r in 0..2_860 {
+        let count = (2_860 - 1 - r % 97) / 97 + 1;
+        for col in 1..=58 {
+            let expected = if col % 3 == 2 { 1.0 } else { f64::from(count) };
+            assert_eq!(wb.sheet(1).unwrap().value(CellRef::new(r, col)), Value::Number(expected));
+        }
+    }
+    assert!(elapsed < std::time::Duration::from_secs(20), "criteria recalc took {elapsed:?}");
+}
+
+#[test]
+fn indexed_text_criteria_match_the_scan_after_edits() {
+    let mut t = T::new();
+    // Repeated text, Unicode simple folding, numeric-looking text, blanks, errors, and
+    // cancellation-sensitive sums. Concatenating the criterion forces the ordinary path.
+    let keys = ["Apple", "APPLE", "apple", "İ", "i", "i\u{307}", "*", "~", "12", "", "TRUE", "#N/A"];
+    let targets = [1e16, 1.0, -1e16, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+    for (r, (key, n)) in keys.iter().zip(targets).enumerate() {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::new(r as u32, 0), Cell::value(Value::from(*key)));
+        sh.cells.set(CellRef::new(r as u32, 1), Cell::value(Value::Number(n)));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B12"), Cell::value(Value::Error(CellError::NA)));
+    let long_criterion = "x".repeat(256);
+    let criteria = ["apple", "=APPLE", "i", "i\u{307}", "missing", "a*", "~*", "<>apple", "12", "", "TRUE", "#N/A", "é", &long_criterion];
+    let names = ["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MINIFS", "MAXIFS"];
+    let mut pairs = Vec::new();
+    for (r, key) in criteria.iter().enumerate() {
+        t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r as u32, 3), Cell::value(Value::from(*key)));
+        for (col, name) in names.iter().enumerate() {
+            let criterion = format!("D{}", r + 1);
+            let args = |criterion: &str| match *name {
+                "COUNTIF" | "COUNTIFS" => format!("A$1:A$12,{criterion}"),
+                "SUMIF" | "AVERAGEIF" => format!("A$1:A$12,{criterion},B$1:B$12"),
+                _ => format!("B$1:B$12,A$1:A$12,{criterion}"),
+            };
+            let indexed = CellRef::new(r as u32, 5 + col as u32 * 2);
+            let scanned = CellRef::new(r as u32, indexed.col + 1);
+            let sh = t.wb.sheet_mut(0).unwrap();
+            sh.cells.set(indexed, Cell::formula(Formula::new(&format!("={name}({})", args(&criterion)))));
+            sh.cells.set(scanned, Cell::formula(Formula::new(&format!("={name}({})", args(&format!("\"\"&{criterion}"))))));
+            pairs.push((indexed, scanned));
+        }
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let compare = |t: &T| {
+        for &(indexed, scanned) in &pairs {
+            let sh = t.wb.sheet(0).unwrap();
+            assert_eq!(sh.value(indexed), sh.value(scanned), "{indexed:?}");
+        }
+    };
+    compare(&t);
+    for (at, value) in [("A1", "Pear"), ("B2", "100"), ("D1", "pear"), ("A3", "=\"pear\""), ("A3", "apple")] {
+        t.set(at, value);
+        compare(&t);
+    }
+    t.wb.calc.iterative = true;
+    t.calc.recalc_all(&mut t.wb);
+    compare(&t);
+}
+
 struct T {
     wb: Workbook,
     calc: Calc,
