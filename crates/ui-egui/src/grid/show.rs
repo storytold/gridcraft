@@ -517,10 +517,13 @@ fn cancel_scrollbar_capture(ctx: &egui::Context, release_on_pointer_gone: bool) 
     let Some(state) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(capture)) else { return };
     let frame = ctx.cumulative_frame_nr();
     let cancelled = ctx.input(|i| {
+        // Web focus polling can append Focused(false) after pointerdown before
+        // the canvas ever gains focus. That is not a loss of this new gesture's focus.
+        let focus_seen = state.was_focused || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)));
         let interrupted = i.events.iter().rev().find_map(|event| match event {
             // Only a capture born this frame can belong to a press after an interruption.
             egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } if state.started == frame => Some(false),
-            egui::Event::WindowFocused(false) => Some(true),
+            egui::Event::WindowFocused(false) if focus_seen => Some(true),
             egui::Event::PointerGone if release_on_pointer_gone => Some(true),
             _ => None,
         });
@@ -539,7 +542,7 @@ fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_g
         let capture = egui::Id::unique(("worksheet_scrollbar_capture", ui.ctx().viewport_id()));
         let frame = ui.ctx().cumulative_frame_nr();
         // Web pointerdown can precede canvas focus. Only a subsequent loss of
-        // observed focus cancels that gesture; an explicit loss event still does.
+        // observed focus cancels that gesture.
         let was_focused = ui.input(|i| i.raw.focused && i.focused);
         ui.ctx().data_mut(|d| {
             if d.get_temp::<ScrollbarCapture>(capture).is_none_or(|state| state.id != resp.id) {
