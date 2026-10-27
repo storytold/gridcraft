@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Python cells as data; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -178,6 +178,22 @@ bound what a file can make the app hold (result size, spill ranges, total rebuil
 size). This build runs no Python: `python.set` stores code, and new or changed code shows
 `#BLOCKED!`.
 
+In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
+the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. A locked cell on
+a protected sheet is refused before a draft exists. Committing a Python edit
+(`commit_python_edit`) runs no command when the code is unchanged (no undo step), and none when
+sheet protection locked the cell while the draft was open (the draft is dropped with the warning).
+With all code deleted it runs `cell.set` with empty input on a Python cell, which clears it, and
+nothing on any other cell. Any other commit runs `python.set`; when that refuses, the message
+shows and the edit stays open. Drafts, Python or not, follow their sheet by its runtime identity
+(`Sheet::uid`, `model::SheetUid`, found again by `EditState::sheet_in`), so a sheet inserted,
+deleted or moved while one is open never takes it. After every command the open draft is pointed
+at its sheet again, so it is drawn, pointed from and committed there, and its point-mode anchor
+(held by sheet index) is let go when the sheet order changed. A draft is dropped then, with a
+message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
+cell) that sheet protection now hides, as the Python editor window closes then.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -203,6 +219,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |

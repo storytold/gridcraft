@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (Python cells stored and kept in files; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-01 | Python mode in the formula bar: Ctrl+Alt+Shift+P, `=PY` then Tab, or editing a Python cell edits its code in the formula bar, with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`. The code still doesn't run |
 | 2026-11-01 | Python cells as data: `python.set` stores code in a cell, Python cells copy, move, fill and undo like formulas, and `.xlsx` reads and writes Python cells as [MS-XLSX] specifies (`_xlfn._xlws.PY(index,0 or 1)`, the code in the workbook's Python part) with cached values and spills, so such workbooks open with their results; nothing runs Python (new code shows `#BLOCKED!`), and opening a file limits code size, result size and spill ranges |
 | 2026-11-01 | XLSX keeps the first visible workbook window's active sheet and display settings together, falling back to the first view when all are hidden. Tab ratios are normalized to 0–1000 on import and export; invalid numeric text uses 600. Synthetic round trips cover isolated attributes, missing views, and active tabs after sheet deletion/reordering; firstSheet remains separate #2264 work (#3057). |
 | 2026-10-31 | Esc in File › Info, Print or Options first leaves the text field; the next Esc returns to the sheet (#3035) |
@@ -251,6 +252,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-01 | minor | Progress log: Python cells as data |
 | 2026-11-01 | trivial | Workbook views: selected window settings stay together, tab ratios are bounded, and regressions cover isolated settings and sheet edits; readiness estimates unchanged (#3057) |
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
