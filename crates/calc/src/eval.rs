@@ -13,6 +13,7 @@ use gridcraft_model::Workbook;
 
 mod array;
 mod call;
+mod criteria;
 mod format;
 mod lambda;
 mod reference_fns;
@@ -114,6 +115,14 @@ pub trait Host {
     /// until `f` returns false. `false` when this host can't (callers use `range_values`).
     fn visit_range(&mut self, _sheet: usize, _range: RangeRef, _f: &mut dyn FnMut(&Value) -> bool) -> bool {
         false
+    }
+    /// A scalar constant, only when reading it cannot calculate a formula or observe a spill.
+    fn constant_value(&self, _area: Area) -> Option<Value> {
+        None
+    }
+    /// Optional pass-local text criteria index; hosts decline formula/spill/iterative ranges.
+    fn text_criteria_index(&mut self, _range: Area, _target: Area) -> Option<Arc<gridcraft_functions::TextCriteriaIndex>> {
+        None
     }
     /// While a formula is calculated on demand inside another one: `stack_position()` where the
     /// outermost one started, which the stack budget is counted from.
@@ -258,6 +267,18 @@ impl<'h> Evaluator<'h> {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
         }
+        let area = match self.materialized_area(a) {
+            Ok(area) => area,
+            Err(e) => return Value::Error(e),
+        };
+        let range = area.range;
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let data = self.host.range_values(a.sheet, range);
+        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+
+    /// The exact area the normal array path reads, including its used-range trimming and cap.
+    fn materialized_area(&mut self, a: &Area) -> Result<Area, CellError> {
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
@@ -268,10 +289,9 @@ impl<'h> Evaluator<'h> {
         let range = if full_size { a.range } else { self.trim(a) };
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
-            return Value::Error(CellError::Num);
+            return Err(CellError::Num);
         }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        Ok(Area { sheet: a.sheet, range })
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
