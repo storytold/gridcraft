@@ -6,6 +6,7 @@ use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
+use super::formatting_rule::formatting_rule;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
@@ -78,6 +79,16 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "newFormattingRule" => {
+            let rule = d.values.get("rule").cloned().unwrap_or(Json::Null);
+            v = match d.values.get("index").and_then(Json::as_u64) {
+                Some(i) => json!({"update": i, "rule": rule, "sheet": d.values.get("sheet")}),
+                None => match d.values.get("range").and_then(Json::as_str) {
+                    Some(r) => json!({"range": r, "rule": rule, "sheet": d.values.get("sheet")}),
+                    None => json!({"rule": rule}),
+                },
+            };
+        }
         "cfQuick" => {
             let mut rule = Map::new();
             for (k, val) in &d.values {
@@ -140,6 +151,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
+        "newFormattingRule" => 560.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -175,6 +187,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
+                "newFormattingRule" => formatting_rule(app, ui, &mut d, &mut confirm, &mut open),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
@@ -488,7 +501,7 @@ pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
 
 /// Keeps a picking formula box's caret, and gives it the keyboard back after a grid click put a
 /// reference in it (the click took the focus), its caret after the reference.
-fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
+pub(super) fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     if typed {
         pick.point = None;
     }

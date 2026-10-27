@@ -21,6 +21,7 @@ mod cond_format_rules;
 mod data;
 mod find;
 mod format_cells;
+mod formatting_rule;
 mod insert_function;
 mod names;
 mod paste;
@@ -32,6 +33,7 @@ use analysis::toolpak_defaults;
 use charts::select_chart;
 use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
+use formatting_rule::cf_apply_preset;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
 pub(crate) use show::build_params;
@@ -81,6 +83,9 @@ pub struct Dialog {
 #[derive(Clone, Debug)]
 struct RefPick {
     key: &'static str,
+    /// The object in the dialog's values that holds `key`, when the field isn't a value of its
+    /// own (New Formatting Rule keeps its whole rule in `rule`).
+    nested: Option<&'static str>,
     /// The sheet the dialog was opened on, by name: its index changes when sheets are inserted or
     /// moved while the dialog is open. References to another sheet carry that sheet's name.
     sheet: String,
@@ -129,7 +134,11 @@ impl Dialog {
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
     pub fn picks_references(&self) -> bool {
-        self.pick.is_some()
+        match self.pick.as_ref().and_then(|pick| pick.nested) {
+            // New Formatting Rule points only while its formula box shows.
+            Some(obj) => self.values.get(obj).and_then(|r| r.get("type")).and_then(Json::as_str) == Some("expression"),
+            None => self.pick.is_some(),
+        }
     }
 
     /// A click (`extend` false) or a drag reaching `cell`: writes the absolute reference at the
@@ -139,7 +148,11 @@ impl Dialog {
     /// dialog's own.
     pub fn pick_reference(&mut self, cell: CellRef, active_sheet: &str, extend: bool) {
         let Some(pick) = self.pick.as_mut() else { return };
-        let text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
+        let holder = match pick.nested {
+            Some(obj) => self.values.get(obj).and_then(Json::as_object),
+            None => Some(&self.values),
+        };
+        let text = holder.and_then(|h| h.get(pick.key)).and_then(Json::as_str).unwrap_or("").to_string();
         let mut ed = crate::editor::EditState::new(0, 0, cell, text, true, false);
         ed.caret = pick.caret.min(ed.text.chars().count());
         ed.point = pick.point;
@@ -164,7 +177,16 @@ impl Dialog {
         pick.caret = ed.caret;
         pick.point = ed.point;
         pick.refocus = true;
-        self.values.insert(pick.key.into(), json!(ed.text));
+        match pick.nested {
+            Some(obj) => {
+                if let Some(h) = self.values.get_mut(obj).and_then(Json::as_object_mut) {
+                    h.insert(pick.key.into(), json!(ed.text));
+                }
+            }
+            None => {
+                self.values.insert(pick.key.into(), json!(ed.text));
+            }
+        }
     }
 
     /// Creates a command-backed form with its initial field values.
@@ -851,7 +873,16 @@ impl Dialog {
                             )
                         })
                         .unwrap_or_default();
-                    d.pick = Some(RefPick { key: "formula", sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+                    d.pick = Some(RefPick {
+                        key: "formula",
+                        nested: None,
+                        sheet,
+                        caret: 0,
+                        point: None,
+                        anchor: CellRef::new(0, 0),
+                        refocus: false,
+                        applies_to,
+                    });
                 }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
@@ -934,6 +965,56 @@ impl Dialog {
                 dialog
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "newFormattingRule" => {
+                // New Rule… starts from Format only cells that contain › Cell Value between;
+                // Manage Rules › Edit Rule… passes the rule's index and params.
+                let index = p("index").as_u64();
+                let mut rule = p("rule").as_object().cloned().unwrap_or_else(|| {
+                    json!({"type": "cellIs", "operator": "between", "value": "", "value2": ""}).as_object().cloned().unwrap_or_default()
+                });
+                if !rule.contains_key("fill") {
+                    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+                    let preset = rule.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
+                    cf_apply_preset(&mut rule, &preset, &theme);
+                }
+                let title = if index.is_some() { "Edit Formatting Rule" } else { "New Formatting Rule" };
+                // The sheet (by name: inserting or moving sheets changes its index) and the cells
+                // the rule applies to are fixed as the dialog opens, so pointing at cells for the
+                // formula, on this sheet or another, doesn't move the rule.
+                let (sheet, range) = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        let sheet = match p("sheet") {
+                            Json::Null => doc.wb.active(),
+                            v => v
+                                .as_u64()
+                                .and_then(|i| doc.wb.sheet(i as usize))
+                                .or_else(|| v.as_str().and_then(|n| doc.wb.sheet_index(n)).and_then(|i| doc.wb.sheet(i))),
+                        };
+                        let range = match p("range") {
+                            Json::Null if index.is_none() => json!(doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(",")),
+                            r => r,
+                        };
+                        (sheet.map(|sh| sh.name.clone()).unwrap_or_default(), range)
+                    })
+                    .unwrap_or_default();
+                let sheet_param = if sheet.is_empty() { p("sheet") } else { json!(sheet) };
+                let mut d = Dialog::custom("newFormattingRule", title, json!({"rule": rule, "index": index, "range": range, "sheet": sheet_param}));
+                d.command = Some(if index.is_some() { "home.manageRules" } else { "home.conditionalFormat" });
+                let applies_to = range.as_str().unwrap_or_default().to_string();
+                d.pick = Some(RefPick {
+                    key: "formula",
+                    nested: Some("rule"),
+                    sheet,
+                    caret: 0,
+                    point: None,
+                    anchor: CellRef::new(0, 0),
+                    refocus: false,
+                    applies_to,
+                });
+                d
+            }
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
