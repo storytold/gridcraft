@@ -327,3 +327,93 @@ fn a_child_release_and_repress_on_the_same_thumb_starts_a_fresh_capture() {
         assert!(axis.scroll(&h) > 0.0, "{axis:?}: a delivered release must give the next child press a fresh capture");
     }
 }
+
+#[test]
+fn a_child_pending_thumb_press_cannot_steal_a_new_gesture_after_interruption() {
+    for interruption in [vec![Event::PointerGone], vec![Event::WindowFocused(false), Event::WindowFocused(true)]] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let (mut h, queued) = child_harness(true);
+            let p = axis.start(&h);
+            child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+            let next_press = axis.outside_track(p) + axis.movement() * 2.0;
+            let mut batch = interruption.clone();
+            batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
+            child_events(&mut h, &queued, batch);
+            child_events(&mut h, &queued, [Event::PointerMoved(next_press + axis.movement())]);
+            assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: the interrupted pending thumb must stay stopped");
+            assert_ne!(h.state().session.active().unwrap().selection.active, CellRef::new(0, 0), "{axis:?}: the new child gesture must work");
+        }
+    }
+}
+
+fn track_end(axis: Axis, h: &Harness) -> Pos2 {
+    match axis {
+        Axis::Vertical => pos2(h.state().grid.rect.unwrap().right() + 7.0, h.state().grid.cells_rect.unwrap().bottom() - 12.0),
+        Axis::Horizontal => {
+            let track = h.state().grid.hscroll.unwrap();
+            pos2(track.right() - 6.0, track.center().y)
+        }
+    }
+}
+
+#[test]
+fn cancelling_a_child_pending_track_press_does_not_page() {
+    for interruption in [Event::PointerGone, Event::WindowFocused(false)] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let (mut h, queued) = child_harness(true);
+            let p = track_end(axis, &h);
+            child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+            queued.lock().unwrap().push(interruption.clone());
+            h.run_steps(1);
+            assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: cancelling must not turn the old press into a track click");
+            h.ctx.input_for(egui::ViewportId::from_hash_of("scrollbar child"), |input| {
+                assert!(!input.pointer.primary_clicked(), "cancellation must not generate a click anywhere in the app");
+                assert_eq!(input.pointer.delta(), Vec2::ZERO, "cancellation must not expose pointer movement");
+            });
+        }
+    }
+}
+
+#[test]
+fn a_new_child_click_after_cancellation_is_not_a_double_click() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(true);
+        let p = axis.start(&h);
+        child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+        let next_press = p + axis.movement().normalized() * 2.0;
+        queued.lock().unwrap().extend([
+            Event::WindowFocused(false),
+            Event::WindowFocused(true),
+            Event::PointerMoved(next_press),
+            button(next_press, true),
+            button(next_press, false),
+        ]);
+        h.run_steps(1);
+        h.ctx.input_for(egui::ViewportId::from_hash_of("scrollbar child"), |input| {
+            assert!(input.pointer.primary_clicked(), "the new click must work");
+            assert!(!input.pointer.button_double_clicked(PointerButton::Primary), "the cancelled press must not count towards a double-click");
+        });
+    }
+}
+
+#[test]
+fn a_real_child_track_click_after_interruption_in_the_same_batch_still_pages() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(true);
+        let p = axis.start(&h);
+        child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true)]);
+        let next_press = track_end(axis, &h);
+        child_events(
+            &mut h,
+            &queued,
+            [
+                Event::WindowFocused(false),
+                Event::WindowFocused(true),
+                Event::PointerMoved(next_press),
+                button(next_press, true),
+                button(next_press, false),
+            ],
+        );
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: cancellation must not swallow a real later track click");
+    }
+}
