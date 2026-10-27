@@ -1,6 +1,7 @@
 //! Excel criteria (COUNTIF, SUMIFS, DCOUNT…) and wildcard matching.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use gridcraft_core::parse::parse_number_text;
 use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
@@ -8,6 +9,95 @@ use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
 const MAX_CRITERION_UTF16_UNITS: usize = 255;
+
+/// A pass-local index for literal text equality in the criteria aggregates. Each bucket folds
+/// numbers in their original row-major order, just as SUMIF does after selecting its cells.
+/// Numeric, wildcard, blank and comparison criteria still use the ordinary matcher.
+#[derive(Default)]
+pub struct TextCriteriaIndex {
+    groups: HashMap<String, TextGroup>,
+    text_bytes: usize,
+}
+
+#[derive(Default)]
+struct TextGroup {
+    cells: usize,
+    numbers: usize,
+    sum: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    error: Option<CellError>,
+}
+
+impl TextCriteriaIndex {
+    /// The index key only when the existing parser accepts a literal text equality criterion.
+    /// Fold one character to one character, exactly like the criteria wildcard matcher (not
+    /// `compare_text`, whose Unicode folding can expand characters).
+    pub fn key(criterion: &Value) -> Option<String> {
+        let c = Criterion::parse_arg(criterion).ok()?;
+        match c.operand {
+            Operand::Text(t) if c.op == Op::Eq && !t.contains(['*', '?', '~']) => Some(t.chars().map(lower_char).collect()),
+            _ => None,
+        }
+    }
+
+    /// Builds from scalar cells and their aligned targets. `None` means the optional index
+    /// exceeded its text-storage allowance; callers must then use the ordinary calculation.
+    pub fn new<'a>(cells: impl Iterator<Item = (&'a Value, &'a Value)>, max_text_bytes: usize) -> Option<Self> {
+        let mut index = Self::default();
+        for (source, target) in cells {
+            let Value::Text(text) = source else { continue };
+            if text.len() > max_text_bytes {
+                return None;
+            }
+            let key: String = text.chars().map(lower_char).collect();
+            if !index.groups.contains_key(&key) {
+                index.text_bytes = index.text_bytes.checked_add(key.len())?;
+                if index.text_bytes > max_text_bytes {
+                    return None;
+                }
+            }
+            let group = index.groups.entry(key).or_default();
+            group.cells += 1;
+            match target {
+                Value::Number(n) => {
+                    group.numbers += 1;
+                    group.sum += n;
+                    group.min = Some(group.min.map_or(*n, |v| v.min(*n)));
+                    group.max = Some(group.max.map_or(*n, |v| v.max(*n)));
+                }
+                Value::Error(e) if group.error.is_none() => group.error = Some(*e),
+                _ => {}
+            }
+        }
+        Some(index)
+    }
+
+    /// Bytes of folded text retained, for the host's pass-wide index allowance.
+    pub fn text_bytes(&self) -> usize {
+        self.text_bytes
+    }
+
+    /// Answers one of the criteria aggregates for an already-parsed literal text key.
+    pub fn aggregate(&self, name: &str, key: &str) -> Value {
+        let empty = TextGroup::default();
+        let group = self.groups.get(key).unwrap_or(&empty);
+        if matches!(name, "COUNTIF" | "COUNTIFS") {
+            return Value::Number(group.cells as f64);
+        }
+        if let Some(e) = group.error {
+            return Value::Error(e);
+        }
+        match name {
+            "SUMIF" | "SUMIFS" => Value::number(group.sum),
+            "AVERAGEIF" | "AVERAGEIFS" if group.numbers == 0 => Value::Error(CellError::Div0),
+            "AVERAGEIF" | "AVERAGEIFS" => Value::number(group.sum / group.numbers as f64),
+            "MINIFS" => Value::number(group.min.unwrap_or(0.0)),
+            "MAXIFS" => Value::number(group.max.unwrap_or(0.0)),
+            _ => Value::Error(CellError::Name),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
@@ -383,6 +473,49 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_index_matches_the_ordinary_aggregates() {
+        use crate::util::testutil::{ev, rf, t};
+        use gridcraft_core::Array;
+
+        let keys: Vec<Value> =
+            ["apple", "APPLE", "Apple", "İ", "i", "i\u{307}", "é", "É", "12", "", "bad", "bad"].into_iter().map(Value::from).collect();
+        let values = vec![
+            Value::Number(1e16),
+            Value::Number(1.0),
+            Value::Number(-1e16),
+            Value::Number(4.0),
+            Value::Number(5.0),
+            Value::Number(6.0),
+            Value::Number(7.0),
+            Value::Bool(true),
+            Value::Number(9.0),
+            Value::Empty,
+            Value::Error(CellError::NA),
+            Value::Error(CellError::Div0),
+        ];
+        let index = TextCriteriaIndex::new(keys.iter().zip(&values), 1024).unwrap();
+        for criterion in ["apple", "=APPLE", "i", "i\u{307}", "é", "missing", "bad"] {
+            let key = TextCriteriaIndex::key(&Value::from(criterion)).unwrap();
+            for name in ["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MINIFS", "MAXIFS"] {
+                let source = rf(Value::from(Array::column(keys.clone())));
+                let target = rf(Value::from(Array::column(values.clone())));
+                let args = match name {
+                    "COUNTIF" | "COUNTIFS" => vec![source, t(criterion)],
+                    "SUMIF" | "AVERAGEIF" => vec![source, t(criterion), target],
+                    _ => vec![target, source, t(criterion)],
+                };
+                assert_eq!(index.aggregate(name, &key), ev(name, args), "{name}: {criterion}");
+            }
+        }
+        for criterion in ["12", "TRUE", "#N/A", "", "=", "<>apple", "a*", "?", "~*", &"x".repeat(256)] {
+            assert!(TextCriteriaIndex::key(&Value::from(criterion)).is_none(), "{criterion}");
+        }
+        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 2).is_none());
+        // An exhausted optional cache must not return a partial set of groups.
+        assert!(TextCriteriaIndex::new(keys.iter().zip(&values), 0).is_none());
+    }
 
     fn m(c: &str, v: Value) -> bool {
         Criterion::parse(&Value::from(c)).matches(&v)

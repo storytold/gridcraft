@@ -299,6 +299,9 @@ impl<'h> Evaluator<'h> {
         if let Some(kind) = Agg::of(spec.name) {
             return self.aggregate(kind, args);
         }
+        if let Some(value) = self.indexed_criteria(spec.name, args) {
+            return Ev::V(value);
+        }
         let mut evaluated = Vec::with_capacity(args.len());
         // SUMIF/AVERAGEIF: the size of the criteria range (argument 1), which the sum range takes.
         let mut criteria_shape = None;

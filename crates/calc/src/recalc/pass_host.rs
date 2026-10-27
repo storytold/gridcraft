@@ -24,6 +24,11 @@ pub(super) struct PassHost<'a> {
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
+    /// Optional constant-range indexes live only for this pass. None remembers an ineligible
+    /// range too, so thousands of calls do not repeatedly check the same formula cells.
+    text_criteria: HashMap<(Area, Area), Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>>>,
+    criteria_cells: u64,
+    criteria_bytes: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -76,6 +81,9 @@ impl<'a> PassHost<'a> {
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             used: HashMap::default(),
+            text_criteria: HashMap::default(),
+            criteria_cells: 0,
+            criteria_bytes: 0,
             rng,
             now,
             cycle: false,
@@ -393,6 +401,60 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 }
 
 impl Host for PassHost<'_> {
+    fn constant_value(&self, area: Area) -> Option<Value> {
+        let sh = self.wb.sheet(area.sheet)?;
+        if self.iterate || !area.range.is_single() || !self.spills.is_empty() || !sh.spill.is_empty() {
+            return None;
+        }
+        match sh.cell(area.range.start) {
+            Some(cell) if cell.formula.is_some() || matches!(cell.value, Value::Array(_)) => None,
+            Some(cell) => Some(cell.value.clone()),
+            None => Some(Value::Empty),
+        }
+    }
+    fn text_criteria_index(&mut self, range: Area, target: Area) -> Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>> {
+        // A new spill can overwrite a previously constant range, even if the cached index was
+        // built before its anchor ran. Decline before consulting the cache in that case.
+        if self.iterate || !self.spills.is_empty() {
+            return None;
+        }
+        let source = self.wb.sheet(range.sheet)?;
+        let dest = self.wb.sheet(target.sheet)?;
+        if !source.spill.is_empty() || !dest.spill.is_empty() {
+            return None;
+        }
+        let key = (range, target);
+        if let Some(index) = self.text_criteria.get(&key) {
+            return index.clone();
+        }
+        // Optional acceleration has a pass-wide cell and text budget. Reaching it changes no
+        // results: the ordinary evaluator remains the fallback. Limit cache metadata as well.
+        let cells = u64::from(range.range.height()) * u64::from(range.range.width());
+        if self.text_criteria.len() >= 1_024 || self.criteria_cells.saturating_add(cells) > 1_000_000 {
+            return None;
+        }
+        self.criteria_cells += cells;
+        let constant = |area: Area| {
+            self.wb
+                .sheet(area.sheet)
+                .is_some_and(|sh| sh.cells.iter_range(area.range).all(|(_, cell)| cell.formula.is_none() && !matches!(cell.value, Value::Array(_))))
+        };
+        let index = if constant(range) && constant(target) {
+            let cells = source.cells.iter_range(range.range).map(|(at, cell)| {
+                let target_cell =
+                    CellRef::new(target.range.start.row + at.row - range.range.start.row, target.range.start.col + at.col - range.range.start.col);
+                (&cell.value, dest.value_ref(target_cell).unwrap_or(&Value::Empty))
+            });
+            gridcraft_functions::TextCriteriaIndex::new(cells, 8_000_000usize.saturating_sub(self.criteria_bytes)).map(std::sync::Arc::new)
+        } else {
+            None
+        };
+        if let Some(index) = &index {
+            self.criteria_bytes += index.text_bytes();
+        }
+        self.text_criteria.insert(key, index.clone());
+        index
+    }
     fn workbook(&self) -> &Workbook {
         self.wb
     }
@@ -552,5 +614,40 @@ impl Host for PassHost<'_> {
         x ^= x >> 27;
         *self.rng = x;
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+#[cfg(test)]
+mod criteria_tests {
+    use super::*;
+    use gridcraft_model::Cell;
+
+    #[test]
+    fn text_criteria_ranges_are_indexed_once_per_pass() {
+        use crate::eval::Area;
+        let mut wb = Workbook::new();
+        for r in 0..500 {
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 0), Cell::value(Value::from(format!("key{r}"))));
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 1), Cell::value(Value::Number(f64::from(r))));
+        }
+        let range = Area { sheet: 0, range: RangeRef::parse("A1:A500").unwrap() };
+        let target = Area { sheet: 0, range: RangeRef::parse("B1:B500").unwrap() };
+        let exprs = HashMap::default();
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for _ in 0..3 {
+            for r in 0..500 {
+                let index = host.text_criteria_index(range, target).unwrap();
+                assert_eq!(index.aggregate("SUMIF", &format!("key{r}")), Value::Number(f64::from(r)));
+            }
+        }
+        // Deterministic complexity guard, alongside the opt-in wall-clock profile test.
+        assert_eq!(host.criteria_cells, 500);
+        assert_eq!(host.text_criteria.len(), 1);
+        host.iterate = true;
+        assert!(host.text_criteria_index(range, target).is_none());
+        host.iterate = false;
+        host.spills.insert((0, CellRef::new(0, 3)), std::sync::Arc::new(gridcraft_core::Array::scalar(Value::Number(1.0))));
+        assert!(host.text_criteria_index(range, target).is_none());
     }
 }
