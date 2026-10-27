@@ -283,7 +283,7 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
 /// `Ui` (not the app) read it to translate their labels; [`set_current`] writes it once per frame.
 fn lang_key() -> egui::Id {
-    egui::Id::new("gridcraft.language")
+    egui::Id::unique("gridcraft.language")
 }
 
 /// The language the current frame is drawing in. `En` when unset.
@@ -369,6 +369,21 @@ mod tests {
                 // Big ribbon buttons whose English fits on one line may still need two.
                 if !label.contains('\n') && !["AutoSum", "PivotTable"].contains(english) {
                     assert!(!text.contains('\n'), "{language:?}: one-line {english:?} => {text:?}");
+                }
+            }
+        }
+    }
+
+    /// The screen-reader names for the formula-bar controls must be translated in every catalog
+    /// (no silent English fallback) and stay single-line labels.
+    #[test]
+    fn accessible_control_names_are_translated_in_every_catalog() {
+        for key in ["Name Box", "Cell Editor", "Font Size", "Sheet Name", "Text Box"] {
+            for language in Language::ALL {
+                let shown = language.tr(key);
+                assert!(!shown.contains('\n'), "{}: {key:?} is not a single-line label: {shown:?}", language.code());
+                if language != Language::En {
+                    assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
                 }
             }
         }

@@ -165,7 +165,7 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     test_commands().iter().find(|c| c.id == id).copied()
 }
 
-static TEST_COMMANDS: std::sync::Mutex<Vec<&'static CommandSpec>> = std::sync::Mutex::new(Vec::new());
+static TEST_COMMANDS: std::sync::Mutex<Vec<&CommandSpec>> = std::sync::Mutex::new(Vec::new());
 
 /// Test-only: register an extra command so UI integration tests can prove a pending
 /// keytip becomes live the moment its command lands (see crates/ui-egui/tests/keytips.rs).
@@ -296,7 +296,7 @@ pub(crate) fn target_sheet(s: &Session, p: &Json) -> Result<usize> {
     {
         return d.wb.sheet_index(&sh).ok_or_else(|| bad("range", format!("no sheet named `{sh}`")));
     }
-    Ok(d.wb.active_sheet)
+    Ok(d.wb.active_sheet())
 }
 
 pub(crate) use gridcraft_core::split_sheet;
@@ -305,7 +305,7 @@ pub(crate) use gridcraft_core::split_sheet;
 /// a cell reference, or that names a sheet other than the active one, is an error rather than a
 /// silent fallback to some other cell.
 pub(crate) fn cell_param(s: &Session, p: &Json, key: &str) -> Result<Option<CellRef>> {
-    cell_param_on(s, p, key, s.doc()?.wb.active_sheet)
+    cell_param_on(s, p, key, s.doc()?.wb.active_sheet())
 }
 
 /// Like [`cell_param`], for a command that operates on `sheet` (a `Sheet!` prefix must name it).
@@ -593,7 +593,7 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
 
 impl Ctx<'_> {
     pub fn sheet_index(&self) -> usize {
-        self.wb.active_sheet
+        self.wb.active_sheet()
     }
     pub fn sheet_mut(&mut self, i: usize) -> Result<&mut gridcraft_model::Sheet> {
         self.wb.sheet_mut(i).ok_or_else(|| EngineError::Other("no such sheet".into()))

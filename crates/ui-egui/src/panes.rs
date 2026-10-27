@@ -50,6 +50,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Lists comments and replies, links each to its cell, and runs delete/resolve/reopen/reply commands.
 fn comments(app: &mut SheetApp, ui: &mut Ui) {
     let Some(d) = app.session.active() else { return };
     let Some(sh) = d.wb.active() else { return };
@@ -80,7 +81,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                 for (a, txt) in &c.replies {
                     ui.label(egui::RichText::new(format!("↳ {a}: {txt}")).color(t.text));
                 }
-                let key = egui::Id::new(("reply", &cell));
+                let key = egui::Id::unique(("reply", &cell));
                 let mut draft: String = ui.ctx().data_mut(|m| m.get_temp(key)).unwrap_or_default();
                 // Buttons first, right to left, so the reply field gets exactly the width they leave:
                 // a field sized by a guess wider than the row pushes the resizable pane wider every frame.
@@ -106,6 +107,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Adds the active cell, lists watch values and formulas, and removes watched entries.
 fn watch(app: &mut SheetApp, ui: &mut Ui) {
     if ui.button("Add Watch (active cell)").clicked()
         && let Some(d) = app.session.active()
@@ -126,7 +128,7 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
             ui.label(&cell);
             ui.label(w["value"].as_str().unwrap_or(""));
             ui.label(w["formula"].as_str().unwrap_or(""));
-            if ui.small_button("✕").clicked() {
+            if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 let _ = app.session.run("formulas.watchWindow", json!({"remove": cell}));
             }
             ui.end_row();
@@ -134,6 +136,7 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Lists the sheet's objects and dispatches select, bring-forward, send-backward and delete.
 fn selection(app: &mut SheetApp, ui: &mut Ui) {
     let list = app.session.run("arrange.selectionPane", json!({})).unwrap_or(Json::Null);
     let items = list.as_array().cloned().unwrap_or_default();
@@ -154,13 +157,14 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
             if ui.small_button("▼").on_hover_text("Send Backward").clicked() {
                 app.run_or_alert("arrange.sendBackward", json!({"kind": kind, "id": id}));
             }
-            if ui.small_button("✕").on_hover_text("Delete").clicked() {
+            if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
             }
         });
     }
 }
 
+/// Draws the chart format pane: title, type, legend, elements/axis titles, series colors, palettes/layouts and size.
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_chart else {
         ui.label(egui::RichText::new("Select a chart to format it.").italics());
@@ -172,7 +176,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
     ui.collapsing("Chart Title", |ui| {
-        let field = egui::Id::new(("gridcraft.chart_title", id));
+        let field = egui::Id::unique(("gridcraft.chart_title", id));
         if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
             app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
         }
@@ -217,21 +221,21 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         }
         ui.horizontal(|ui| {
             ui.label("Horizontal axis title:");
-            let field = egui::Id::new(("gridcraft.chart_x_title", id));
+            let field = egui::Id::unique(("gridcraft.chart_x_title", id));
             if let Some(xt) = crate::widgets::committed_text(ui, field, chart.x_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "xTitle": if xt.is_empty() { Json::Null } else { json!(xt) }}));
             }
         });
         ui.horizontal(|ui| {
             ui.label("Vertical axis title:");
-            let field = egui::Id::new(("gridcraft.chart_y_title", id));
+            let field = egui::Id::unique(("gridcraft.chart_y_title", id));
             if let Some(yt) = crate::widgets::committed_text(ui, field, chart.y_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "yTitle": if yt.is_empty() { Json::Null } else { json!(yt) }}));
             }
         });
     });
     ui.collapsing("Series", |ui| {
-        let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, &chart));
+        let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &chart));
         for (i, s) in chart.series.iter().enumerate() {
             let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series {}", i + 1));
             let col =
@@ -271,7 +275,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.collapsing("Size", |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
-        let draft = egui::Id::new(("gridcraft.chart_size_draft", id));
+        let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
         let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
         let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(40.0..=4000.0));
         let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(40.0..=4000.0));

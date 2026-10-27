@@ -193,6 +193,14 @@ pub struct Font {
     /// Font family class (1 roman, 2 swiss, 3 modern…); `None` is swiss, the default.
     #[serde(default)]
     pub family: Option<u8>,
+    /// The font follows the theme's body font (`<scheme val="minor"/>`) while its face is the
+    /// theme's minor font. Fonts derived from it (bold, a colour, a size) keep the link.
+    #[serde(default = "default_minor")]
+    pub minor: bool,
+}
+
+fn default_minor() -> bool {
+    true
 }
 
 impl Eq for Font {}
@@ -200,7 +208,7 @@ impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
         self.size.to_bits().hash(h);
-        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family).hash(h);
+        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor).hash(h);
     }
 }
 
@@ -217,6 +225,7 @@ impl Default for Font {
             vert: VertAlign::Baseline,
             charset: None,
             family: None,
+            minor: true,
         }
     }
 }

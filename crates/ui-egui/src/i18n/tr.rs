@@ -1,6 +1,7 @@
 //! Turkish translations for the interface strings in i18n.rs. Labels follow the wording Turkish
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Yapıştır",
@@ -188,6 +189,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Sayfa Sonu\nÖnizleme",
         "Page\nLayout" => "Sayfa\nDüzeni",
         "Formula Bar" => "Formül Çubuğu",
+        "Name Box" => "Ad kutusu",
+        "Cell Editor" => "Hücre düzenleyici",
+        "Font Size" => "Yazı tipi boyutu",
         "Gridlines" => "Kılavuz Çizgileri",
         "Headings" => "Başlıklar",
         "Zoom" => "Yakınlaştır",
@@ -410,6 +414,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Koyu",
         "Sheet Options|View" => "Görünüm",
         "Print" => "Yazdır",
+        "Print What" => "Yazdırılacaklar",
+        "Text Box" => "Metin Kutusu",
         _ => return None,
     })
 }

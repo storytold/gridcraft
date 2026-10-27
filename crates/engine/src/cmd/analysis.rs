@@ -1182,7 +1182,7 @@ mod tests {
     fn v(s: &Session, a: &str) -> Value {
         let d = s.doc().unwrap();
         let (sh, body) = crate::cmd::split_sheet(a);
-        let si = sh.map(|n| d.wb.sheet_index(&n).unwrap()).unwrap_or(d.wb.active_sheet);
+        let si = sh.map(|n| d.wb.sheet_index(&n).unwrap()).unwrap_or(d.wb.active_sheet());
         d.wb.sheet(si).unwrap().value(CellRef::parse(body).unwrap())
     }
     fn n(s: &Session, a: &str) -> f64 {

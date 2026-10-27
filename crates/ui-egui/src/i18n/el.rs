@@ -2,6 +2,7 @@
 //! Command ids, cell references and formula identifiers are not translated.
 //! Source labels are kept verbatim and unmatched labels fall back to English.
 
+/// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Επικόλληση",
@@ -185,6 +186,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Προεπισκόπηση\nαλλαγών σελίδας",
         "Page\nLayout" => "Διάταξη\nσελίδας",
         "Formula Bar" => "Γραμμή τύπων",
+        "Name Box" => "Πλαίσιο ονόματος",
+        "Cell Editor" => "Επεξεργαστής κελιού",
+        "Font Size" => "Μέγεθος γραμματοσειράς",
         "Gridlines" => "Γραμμές πλέγματος",
         "Headings" => "Επικεφαλίδες",
         "Zoom" => "Μεγέθυνση",
@@ -396,6 +400,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Σκοτεινό",
         "Sheet Options|View" => "Προβολή",
         "Print" => "Εκτύπωση",
+        "Print What" => "Τι θα εκτυπωθεί",
         "PivotTable Fields" => "Πεδία συγκεντρωτικού πίνακα",
         "Choose fields to add to report:" => "Επιλέξτε πεδία για προσθήκη στην αναφορά:",
         "Use a field's menu to move it between areas:" => "Χρησιμοποιήστε το μενού ενός πεδίου για να το μετακινήσετε μεταξύ περιοχών:",

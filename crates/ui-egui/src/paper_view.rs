@@ -280,14 +280,14 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
 pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Leaving the sheet or the view commits.
     if let Some(e) = &app.grid.hf_edit
-        && (e.sheet != wb.active_sheet || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
+        && (e.sheet != wb.active_sheet() || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
     {
         commit(app);
     }
     let Some(pg) = geo.paper.clone() else { return };
-    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet);
+    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet());
     if std::mem::take(&mut app.grid.hf_start) {
-        begin(app, wb.active_sheet, sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
+        begin(app, wb.active_sheet(), sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
     }
     if resp.clicked_by(egui::PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
@@ -295,7 +295,7 @@ pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let (x, y) =
             (geo.scroll.x as f64 + ((p.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((p.y - geo.cells.top()) / geo.z) as f64);
         match pg.hf_zone_at(x, y) {
-            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet, sh, page, zone),
+            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet(), sh, page, zone),
             _ => {
                 // A click anywhere else ends the edit; the grid then handles the click.
                 if app.grid.hf_edit.is_some() {
@@ -438,6 +438,7 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
     begin(app, sheet, &sh, page, HfZone { footer, section });
 }
 
+/// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
@@ -469,7 +470,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         let anchor = [Align2::LEFT_TOP, Align2::CENTER_TOP, Align2::RIGHT_TOP][k];
         let x = [r.left() + 3.0, r.center().x, r.right() - 3.0][k];
         p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
-        if ui.interact(*r, ui.id().with(("hf_section", k)), egui::Sense::click()).clicked() {
+        if ui.interact(*r, ui.scope_id().with(("hf_section", k)), egui::Sense::click()).clicked() {
             switch_to = Some(k);
         }
     }
@@ -478,9 +479,9 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         app.grid.hf_edit = Some(e);
         return;
     };
-    let id = egui::Id::new("gridcraft.header_footer_editor");
+    let id = egui::Id::unique("gridcraft.header_footer_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(3.0, 2.0)).intersect(geo.cells)));
-    let align = [egui::Align::LEFT, egui::Align::Center, egui::Align::RIGHT][e.section.min(2)];
+    let align = [egui::Align2::LEFT_TOP, egui::Align2::CENTER_TOP, egui::Align2::RIGHT_TOP][e.section.min(2)];
     if let Some(text) = e.texts.get_mut(e.section) {
         let mut output = TextEdit::multiline(text)
             .id(id)
@@ -488,7 +489,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
             .font(font)
             .text_color(Color32::BLACK)
             .background_color(Color32::WHITE)
-            .horizontal_align(align)
+            .align(align)
             .desired_width(r.width() - 6.0)
             .desired_rows(1)
             .lock_focus(true)
@@ -776,8 +777,8 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
     }
     let (hr, vr) = ruler_rects(outer, geo);
     // Right-to-left sheets mirror the pages and the horizontal ruler; hit-testing is logical.
-    let hresp = ui.interact(hr, egui::Id::new("ruler_margin_h"), egui::Sense::drag());
-    let vresp = ui.interact(vr, egui::Id::new("ruler_margin_v"), egui::Sense::drag());
+    let hresp = ui.interact(hr, egui::Id::unique("ruler_margin_h"), egui::Sense::drag());
+    let vresp = ui.interact(vr, egui::Id::unique("ruler_margin_v"), egui::Sense::drag());
     let margins_in = |sh: &Sheet| -> [f32; 6] {
         let m = |i: usize| sh.print.margins.get(i).copied().unwrap_or(0.5);
         [m(0), m(1), m(2), m(3), m(4), m(5)]
@@ -787,7 +788,7 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
     let tip = |ui: &egui::Ui, app: &SheetApp, edge: Edge, inches: f32| {
         let value = if metric { format!("{:.2} cm", inches * 2.54) } else { format!("{inches:.2} in") };
         let text = format!("{}: {value}", app.ui.language.tr(edge.label()));
-        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("ruler_margin_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("ruler_margin_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(text);
         });
     };

@@ -1,6 +1,7 @@
 //! Workbooks.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gridcraft_core::DateSystem;
 use gridcraft_formula::Expr;
@@ -147,7 +148,8 @@ pub struct Workbook {
     pub calc: CalcSettings,
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
-    pub active_sheet: usize,
+    /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
+    pub active_sheet: ActiveSheet,
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
@@ -205,6 +207,57 @@ impl Default for Workbook {
     }
 }
 
+/// The active sheet index of a [`Workbook`].
+///
+/// Every other part of a workbook value is immutable once shared (the engine keeps versions as
+/// `Arc<Workbook>` and tells unsaved changes by pointer). The active sheet is the exception: it
+/// is the view state of the window showing the workbook, and several windows on one workbook
+/// swap their own sheet into it whenever one of them becomes the one commands act on. Keeping it
+/// in an atomic lets that swap happen through the shared `Arc` without cloning the workbook.
+/// Copies (undo versions, a cloned workbook) take the value at the time of the copy.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(from = "usize", into = "usize")]
+pub struct ActiveSheet(AtomicUsize);
+
+impl ActiveSheet {
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+    pub fn set(&self, i: usize) {
+        self.0.store(i, Ordering::Relaxed);
+    }
+}
+
+impl From<usize> for ActiveSheet {
+    fn from(i: usize) -> ActiveSheet {
+        ActiveSheet(AtomicUsize::new(i))
+    }
+}
+
+impl From<ActiveSheet> for usize {
+    fn from(a: ActiveSheet) -> usize {
+        a.get()
+    }
+}
+
+impl Clone for ActiveSheet {
+    fn clone(&self) -> ActiveSheet {
+        ActiveSheet::from(self.get())
+    }
+}
+
+impl PartialEq for ActiveSheet {
+    fn eq(&self, other: &ActiveSheet) -> bool {
+        self.get() == other.get()
+    }
+}
+
+impl std::fmt::Debug for ActiveSheet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
 impl Workbook {
     /// A new workbook with one sheet, "Sheet1".
     pub fn new() -> Workbook {
@@ -216,7 +269,7 @@ impl Workbook {
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
-            active_sheet: 0,
+            active_sheet: ActiveSheet::default(),
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
@@ -239,8 +292,17 @@ impl Workbook {
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
         self.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))
     }
+    /// The index of the sheet the workbook's window shows (the file's active tab).
+    pub fn active_sheet(&self) -> usize {
+        self.active_sheet.get()
+    }
+    /// Changes the active sheet in place, also through a shared `Arc<Workbook>`: it is view state,
+    /// so switching sheets or windows neither copies the workbook nor makes it a new version.
+    pub fn set_active_sheet(&self, i: usize) {
+        self.active_sheet.set(i);
+    }
     pub fn active(&self) -> Option<&Sheet> {
-        self.sheet(self.active_sheet)
+        self.sheet(self.active_sheet())
     }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {

@@ -165,7 +165,7 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
     let value = str_param(p, "value").ok_or_else(|| bad("slicer.toggle", "missing `value`"))?.to_string();
     let multi = bool_param(p, "multi").unwrap_or(false);
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let (table, column, current) = {
         let d = s.doc()?;
         let sl = d.wb.active().and_then(|sh| sh.slicers.get(idx)).ok_or_else(|| bad("slicer.toggle", "no slicer"))?;
@@ -204,7 +204,7 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         if let Some(sl) = cx.sheet_mut(sheet)?.slicers.get_mut(idx) {
             sl.selected = None;
@@ -217,7 +217,7 @@ fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     // Absolute column of the slicer, so its filter criterion can be removed too.
     let abs_col = s.doc().ok().and_then(|d| {
         let sh = d.wb.active()?;

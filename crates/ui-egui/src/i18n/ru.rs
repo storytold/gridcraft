@@ -1,5 +1,6 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Returns the Russian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",
@@ -208,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Предварительный просмотр\nразрывов страниц",
         "Page\nLayout" => "Разметка\nстраницы",
         "Formula Bar" => "Строка формул",
+        "Name Box" => "Поле имени",
+        "Cell Editor" => "Редактор ячейки",
+        "Font Size" => "Размер шрифта",
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
         "Zoom" => "Масштаб",
@@ -307,6 +311,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Тёмная",
         "Sheet Options|View" => "На экране",
         "Print" => "Печать",
+        "Print What" => "Что печатать",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Щелкните, чтобы добавить данные",
         "Add header" => "Добавить верхний колонтитул",
@@ -420,6 +425,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Автоматически сохранять книги .xlsx после каждого изменения",
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
+        "Maximum Iterations:" => "Предельное число итераций:",
+        "Maximum Change:" => "Максимальное изменение:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Предельное число итераций должно быть целым числом от 1 до 32767.",
+        "Maximum Change must be a number of 0 or more." => "Максимальное изменение должно быть числом не меньше 0.",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
@@ -438,6 +447,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Следующий лист",
         "All sheets" => "Все листы",
         "New sheet (⇧F11)" => "Новый лист (⇧F11)",
+        "Text Box" => "Надпись",
         _ => return None,
     })
 }

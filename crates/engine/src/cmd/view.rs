@@ -149,7 +149,7 @@ fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let at = match cell_param_on(s, p, "cell", si)? {
         Some(c) => c,
-        None if si == d.wb.active_sheet => d.selection.active,
+        None if si == d.wb.active_sheet() => d.selection.active,
         // The selection belongs to the active sheet.
         None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
     };
@@ -225,7 +225,7 @@ fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let dirty = d.is_dirty();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     if let Some(sh) = wb.sheet_mut(si) {
         sh.zoom = z;
     }

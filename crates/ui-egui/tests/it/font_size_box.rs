@@ -13,12 +13,12 @@ fn harness() -> Harness {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h
@@ -105,9 +105,10 @@ fn escape_cancels_the_typed_size() {
 }
 
 #[test]
+/// The size list has no filter; clicking 16 applies it, and Down then Enter picks 12.
 fn the_arrow_opens_the_plain_list_of_sizes() {
     let mut h = harness();
-    h.get_by_label("Font Size").click();
+    h.get_by_role_and_label(Role::Button, "Font Size").click();
     h.run_steps(3);
     assert!(h.query_by_label("Type to filter…").is_none(), "the size list has no filter field");
     // The grid's row headers carry the same numbers as labels: pick the list's button.
@@ -116,7 +117,7 @@ fn the_arrow_opens_the_plain_list_of_sizes() {
     assert_eq!(size(&h, "B2"), 16.0, "clicking a size applies it");
 
     let mut h = harness();
-    h.get_by_label("Font Size").click();
+    h.get_by_role_and_label(Role::Button, "Font Size").click();
     h.run_steps(3);
     key(&mut h, Key::ArrowDown);
     key(&mut h, Key::Enter);

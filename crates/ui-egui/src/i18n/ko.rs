@@ -1,5 +1,6 @@
 //! Korean translations for the interface strings in i18n.rs.
 
+/// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "붙여넣기",
@@ -208,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "페이지 나누기\n미리 보기",
         "Page\nLayout" => "페이지\n레이아웃",
         "Formula Bar" => "수식 입력줄",
+        "Name Box" => "이름 상자",
+        "Cell Editor" => "셀 편집기",
+        "Font Size" => "글꼴 크기",
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
         "Zoom" => "확대/축소",
@@ -307,6 +311,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "어둡게",
         "Sheet Options|View" => "화면",
         "Print" => "인쇄",
+        "Print What" => "인쇄할 내용",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "클릭하여 데이터 추가",
         "Add header" => "머리글 추가",
@@ -420,6 +425,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "변경할 때마다 .xlsx 통합 문서를 자동으로 저장",
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
+        "Maximum Iterations:" => "최대 반복 횟수:",
+        "Maximum Change:" => "변화 한도:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "최대 반복 횟수는 1에서 32767 사이의 정수여야 합니다.",
+        "Maximum Change must be a number of 0 or more." => "변화 한도는 0 이상의 숫자여야 합니다.",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
         "Insert Sheet" => "시트 삽입",
         "Rename" => "이름 바꾸기",
@@ -436,6 +445,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "다음 시트",
         "All sheets" => "모든 시트",
         "New sheet (⇧F11)" => "새 시트 (⇧F11)",
+        "Text Box" => "텍스트 상자",
         _ => return None,
     })
 }
