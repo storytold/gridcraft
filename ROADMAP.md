@@ -140,6 +140,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
+| 2026-10-27 | Conditional Formatting Rules Manager: a table of the rules with their format and Applies to, filtered by Current Selection or This Worksheet; New, Edit, Delete and Duplicate Rule, Move Up/Move Down, Stop If True, and Cancel puts back the rules it opened with |
 | 2026-10-27 | Conditional formatting: New Rule… opens a full New Formatting Rule dialog (six rule types, format editor with preview), also used as Edit Formatting Rule |
 | 2026-10-27 | Conditional formatting commands edit rules: `home.conditionalFormat` takes Stop If True, plain format overrides (fill, font colour, border, font styles) and colour-scale/data-bar thresholds, and checks icon set thresholds; `home.manageRules` gains `show`, `selection`, `update`, `duplicate` and `set` and lists each rule's editable params, on any sheet |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
@@ -258,6 +259,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-11-01 | minor | Progress log: conditional formatting rule editing commands |
 | 2026-11-01 | minor | Progress log: New Formatting Rule dialog |
+| 2026-11-01 | minor | Progress log: Conditional Formatting Rules Manager |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |

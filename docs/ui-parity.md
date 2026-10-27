@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (New/Edit Formatting Rule dialogs; Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (New/Edit Formatting Rule dialog and Rules Manager; Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -159,8 +159,10 @@ keeps the original link and an edit can be undone in one step.
 
 Format Cells, Insert Function (search, Most Recently Used, All and each category), Find and
 Replace, Go To and Go To Special, Sort,
-Name Manager, Data Validation, Paste Special, Conditional Formatting (New/Edit Formatting Rule,
-Rules Manager), Page Setup, Goal Seek, Scenario Manager, Data Analysis, Forecast Sheet,
+Name Manager, Data Validation, Paste Special, Conditional Formatting (New/Edit Formatting Rule
+with six rule types and a format editor; Rules Manager with selection/worksheet filters, New/Edit/
+Delete/Duplicate, Move Up/Move Down, Applies to, Stop If True, and OK/Cancel), Page Setup, Goal
+Seek, Scenario Manager, Data Analysis, Forecast Sheet,
 Macros (macros, Automate scripts and a
 note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
 editor (Excel's VBA editor has no counterpart here) and others exist. Missing or partial: Options,
@@ -197,6 +199,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Conditional Formatting Rules Manager: filters, rule creation/edit/deletion/duplication, priority, Applies to, Stop If True and Cancel restore |
 | 2026-11-01 | minor | New/Edit Formatting Rule dialog and format editor, also used to edit rules from Rules Manager |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |

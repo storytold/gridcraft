@@ -143,6 +143,21 @@ fn new_formatting_rule_dialog(app: &mut SheetApp, params: &Json) -> Dialog {
     dialog
 }
 
+fn manage_rules_dialog(app: &mut SheetApp) -> Dialog {
+    let sheet = app.session.active().map(|doc| doc.wb.active_sheet());
+    let selection = app.session.active().map(|doc| doc.selection.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","));
+    let now = app.session.run("home.manageRules", json!({"sheet": sheet})).unwrap_or(Json::Null);
+    let snapshot: Vec<Json> = now["rules"]
+        .as_array()
+        .map(|a| a.iter().map(|r| json!({"rule": r["rule"], "appliesTo": r["appliesTo"], "stopIfTrue": r["stopIfTrue"]})).collect())
+        .unwrap_or_default();
+    Dialog::custom(
+        "manageRules",
+        "Conditional Formatting Rules Manager",
+        json!({"show": "selection", "sheet": sheet, "selection": selection, "snapshot": snapshot}),
+    )
+}
+
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
@@ -1006,7 +1021,7 @@ impl Dialog {
                 dialog.result = Some(json!(names));
                 dialog
             }
-            "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "manageRules" => manage_rules_dialog(app),
             "newFormattingRule" => new_formatting_rule_dialog(app, &params),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),

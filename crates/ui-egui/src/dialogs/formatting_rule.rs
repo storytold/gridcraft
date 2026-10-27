@@ -20,7 +20,7 @@ const CF_PRESETS: [(&str, &str); 6] = [
     ("redBorder", "Red Border"),
 ];
 
-const CF_OPERATORS: [(&str, &str); 8] = [
+pub(super) const CF_OPERATORS: [(&str, &str); 8] = [
     ("between", "CF|between"),
     ("notBetween", "CF|not between"),
     ("equal", "CF|equal to"),
@@ -31,7 +31,7 @@ const CF_OPERATORS: [(&str, &str); 8] = [
     ("lessOrEqual", "CF|less than or equal to"),
 ];
 
-const CF_PERIODS: [(&str, &str); 10] = [
+pub(super) const CF_PERIODS: [(&str, &str); 10] = [
     ("yesterday", "Yesterday"),
     ("today", "Today"),
     ("tomorrow", "Tomorrow"),
@@ -77,7 +77,7 @@ fn cf_flag(rule: &Map<String, Json>, key: &str) -> bool {
     rule.get(key).and_then(Json::as_bool).unwrap_or(false)
 }
 
-fn hex_color(s: &str) -> Option<Color32> {
+pub(super) fn hex_color(s: &str) -> Option<Color32> {
     let h = s.trim().strip_prefix('#')?;
     let v = u32::from_str_radix(h.get(..6)?, 16).ok()?;
     Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
@@ -101,7 +101,7 @@ pub(super) fn cf_apply_preset(rule: &mut Map<String, Json>, preset: &str, theme:
 }
 
 /// A combo box over `(value, label)` pairs for `rule[key]`; true when the user picked one.
-fn cf_combo(ui: &mut egui::Ui, id: &str, rule: &mut Map<String, Json>, key: &str, options: &[(&str, &str)], width: f32) -> bool {
+pub(super) fn cf_combo(ui: &mut egui::Ui, id: &str, rule: &mut Map<String, Json>, key: &str, options: &[(&str, &str)], width: f32) -> bool {
     let lang = crate::i18n::current(ui.ctx());
     let current = cf_str(rule, key);
     let label = options.iter().find(|(v, _)| *v == current).or(options.first()).map(|(_, l)| lang.tr(l)).unwrap_or_default();
@@ -149,7 +149,7 @@ fn cf_color_button(ui: &mut egui::Ui, label: &str, current: Option<Color32>, non
 }
 
 /// Fill, font and border of a rule's format, as a cell would show them.
-fn cf_preview(ui: &mut egui::Ui, rule: &Map<String, Json>, size: egui::Vec2) {
+pub(super) fn cf_preview(ui: &mut egui::Ui, rule: &Map<String, Json>, size: egui::Vec2) {
     let lang = crate::i18n::current(ui.ctx());
     let fill = hex_color(&cf_str(rule, "fill"));
     let font = hex_color(&cf_str(rule, "fontColor"));

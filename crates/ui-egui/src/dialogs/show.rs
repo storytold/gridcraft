@@ -2,7 +2,7 @@ use super::about::about;
 use super::analysis::{analysis_toolpak, cancel_solver_options, goal_seek, in_solver_options, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
-use super::cond_format_rules::manage_rules;
+use super::cond_format_rules::{manage_rules, manage_rules_revert};
 use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
@@ -149,8 +149,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
+        "manageRules" => 680.0,
         "newFormattingRule" => 560.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -186,7 +187,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
-                "manageRules" => manage_rules(app, ui),
+                "manageRules" => manage_rules(app, ui, &mut d, &mut confirm, &mut open),
                 "newFormattingRule" => formatting_rule(app, ui, &mut d, &mut confirm, &mut open),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
@@ -395,6 +396,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         } else {
             open = false;
         }
+    }
+    if !open && d.name == "manageRules" && d.values.get("ok").is_none() {
+        manage_rules_revert(app, &d);
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
