@@ -61,6 +61,72 @@ fn begin_drag(h: &mut Harness, axis: Axis) -> Pos2 {
     p
 }
 
+#[test]
+fn a_press_before_canvas_focus_can_start_a_scrollbar_drag() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        let p = axis.start(&h);
+        h.input_mut().focused = false;
+        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
+        // Web pointerdown can run the app before mousedown focuses the canvas.
+        h.input_mut().focused = true;
+        events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: gaining focus must preserve the activating drag");
+        let before = axis.scroll(&h);
+        h.input_mut().focused = false;
+        events(&mut h, []);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::PointerMoved(p + axis.movement() * 2.0)]);
+        assert_eq!(axis.scroll(&h), before, "{axis:?}: later focus loss still cancels the gesture");
+    }
+}
+
+#[test]
+fn a_track_press_before_canvas_focus_still_pages_on_release() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        let p = track_end(axis, &h);
+        h.input_mut().focused = false;
+        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::WindowFocused(true), button(p, false)]);
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: gaining focus must preserve the activating track click");
+    }
+}
+
+#[test]
+fn focus_acquired_during_hidden_ticks_is_tracked_before_a_later_loss() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        let p = axis.start(&h);
+        h.input_mut().focused = false;
+        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
+        events(&mut h, [Event::PointerMoved(p + axis.movement())]);
+        assert!(axis.scroll(&h) > 0.0, "{axis:?}: an unfocused activating drag must continue");
+        let ctx = h.ctx.clone();
+        let _ = ctx.run_logic(&egui::RawInput { focused: true, ..Default::default() }, |ctx| h.state_mut().logic(ctx));
+        let _ = ctx.run_logic(&egui::RawInput { focused: false, ..Default::default() }, |ctx| h.state_mut().logic(ctx));
+        assert!(ctx.dragged_id().is_none(), "{axis:?}: the later hidden focus loss ends capture");
+        let stopped = axis.scroll(&h);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::PointerMoved(p + axis.movement() * 2.0)]);
+        assert_eq!(axis.scroll(&h), stopped, "{axis:?}: the hidden cancellation survives until input is processed");
+    }
+}
+
+#[test]
+fn non_primary_thumb_drags_keep_their_existing_behavior() {
+    for button_kind in [PointerButton::Secondary, PointerButton::Middle] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let mut h = crate::support::blank_harness(4);
+            let p = axis.start(&h);
+            events(&mut h, [Event::PointerMoved(p), Event::PointerButton { pos: p, button: button_kind, pressed: true, modifiers: Modifiers::NONE }]);
+            events(&mut h, [Event::PointerMoved(p + axis.movement())]);
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: {button_kind:?} dragging must retain baseline behavior");
+        }
+    }
+}
+
 fn dragging(axis: Axis) -> (Harness, Pos2) {
     dragging_with_policy(axis, false)
 }
