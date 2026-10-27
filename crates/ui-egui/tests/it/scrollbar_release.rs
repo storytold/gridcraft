@@ -95,6 +95,37 @@ fn a_track_press_before_canvas_focus_still_pages_on_release() {
 }
 
 #[test]
+fn polling_canvas_focus_after_pointerdown_preserves_the_activating_press() {
+    for track_click in [false, true] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let mut h = crate::support::blank_harness(4);
+            let p = if track_click { track_end(axis, &h) } else { axis.start(&h) };
+            // eframe starts with raw.focused=true. Its pointerdown handler queues
+            // the press, then update_focus discovers the canvas is not focused.
+            h.input_mut().focused = false;
+            events(&mut h, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(false)]);
+            h.input_mut().focused = true;
+            let next = if track_click { button(p, false) } else { Event::PointerMoved(p + axis.movement()) };
+            events(&mut h, [Event::WindowFocused(true), next]);
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: canvas focus polling must preserve activating click={track_click}");
+        }
+    }
+}
+
+#[test]
+fn focus_acquired_and_lost_after_a_new_press_in_one_batch_still_cancels_it() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        let p = axis.start(&h);
+        h.input_mut().focused = false;
+        events(&mut h, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(true), Event::WindowFocused(false)]);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
+        assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: observed acquisition followed by loss must cancel even in the press batch");
+    }
+}
+
+#[test]
 fn focus_acquired_during_hidden_ticks_is_tracked_before_a_later_loss() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
         let mut h = crate::support::blank_harness(4);
