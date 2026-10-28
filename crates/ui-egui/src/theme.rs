@@ -684,6 +684,10 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted
     // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
     // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
     let mut loaded: Vec<String> = Vec::new();
+    // The scripts the faces above actually answered for. A script can be wanted and still have no
+    // face: the chains name files by path, and a host may install the script under a family those
+    // paths do not name (a different package layout, or only one weight).
+    let mut covered = ScriptSet::EMPTY;
     for face in fallback_faces(han) {
         if !face.covers.intersects(wanted) {
             continue; // nothing in this workbook or interface asks for the script
@@ -704,9 +708,47 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted
                 fonts.font_data.insert(key.to_string(), Arc::new(fd));
                 keys.push(key.to_string());
                 loaded.push(path.clone());
+                covered = covered.union(face.covers);
                 break;
             }
         }
+    }
+    keys.extend(load_catalog_fallback(fonts, wanted, covered, serif, &mut loaded));
+    keys
+}
+
+/// Loads one face from the installed catalog for every wanted script the hand-written chains did
+/// not cover, so a script the system can draw is drawn even when its file sits where the chains do
+/// not look (a package that names the family differently, or installs only the regular weight).
+/// The catalog's choice is a single face per script — a fallback face only has to have the glyph,
+/// and a cell asking for bold gets the closest face epaint finds in the chain, exactly as the
+/// hand-written fallbacks already behave. Returns the keys of the faces it loaded.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_catalog_fallback(fonts: &mut FontDefinitions, wanted: ScriptSet, covered: ScriptSet, serif: bool, loaded: &mut Vec<String>) -> Vec<String> {
+    let Some(catalog) = crate::catalog::FontCatalog::installed() else { return Vec::new() };
+    let mut keys = Vec::new();
+    for script in ScriptClass::ALL {
+        // Latin is drawn by the interface font and by every bound workbook font; adding a Latin
+        // fallback face would put another Latin font at the end of chains that already have one.
+        if script == ScriptClass::Latin {
+            continue;
+        }
+        let single = ScriptSet::EMPTY.with(script);
+        if !wanted.intersects(single) || covered.intersects(single) {
+            continue;
+        }
+        let Some(entry) = catalog.font_for_script(script, serif) else { continue };
+        let path = entry.path.to_string_lossy().into_owned();
+        // A file already in the font set serves every script it covers; loading it again under a
+        // second key would duplicate its bytes in memory (a CJK collection is tens of megabytes).
+        if loaded.contains(&path) {
+            continue;
+        }
+        let Some(fd) = try_load(&[(path.as_str(), entry.index)]) else { continue };
+        let key = format!("sys-script-{}{}", script.name(), if serif { "-serif" } else { "" });
+        fonts.font_data.insert(key.clone(), Arc::new(fd));
+        keys.push(key);
+        loaded.push(path);
     }
     keys
 }
@@ -1400,6 +1442,21 @@ mod tests {
         let (fonts, _) = font_definitions_with_bound(Language::En, &[], ScriptSet::of_text("Total 42"));
         assert!(!fonts.font_data.keys().any(|k| k.starts_with("sys-cjk")), "Latin text loads no CJK face");
         assert!(!fonts.font_data.keys().any(|k| k.starts_with("sys-thai")), "Latin text loads no Thai face");
+    }
+
+    #[test]
+    fn a_wanted_script_gets_a_face_from_the_chains_or_the_catalog() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(catalog) = crate::catalog::FontCatalog::installed() else { return };
+        if !catalog.covers(ScriptClass::Thai) {
+            return; // no Thai face to find on this machine
+        }
+        let (fonts, _) = font_definitions_with_bound(Language::En, &[], ScriptSet::of_text("สวัสดี"));
+        assert!(
+            fonts.font_data.keys().any(|k| k == "sys-thai" || k == "sys-script-thai"),
+            "a Thai workbook needs a Thai face: {:?}",
+            fonts.font_data.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -143,6 +143,90 @@ impl FontCatalog {
     pub fn scripts(&self) -> ScriptSet {
         self.by_script.keys().copied().fold(ScriptSet::default(), ScriptSet::with)
     }
+
+    /// The face that should serve `script` when a cell asks for it and the hand-written chains in
+    /// [`crate::theme`] found nothing: the preferred family for the script when it is installed,
+    /// else any family that covers it that does not read as an auxiliary design (symbol, emoji,
+    /// monospace…). `serif` asks for a serif face and falls back to a sans one, the same way the
+    /// serif chains do: a serif cell in a script with no serif design still wants that script.
+    pub fn font_for_script(&self, script: ScriptClass, serif: bool) -> Option<&FontEntry> {
+        for name in preferred_families(script, serif) {
+            let faces = self.family(name);
+            if let Some(entry) = pick(&faces, script, serif) {
+                return Some(entry);
+            }
+        }
+        let list = self.by_script.get(&script)?;
+        let mut best: Option<&FontEntry> = None;
+        for entry in list.iter().filter_map(|at| self.entries.get(*at)) {
+            if script != ScriptClass::Symbols && !reads_as_text(&entry.family) {
+                continue;
+            }
+            if best.is_none_or(|current| rank(entry, serif) < rank(current, serif)) {
+                best = Some(entry);
+            }
+        }
+        best
+    }
+}
+
+/// The families the distributions ship for a script, most preferred first. Fontconfig names a
+/// family by its typographic name, so a package that installs only `Noto Sans Thai` under a
+/// different weight still matches by name here.
+fn preferred_families(script: ScriptClass, serif: bool) -> &'static [&'static str] {
+    match (script, serif) {
+        (ScriptClass::Han, false) => &["Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK TC", "WenQuanYi Micro Hei"],
+        (ScriptClass::Han, true) => &["Noto Serif CJK SC", "Source Han Serif SC", "Noto Serif CJK TC", "Noto Serif CJK JP"],
+        (ScriptClass::Japanese, false) => &["Noto Sans CJK JP", "Noto Sans JP", "Source Han Sans JP"],
+        (ScriptClass::Japanese, true) => &["Noto Serif CJK JP", "Source Han Serif JP"],
+        (ScriptClass::Korean, false) => &["Noto Sans KR", "Noto Sans CJK KR", "Malgun Gothic", "NanumGothic"],
+        (ScriptClass::Korean, true) => &["Noto Serif KR", "Noto Serif CJK KR", "NanumMyeongjo"],
+        (ScriptClass::Thai, false) => &["Noto Sans Thai", "Loma", "Garuda"],
+        (ScriptClass::Thai, true) => &["Noto Serif Thai"],
+        (ScriptClass::Lao, false) => &["Noto Sans Lao", "Phetsarath OT"],
+        (ScriptClass::Lao, true) => &["Noto Serif Lao"],
+        (ScriptClass::Hebrew, false) => &["Noto Sans Hebrew", "DejaVu Sans", "Liberation Sans"],
+        (ScriptClass::Hebrew, true) => &["Noto Serif Hebrew", "DejaVu Serif", "Liberation Serif"],
+        (ScriptClass::Arabic, false) => &["Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans"],
+        (ScriptClass::Arabic, true) => &["Noto Naskh Arabic", "Amiri", "Noto Serif Arabic"],
+        (ScriptClass::Devanagari, false) => &["Noto Sans Devanagari", "Lohit Devanagari"],
+        (ScriptClass::Devanagari, true) => &["Noto Serif Devanagari"],
+        (ScriptClass::Khmer, false) => &["Noto Sans Khmer", "Khmer OS"],
+        (ScriptClass::Khmer, true) => &["Noto Serif Khmer"],
+        (ScriptClass::Myanmar, false) => &["Noto Sans Myanmar", "Myanmar Text"],
+        (ScriptClass::Myanmar, true) => &["Noto Sans Myanmar", "Myanmar Text"],
+        (ScriptClass::Tibetan, false) => &["Noto Serif Tibetan", "Noto Sans Tibetan", "Jomolhari"],
+        (ScriptClass::Tibetan, true) => &["Noto Serif Tibetan", "Jomolhari"],
+        (ScriptClass::Yi, false) => &["Noto Sans Yi", "Nuosu SIL"],
+        (ScriptClass::Yi, true) => &["Noto Sans Yi", "Nuosu SIL"],
+        (ScriptClass::Symbols, false) => &["Noto Sans Symbols 2", "Noto Sans Symbols", "DejaVu Sans"],
+        (ScriptClass::Symbols, true) => &["Noto Sans Symbols 2", "DejaVu Sans"],
+        (ScriptClass::Latin, false) => &["DejaVu Sans", "Liberation Sans", "Noto Sans"],
+        (ScriptClass::Latin, true) => &["DejaVu Serif", "Liberation Serif", "Noto Serif"],
+        (ScriptClass::Common, _) => &[],
+    }
+}
+
+/// The best of `faces` for `script`: it must cover the script, and among those the upright
+/// regular face wins, the requested serif design before a sans one.
+fn pick<'a>(faces: &[&'a FontEntry], script: ScriptClass, serif: bool) -> Option<&'a FontEntry> {
+    faces.iter().copied().filter(|entry| entry.scripts.has(script)).min_by(|a, b| rank(a, serif).cmp(&rank(b, serif)))
+}
+
+/// How suitable `entry` is as the face for a script, smaller is better: a serif answer for a sans
+/// request (or the other way round) first, then slant, then distance from regular, then the name
+/// so the choice does not depend on the order fontconfig listed the files.
+fn rank(entry: &FontEntry, serif: bool) -> (u8, u8, u32, &str) {
+    let weight = (entry.weight - 400.0).abs();
+    (u8::from(entry.serif != serif), u8::from(entry.italic), weight as u32, entry.family.as_str())
+}
+
+/// Whether a family name reads as a design made for text in a script, rather than an auxiliary one
+/// that happens to cover a few of its characters.
+fn reads_as_text(family: &str) -> bool {
+    const AUXILIARY: [&str; 8] = ["mono", "symbol", "emoji", "dingbat", "icon", "webding", "wingding", "math"];
+    let lower = family.to_lowercase();
+    !AUXILIARY.iter().any(|word| lower.contains(word))
 }
 
 #[cfg(test)]
@@ -197,6 +281,77 @@ mod tests {
         assert!(
             catalog.families_covering(ScriptClass::Latin).iter().all(|name| catalog.family(name).iter().any(|e| e.scripts.has(ScriptClass::Latin)))
         );
+    }
+
+    #[test]
+    fn the_preferred_family_wins_over_another_that_covers_the_script() {
+        let faces = [
+            entry("Zzz Thai Display", &["Zzz Thai Display"], 400.0, false, ScriptClass::Thai),
+            entry("Noto Sans Thai", &["Noto Sans Thai"], 400.0, false, ScriptClass::Thai),
+        ];
+        let catalog = FontCatalog::new(&faces);
+        assert_eq!(catalog.font_for_script(ScriptClass::Thai, false).map(|e| e.family.as_str()), Some("Noto Sans Thai"));
+    }
+
+    #[test]
+    fn a_script_without_its_preferred_family_uses_any_covering_one() {
+        let faces = [entry("Zzz Thai Display", &["Zzz Thai Display"], 400.0, false, ScriptClass::Thai)];
+        let catalog = FontCatalog::new(&faces);
+        assert_eq!(catalog.font_for_script(ScriptClass::Thai, false).map(|e| e.family.as_str()), Some("Zzz Thai Display"));
+        assert!(catalog.font_for_script(ScriptClass::Lao, false).is_none(), "nothing draws Lao");
+    }
+
+    #[test]
+    fn a_family_that_lacks_the_script_is_not_offered() {
+        let faces = [entry("Noto Sans Thai", &["Noto Sans Thai"], 400.0, false, ScriptClass::Latin)];
+        let catalog = FontCatalog::new(&faces);
+        assert!(catalog.font_for_script(ScriptClass::Thai, false).is_none());
+    }
+
+    #[test]
+    fn a_serif_request_prefers_the_serif_face() {
+        let mut sans = entry("Zzz Thai", &["Zzz Thai"], 400.0, false, ScriptClass::Thai);
+        let mut serif = entry("Zzz Thai", &["Zzz Thai"], 400.0, false, ScriptClass::Thai);
+        serif.serif = true;
+        sans.serif = false;
+        let catalog = FontCatalog::new(&[sans, serif]);
+        assert!(catalog.font_for_script(ScriptClass::Thai, true).is_some_and(|e| e.serif));
+        assert!(catalog.font_for_script(ScriptClass::Thai, false).is_some_and(|e| !e.serif));
+    }
+
+    #[test]
+    fn an_auxiliary_family_is_not_used_for_text() {
+        let mut face = entry("Noto Sans Symbols 2", &["Noto Sans Symbols 2"], 400.0, false, ScriptClass::Thai);
+        face.scripts = face.scripts.with(ScriptClass::Symbols);
+        let catalog = FontCatalog::new(&[face]);
+        assert!(catalog.font_for_script(ScriptClass::Thai, false).is_none());
+        assert!(catalog.font_for_script(ScriptClass::Symbols, false).is_some(), "symbols may have a symbol face");
+    }
+
+    #[test]
+    fn the_regular_upright_face_wins_within_a_family() {
+        let faces = [
+            entry("Noto Sans Thai", &["Noto Sans Thai"], 700.0, false, ScriptClass::Thai),
+            entry("Noto Sans Thai", &["Noto Sans Thai"], 300.0, true, ScriptClass::Thai),
+            entry("Noto Sans Thai", &["Noto Sans Thai"], 400.0, false, ScriptClass::Thai),
+        ];
+        let catalog = FontCatalog::new(&faces);
+        let picked = catalog.font_for_script(ScriptClass::Thai, false).expect("Thai is covered");
+        assert_eq!((picked.weight, picked.italic), (400.0, false));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_installed_catalog_answers_for_the_scripts_it_covers() {
+        let _guard = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(catalog) = FontCatalog::installed() else { return };
+        for script in ScriptClass::ALL {
+            let Some(entry) = catalog.font_for_script(script, false) else { continue };
+            assert!(entry.scripts.has(script), "{} was offered for {:?}", entry.family, script);
+        }
+        if catalog.covers(ScriptClass::Thai) {
+            assert!(catalog.font_for_script(ScriptClass::Thai, false).is_some());
+        }
     }
 
     #[test]
