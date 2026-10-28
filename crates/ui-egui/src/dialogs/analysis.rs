@@ -1,4 +1,4 @@
-use super::show::{build_params, form_fields, ok_cancel};
+use super::show::{build_params, form_fields, ok_cancel, track_pick_box};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
@@ -6,13 +6,15 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
     let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
         ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        let r = ui.text_edit_singleline(&mut set);
+        track_pick_box(d, "set", &r);
         ui.end_row();
         ui.label("To value:");
         ui.text_edit_singleline(&mut to);
         ui.end_row();
         ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        let r = ui.text_edit_singleline(&mut changing);
+        track_pick_box(d, "changing", &r);
         ui.end_row();
     });
     d.values.insert("set".into(), json!(set.clone()));

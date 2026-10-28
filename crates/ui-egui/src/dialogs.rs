@@ -94,6 +94,8 @@ struct RefPick {
     /// The selection the rule applies to, fixed when the dialog opened as Excel's "Applies to":
     /// pointing on another sheet must not move the rule there.
     applies_to: String,
+    /// A cell-reference box (Goal Seek's Set cell): references go in without a leading `=`.
+    bare: bool,
 }
 
 impl Dialog {
@@ -139,10 +141,15 @@ impl Dialog {
     /// dialog's own.
     pub fn pick_reference(&mut self, cell: CellRef, active_sheet: &str, extend: bool) {
         let Some(pick) = self.pick.as_mut() else { return };
-        let text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
+        let mut text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
+        // A cell-reference box is pointed as if it were a formula, then loses the `=` again.
+        let shift = usize::from(pick.bare);
+        if pick.bare {
+            text.insert(0, '=');
+        }
         let mut ed = crate::editor::EditState::new(0, 0, cell, text, true, false);
-        ed.caret = pick.caret.min(ed.text.chars().count());
-        ed.point = pick.point;
+        ed.caret = pick.caret.saturating_add(shift).min(ed.text.chars().count());
+        ed.point = pick.point.map(|(start, end)| (start.saturating_add(shift), end.saturating_add(shift)));
         if ed.text.trim().is_empty() {
             ed.text = "=".into();
             ed.caret = 1;
@@ -161,8 +168,11 @@ impl Dialog {
             format!("{}!{range}", gridcraft_engine::formula::quote_sheet(active_sheet))
         };
         ed.insert_ref(&reference);
-        pick.caret = ed.caret;
-        pick.point = ed.point;
+        if pick.bare && ed.text.starts_with('=') {
+            ed.text.remove(0);
+        }
+        pick.caret = ed.caret.saturating_sub(shift);
+        pick.point = ed.point.map(|(start, end)| (start.saturating_sub(shift), end.saturating_sub(shift)));
         pick.refocus = true;
         self.values.insert(pick.key.into(), json!(ed.text));
     }
@@ -616,7 +626,24 @@ impl Dialog {
                 }
                 d
             }
-            "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
+            "goalSeek" => {
+                let mut d = Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""}));
+                let sheet = app.session.active().and_then(|doc| doc.wb.active().map(|sh| sh.name.clone())).unwrap_or_default();
+                // Set cell and By changing cell take a cell clicked on the grid; the box with the
+                // keyboard gets it (see `goal_seek`). The caret starts after the starting cell.
+                let caret = active.chars().count();
+                d.pick = Some(RefPick {
+                    key: "set",
+                    sheet,
+                    caret,
+                    point: None,
+                    anchor: CellRef::new(0, 0),
+                    refocus: false,
+                    applies_to: String::new(),
+                    bare: true,
+                });
+                d
+            }
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
                 "Create Forecast Worksheet",
@@ -851,7 +878,16 @@ impl Dialog {
                             )
                         })
                         .unwrap_or_default();
-                    d.pick = Some(RefPick { key: "formula", sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+                    d.pick = Some(RefPick {
+                        key: "formula",
+                        sheet,
+                        caret: 0,
+                        point: None,
+                        anchor: CellRef::new(0, 0),
+                        refocus: false,
+                        applies_to,
+                        bare: false,
+                    });
                 }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
