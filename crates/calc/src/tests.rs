@@ -2274,3 +2274,151 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+/// The issue's ledger: a unit, a payer and a text per row from row 2, and in F a running count
+/// of the earlier rows with the same unit and payer whose text starts with "Rent".
+fn running_countifs_ledger(n: usize) -> T {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for i in 0..n {
+        let r = i + 2;
+        sh.cells.set(c(&format!("B{r}")), Cell::value(Value::from(format!("U{:02}", i % 80))));
+        sh.cells.set(c(&format!("C{r}")), Cell::value(Value::from(format!("P{:03}", i % 120))));
+        let text = if i % 5 != 0 { format!("Rent {:02}", i % 12 + 1) } else { "Service charge".to_string() };
+        sh.cells.set(c(&format!("D{r}")), Cell::value(Value::from(text)));
+        sh.cells.set(c(&format!("E{r}")), Cell::value(Value::Number((500 + i % 300) as f64)));
+        let f = format!("=COUNTIFS($B$2:B{r},B{r},$C$2:C{r},C{r},$D$2:D{r},\"Rent*\")");
+        sh.cells.set(c(&format!("F{r}")), Cell::formula(Formula::new(&f)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    t
+}
+
+/// Column F of the ledger counted row by row from the stored texts.
+fn running_countifs_by_hand(t: &T, n: usize) -> Vec<f64> {
+    let text = |col: &str, r: usize| match t.get(&format!("{col}{r}")) {
+        Value::Text(s) => s.to_string(),
+        _ => String::new(),
+    };
+    let rows: Vec<(String, String, String)> = (2..n + 2).map(|r| (text("B", r), text("C", r), text("D", r))).collect();
+    (0..n)
+        .map(|i| {
+            let (b, c, _) = &rows[i];
+            rows[..=i].iter().filter(|(b2, c2, d2)| b2 == b && c2 == c && d2.starts_with("Rent")).count() as f64
+        })
+        .collect()
+}
+
+#[test]
+fn running_countifs_match_a_count_by_hand() {
+    let n = 2000;
+    let mut t = running_countifs_ledger(n);
+    let column = |t: &T| (2..n + 2).map(|r| t.num(&format!("F{r}"))).collect::<Vec<_>>();
+
+    assert_eq!(column(&t), running_countifs_by_hand(&t, n));
+    assert_eq!(column(&t).iter().sum::<f64>(), 7488.0);
+
+    // Edits above the table change the running counts below them.
+    t.set("D12", "Service charge");
+    t.set("B13", "U10");
+    t.set("C13", "P010");
+    assert_eq!(column(&t), running_countifs_by_hand(&t, n), "after edits");
+}
+
+#[test]
+fn running_ranges_read_formulas_spills_and_edits() {
+    // B: text with blanks, errors and numbers. C: constants down to C40, a formula at C41.
+    // G: a spill from G1 over G2:G6 above constants from G10. H: long text. Every formula is
+    // compared with the sum of its criteria function over each row's cells alone.
+    let n = 80;
+    let mut t = T::new();
+    for r in 2..n + 2 {
+        let b = match r {
+            r if r % 7 == 0 => String::new(),
+            r if r % 11 == 0 => "#N/A".to_string(),
+            r if r % 13 == 0 => "4".to_string(),
+            r => format!("u{}", r % 4),
+        };
+        if !b.is_empty() {
+            let v = gridcraft_core::parse::parse_input(&b, t.wb.date_system).value;
+            t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("B{r}")), Cell::value(v));
+        }
+        let cv = if r == 41 { Cell::formula(Formula::new("=C40&\"\"")) } else { Cell::value(Value::from(format!("c{}", r % 3))) };
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("C{r}")), cv);
+        if r > 9 {
+            t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("G{r}")), Cell::value(Value::Number((r % 5) as f64)));
+        }
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("H{r}")), Cell::value(Value::from("x".repeat(260 + r % 2))));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(c("G1"), Cell::formula(Formula::new("=SEQUENCE(6)")));
+    let last = n + 1;
+    // (column, formula of row r, its share of row j alone, whether it reads rows 2..=r or r..=last)
+    type Piece = fn(usize, usize) -> String;
+    let columns: [(&str, fn(usize) -> String, Piece, bool); 4] = [
+        ("J", |r| format!("=COUNTIFS($B$2:B{r},B{r},$C$2:C{r},C{r})"), |r, j| format!("COUNTIFS(B{j},B{r},C{j},C{r})"), true),
+        ("K", |r| format!("=COUNTIFS($G$2:G{r},\">1\",$B$2:B{r},\"<>\")"), |_, j| format!("COUNTIFS(G{j},\">1\",B{j},\"<>\")"), true),
+        (
+            "L",
+            |r| format!("=COUNTIFS(B{r}:$B$81,B{r},H{r}:$H$81,REPT(\"x\",261))"),
+            |r, j| format!("COUNTIFS(B{j},B{r},H{j},REPT(\"x\",261))"),
+            false,
+        ),
+        ("M", |r| format!("=SUMIFS($G$2:G{r},$C$2:C{r},\"c*\")"), |_, j| format!("SUMIFS(G{j},C{j},\"c*\")"), true),
+    ];
+    // Each formula, and the sum of its shares cell by cell, which reads no range.
+    let formulas: Vec<(String, String, String)> = (2..=last)
+        .flat_map(|r| {
+            columns.iter().map(move |(col, full, piece, down)| {
+                let rows: Vec<usize> = if *down { (2..=r).collect() } else { (r..=last).collect() };
+                let by_cell = rows.iter().map(|j| piece(r, *j)).collect::<Vec<_>>().join("+");
+                (format!("{col}{r}"), full(r), format!("={by_cell}"))
+            })
+        })
+        .collect();
+    for (at, f, _) in &formulas {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(Formula::new(f)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let check = |t: &T, step: &str| {
+        for (at, f, by_cell) in &formulas {
+            assert_eq!(t.get(at), crate::evaluate(&t.wb, 0, c(at), by_cell), "{at} {f} ({step})");
+        }
+    };
+    check(&t, "recalc");
+
+    t.set("B5", "u1");
+    check(&t, "edit in B");
+    t.set("C10", "=\"c\"&1");
+    check(&t, "formula in C");
+    t.set("G1", "=SEQUENCE(9)");
+    check(&t, "longer spill");
+}
+
+#[test]
+#[ignore = "timing-sensitive; run with --ignored in release"]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn running_countifs_cost_about_as_much_as_a_running_count() {
+    // Each COUNTIFS of the ledger reads three ranges as long as a running COUNT's one, but its
+    // cells are constants, kept once per recalculation. It used to take nearly four times as
+    // long as COUNT (allocating for each cell compared and walking the cell store for each
+    // range); now it takes less. Best of three, so a slow moment doesn't decide.
+    let n = 2000;
+    let time = |count: bool| {
+        (0..3)
+            .map(|_| {
+                let mut t = running_countifs_ledger(n);
+                if count {
+                    for r in 2..n + 2 {
+                        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("F{r}")), Cell::formula(Formula::new(&format!("=COUNT($E$2:E{r})"))));
+                    }
+                }
+                let start = std::time::Instant::now();
+                t.calc.recalc_all(&mut t.wb);
+                start.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (countifs, count) = (time(false), time(true));
+
+    assert!(countifs < 2.0 * count, "running COUNTIFS {countifs:.3}s, running COUNT {count:.3}s");
+}
