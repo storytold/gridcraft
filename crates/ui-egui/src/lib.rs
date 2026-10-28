@@ -263,6 +263,9 @@ pub struct SheetApp {
     fonts_set: bool,
     /// Workbook fonts bound into the current font set; a change rebinds (installed fonts only).
     fonts_bound: Vec<String>,
+    /// The scripts the cell text used when the fallback faces were chosen; new text in another
+    /// script loads that script's faces on the next pass (#1231).
+    fonts_scripts: crate::script::ScriptSet,
     /// The (doc uid, revision) `fonts_bound` was computed for, so the style table is walked only
     /// when the workbook changes.
     fonts_seen: (u64, u64),
@@ -332,6 +335,7 @@ impl SheetApp {
             fonts_ready: false,
             fonts_set: false,
             fonts_bound: Vec::new(),
+            fonts_scripts: crate::script::ScriptSet::EMPTY,
             fonts_seen: (0, 0),
             fonts_rebind: false,
             pending_bound: None,
@@ -1204,6 +1208,7 @@ impl SheetApp {
                 self.fonts_set = true;
                 // The rebuilt set has no workbook fonts yet: bind them again once it is active.
                 self.fonts_bound.clear();
+                self.fonts_scripts = crate::script::ScriptSet::EMPTY;
                 self.fonts_seen = (0, 0);
                 self.pending_bound = None;
                 self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
@@ -1224,11 +1229,13 @@ impl SheetApp {
             let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
+                let scripts = self.used_scripts();
                 self.fonts_seen = seen;
-                if used != self.fonts_bound {
-                    let (fonts, bound) = theme::font_definitions_with_bound(self.ui.language, &used, self.used_scripts());
+                if used != self.fonts_bound || scripts != self.fonts_scripts {
+                    let (fonts, bound) = theme::font_definitions_with_bound(self.ui.language, &used, scripts);
                     ctx.set_fonts(fonts);
                     self.fonts_bound = used;
+                    self.fonts_scripts = scripts;
                     self.pending_bound = Some(bound);
                     self.fonts_rebind = true;
                     ctx.request_repaint();
