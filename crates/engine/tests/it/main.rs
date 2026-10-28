@@ -5,6 +5,7 @@ mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_commands;
 mod chart_line_stacked100;
+mod chart_reliability;
 mod chart_workbook_names;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;

@@ -1,6 +1,5 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
-use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
@@ -73,8 +72,7 @@ impl Ctx<'_> {
         }
         String::new()
     }
-    #[allow(clippy::too_many_arguments)]
-    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, align: HAlign, valign: VAlign) {
+    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
             return;
         }

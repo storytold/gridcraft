@@ -175,10 +175,10 @@ impl G<'_> {
             self.p.circle_stroke(self.pt(x, y), r * self.s, Stroke::new(1.0, c));
         }
     }
-    fn text(&self, x: f32, y: f32, t: &str, size: f32, c: Color32, bold: bool, italic: bool) {
-        let fam = if bold {
+    fn text(&self, x: f32, y: f32, t: &str, size: f32, c: Color32, style: (bool, bool)) {
+        let fam = if style.0 {
             crate::theme::CELL_BOLD
-        } else if italic {
+        } else if style.1 {
             crate::theme::CELL_ITALIC
         } else {
             crate::theme::CELL
@@ -269,14 +269,14 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.stroke(&[(8.0, 6.0), (8.0, 8.5), (5.0, 8.5), (5.0, 10.0)], c);
             g.rect(4.0, 10.0, 2.0, 4.5, Some(c), None);
         }
-        Icon::Bold => g.text(8.0, 8.5, "B", 12.0, c, true, false),
-        Icon::Italic => g.text(8.0, 8.5, "I", 12.0, c, false, true),
+        Icon::Bold => g.text(8.0, 8.5, "B", 12.0, c, (true, false)),
+        Icon::Italic => g.text(8.0, 8.5, "I", 12.0, c, (false, true)),
         Icon::Underline => {
-            g.text(8.0, 7.5, "U", 11.0, c, false, false);
+            g.text(8.0, 7.5, "U", 11.0, c, (false, false));
             g.stroke(&[(4.0, 14.0), (12.0, 14.0)], c);
         }
         Icon::Strike => {
-            g.text(8.0, 8.0, "ab", 10.0, c, false, false);
+            g.text(8.0, 8.0, "ab", 10.0, c, (false, false));
             g.stroke(&[(2.5, 8.5), (13.5, 8.5)], c);
         }
         Icon::Borders | Icon::BorderAll => {
@@ -311,47 +311,20 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.circle(13.5, 10.0, 1.2, Some(c), None);
         }
         Icon::FontColor => {
-            g.text(8.0, 7.0, "A", 11.0, c, false, false);
+            g.text(8.0, 7.0, "A", 11.0, c, (false, false));
         }
-        Icon::AlignTop | Icon::AlignMiddle | Icon::AlignBottom => {
-            let ys: [f32; 3] = match icon {
-                Icon::AlignTop => [3.0, 5.5, 8.0],
-                Icon::AlignMiddle => [5.5, 8.0, 10.5],
-                _ => [8.0, 10.5, 13.0],
-            };
-            let edge = match icon {
-                Icon::AlignTop => 1.5,
-                Icon::AlignMiddle => -1.0,
-                _ => 14.5,
-            };
-            if edge > 0.0 {
-                g.stroke(&[(2.0, edge), (14.0, edge)], light);
-            }
-            for (i, y) in ys.iter().enumerate() {
-                let w = if i == 1 { 8.0 } else { 10.0 };
-                g.stroke(&[(8.0 - w / 2.0, *y), (8.0 + w / 2.0, *y)], c);
-            }
-        }
-        Icon::AlignLeft | Icon::AlignCenter | Icon::AlignRight | Icon::IndentDec | Icon::IndentInc => {
-            for (i, y) in [3.5f32, 6.5, 9.5, 12.5].iter().enumerate() {
-                let w = if i % 2 == 0 { 12.0 } else { 8.0 };
-                let (x0, x1) = match icon {
-                    Icon::AlignLeft => (2.0, 2.0 + w),
-                    Icon::AlignRight => (14.0 - w, 14.0),
-                    Icon::AlignCenter => (8.0 - w / 2.0, 8.0 + w / 2.0),
-                    _ => (if i == 0 || i == 3 { 2.0 } else { 7.0 }, 14.0),
-                };
-                g.stroke(&[(x0, *y), (x1, *y)], c);
-            }
-            if icon == Icon::IndentInc {
-                g.poly(&[(2.0, 6.0), (5.0, 8.0), (2.0, 10.0)], blue);
-            }
-            if icon == Icon::IndentDec {
-                g.poly(&[(5.0, 6.0), (2.0, 8.0), (5.0, 10.0)], blue);
-            }
+        Icon::AlignTop
+        | Icon::AlignMiddle
+        | Icon::AlignBottom
+        | Icon::AlignLeft
+        | Icon::AlignCenter
+        | Icon::AlignRight
+        | Icon::IndentDec
+        | Icon::IndentInc => {
+            paint_alignment(&g, icon, c, light, blue);
         }
         Icon::Orientation => {
-            g.text(6.0, 9.0, "ab", 8.5, c, false, false);
+            g.text(6.0, 9.0, "ab", 8.5, c, (false, false));
             g.stroke(&[(9.0, 13.0), (14.0, 3.0)], blue);
             g.poly(&[(14.5, 2.0), (12.0, 4.0), (14.6, 5.2)], blue);
         }
@@ -373,18 +346,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], blue);
             g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], blue);
         }
-        Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
-        Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),
-        Icon::Comma => g.text(8.0, 7.0, ",", 14.0, c, true, false),
+        Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, (false, false)),
+        Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, (false, false)),
+        Icon::Comma => g.text(8.0, 7.0, ",", 14.0, c, (true, false)),
         Icon::DecInc => {
-            g.text(5.0, 5.0, ".0", 6.5, c, false, false);
-            g.text(10.0, 11.0, ".00", 6.5, c, false, false);
+            g.text(5.0, 5.0, ".0", 6.5, c, (false, false));
+            g.text(10.0, 11.0, ".00", 6.5, c, (false, false));
             g.stroke(&[(2.0, 12.0), (5.0, 12.0)], blue);
             g.poly(&[(1.0, 12.0), (2.8, 10.6), (2.8, 13.4)], blue);
         }
         Icon::DecDec => {
-            g.text(6.0, 5.0, ".00", 6.5, c, false, false);
-            g.text(11.0, 11.0, ".0", 6.5, c, false, false);
+            g.text(6.0, 5.0, ".00", 6.5, c, (false, false));
+            g.text(11.0, 11.0, ".0", 6.5, c, (false, false));
             g.stroke(&[(2.0, 12.0), (5.5, 12.0)], blue);
             g.poly(&[(7.0, 12.0), (5.2, 10.6), (5.2, 13.4)], blue);
         }
@@ -427,7 +400,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
                 }
             }
         }
-        Icon::Sum => g.text(8.0, 8.0, "Σ", 13.0, c, false, false),
+        Icon::Sum => g.text(8.0, 8.0, "Σ", 13.0, c, (false, false)),
         Icon::FillDown => {
             g.rect(4.0, 2.0, 8.0, 12.0, Some(paper), Some(light));
             g.stroke(&[(8.0, 4.0), (8.0, 11.0)], blue);
@@ -438,8 +411,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.poly(&[(8.0, 4.0), (10.5, 1.5), (14.5, 5.5), (12.0, 8.0)], red);
         }
         Icon::SortFilter => {
-            g.text(4.5, 4.5, "A", 6.0, c, false, false);
-            g.text(4.5, 11.5, "Z", 6.0, c, false, false);
+            g.text(4.5, 4.5, "A", 6.0, c, (false, false));
+            g.text(4.5, 11.5, "Z", 6.0, c, (false, false));
             g.stroke(&[(8.0, 3.0), (8.0, 13.0)], blue);
             g.poly(&[(6.5, 11.0), (9.5, 11.0), (8.0, 13.5)], blue);
             g.poly(&[(10.0, 3.0), (15.0, 3.0), (13.0, 7.5), (13.0, 12.0), (12.0, 11.0), (12.0, 7.5)], light);
@@ -492,7 +465,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.rect(2.0, 2.0, 12.0, 12.0, None, Some(c));
             g.line(&[(4.5, 8.0), (7.0, 10.5), (11.5, 5.0)], c, 1.4);
         }
-        Icon::Fx => g.text(8.0, 8.0, "fx", 10.5, c, false, true),
+        Icon::Fx => g.text(8.0, 8.0, "fx", 10.5, c, (false, true)),
         Icon::Plus => {
             g.line(&[(8.0, 3.0), (8.0, 13.0)], c, 1.3);
             g.line(&[(3.0, 8.0), (13.0, 8.0)], c, 1.3);
@@ -564,13 +537,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         }
         Icon::TextBox => {
             g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
-            g.text(8.0, 8.0, "A", 8.0, c, false, false);
+            g.text(8.0, 8.0, "A", 8.0, c, (false, false));
         }
-        Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, false, false),
-        Icon::Function => g.text(8.0, 8.0, "fx", 11.0, c, false, true),
+        Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, (false, false)),
+        Icon::Function => g.text(8.0, 8.0, "fx", 11.0, c, (false, true)),
         Icon::Name => {
             g.rect(1.5, 4.0, 13.0, 8.0, None, Some(c));
-            g.text(8.0, 8.0, "ab", 8.0, c, false, false);
+            g.text(8.0, 8.0, "ab", 8.0, c, (false, false));
         }
         Icon::Trace => {
             g.circle(4.0, 12.0, 1.6, Some(blue), None);
@@ -588,8 +561,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         Icon::Filter => g.poly(&[(2.0, 3.0), (14.0, 3.0), (9.5, 8.5), (9.5, 13.5), (6.5, 12.0), (6.5, 8.5)], c),
         Icon::SortAsc | Icon::SortDesc => {
             let (a, b) = if icon == Icon::SortAsc { ("A", "Z") } else { ("Z", "A") };
-            g.text(5.0, 4.5, a, 6.5, c, false, false);
-            g.text(5.0, 11.5, b, 6.5, c, false, false);
+            g.text(5.0, 4.5, a, 6.5, c, (false, false));
+            g.text(5.0, 11.5, b, 6.5, c, (false, false));
             g.stroke(&[(11.0, 2.5), (11.0, 13.0)], blue);
             g.poly(&[(9.0, 11.0), (13.0, 11.0), (11.0, 14.0)], blue);
         }
@@ -614,9 +587,9 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
                 g.stroke(&[(7.0, y), (14.0, y)], light);
             }
             match icon {
-                Icon::Group => g.text(3.0, 2.5, "+", 6.0, blue, true, false),
-                Icon::Ungroup => g.text(3.0, 2.5, "−", 6.0, blue, true, false),
-                _ => g.text(11.0, 13.0, "Σ", 6.0, blue, false, false),
+                Icon::Group => g.text(3.0, 2.5, "+", 6.0, blue, (true, false)),
+                Icon::Ungroup => g.text(3.0, 2.5, "−", 6.0, blue, (true, false)),
+                _ => g.text(11.0, 13.0, "Σ", 6.0, blue, (false, false)),
             }
         }
         Icon::Lock => {
@@ -624,7 +597,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(5.5, 7.0), (5.5, 4.5), (8.0, 2.5), (10.5, 4.5), (10.5, 7.0)], c, 1.2);
         }
         Icon::Spell => {
-            g.text(7.0, 6.0, "abc", 7.0, c, false, false);
+            g.text(7.0, 6.0, "abc", 7.0, c, (false, false));
             g.line(&[(4.0, 11.0), (6.5, 13.5), (12.0, 8.5)], green, 1.4);
         }
         Icon::Freeze => {
@@ -797,4 +770,43 @@ pub const LIBRARY: &[(&str, Icon)] = &[
 
 pub fn from_name(name: &str) -> Option<Icon> {
     LIBRARY.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, i)| *i)
+}
+
+fn paint_alignment(g: &G<'_>, icon: Icon, c: Color32, light: Color32, blue: Color32) {
+    if matches!(icon, Icon::AlignTop | Icon::AlignMiddle | Icon::AlignBottom) {
+        let ys: [f32; 3] = match icon {
+            Icon::AlignTop => [3.0, 5.5, 8.0],
+            Icon::AlignMiddle => [5.5, 8.0, 10.5],
+            _ => [8.0, 10.5, 13.0],
+        };
+        let edge = match icon {
+            Icon::AlignTop => 1.5,
+            Icon::AlignMiddle => -1.0,
+            _ => 14.5,
+        };
+        if edge > 0.0 {
+            g.stroke(&[(2.0, edge), (14.0, edge)], light);
+        }
+        for (i, y) in ys.iter().enumerate() {
+            let w = if i == 1 { 8.0 } else { 10.0 };
+            g.stroke(&[(8.0 - w / 2.0, *y), (8.0 + w / 2.0, *y)], c);
+        }
+    } else {
+        for (i, y) in [3.5f32, 6.5, 9.5, 12.5].iter().enumerate() {
+            let w = if i % 2 == 0 { 12.0 } else { 8.0 };
+            let (x0, x1) = match icon {
+                Icon::AlignLeft => (2.0, 2.0 + w),
+                Icon::AlignRight => (14.0 - w, 14.0),
+                Icon::AlignCenter => (8.0 - w / 2.0, 8.0 + w / 2.0),
+                _ => (if i == 0 || i == 3 { 2.0 } else { 7.0 }, 14.0),
+            };
+            g.stroke(&[(x0, *y), (x1, *y)], c);
+        }
+        if icon == Icon::IndentInc {
+            g.poly(&[(2.0, 6.0), (5.0, 8.0), (2.0, 10.0)], blue);
+        }
+        if icon == Icon::IndentDec {
+            g.poly(&[(5.0, 6.0), (2.0, 8.0), (5.0, 10.0)], blue);
+        }
+    }
 }

@@ -748,7 +748,9 @@ fn sanitize_axis_values(axis: &mut gridcraft_model::ChartAxis) {
     sanitize_width(&mut axis.tick_line.width);
 }
 
-fn sanitize_chart_format(format: &mut gridcraft_model::ChartFormat) {
+/// Normalizes imported formatting to the bounds accepted by chart editing commands.
+/// Call after native properties have been merged over an optional GridCraft extension.
+pub(crate) fn sanitize_chart_format(format: &mut gridcraft_model::ChartFormat) {
     sanitize_axis_values(&mut format.x_axis);
     sanitize_axis_values(&mut format.y_axis);
     let position_ok = |position: [f32; 2]| position.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value));
@@ -1046,6 +1048,70 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
     Some(s)
 }
 
+/// Native series styling; the GridCraft extension retains properties not represented here.
+fn series_format_xml(spec: &gridcraft_model::ChartSeriesFormat, idx: usize, g: G, color: Option<&str>) -> String {
+    let mut x = String::new();
+    let c = color.map(str::to_owned).unwrap_or_else(|| format!("<a:schemeClr val=\"accent{}\"/>", idx % 6 + 1));
+    let width = if matches!(g, G::Bar { .. } | G::Area { .. }) { spec.border_width.unwrap_or(0.0) } else { spec.line_width.unwrap_or(2.25) };
+    let fill = spec.fill_color.map(rgba_xml).unwrap_or_else(|| c.clone());
+    let line = spec.line_color.map(rgba_xml).unwrap_or_else(|| c.clone());
+    let _ = write!(x, "<c:spPr><a:solidFill>{fill}</a:solidFill><a:ln w=\"{}\">", (width * 12700.0).round() as u32);
+    if spec.no_line || width == 0.0 || (g == (G::Scatter { lines: false }) && spec.line_width.is_none()) {
+        x.push_str("<a:noFill/>");
+    } else {
+        if matches!(g, G::Bar { .. } | G::Area { .. }) && spec.line_color.is_none() {
+            x.push_str("<a:solidFill><a:srgbClr val=\"262626\"/></a:solidFill>");
+        } else {
+            let _ = write!(x, "<a:solidFill>{line}</a:solidFill>");
+        }
+    }
+    let _ = write!(x, "<a:prstDash val=\"{}\"/></a:ln></c:spPr>", if spec.dashed { "dash" } else { "solid" });
+    if matches!(g, G::Line { .. } | G::Line100 { .. } | G::Scatter { .. }) {
+        // Styling a line must retain its marker-free default. Markers are opt-in on
+        // ScatterLines, just as they are on a line chart without markers.
+        let marker = spec.marker.as_deref().unwrap_or(
+            if matches!(g, G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true }) { "none" } else { "circle" },
+        );
+        let marker = match marker {
+            "none" => "none",
+            "circle" => "circle",
+            "square" => "square",
+            "diamond" => "diamond",
+            "triangle" => "triangle",
+            "cross" | "x" => "x",
+            "plus" => "plus",
+            "star" => "star",
+            "dash" => "dash",
+            _ => "circle",
+        };
+        let fill = if spec.marker_no_fill {
+            "<a:noFill/>".into()
+        } else {
+            format!("<a:solidFill>{}</a:solidFill>", spec.marker_fill.map(rgba_xml).unwrap_or_else(|| c.clone()))
+        };
+        let border_width = spec.marker_border_width.or(spec.border_width).unwrap_or(if spec.marker_border_color.is_some() || spec.marker_no_fill {
+            1.0
+        } else {
+            0.75
+        });
+        let border = if border_width == 0.0 {
+            "<a:noFill/>".into()
+        } else {
+            format!(
+                "<a:solidFill>{}</a:solidFill>",
+                rgba_xml(spec.marker_border_color.unwrap_or(if spec.marker_no_fill { [38, 38, 38, 255] } else { [255, 255, 255, 255] }))
+            )
+        };
+        let _ = write!(
+            x,
+            "<c:marker><c:symbol val=\"{marker}\"/><c:size val=\"{}\"/><c:spPr>{fill}<a:ln w=\"{}\">{border}</a:ln></c:spPr></c:marker>",
+            spec.marker_size.unwrap_or(7.0).round() as u32,
+            (border_width * 12700.0).round() as u32
+        );
+    }
+    x
+}
+
 fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Option<&gridcraft_model::ChartSeriesFormat>) -> String {
     let smooth = spec.and_then(|s| s.smooth).unwrap_or(s.smooth);
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
@@ -1060,67 +1126,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Line100 { .. } | G::Radar | G::Scatter { lines: true });
     if let Some(spec) = spec {
-        let c = color.clone().unwrap_or_else(|| format!("<a:schemeClr val=\"accent{}\"/>", idx % 6 + 1));
-        let width = if matches!(g, G::Bar { .. } | G::Area { .. }) { spec.border_width.unwrap_or(0.0) } else { spec.line_width.unwrap_or(2.25) };
-        let fill = spec.fill_color.map(rgba_xml).unwrap_or_else(|| c.clone());
-        let line = spec.line_color.map(rgba_xml).unwrap_or_else(|| c.clone());
-        let _ = write!(x, "<c:spPr><a:solidFill>{fill}</a:solidFill><a:ln w=\"{}\">", (width * 12700.0).round() as u32);
-        if spec.no_line || width == 0.0 || (g == (G::Scatter { lines: false }) && spec.line_width.is_none()) {
-            x.push_str("<a:noFill/>");
-        } else {
-            if matches!(g, G::Bar { .. } | G::Area { .. }) && spec.line_color.is_none() {
-                x.push_str("<a:solidFill><a:srgbClr val=\"262626\"/></a:solidFill>");
-            } else {
-                let _ = write!(x, "<a:solidFill>{line}</a:solidFill>");
-            }
-        }
-        let _ = write!(x, "<a:prstDash val=\"{}\"/></a:ln></c:spPr>", if spec.dashed { "dash" } else { "solid" });
-        if matches!(g, G::Line { .. } | G::Line100 { .. } | G::Scatter { .. }) {
-            // Styling a line must retain its marker-free default. Markers are opt-in on
-            // ScatterLines, just as they are on a line chart without markers.
-            let marker = spec.marker.as_deref().unwrap_or(
-                if matches!(g, G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true }) {
-                    "none"
-                } else {
-                    "circle"
-                },
-            );
-            let marker = match marker {
-                "none" => "none",
-                "circle" => "circle",
-                "square" => "square",
-                "diamond" => "diamond",
-                "triangle" => "triangle",
-                "cross" | "x" => "x",
-                "plus" => "plus",
-                "star" => "star",
-                "dash" => "dash",
-                _ => "circle",
-            };
-            let fill = if spec.marker_no_fill {
-                "<a:noFill/>".into()
-            } else {
-                format!("<a:solidFill>{}</a:solidFill>", spec.marker_fill.map(rgba_xml).unwrap_or_else(|| c.clone()))
-            };
-            let border_width = spec
-                .marker_border_width
-                .or(spec.border_width)
-                .unwrap_or(if spec.marker_border_color.is_some() || spec.marker_no_fill { 1.0 } else { 0.75 });
-            let border = if border_width == 0.0 {
-                "<a:noFill/>".into()
-            } else {
-                format!(
-                    "<a:solidFill>{}</a:solidFill>",
-                    rgba_xml(spec.marker_border_color.unwrap_or(if spec.marker_no_fill { [38, 38, 38, 255] } else { [255, 255, 255, 255] }))
-                )
-            };
-            let _ = write!(
-                x,
-                "<c:marker><c:symbol val=\"{marker}\"/><c:size val=\"{}\"/><c:spPr>{fill}<a:ln w=\"{}\">{border}</a:ln></c:spPr></c:marker>",
-                spec.marker_size.unwrap_or(7.0).round() as u32,
-                (border_width * 12700.0).round() as u32
-            );
-        }
+        x.push_str(&series_format_xml(spec, idx, g, color.as_deref()));
     } else {
         match (&color, line_like) {
             (Some(c), true) => {

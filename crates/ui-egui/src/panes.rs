@@ -7,6 +7,144 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
+/// Series appearance and trendline controls within the selected element's existing UI scope.
+fn chart_series_controls(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    chart: &gridcraft_engine::model::Chart,
+    i: usize,
+    page: u8,
+    format: &mut gridcraft_engine::model::ChartFormat,
+) -> bool {
+    use gridcraft_engine::model::ChartKind;
+    let id = chart.id;
+    let mut changed = false;
+    let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
+    if page == 0 {
+        ui.menu_button(crate::widgets::tr(ui, "Series Color…"), |ui| {
+            if let Some(color) = crate::widgets::color_palette(ui, &colors, crate::widgets::tr(ui, "Automatic")) {
+                app.run_or_alert("chart.formatSelection", json!({"chart":id,"series":i,"color":if color=="none" {Json::Null}else{json!(color)}}));
+                ui.close();
+            }
+        });
+    }
+    let spec = format.series.entry(i).or_default();
+
+    let lines = matches!(
+        chart.kind,
+        ChartKind::Scatter
+            | ChartKind::ScatterLines
+            | ChartKind::Line
+            | ChartKind::LineMarkers
+            | ChartKind::LineStacked
+            | ChartKind::LineStacked100
+            | ChartKind::LineStacked100Markers
+            | ChartKind::Combo
+    );
+    if page == 0 && lines {
+        let marker_id = ui.scope_id().with("line_or_marker");
+        let mut marker = ui.ctx().data_mut(|d| d.get_temp::<bool>(marker_id)).unwrap_or(false);
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut marker, false, crate::widgets::tr(ui, "Chart|Line"));
+            ui.selectable_value(&mut marker, true, crate::widgets::tr(ui, "Marker"));
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(marker_id, marker));
+        if !marker {
+            chart_section(ui, "Chart|Line", |ui| {
+                let mut visible = !spec.no_line && (chart.kind != ChartKind::Scatter || spec.line_width.is_some());
+                if ui.checkbox(&mut visible, crate::widgets::tr(ui, "Show Line")).changed() {
+                    spec.no_line = !visible;
+                    if visible {
+                        spec.line_width.get_or_insert(2.25);
+                    }
+                    changed = true;
+                }
+                changed |= chart_number_f32(ui, "Line Width (pt)", &mut spec.line_width);
+                changed |= ui.checkbox(&mut spec.dashed, crate::widgets::tr(ui, "Dashed Line")).changed();
+                let mut smooth = spec.smooth.unwrap_or_else(|| chart.series.get(i).is_some_and(|s| s.smooth));
+                if ui.checkbox(&mut smooth, crate::widgets::tr(ui, "Smoothed Line")).changed() {
+                    spec.smooth = Some(smooth);
+                    changed = true;
+                }
+                changed |= chart_color(ui, "Line Color & Transparency", &mut spec.line_color);
+            });
+        } else {
+            chart_section(ui, "Marker Options", |ui| {
+                let old = spec.marker.clone();
+                ComboBox::from_id_salt("marker_type")
+                    .selected_text(crate::widgets::tr(
+                        ui,
+                        match spec.marker.as_deref() {
+                            None => "Automatic",
+                            Some("none") => "None",
+                            Some("circle") => "Circle",
+                            Some("square") => "Square",
+                            Some("diamond") => "Diamond",
+                            Some("triangle") => "Triangle",
+                            Some("cross") => "X",
+                            Some("plus") => "Plus (+)",
+                            Some("star") => "Star",
+                            Some("dash") => "Dash",
+                            _ => "Automatic",
+                        },
+                    ))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut spec.marker, None, crate::widgets::tr(ui, "Automatic"));
+                        for (key, label) in [
+                            ("none", "None"),
+                            ("circle", "Circle"),
+                            ("square", "Square"),
+                            ("diamond", "Diamond"),
+                            ("triangle", "Triangle"),
+                            ("cross", "X"),
+                            ("plus", "Plus (+)"),
+                            ("star", "Star"),
+                            ("dash", "Dash"),
+                        ] {
+                            ui.selectable_value(&mut spec.marker, Some(key.into()), crate::widgets::tr(ui, label));
+                        }
+                    });
+                changed |= old != spec.marker;
+                changed |= chart_number_f32(ui, "Marker Size (2–72 pt)", &mut spec.marker_size);
+            });
+            chart_section(ui, "Chart Fill|Fill", |ui| {
+                changed |= ui.checkbox(&mut spec.marker_no_fill, crate::widgets::tr(ui, "No Fill Marker")).changed();
+                changed |= chart_color(ui, "Marker Fill", &mut spec.marker_fill);
+            });
+            chart_section(ui, "Chart|Border", |ui| {
+                changed |= chart_color(ui, "Marker Border Color", &mut spec.marker_border_color);
+                changed |= chart_number_f32(ui, "Marker Border Width (pt)", &mut spec.marker_border_width);
+            });
+        }
+    }
+    if page == 0 && !lines && chart.kind != ChartKind::Bubble {
+        chart_section(ui, "Chart Fill|Fill", |ui| {
+            changed |= chart_fill(ui, &mut spec.fill_color);
+        });
+        chart_section(ui, "Chart|Border", |ui| {
+            changed |= chart_number_f32(ui, "Border Width (pt)", &mut spec.border_width);
+        });
+    }
+    if page == 1
+        && matches!(
+            chart.kind,
+            ChartKind::ColumnClustered
+                | ChartKind::ColumnStacked
+                | ChartKind::ColumnStacked100
+                | ChartKind::BarClustered
+                | ChartKind::BarStacked
+                | ChartKind::BarStacked100
+        )
+    {
+        changed |= chart_number_f32(ui, "Gap Width (0–500%)", &mut format.gap_width);
+        changed |= chart_number_f32(ui, "Series Overlap (-100–100%)", &mut format.overlap);
+    }
+    if page == 1 {
+        chart_trendline_controls(app, ui, chart, i);
+    }
+    changed
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     // The Comments pane is engine state (`review.showComments`, so agents can drive it); the other
     // panes are UI state. One pane shows at a time: opening another one closes Comments.
@@ -524,132 +662,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     .changed();
             }
             ChartElement::Series(i) if supported && i < chart.series.len() => {
-                let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
-                if page == 0 {
-                    ui.menu_button(crate::widgets::tr(ui, "Series Color…"), |ui| {
-                        if let Some(color) = crate::widgets::color_palette(ui, &colors, crate::widgets::tr(ui, "Automatic")) {
-                            app.run_or_alert(
-                                "chart.formatSelection",
-                                json!({"chart":id,"series":i,"color":if color=="none" {Json::Null}else{json!(color)}}),
-                            );
-                            ui.close();
-                        }
-                    });
-                }
-                let spec = format.series.entry(i).or_default();
-
-                let lines = matches!(
-                    chart.kind,
-                    ChartKind::Scatter
-                        | ChartKind::ScatterLines
-                        | ChartKind::Line
-                        | ChartKind::LineMarkers
-                        | ChartKind::LineStacked
-                        | ChartKind::LineStacked100
-                        | ChartKind::LineStacked100Markers
-                        | ChartKind::Combo
-                );
-                if page == 0 && lines {
-                    let marker_id = ui.scope_id().with("line_or_marker");
-                    let mut marker = ui.ctx().data_mut(|d| d.get_temp::<bool>(marker_id)).unwrap_or(false);
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut marker, false, crate::widgets::tr(ui, "Chart|Line"));
-                        ui.selectable_value(&mut marker, true, crate::widgets::tr(ui, "Marker"));
-                    });
-                    ui.ctx().data_mut(|d| d.insert_temp(marker_id, marker));
-                    if !marker {
-                        chart_section(ui, "Chart|Line", |ui| {
-                            let mut visible = !spec.no_line && (chart.kind != ChartKind::Scatter || spec.line_width.is_some());
-                            if ui.checkbox(&mut visible, crate::widgets::tr(ui, "Show Line")).changed() {
-                                spec.no_line = !visible;
-                                if visible {
-                                    spec.line_width.get_or_insert(2.25);
-                                }
-                                changed = true;
-                            }
-                            changed |= chart_number_f32(ui, "Line Width (pt)", &mut spec.line_width);
-                            changed |= ui.checkbox(&mut spec.dashed, crate::widgets::tr(ui, "Dashed Line")).changed();
-                            let mut smooth = spec.smooth.unwrap_or_else(|| chart.series.get(i).is_some_and(|s| s.smooth));
-                            if ui.checkbox(&mut smooth, crate::widgets::tr(ui, "Smoothed Line")).changed() {
-                                spec.smooth = Some(smooth);
-                                changed = true;
-                            }
-                            changed |= chart_color(ui, "Line Color & Transparency", &mut spec.line_color);
-                        });
-                    } else {
-                        chart_section(ui, "Marker Options", |ui| {
-                            let old = spec.marker.clone();
-                            ComboBox::from_id_salt("marker_type")
-                                .selected_text(crate::widgets::tr(
-                                    ui,
-                                    match spec.marker.as_deref() {
-                                        None => "Automatic",
-                                        Some("none") => "None",
-                                        Some("circle") => "Circle",
-                                        Some("square") => "Square",
-                                        Some("diamond") => "Diamond",
-                                        Some("triangle") => "Triangle",
-                                        Some("cross") => "X",
-                                        Some("plus") => "Plus (+)",
-                                        Some("star") => "Star",
-                                        Some("dash") => "Dash",
-                                        _ => "Automatic",
-                                    },
-                                ))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut spec.marker, None, crate::widgets::tr(ui, "Automatic"));
-                                    for (key, label) in [
-                                        ("none", "None"),
-                                        ("circle", "Circle"),
-                                        ("square", "Square"),
-                                        ("diamond", "Diamond"),
-                                        ("triangle", "Triangle"),
-                                        ("cross", "X"),
-                                        ("plus", "Plus (+)"),
-                                        ("star", "Star"),
-                                        ("dash", "Dash"),
-                                    ] {
-                                        ui.selectable_value(&mut spec.marker, Some(key.into()), crate::widgets::tr(ui, label));
-                                    }
-                                });
-                            changed |= old != spec.marker;
-                            changed |= chart_number_f32(ui, "Marker Size (2–72 pt)", &mut spec.marker_size);
-                        });
-                        chart_section(ui, "Chart Fill|Fill", |ui| {
-                            changed |= ui.checkbox(&mut spec.marker_no_fill, crate::widgets::tr(ui, "No Fill Marker")).changed();
-                            changed |= chart_color(ui, "Marker Fill", &mut spec.marker_fill);
-                        });
-                        chart_section(ui, "Chart|Border", |ui| {
-                            changed |= chart_color(ui, "Marker Border Color", &mut spec.marker_border_color);
-                            changed |= chart_number_f32(ui, "Marker Border Width (pt)", &mut spec.marker_border_width);
-                        });
-                    }
-                }
-                if page == 0 && !lines && chart.kind != ChartKind::Bubble {
-                    chart_section(ui, "Chart Fill|Fill", |ui| {
-                        changed |= chart_fill(ui, &mut spec.fill_color);
-                    });
-                    chart_section(ui, "Chart|Border", |ui| {
-                        changed |= chart_number_f32(ui, "Border Width (pt)", &mut spec.border_width);
-                    });
-                }
-                if page == 1
-                    && matches!(
-                        chart.kind,
-                        ChartKind::ColumnClustered
-                            | ChartKind::ColumnStacked
-                            | ChartKind::ColumnStacked100
-                            | ChartKind::BarClustered
-                            | ChartKind::BarStacked
-                            | ChartKind::BarStacked100
-                    )
-                {
-                    changed |= chart_number_f32(ui, "Gap Width (0–500%)", &mut format.gap_width);
-                    changed |= chart_number_f32(ui, "Series Overlap (-100–100%)", &mut format.overlap);
-                }
-                if page == 1 {
-                    chart_trendline_controls(app, ui, chart, i);
-                }
+                changed |= chart_series_controls(app, ui, chart, i, page, &mut format);
             }
             ChartElement::ChartArea if page == 0 => {
                 changed |= chart_surface(ui, &mut format.chart_area);

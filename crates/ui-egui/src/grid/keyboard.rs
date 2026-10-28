@@ -1,7 +1,7 @@
 use super::geo::Geo;
 use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
-use super::*;
+use super::{CellRef, Drag, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {

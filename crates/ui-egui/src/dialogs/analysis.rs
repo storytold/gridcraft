@@ -1,5 +1,5 @@
 use super::show::{form_fields, ok_cancel};
-use super::*;
+use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();

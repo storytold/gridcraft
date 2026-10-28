@@ -12,7 +12,7 @@ use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
-use super::*;
+use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.

@@ -439,7 +439,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phonetics_are_additive_in_json() {
+    fn phonetics_are_additive_in_json() -> Result<(), Box<dyn std::error::Error>> {
         let mut wb = Workbook::new();
         assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
         wb.phonetics.push(PhoneticString {
@@ -447,12 +447,13 @@ mod tests {
             runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
             props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
         });
-        let json = serde_json::to_string(&wb).expect("serialize");
-        assert_eq!(serde_json::from_str::<Workbook>(&json).expect("deserialize").phonetics, wb.phonetics);
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.phonetics, wb.phonetics);
         // JSON written before the field existed still loads.
-        let mut value: serde_json::Value = serde_json::from_str(&json).expect("value");
-        value.as_object_mut().expect("an object").remove("phonetics");
-        assert!(serde_json::from_value::<Workbook>(value).expect("older JSON").phonetics.is_empty());
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().ok_or("none")?.remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
     }
 
     #[test]

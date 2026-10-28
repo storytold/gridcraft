@@ -172,6 +172,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
             }
         }
     }
+    crate::chart::sanitize_chart_format(&mut format);
     Some(Chart {
         id: 0,
         kind: kind?,
@@ -453,6 +454,20 @@ fn gridline_xml(stroke: &gridcraft_model::ChartStroke) -> String {
 #[cfg(test)]
 mod quartile_tests {
     use super::*;
+
+    #[test]
+    fn native_chartex_strokes_follow_chart_format_validation_limits() {
+        for (width, expected) in [("NaN", None), ("inf", None), ("-12700", None), ("266700", None), ("0", Some(0.0)), ("254000", Some(20.0))] {
+            let xml = format!(
+                r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:spPr><a:ln w="{width}"/></cx:spPr><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion><cx:spPr><a:ln w="{width}"/></cx:spPr><cx:axis id="1"><cx:majorGridlines><cx:spPr><a:ln w="{width}"/></cx:spPr></cx:majorGridlines></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#
+            );
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let chart = read_chartex(&root).unwrap();
+            assert_eq!(chart.format.chart_area.border_width, expected, "chart border: {width}");
+            assert_eq!(chart.format.plot_area.border_width, expected, "plot border: {width}");
+            assert_eq!(chart.format.horizontal_gridline.width, expected, "gridlines: {width}");
+        }
+    }
 
     #[test]
     fn box_whisker_reads_quartile_method_and_defaults() {

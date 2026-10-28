@@ -1,5 +1,5 @@
 use super::controls::control_keytip;
-use super::*;
+use super::{Icon, SheetApp, Ui, big_button, json};
 
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Script, "Macros", "Macros and scripts in this workbook (Alt+F8)", false).clicked() {

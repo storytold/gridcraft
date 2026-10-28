@@ -1,5 +1,5 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
-use super::*;
+use super::{Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icons, json, small_button, vec2};
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {

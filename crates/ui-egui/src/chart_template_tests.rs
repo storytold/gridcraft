@@ -3,6 +3,28 @@ use gridcraft_engine::Session;
 use serde_json::json;
 
 #[test]
+fn templates_preserve_the_visible_series_palette_and_explicit_overrides() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1","values":[["X","North","South"],[1,2,3],[2,4,6],[3,6,9]]})).unwrap();
+    let mut app = SheetApp::new(session, Default::default());
+    let first = app.run("insert.chart", json!({"range":"A1:C4","type":"line"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    app.run("chart.changeColors", json!({"chart":first,"palette":"monochrome"})).unwrap();
+    app.run("chart.set", json!({"chart":first,"format":{"series":{"1":{"line_color":[11,22,33,255],"line_width":3.0}}}})).unwrap();
+    let original = app.selected_chart_snapshot().unwrap();
+    chart_tools::save_template(&mut app, first, "Monochrome lines").unwrap();
+    app.run("insert.chart", json!({"range":"A1:C4","type":"line"})).unwrap();
+    let wb = &app.session.doc().unwrap().wb;
+    let applied = wb.active().unwrap().charts.last().unwrap();
+    let draw = |chart| {
+        gridcraft_chart::render(chart, &gridcraft_chart::resolve(wb, wb.active_sheet(), chart), 480.0, 300.0, &gridcraft_chart::ApproxMeasure)
+    };
+    assert_eq!(draw(&original), draw(applied));
+    assert_eq!(applied.format.series[&1].line_color, Some([11, 22, 33, 255]));
+    assert_eq!(wb.active().unwrap().charts[0], original, "saving a template must not mutate its source");
+}
+
+#[test]
 fn saved_template_is_applied_to_future_charts_of_the_same_kind_and_persisted() {
     let mut session = Session::new();
     session.new_workbook();

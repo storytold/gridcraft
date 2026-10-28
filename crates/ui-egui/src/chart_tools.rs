@@ -4,6 +4,10 @@ use gridcraft_engine::model::Chart;
 use serde_json::{Value as Json, json};
 use std::hash::{Hash, Hasher};
 
+#[cfg(test)]
+#[path = "chart_clipboard_tests.rs"]
+mod tests;
+
 pub(crate) struct ChartClipboard {
     snapshot: Chart,
     document: u64,
@@ -233,12 +237,25 @@ pub(crate) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui, id: u32) -> bo
     close
 }
 
+/// Saves visual styling without data or trendlines. Capture base series colors in the existing
+/// format overrides, since palettes and the series-color picker store those outside `ChartFormat`.
 pub(crate) fn save_template(app: &mut SheetApp, chart_id: u32, name: &str) -> Result<(), String> {
     let chart =
         app.selected_chart_snapshot().filter(|chart| chart.id == chart_id).ok_or_else(|| "The selected chart is no longer available.".to_string())?;
     let name = name.trim();
     if name.is_empty() || name.len() > 80 {
         return Err("Enter a template name between 1 and 80 characters.".into());
+    }
+    let theme = app.session.doc().map_err(|error| error.to_string())?.wb.theme.clone();
+    let mut format = chart.format;
+    for (index, series) in chart.series.iter().take(256).enumerate() {
+        if let Some([r, g, b]) = series.color.and_then(|color| color.resolve(&theme)) {
+            let style = format.series.entry(index).or_default();
+            let color = [r, g, b, 255];
+            style.fill_color.get_or_insert(color);
+            style.line_color.get_or_insert(color);
+            style.marker_fill.get_or_insert(color);
+        }
     }
     let kind = chart.kind;
     for template in &mut app.ui.chart_templates {
@@ -254,7 +271,7 @@ pub(crate) fn save_template(app: &mut SheetApp, chart_id: u32, name: &str) -> Re
         legend: chart.legend,
         data_labels: chart.data_labels,
         gridlines: chart.gridlines,
-        format: chart.format,
+        format,
         use_for_new: true,
     });
     Ok(())

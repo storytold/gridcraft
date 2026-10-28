@@ -1,7 +1,12 @@
 use super::problem::Evaluator;
-use super::*;
+use super::{CellRef, EPS};
 
 // ---------------------------------------------------------------- evaluation
+
+type BoundRow = (Vec<(usize, f64)>, Sense, f64);
+
+/// Objective (gradient, constant) and per-row (gradient, constant).
+pub(super) type Linearized = ((Vec<f64>, f64), Vec<(Vec<f64>, f64)>);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Sense {
@@ -27,6 +32,188 @@ pub(super) enum Outcome {
     Infeasible,
     Unbounded,
     Limit,
+}
+
+struct Map {
+    var: usize,
+    sign: f64,
+}
+
+struct VariableMap {
+    columns: Vec<Map>,
+    offset: Vec<f64>,
+    bound_rows: Vec<BoundRow>,
+}
+
+struct Tableau {
+    rows: Vec<Vec<f64>>,
+    basis: Vec<usize>,
+    width: usize,
+    decision_cols: usize,
+    slack_cols: usize,
+    artificial_cols: usize,
+}
+
+fn map_variables(n: usize, lo: &[f64], hi: &[f64]) -> VariableMap {
+    let mut columns = Vec::new();
+    let mut offset = vec![0.0; n];
+    let mut bound_rows = Vec::new();
+    for j in 0..n {
+        let lower = lo.get(j).copied().unwrap_or(f64::NEG_INFINITY);
+        let upper = hi.get(j).copied().unwrap_or(f64::INFINITY);
+        if lower.is_finite() {
+            if let Some(value) = offset.get_mut(j) {
+                *value = lower;
+            }
+            columns.push(Map { var: j, sign: 1.0 });
+            if upper.is_finite() {
+                bound_rows.push((vec![(columns.len() - 1, 1.0)], Sense::Le, upper - lower));
+            }
+        } else if upper.is_finite() {
+            if let Some(value) = offset.get_mut(j) {
+                *value = upper;
+            }
+            columns.push(Map { var: j, sign: -1.0 });
+        } else {
+            columns.push(Map { var: j, sign: 1.0 });
+            columns.push(Map { var: j, sign: -1.0 });
+        }
+    }
+    VariableMap { columns, offset, bound_rows }
+}
+
+fn normalize_rows(rows: &[(Vec<f64>, Sense, f64)], bound_rows: Vec<BoundRow>, columns: &[Map], offset: &[f64]) -> Vec<(Vec<f64>, Sense, f64)> {
+    let width = columns.len();
+    let mut transformed = Vec::with_capacity(rows.len() + bound_rows.len());
+    for (coefficients, sense, rhs) in rows {
+        let mut row = vec![0.0; width];
+        for (index, mapping) in columns.iter().enumerate() {
+            if let Some(value) = row.get_mut(index) {
+                *value = coefficients.get(mapping.var).copied().unwrap_or(0.0) * mapping.sign;
+            }
+        }
+        let shift: f64 = coefficients.iter().zip(offset).map(|(coefficient, base)| coefficient * base).sum();
+        transformed.push((row, *sense, rhs - shift));
+    }
+    for (entries, sense, rhs) in bound_rows {
+        let mut row = vec![0.0; width];
+        for (index, value) in entries {
+            if let Some(slot) = row.get_mut(index) {
+                *slot = value;
+            }
+        }
+        transformed.push((row, sense, rhs));
+    }
+    // Rows with a negative right side are negated so every right side is >= 0.
+    transformed
+        .into_iter()
+        .map(|(row, sense, rhs)| {
+            if rhs < 0.0 {
+                let sense = match sense {
+                    Sense::Le => Sense::Ge,
+                    Sense::Ge => Sense::Le,
+                    Sense::Eq => Sense::Eq,
+                };
+                (row.iter().map(|v| -v).collect(), sense, -rhs)
+            } else {
+                (row, sense, rhs)
+            }
+        })
+        .collect()
+}
+
+fn build_tableau(normalized: &[(Vec<f64>, Sense, f64)], decision_cols: usize, slack_cols: usize, artificial_cols: usize) -> Tableau {
+    let width = decision_cols + slack_cols + artificial_cols;
+    let mut rows = Vec::with_capacity(normalized.len());
+    let mut basis = vec![0usize; normalized.len()];
+    let (mut slack, mut artificial) = (decision_cols, decision_cols + slack_cols);
+    for (i, (coefficients, sense, rhs)) in normalized.iter().enumerate() {
+        let mut row = vec![0.0; width + 1];
+        for (value, coefficient) in row.iter_mut().zip(coefficients) {
+            *value = *coefficient;
+        }
+        let basic = match sense {
+            Sense::Le => {
+                if let Some(value) = row.get_mut(slack) {
+                    *value = 1.0;
+                }
+                let basic = slack;
+                slack += 1;
+                basic
+            }
+            Sense::Ge => {
+                if let Some(value) = row.get_mut(slack) {
+                    *value = -1.0;
+                }
+                slack += 1;
+                if let Some(value) = row.get_mut(artificial) {
+                    *value = 1.0;
+                }
+                let basic = artificial;
+                artificial += 1;
+                basic
+            }
+            Sense::Eq => {
+                if let Some(value) = row.get_mut(artificial) {
+                    *value = 1.0;
+                }
+                let basic = artificial;
+                artificial += 1;
+                basic
+            }
+        };
+        if let Some(value) = row.get_mut(width) {
+            *value = *rhs;
+        }
+        if let Some(slot) = basis.get_mut(i) {
+            *slot = basic;
+        }
+        rows.push(row);
+    }
+    Tableau { rows, basis, width, decision_cols, slack_cols, artificial_cols }
+}
+
+fn phase_one(tableau: &mut Tableau, normalized: &[(Vec<f64>, Sense, f64)], budget: &mut u64) -> Result<(), Outcome> {
+    if tableau.artificial_cols == 0 {
+        return Ok(());
+    }
+    let mut objective = vec![0.0; tableau.width + 1];
+    for column in tableau.decision_cols + tableau.slack_cols..tableau.width {
+        if let Some(value) = objective.get_mut(column) {
+            *value = 1.0;
+        }
+    }
+    for (i, row) in tableau.rows.iter().enumerate() {
+        if tableau.basis.get(i).is_some_and(|basic| *basic >= tableau.decision_cols + tableau.slack_cols) {
+            for (value, coefficient) in objective.iter_mut().zip(row) {
+                *value -= coefficient;
+            }
+        }
+    }
+    let all = vec![true; tableau.width];
+    if matches!(simplex(&mut tableau.rows, &mut tableau.basis, &mut objective, &all, budget), Step::Limit) {
+        return Err(Outcome::Limit);
+    }
+    let scale = normalized.iter().map(|row| row.2.abs()).fold(1.0f64, f64::max);
+    if -objective.get(tableau.width).copied().unwrap_or(0.0) > 1e-7 * scale {
+        return Err(Outcome::Infeasible);
+    }
+    for i in 0..tableau.rows.len() {
+        if !tableau.basis.get(i).is_some_and(|basic| *basic >= tableau.decision_cols + tableau.slack_cols) {
+            continue;
+        }
+        let pivot_col = tableau
+            .rows
+            .get(i)
+            .and_then(|row| (0..tableau.decision_cols + tableau.slack_cols).find(|&column| row.get(column).is_some_and(|value| value.abs() > EPS)));
+        if let Some(column) = pivot_col {
+            pivot(&mut tableau.rows, &mut objective, i, column);
+            if let Some(basic) = tableau.basis.get_mut(i) {
+                *basic = column;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Depth-first branch and bound over a relaxation solver; returns the best integer point.
@@ -201,165 +388,23 @@ fn simplex(t: &mut [Vec<f64>], basis: &mut [usize], obj: &mut [f64], allowed: &[
 
 /// Minimises `c·x` subject to `rows` (coefficients, sense, rhs) and `lo ≤ x ≤ hi`.
 pub(super) fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], budget: &mut u64) -> Outcome {
-    let n = c.len();
     if lo.iter().zip(hi).any(|(l, h)| l > h) {
         return Outcome::Infeasible;
     }
     // x_j = offset + Σ sign·y_k with y ≥ 0.
-    struct Map {
-        var: usize,
-        sign: f64,
-    }
-    let mut cols: Vec<Map> = Vec::new();
-    let mut offset = vec![0.0; n];
-    let mut extra: Vec<(Vec<(usize, f64)>, Sense, f64)> = Vec::new();
-    for j in 0..n {
-        let (l, h) = (lo.get(j).copied().unwrap_or(f64::NEG_INFINITY), hi.get(j).copied().unwrap_or(f64::INFINITY));
-        if l.is_finite() {
-            if let Some(o) = offset.get_mut(j) {
-                *o = l;
-            }
-            cols.push(Map { var: j, sign: 1.0 });
-            if h.is_finite() {
-                extra.push((vec![(cols.len() - 1, 1.0)], Sense::Le, h - l));
-            }
-        } else if h.is_finite() {
-            if let Some(o) = offset.get_mut(j) {
-                *o = h;
-            }
-            cols.push(Map { var: j, sign: -1.0 });
-        } else {
-            cols.push(Map { var: j, sign: 1.0 });
-            cols.push(Map { var: j, sign: -1.0 });
-        }
-    }
+    let mapping = map_variables(c.len(), lo, hi);
+    let VariableMap { columns: cols, offset, bound_rows: extra } = mapping;
     let ny = cols.len();
     // Rows over y: (coefficients, sense, rhs).
-    let mut yrows: Vec<(Vec<f64>, Sense, f64)> = Vec::with_capacity(rows.len() + extra.len());
-    for (a, sense, b) in rows {
-        let mut coef = vec![0.0; ny];
-        for (k, m) in cols.iter().enumerate() {
-            if let Some(v) = coef.get_mut(k) {
-                *v = a.get(m.var).copied().unwrap_or(0.0) * m.sign;
-            }
-        }
-        let shift: f64 = a.iter().zip(&offset).map(|(x, o)| x * o).sum();
-        yrows.push((coef, *sense, b - shift));
+    let normalized = normalize_rows(rows, extra, &cols, &offset);
+    let n_slack = normalized.iter().filter(|row| row.1 != Sense::Eq).count();
+    let n_art = normalized.iter().filter(|row| row.1 != Sense::Le).count();
+    let mut tableau = build_tableau(&normalized, ny, n_slack, n_art);
+    if let Err(outcome) = phase_one(&mut tableau, &normalized, budget) {
+        return outcome;
     }
-    for (entries, sense, b) in extra {
-        let mut coef = vec![0.0; ny];
-        for (k, v) in entries {
-            if let Some(e) = coef.get_mut(k) {
-                *e = v;
-            }
-        }
-        yrows.push((coef, sense, b));
-    }
-    let m = yrows.len();
-    let n_slack = yrows.iter().filter(|r| r.1 != Sense::Eq).count();
-    // Rows with b < 0 are negated so every right side is ≥ 0.
-    let normalized: Vec<(Vec<f64>, Sense, f64)> = yrows
-        .into_iter()
-        .map(|(a, s, b)| {
-            if b < 0.0 {
-                let s = match s {
-                    Sense::Le => Sense::Ge,
-                    Sense::Ge => Sense::Le,
-                    Sense::Eq => Sense::Eq,
-                };
-                (a.iter().map(|v| -v).collect(), s, -b)
-            } else {
-                (a, s, b)
-            }
-        })
-        .collect();
-    let n_art = normalized.iter().filter(|r| r.1 != Sense::Le).count();
-    let width = ny + n_slack + n_art;
-    let mut t: Vec<Vec<f64>> = Vec::with_capacity(m);
-    let mut basis = vec![0usize; m];
-    let (mut si, mut ai) = (ny, ny + n_slack);
-    for (i, (a, s, b)) in normalized.iter().enumerate() {
-        let mut row = vec![0.0; width + 1];
-        for (v, x) in row.iter_mut().zip(a) {
-            *v = *x;
-        }
-        match s {
-            Sense::Le => {
-                if let Some(v) = row.get_mut(si) {
-                    *v = 1.0;
-                }
-                if let Some(bi) = basis.get_mut(i) {
-                    *bi = si;
-                }
-                si += 1;
-            }
-            Sense::Ge => {
-                if let Some(v) = row.get_mut(si) {
-                    *v = -1.0;
-                }
-                si += 1;
-                if let Some(v) = row.get_mut(ai) {
-                    *v = 1.0;
-                }
-                if let Some(bi) = basis.get_mut(i) {
-                    *bi = ai;
-                }
-                ai += 1;
-            }
-            Sense::Eq => {
-                if let Some(v) = row.get_mut(ai) {
-                    *v = 1.0;
-                }
-                if let Some(bi) = basis.get_mut(i) {
-                    *bi = ai;
-                }
-                ai += 1;
-            }
-        }
-        if let Some(v) = row.get_mut(width) {
-            *v = *b;
-        }
-        t.push(row);
-    }
-    let is_art = |j: usize| j >= ny + n_slack && j < width;
-    // Phase 1: minimise the sum of the artificials.
-    let mut obj = vec![0.0; width + 1];
-    for j in (ny + n_slack)..width {
-        if let Some(v) = obj.get_mut(j) {
-            *v = 1.0;
-        }
-    }
-    for (i, row) in t.iter().enumerate() {
-        if basis.get(i).is_some_and(|b| is_art(*b)) {
-            for (v, x) in obj.iter_mut().zip(row) {
-                *v -= x;
-            }
-        }
-    }
-    let all: Vec<bool> = vec![true; width];
-    if n_art > 0 {
-        match simplex(&mut t, &mut basis, &mut obj, &all, budget) {
-            Step::Limit => return Outcome::Limit,
-            Step::Unbounded | Step::Optimal => {}
-        }
-        let scale = normalized.iter().map(|r| r.2.abs()).fold(1.0f64, f64::max);
-        if -obj.get(width).copied().unwrap_or(0.0) > 1e-7 * scale {
-            return Outcome::Infeasible;
-        }
-        // Drive zero-valued artificials out of the basis where possible.
-        for i in 0..m {
-            if !basis.get(i).is_some_and(|b| is_art(*b)) {
-                continue;
-            }
-            let j = t.get(i).and_then(|row| (0..ny + n_slack).find(|&j| row.get(j).is_some_and(|v| v.abs() > EPS)));
-            if let Some(j) = j {
-                pivot(&mut t, &mut obj, i, j);
-                if let Some(b) = basis.get_mut(i) {
-                    *b = j;
-                }
-            }
-        }
-    }
+    let Tableau { rows: mut t, mut basis, width, decision_cols: ny, slack_cols: n_slack, .. } = tableau;
+    let is_art = |column: usize| column >= ny + n_slack && column < width;
     // Phase 2: the real costs; artificials may not re-enter.
     let mut cost = vec![0.0; width + 1];
     for (k, mp) in cols.iter().enumerate() {
@@ -402,8 +447,7 @@ pub(super) fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], h
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the
 /// objective gradient and constant, and per row the gradient and constant of `lhs − rhs`.
-#[allow(clippy::type_complexity)]
-pub(super) fn linearize(ev: &mut Evaluator, x0: &[f64]) -> std::result::Result<((Vec<f64>, f64), Vec<(Vec<f64>, f64)>), &'static str> {
+pub(super) fn linearize(ev: &mut Evaluator, x0: &[f64]) -> std::result::Result<Linearized, &'static str> {
     let n = x0.len();
     let p0 = ev.eval(x0).ok_or("budget")?;
     if !p0.f.is_finite() || p0.g.iter().any(|v| !v.is_finite()) {

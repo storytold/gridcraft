@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
+    f64_param, json, split_sheet, str_param, u32_param,
+};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
@@ -143,13 +146,16 @@ pub(super) fn change_colors(s: &mut Session, p: &Json) -> Result<Json> {
     let palette = str_param(p, "palette").unwrap_or("colorful").to_string();
     with_chart(s, p, |c| {
         for (i, se) in c.series.iter_mut().enumerate() {
+            // Imported/pasted charts can have hundreds of series; saturate before narrowing
+            // to the model's tint so the palette command cannot overflow on those charts.
+            let tint_index = i32::try_from(i).unwrap_or(i32::MAX);
             se.color = match &explicit {
                 Some(cols) if !cols.is_empty() => cols.get(i % cols.len()).copied(),
                 _ => match palette.as_str() {
-                    "monochrome" => Some(Color::Theme(4, (-400 + (i as i16 * 200)).clamp(-800, 800))),
+                    "monochrome" => Some(Color::Theme(4, tint_index.saturating_mul(200).saturating_sub(400).clamp(-800, 800) as i16)),
                     p if p.starts_with("accent") => {
                         let k: u8 = p.trim_start_matches("accent").parse().unwrap_or(1);
-                        Some(Color::Theme(3 + k.clamp(1, 6), (-500 + i as i16 * 250).clamp(-800, 800)))
+                        Some(Color::Theme(3 + k.clamp(1, 6), tint_index.saturating_mul(250).saturating_sub(500).clamp(-800, 800) as i16))
                     }
                     _ => None,
                 },

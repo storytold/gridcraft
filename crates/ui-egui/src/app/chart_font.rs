@@ -1,6 +1,6 @@
 //! Route Home font commands to the selected chart text role.
 
-use super::*;
+use super::{Json, SheetApp, json};
 
 impl SheetApp {
     fn chart_font_target(&self) -> Option<(u32, &'static str)> {

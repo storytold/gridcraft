@@ -1,6 +1,6 @@
 use super::geo::Geo;
 use super::interact::{OBJECT_RESIZE_RADIUS, col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
-use super::*;
+use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
 pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {

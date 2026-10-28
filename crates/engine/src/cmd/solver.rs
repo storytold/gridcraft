@@ -97,9 +97,17 @@ struct Solve {
     evo_end: Option<EvoEnd>,
 }
 
+/// Variable bounds and integrality flags.
+#[derive(Clone, Copy)]
+struct Bounds<'a> {
+    lo: &'a [f64],
+    hi: &'a [f64],
+    integer: &'a [bool],
+}
+
 /// Runs the model's method for `goal` within `lo..hi` from `x0`.
-#[allow(clippy::too_many_arguments)]
-fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], lo: &[f64], hi: &[f64], integer: &[bool], gap: f64) -> Solve {
+fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bounds, gap: f64) -> Solve {
+    let Bounds { lo, hi, integer } = bounds;
     let any_int = integer.iter().any(|b| *b);
     let mut not_linear = false;
     let mut evo_end = None;
@@ -203,7 +211,8 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
                 .into(),
         ));
     }
-    let Solve { outcome, not_linear, evo_end } = optimise(&mut ev, &model, model.goal, &x0, &prob.lo, &prob.hi, &prob.integer, gap);
+    let Solve { outcome, not_linear, evo_end } =
+        optimise(&mut ev, &model, model.goal, &x0, Bounds { lo: &prob.lo, hi: &prob.hi, integer: &prob.integer }, gap);
     let (status, message, solution) = match outcome {
         _ if not_linear => ("notLinear", "The model isn't linear in the variable cells, so Simplex LP can't solve it. Try GRG Nonlinear.", None),
         Outcome::Solved(x, _, true) if model.method == Method::Evolutionary => match evo_end {

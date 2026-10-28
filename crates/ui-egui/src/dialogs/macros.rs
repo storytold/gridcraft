@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, Json, SheetApp, json};
 
 /// The Macros dialog: lists GridCraft's own recorded scripts and (if the file carries one) the
 /// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is

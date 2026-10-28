@@ -1,6 +1,7 @@
 use super::frame::Bx;
 use super::trend::clip_unit;
-use super::*;
+use super::{Ctx, DARK_TEXT, MAX_LINE_PTS, MAX_MARKERS, PI, Prim, Rgba, WHITE};
+use std::collections::HashSet;
 
 // ---------------------------------------------------------------- helpers
 

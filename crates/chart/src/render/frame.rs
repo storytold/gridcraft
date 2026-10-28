@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    AXIS, AXIS_TITLE_SIZE, Chart, ChartData, ChartKind, Ctx, DARK_TEXT, Fmt, GRID, HAlign, LABEL_SIZE, PI, Prim, Rgba, Scale, TEXT, VAlign, WHITE,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bx {
@@ -190,6 +192,103 @@ fn minor_ticks(ctx: &mut Ctx, scale: Scale, axis: &gridcraft_model::ChartAxis, p
     }
 }
 
+/// Paints a vertical chart's category labels, group separators and category gridlines.
+fn category_labels(ctx: &mut Ctx, chart: &Chart, plot: Bx, (l, outer): (&[String], &[Vec<String>]), reverse_categories: bool) {
+    let lsx = ctx.font_size("x_axis", LABEL_SIZE);
+    let ls = lsx.max(ctx.font_size("y_axis", LABEL_SIZE));
+    let lh = ls * 1.4;
+    let gx = chart.format.vertical_gridline.color.unwrap_or(GRID);
+    let gwx = chart.format.vertical_gridline.width.unwrap_or(0.75);
+    let ax = chart.format.x_axis.line.color.unwrap_or(AXIS);
+    let awx = chart.format.x_axis.line.width.unwrap_or(0.75);
+    let n = l.len().max(1);
+    let cw = plot.w / n as f32;
+    for j in (0..n.saturating_sub(1)).step_by(n.div_ceil(250).max(1)) {
+        tick(ctx, plot.x + (j + 1) as f32 * cw, plot.bottom(), true, chart.format.x_axis.minor_tick.as_deref(), &chart.format.x_axis.tick_line);
+    }
+    let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+    let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
+    for (j, t) in l.iter().enumerate().step_by(k) {
+        let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
+        let j = if reverse_categories { n - 1 - j } else { j };
+        tick(ctx, plot.x + (j as f32 + 0.5) * cw, plot.bottom(), true, chart.format.x_axis.major_tick.as_deref(), &chart.format.x_axis.tick_line);
+        ctx.text_role("x_axis", plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
+    }
+    if chart.format.vertical_gridlines {
+        for j in (0..n).step_by(k) {
+            ctx.vline(plot.x + (j as f32 + 0.5) * cw, plot.y, plot.bottom(), gx, gwx);
+        }
+    }
+    // Outer levels, one row each below the labels: a group's name centred under its
+    // categories, and a separator at each group boundary down through the rows.
+    for (i, level) in outer.iter().enumerate() {
+        let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
+        for (first, end) in level_groups(level, n) {
+            let (start, stop) = if reverse_categories { (n - end, n - first) } else { (first, end) };
+            let (x0, x1) = (plot.x + start as f32 * cw, plot.x + stop as f32 * cw);
+            if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                let t = ctx.fit(t, ls, x1 - x0 - 2.0);
+                ctx.text_role("x_axis", (x0 + x1) / 2.0, top, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
+            }
+            if first > 0 {
+                let edge = if reverse_categories { x1 } else { x0 };
+                ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
+            }
+        }
+        let edge = if reverse_categories { plot.x } else { plot.right() };
+        ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
+    }
+}
+
+/// Paints the category axis of horizontal bar charts, including multilevel labels.
+fn bar_category_labels(ctx: &mut Ctx, chart: &Chart, plot: Bx, labels: &[String], outer: &[Vec<String>], (lw, level_w): (f32, &[f32])) {
+    let lsy = ctx.font_size("y_axis", LABEL_SIZE);
+    let ls = lsy.max(ctx.font_size("x_axis", LABEL_SIZE));
+    let lh = ls * 1.4;
+    let ay = chart.format.y_axis.line.color.unwrap_or(AXIS);
+    let awy = chart.format.y_axis.line.width.unwrap_or(0.75);
+    let gy = chart.format.horizontal_gridline.color.unwrap_or(GRID);
+    let gwy = chart.format.horizontal_gridline.width.unwrap_or(0.75);
+    let n = labels.len().max(1);
+    let ch = plot.h / n as f32;
+    for j in (0..n.saturating_sub(1)).step_by(n.div_ceil(250).max(1)) {
+        tick(ctx, plot.x, plot.bottom() - (j + 1) as f32 * ch, false, chart.format.y_axis.minor_tick.as_deref(), &chart.format.y_axis.tick_line);
+    }
+    let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
+    for (j, t) in labels.iter().enumerate().step_by(k) {
+        let t = ctx.fit(t, ls, lw - 6.0);
+        let j = if chart.format.y_axis.reversed { n - 1 - j } else { j };
+        tick(ctx, plot.x, plot.bottom() - (j as f32 + 0.5) * ch, false, chart.format.y_axis.major_tick.as_deref(), &chart.format.y_axis.tick_line);
+        ctx.text_role("y_axis", plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, lsy, TEXT, HAlign::Right, VAlign::Middle);
+    }
+    if chart.format.vertical_gridlines {
+        for j in (0..n).step_by(k) {
+            ctx.hline(plot.x, plot.right(), plot.bottom() - (j as f32 + 0.5) * ch, gy, gwy);
+        }
+    }
+    // Outer levels: a group's name centred beside its categories, separators at the
+    // boundaries running right to the axis.
+    let mut x1 = plot.x - lw;
+    for (level, w) in outer.iter().zip(level_w) {
+        let x0 = x1 - w;
+        for (first, end) in level_groups(level, n) {
+            let (start, stop) = if chart.format.y_axis.reversed { (n - end, n - first) } else { (first, end) };
+            let (y0, y1) = (plot.bottom() - stop as f32 * ch, plot.bottom() - start as f32 * ch);
+            if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                let t = ctx.fit(t, ls, w - 4.0);
+                ctx.text_role("y_axis", (x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, lsy, TEXT, HAlign::Center, VAlign::Middle);
+            }
+            if first > 0 {
+                let edge = if chart.format.y_axis.reversed { y0 } else { y1 };
+                ctx.hline(x0, plot.x, edge, ay, awy);
+            }
+        }
+        let edge = if chart.format.y_axis.reversed { plot.bottom() } else { plot.y };
+        ctx.hline(x0, plot.x, edge, ay, awy);
+        x1 = x0;
+    }
+}
+
 /// Lays out axes, ticks and gridlines using the chart's formatting and returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, chart: &Chart) -> Bx {
     let reverse_categories =
@@ -248,59 +347,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, ax, awx);
         match cat {
-            CatAxis::Labels(l, outer) => {
-                let n = l.len().max(1);
-                let cw = plot.w / n as f32;
-                for j in (0..n.saturating_sub(1)).step_by(n.div_ceil(250).max(1)) {
-                    tick(
-                        ctx,
-                        plot.x + (j + 1) as f32 * cw,
-                        plot.bottom(),
-                        true,
-                        chart.format.x_axis.minor_tick.as_deref(),
-                        &chart.format.x_axis.tick_line,
-                    );
-                }
-                let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
-                let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
-                for (j, t) in l.iter().enumerate().step_by(k) {
-                    let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    let j = if reverse_categories { n - 1 - j } else { j };
-                    tick(
-                        ctx,
-                        plot.x + (j as f32 + 0.5) * cw,
-                        plot.bottom(),
-                        true,
-                        chart.format.x_axis.major_tick.as_deref(),
-                        &chart.format.x_axis.tick_line,
-                    );
-                    ctx.text_role("x_axis", plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
-                }
-                if chart.format.vertical_gridlines {
-                    for j in (0..n).step_by(k) {
-                        ctx.vline(plot.x + (j as f32 + 0.5) * cw, plot.y, plot.bottom(), gx, gwx);
-                    }
-                }
-                // Outer levels, one row each below the labels: a group's name centred under its
-                // categories, and a separator at each group boundary down through the rows.
-                for (i, level) in outer.iter().enumerate() {
-                    let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
-                    for (first, end) in level_groups(level, n) {
-                        let (start, stop) = if reverse_categories { (n - end, n - first) } else { (first, end) };
-                        let (x0, x1) = (plot.x + start as f32 * cw, plot.x + stop as f32 * cw);
-                        if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                            let t = ctx.fit(t, ls, x1 - x0 - 2.0);
-                            ctx.text_role("x_axis", (x0 + x1) / 2.0, top, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
-                        }
-                        if first > 0 {
-                            let edge = if reverse_categories { x1 } else { x0 };
-                            ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
-                        }
-                    }
-                    let edge = if reverse_categories { plot.x } else { plot.right() };
-                    ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
-                }
-            }
+            CatAxis::Labels(l, outer) => category_labels(ctx, chart, plot, (l, outer), reverse_categories),
             CatAxis::Numeric(s, f) => {
                 minor_ticks(ctx, s, &chart.format.x_axis, plot, true);
                 let ticks = s.ticks();
@@ -358,51 +405,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
         let x0 = plot.x + y.scale.frac(zero) * plot.w;
         ctx.vline(x0, plot.y, plot.bottom(), ay, awy);
-        let n = labels.len().max(1);
-        let ch = plot.h / n as f32;
-        for j in (0..n.saturating_sub(1)).step_by(n.div_ceil(250).max(1)) {
-            tick(ctx, plot.x, plot.bottom() - (j + 1) as f32 * ch, false, chart.format.y_axis.minor_tick.as_deref(), &chart.format.y_axis.tick_line);
-        }
-        let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
-        for (j, t) in labels.iter().enumerate().step_by(k) {
-            let t = ctx.fit(t, ls, lw - 6.0);
-            let j = if chart.format.y_axis.reversed { n - 1 - j } else { j };
-            tick(
-                ctx,
-                plot.x,
-                plot.bottom() - (j as f32 + 0.5) * ch,
-                false,
-                chart.format.y_axis.major_tick.as_deref(),
-                &chart.format.y_axis.tick_line,
-            );
-            ctx.text_role("y_axis", plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, lsy, TEXT, HAlign::Right, VAlign::Middle);
-        }
-        if chart.format.vertical_gridlines {
-            for j in (0..n).step_by(k) {
-                ctx.hline(plot.x, plot.right(), plot.bottom() - (j as f32 + 0.5) * ch, gy, gwy);
-            }
-        }
-        // Outer levels: a group's name centred beside its categories, separators at the
-        // boundaries running right to the axis.
-        let mut x1 = plot.x - lw;
-        for (level, w) in outer.iter().zip(&level_w) {
-            let x0 = x1 - w;
-            for (first, end) in level_groups(level, n) {
-                let (start, stop) = if chart.format.y_axis.reversed { (n - end, n - first) } else { (first, end) };
-                let (y0, y1) = (plot.bottom() - stop as f32 * ch, plot.bottom() - start as f32 * ch);
-                if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                    let t = ctx.fit(t, ls, w - 4.0);
-                    ctx.text_role("y_axis", (x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, lsy, TEXT, HAlign::Center, VAlign::Middle);
-                }
-                if first > 0 {
-                    let edge = if chart.format.y_axis.reversed { y0 } else { y1 };
-                    ctx.hline(x0, plot.x, edge, ay, awy);
-                }
-            }
-            let edge = if chart.format.y_axis.reversed { plot.bottom() } else { plot.y };
-            ctx.hline(x0, plot.x, edge, ay, awy);
-            x1 = x0;
-        }
+        bar_category_labels(ctx, chart, plot, &labels, outer, (lw, &level_w));
         plot
     }
 }

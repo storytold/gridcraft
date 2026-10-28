@@ -1,7 +1,15 @@
+#[cfg(test)]
+use super::clock::monotonic_ms;
 use super::clock::now_ms;
 use super::services::{Chrome, Services};
 use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::updates_ui;
+use super::{
+    CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
+    clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
+    keytips, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+};
 
 mod chart_font;
 mod clipboard;

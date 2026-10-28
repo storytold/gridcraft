@@ -1,12 +1,20 @@
+#[cfg(test)]
+use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
 use super::interact::{interact, paint_freeze_handles};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
-use super::quadrant::{mirror_painted, paint_quadrant};
-use super::selection::paint_selection;
+use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
+use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
-use super::*;
+use super::{
+    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
+    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    zoom_glide_step,
+};
+#[cfg(test)]
+use super::{CellRef, Pos2};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -106,22 +114,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         view.scroll -= d / z;
     }
-    // The zoom glides to its step like egui eases a wheel notch (90% of the way in 0.1 s), or goes
-    // there at once without animations (as for the selection outline below: View › Animations
-    // off, egui's off in the headless harness, or a screenshot on its way).
-    let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
-    if let Some((to, shown)) = zooming.glide {
-        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
-        let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
-        let z = if glides { zoom_glide_step(shown, to, share) } else { to };
-        let _ = app.session.run("view.zoom", json!({"percent": z}));
-        zooming.glide = (z != to).then_some((to, z));
-        ui.ctx().request_repaint();
-    }
-    // Store a glide's progress, or that it stopped.
-    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
-        app.grid.wheel_zoom = Some(zooming);
-    }
+    update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
     let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
     if paper {
@@ -138,7 +131,148 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     view.scroll.y = view.scroll.y.min(max_y);
     let mut geo = make_geo(app, view.scroll);
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
-    if app.grid.ensure_visible {
+    ActiveCellVisibility { app, wb: &wb, si, sh, selection: &sel, paper, make_geo: &make_geo }.update(&mut view, &mut geo);
+    // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
+    if let Some(v) = app.view_mut() {
+        *v = view;
+    }
+    app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
+    // The selection outline glides to a new selection. It stays on its cells when Animations is
+    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
+    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
+    // a gliding outline trails the pointer and reads as lag.
+    let outline = selection_outline(app, ui, &geo, sh, &sel, place, now);
+    app.grid.geo = Some(geo.clone());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, t.grid_bg);
+    // Everything up to the headers is painted in logical (left-to-right) coordinates.
+    let mirror_from = painter.add(egui::Shape::Noop);
+    let mut cf = CfCache::new();
+    let quads = if geo.paper.is_some() {
+        crate::paper_view::paint_pages(
+            crate::paper_view::PagePaintInput {
+                app,
+                painter: &painter,
+                geo: &geo,
+                workbook: &wb,
+                sheet_index: si,
+                sheet: sh,
+                selection: &sel,
+                outline,
+                tokens: &t,
+            },
+            &mut cf,
+        )
+    } else {
+        paint_panes(
+            PanesInput { app, painter: &painter, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel, outline, tokens: &t },
+            &mut cf,
+        )
+    };
+    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
+    // on something the user can't see.
+    if crate::chartview::objects_hidden(&wb) {
+        app.selected_chart = None;
+    }
+    let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
+    paint_overlays(OverlayInput {
+        app,
+        ui,
+        painter: &painter.with_clip_rect(geo.cells),
+        geo: &geo,
+        workbook: &wb,
+        sheet_index: si,
+        sheet: sh,
+        selection: &sel,
+    });
+    if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
+        paint_pages(app, &painter.with_clip_rect(geo.cells), &geo, sh);
+    }
+    if geo.paper.is_some() {
+        crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
+    }
+    // Headers.
+    if sh.show_headings {
+        let headings = table_headings(&geo, sh, sel.active);
+        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
+        paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
+    }
+    crate::outline::paint(&painter, &geo, sh, &t);
+    if geo.rtl {
+        let mirror_to = painter.add(egui::Shape::Noop);
+        mirror_painted(ui.ctx(), painter.layer_id(), mirror_from.0..mirror_to.0, &geo, &objects);
+    }
+    if geo.paper.is_some() {
+        crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
+    }
+    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    let track_x = vertical_scroll_track(available, rect, rtl);
+    // The track starts below the column headings and frozen rows; the bar's column beside them
+    // takes its colour too instead of showing a light square in dark mode.
+    ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
+    vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
+    update_clipboard_repaint(app, ui, now);
+}
+
+fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
+    if rtl { (available.left(), grid.left()) } else { (grid.right(), available.right()) }
+}
+
+fn update_clipboard_repaint(app: &mut SheetApp, ui: &egui::Ui, now: f64) {
+    if app.session.clipboard.is_some() {
+        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
+        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    }
+}
+
+struct ActiveCellVisibility<'a, F> {
+    app: &'a mut SheetApp,
+    wb: &'a Workbook,
+    si: usize,
+    sh: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
+    paper: bool,
+    make_geo: &'a F,
+}
+
+fn selection_outline(
+    app: &mut SheetApp,
+    ui: &egui::Ui,
+    geo: &Geo,
+    sh: &Sheet,
+    sel: &gridcraft_engine::Selection,
+    place: (u64, usize),
+    now: f64,
+) -> Rect {
+    let pointer_selecting = ui.input(|i| i.pointer.any_down());
+    let outline = app.grid.glide.frame(crate::selection_glide::Frame {
+        place,
+        range: sel.current(),
+        target: geo.range_rect(sh, sel.current()),
+        view: geo.cells,
+        now,
+        frame_nr: ui.ctx().cumulative_frame_nr(),
+        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
+    });
+    if app.grid.glide.is_gliding() {
+        ui.ctx().request_repaint();
+    }
+    outline
+}
+
+impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
+    fn update(&mut self, view: &mut crate::SheetView, geo: &mut Geo) {
+        if !self.app.grid.ensure_visible {
+            return;
+        }
+        let app = &mut *self.app;
+        let wb = self.wb;
+        let si = self.si;
+        let sh = self.sh;
+        let sel = self.selection;
+        let paper = self.paper;
+
         app.grid.ensure_visible = false;
         let moving = std::mem::take(&mut app.grid.reveal_moving_end);
         let cell = if moving { sel.moving_end() } else { sel.active };
@@ -151,8 +285,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         let extended = (moving && target == cell).then(|| sel.current());
         let before = view.scroll;
         if paper {
-            crate::paper_view::ensure_covers(app, &wb, si, target);
-            geo = make_geo(app, view.scroll);
+            crate::paper_view::ensure_covers(app, wb, si, target);
+            *geo = (self.make_geo)(app, view.scroll);
         }
         let cr = geo.cell_rect(sh, target);
         let area = Rect::from_min_max(pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h), geo.cells.max);
@@ -184,69 +318,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             view.scroll.x = before.x;
         }
         view.scroll = view.scroll.max(egui::Vec2::ZERO);
-        geo = make_geo(app, view.scroll);
+        *geo = (self.make_geo)(app, view.scroll);
     }
-    // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
-    if let Some(v) = app.view_mut() {
-        *v = view;
-    }
-    app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
-    // The selection outline glides to a new selection. It stays on its cells when Animations is
-    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
-    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
-    // a gliding outline trails the pointer and reads as lag.
-    let pointer_selecting = ui.input(|i| i.pointer.any_down());
-    let outline = app.grid.glide.frame(crate::selection_glide::Frame {
-        place,
-        range: sel.current(),
-        target: geo.range_rect(sh, sel.current()),
-        view: geo.cells,
-        now,
-        frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
-    });
-    if app.grid.glide.is_gliding() {
-        ui.ctx().request_repaint();
-    }
-    app.grid.geo = Some(geo.clone());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, t.grid_bg);
-    // Everything up to the headers is painted in logical (left-to-right) coordinates.
-    let mirror_from = painter.add(egui::Shape::Noop);
-    let mut cf = CfCache::new();
-    let quads = if geo.paper.is_some() {
-        crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
-    } else {
-        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
-    };
-    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
-    // on something the user can't see.
-    if crate::chartview::objects_hidden(&wb) {
-        app.selected_chart = None;
-    }
-    let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
-    paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
-    if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
-        paint_pages(app, &painter.with_clip_rect(geo.cells), &geo, sh);
-    }
-    if geo.paper.is_some() {
-        crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
-    }
-    // Headers.
-    if sh.show_headings {
-        let headings = table_headings(&geo, sh, sel.active);
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
-        paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
-    }
-    crate::outline::paint(&painter, &geo, sh, &t);
-    if geo.rtl {
-        let mirror_to = painter.add(egui::Shape::Noop);
-        mirror_painted(ui.ctx(), painter.layer_id(), mirror_from.0..mirror_to.0, &geo, &objects);
-    }
-    if geo.paper.is_some() {
-        crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
-    }
-    // Interaction.
+}
+
+fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -258,48 +334,54 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             app.grid.touch_pan = false;
         }
     } else {
-        crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
-        interact(app, ui, &resp, &geo, sh, &wb);
+        crate::paper_view::interact(app, ui, resp, geo, sh, wb);
+        interact(app, ui, resp, geo, sh, wb);
     }
-    update_cursor(app, ui, &resp, &geo, sh);
-    crate::text_box::show(app, ui, &geo, sh);
+    update_cursor(app, ui, resp, geo, sh);
+    crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
-        in_cell_editor(app, ui, &geo, sh, &wb);
+        in_cell_editor(app, ui, geo, sh, wb);
     }
-    filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
-    list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
+    filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
+    list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
     fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
-    fill_options_tag(app, ui, &geo, sh);
+    fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
-    error_check_tag(app, ui, &geo, sh);
-    let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
-    // The track starts below the column headings and frozen rows; the bar's column beside them
-    // takes its colour too instead of showing a light square in dark mode.
-    ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
-    vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
-    if app.session.clipboard.is_some() {
-        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
-        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    error_check_tag(app, ui, geo, sh);
+}
+
+fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
+    let mut zooming = WheelZoom::at(app, place, zoom, now);
+    if let Some((to, shown)) = zooming.glide {
+        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+        let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
+        let z = if glides { zoom_glide_step(shown, to, share) } else { to };
+        let _ = app.session.run("view.zoom", json!({"percent": z}));
+        zooming.glide = (z != to).then_some((to, z));
+        ui.ctx().request_repaint();
+    }
+    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
+        app.grid.wheel_zoom = Some(zooming);
     }
 }
 
 /// Normal view: up to four panes (frozen rows/columns), each painted with its own clip.
-#[allow(clippy::too_many_arguments)]
-fn paint_panes(
-    app: &SheetApp,
-    painter: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
+struct PanesInput<'a> {
+    app: &'a SheetApp,
+    painter: &'a Painter,
+    geo: &'a Geo,
+    workbook: &'a Workbook,
+    sheet_index: usize,
+    sheet: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
     outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+    tokens: &'a Tokens,
+}
+
+fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
+    let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
     let (sc0, sc1) = geo.scroll_cols(sh);
@@ -321,8 +403,8 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
-        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
+        paint_quadrant(QuadrantPaint { painter: &p, geo, workbook: wb, sheet_index: si, sheet: sh, rows: *rows, cols: *cols, cf, tokens: t });
+        paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -446,7 +528,7 @@ pub(crate) fn paint_headers(
     sh: &Sheet,
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
-    quads: &[((u32, u32), (u32, u32), Rect)],
+    quads: &[PaneQuad],
     headings: &[TableHeading],
 ) {
     let font = theme::ui_font(heading_font_size(geo.z));
@@ -555,18 +637,20 @@ pub(super) fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
     (i > 0 && size(i - 1) <= 0.0, i < u32::MAX && size(i + 1) <= 0.0)
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Paints the validation arrow and input message, notes, the hyperlink tooltip and trace precedent/dependent arrows.
-pub(crate) fn paint_overlays(
-    app: &mut SheetApp,
-    ui: &egui::Ui,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-) {
+pub(crate) struct OverlayInput<'a> {
+    app: &'a mut SheetApp,
+    ui: &'a egui::Ui,
+    painter: &'a Painter,
+    geo: &'a Geo,
+    workbook: &'a Workbook,
+    sheet_index: usize,
+    sheet: &'a Sheet,
+    selection: &'a gridcraft_engine::Selection,
+}
+
+pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
+    let OverlayInput { app, ui, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel } = input;
     // Validation dropdown arrow for the active cell.
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
@@ -762,7 +846,7 @@ mod trace_arrow_tests {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let p = ui.painter().clone();
-            paint_overlays(app, ui, &p, &geo, &wb, si, sh, &sel);
+            paint_overlays(OverlayInput { app, ui, painter: &p, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel });
         });
         // No renderer consumes the font atlas upload here.
         out.textures_delta.clear();

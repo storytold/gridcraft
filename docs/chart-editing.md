@@ -1,6 +1,6 @@
 # Chart editing and export
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-28.
 
 ## Scope
 
@@ -15,6 +15,10 @@ Last updated: 2026-10-27.
   trendline types and toggle equation/R-squared labels through the chart menus and pane.
 - Use chart context menus for selection, formatting, duplication, copy/cut, PNG/SVG export and
   local named templates. Templates apply to the same chart kind and can be the default for new charts.
+  Templates capture visible base series colors as fixed RGBA format overrides, preserving
+  explicit line/fill/marker overrides; they do not copy source data or trendline models.
+  Per-category palettes in pie/doughnut and other category-colored charts are not captured by
+  these per-series overrides. Changing base series colors does not replace explicit color overrides.
 - `chart.duplicate` and `chart.paste {snapshot, at?}` return the new chart ID and are undoable.
   Editable clipboard paste requires the same workbook and a matching clipboard image; otherwise
   the image is pasted. The desktop host supplies `Services::paste_image`.
@@ -25,6 +29,8 @@ Last updated: 2026-10-27.
 Supported settings use native chart XML where implemented, with a GridCraft extension for the
 complete formatting model, including ChartEx. Native properties take precedence when read back.
 Clipping, horizontal-bar axis/gridline roles and marker tokens are preserved on round-trip.
+Classic DrawingML and ChartEx imports both discard out-of-range numeric formatting values after
+merging native properties, keeping imported charts editable through the same command validation.
 Styling a `ScatterLines` series does not introduce a circle marker when saving; explicit markers remain supported.
 
 The review follow-up measures axis titles and trendline labels at their configured font size,
@@ -46,8 +52,8 @@ and non-mutation; chart unit tests load their bundled test fallback on such host
 no source was copied from that PR.
 
 Its `Series.format`/`SeriesFormat`, `AxisScale`, secondary-Y axis, deleted legend entries and
-chart-relative legend box differ from this contribution's `ChartFormat.series` index map,
-`ChartAxis`, primary-axis controls and plot-relative annotation placement. It also preserves theme
+explicit legend box differ from this contribution's `ChartFormat.series` index map,
+`ChartAxis`, primary-axis controls and chart-normalized annotation origins clamped to the plot area. It also preserves theme
 colors and supports secondary scatter groups. Those features must be reconciled if both PRs land;
 the types and serialized fields are not interchangeable. This port additionally covers text fonts,
 log/reversed axes, line/marker widths and sizes, UI editing, templates, clipboard and image export.
@@ -86,6 +92,7 @@ Some extension-only properties can become stale after another editor changes a w
 
 | Date | Change |
 |---|---|
+| 2026-10-28 | Integrate upstream 0.13 module/lint changes; preserve palette colors in templates and validate native ChartEx strokes |
 | 2026-10-27 | Adapt chart rendering, engine commands and UI behavior to the shared module layout; separate chart-font routing into app/chart_font.rs |
 | 2026-10-23 | Follow-up review: fractional minor ticks, combo series-index mapping and fontless native test hosts |
 | 2026-10-23 | Address chart review: role-aware text layout, ticks/legends, native XLSX defaults, template undo and contextual translations |

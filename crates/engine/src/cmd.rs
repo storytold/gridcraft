@@ -205,7 +205,6 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
 }
 
 fn test_commands() -> std::sync::MutexGuard<'static, Vec<&'static CommandSpec>> {
-    #[allow(clippy::unwrap_used)] // a poisoned test registry has no meaningful recovery
     match TEST_COMMANDS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -349,11 +348,15 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+fn wall_clock() -> std::time::Duration {
+    std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
-    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
-    #[allow(clippy::disallowed_methods)]
-    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+    // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
+    // reads the wall clock without the (disallowed) `now`.
+    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
+    let since = |t0: std::time::Duration| wall_clock().saturating_sub(t0);
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
@@ -368,7 +371,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
+        eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
     if structural {
         d.calc.recalc_all(&mut wb);
@@ -376,7 +379,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.cells_changed(&mut wb, &changed);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + recalc {:?}", t0.elapsed());
+        eprintln!("commit: + recalc {:?}", since(t0));
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
@@ -384,7 +387,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         auto_row_height(&mut wb, si, row);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + rows {:?}", t0.elapsed());
+        eprintln!("commit: + rows {:?}", since(t0));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
