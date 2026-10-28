@@ -1281,6 +1281,19 @@ Current relevant tests:
   - `fontconfig_weights_map_to_the_css_scale`
   - `a_role_takes_the_face_nearest_its_weight`
   - `a_standard_name_resolves_to_its_substitute_family`
+  - `a_faces_charset_marks_the_scripts_it_covers`
+- `crates/ui-egui/src/script.rs`:
+  - `scripts_are_classified_by_block`
+  - `common_text_joins_the_run_beside_it`
+  - `kana_and_hangul_are_their_own_scripts`
+  - `runs_cover_the_whole_text_without_gaps`
+  - `a_texts_scripts_are_collected`
+  - `a_charset_string_becomes_a_script_set`
+- `crates/ui-egui/src/catalog.rs`:
+  - `a_localized_name_finds_the_same_faces`
+  - `families_are_listed_once_and_sorted`
+  - `a_script_names_the_families_that_cover_it`
+  - `the_installed_catalog_lists_families_and_scripts`
 - `crates/ui-egui/src/theme.rs`:
   - `fallback_faces_are_appended_to_every_family`
   - `fallback_faces_load_each_file_once`
@@ -1295,6 +1308,8 @@ Current relevant tests:
   - `fontconfig_serif_match_precedes_hard_coded_paths`
   - `an_uninstalled_standard_font_binds_its_substitute_in_all_four_roles`
   - `chromeos_font_layout_is_probed`
+  - `only_the_scripts_in_use_load_their_fallbacks`
+  - `a_latin_sheet_skips_the_cjk_and_thai_faces`
 
 Rich-text tests to add:
 
@@ -1323,7 +1338,7 @@ Current test result:
 
 ```text
 cargo +1.95.0 test -p gridcraft-ui-egui --lib
-173 passed, 0 failed
+187 passed, 0 failed
 ```
 
 Full `cargo xtask ci` is currently blocked by a pre-existing unrelated clippy
@@ -1478,11 +1493,23 @@ the repository's `unsafe_code = "forbid"` policy.
 
 ### Phase 3: font catalog and script routing
 
-- Introduce `FontEntry` and `FontCatalog`.
-- Build script coverage sets with `list_fonts` + charset.
-- Add `classify` and `split_runs`.
-- Add `font_for_script`.
-- Start with global fallback chains; add per-run families only if needed.
+Done (2026-10-28):
+
+- `ScriptClass`, `classify`, `split_runs` and `ScriptSet` in `crates/ui-egui/src/script.rs`.
+- `Face::scripts` filled from fontconfig's `%{charset}` on Linux and from the
+  `skrifa` charmap elsewhere (`crates/ui-egui/src/fonts.rs`).
+- `FontEntry`/`FontCatalog` in `crates/ui-egui/src/catalog.rs`: lookup by any
+  family name and by script coverage.
+- `used_scripts()` walks cell and shape text once per rebind (200 000-character
+  budget) and `load_fallback` loads only the fallback faces whose script the
+  workbook or interface needs.
+
+Still open:
+
+- `font_for_script` as the fallback selector: today the chains still list every
+  loaded face and epaint picks by coverage; a per-run family choice comes with
+  Phase 1/2 rich text.
+- Per-run families (only needed once runs exist).
 
 ### Phase 4: shaping and paint separation
 
@@ -1515,7 +1542,9 @@ the repository's `unsafe_code = "forbid"` policy.
 - HEAD at the start of this rewrite: `775a14a`
 - HEAD after the weight/face-selection fix: `57df98d`
 - HEAD after binding substitutes for uninstalled standard names: `0d58e8d`
-- Remote PR branch: `fork/fix/linux-fontconfig` at `57df98d` (`0d58e8d` is local only)
+- HEAD after Phase 3 (scripts, catalog, per-script fallback loading): `561e539`
+- Remote PR branch: `fork/fix/linux-fontconfig` at `57df98d` (everything after it
+  is local only, not pushed)
 - PR: `#1972`
 - PR state: open; base `main`, currently reported `CONFLICTING` because the branch
   merged an older `origin/main` (`ac8da7d4`) and upstream has moved on
@@ -1523,6 +1552,11 @@ the repository's `unsafe_code = "forbid"` policy.
 Commits on the branch (newest first):
 
 ```text
+561e539  fix(ui): reload fallback faces when the cell text gains a script (#1231)
+8eafe63  feat(ui): load fallback faces only for the scripts in use (#1231)
+70444ae  feat(ui): index installed faces by family and script (#1231)
+504cc8a  feat(ui): record the scripts each face covers (#1231)
+cbdc666  feat(ui): classify text into script runs (#1231)
 0d58e8d  fix(ui): bind the OS substitute for a standard font that is not installed (#1231)
 57df98d  fix(ui): weight ExtraBold and pick the face nearest each role (#1231)
 (merge)  Merge remote-tracking branch 'origin/main'
@@ -1561,6 +1595,12 @@ Current app behavior:
   (Liberation Serif, Caladea, Liberation Mono) is bound in all four roles under
   the requested name. The same now applies to every standard `ribbon::FONTS` name.
 - Italic is ineffective for families that are installed but have no italic face.
+- Fallback faces load per script: a Latin-only workbook no longer asks for the
+  CJK, Thai or Hebrew faces, and Chinese text added later loads the Han face on
+  the next pass (`used_scripts()` is compared when the workbook revision
+  changes, not only the used font names).
+- `FontCatalog` answers "which families cover script X" and "which faces answer
+  to this name (any language)" without touching the file system.
 - Per-character rich text is not implemented; XLSX runs are flattened.
 
 ---
