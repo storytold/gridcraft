@@ -21,6 +21,7 @@ mod cond_format_rules;
 mod data;
 mod find;
 mod format_cells;
+mod import_text;
 mod insert_function;
 mod names;
 mod paste;
@@ -996,6 +997,7 @@ impl Dialog {
                 dialog.picture_target = app.view_key();
                 dialog
             }
+            "importText" => return import_text::open(app, &params),
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
