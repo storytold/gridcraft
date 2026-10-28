@@ -33,6 +33,10 @@ pub enum ScriptClass {
     Myanmar,
     Tibetan,
     Yi,
+    /// Bengali, also used for Assamese.
+    Bengali,
+    /// Ge'ez, the script of Amharic and Tigrinya.
+    Ethiopic,
     /// Arrows, maths, dingbats and emoji: drawn by a symbol face, never by a text face.
     Symbols,
     /// Digits, spaces and punctuation: inherit the script of the run beside them.
@@ -41,7 +45,7 @@ pub enum ScriptClass {
 
 impl ScriptClass {
     /// Every class, [`ScriptClass::Common`] included.
-    pub const ALL: [ScriptClass; 15] = [
+    pub const ALL: [ScriptClass; 17] = [
         ScriptClass::Latin,
         ScriptClass::Han,
         ScriptClass::Japanese,
@@ -55,6 +59,8 @@ impl ScriptClass {
         ScriptClass::Myanmar,
         ScriptClass::Tibetan,
         ScriptClass::Yi,
+        ScriptClass::Bengali,
+        ScriptClass::Ethiopic,
         ScriptClass::Symbols,
         ScriptClass::Common,
     ];
@@ -76,6 +82,8 @@ impl ScriptClass {
             ScriptClass::Tibetan => 11,
             ScriptClass::Yi => 12,
             ScriptClass::Symbols => 13,
+            ScriptClass::Bengali => 14,
+            ScriptClass::Ethiopic => 15,
             ScriptClass::Common => return None,
         })
     }
@@ -96,6 +104,8 @@ impl ScriptClass {
             ScriptClass::Myanmar => "myanmar",
             ScriptClass::Tibetan => "tibetan",
             ScriptClass::Yi => "yi",
+            ScriptClass::Bengali => "bengali",
+            ScriptClass::Ethiopic => "ethiopic",
             ScriptClass::Symbols => "symbols",
             ScriptClass::Common => "common",
         }
@@ -116,6 +126,8 @@ pub fn classify(c: char) -> ScriptClass {
             ScriptClass::Arabic
         }
         '\u{0900}'..='\u{097F}' | '\u{A8E0}'..='\u{A8FF}' => ScriptClass::Devanagari,
+        '\u{0980}'..='\u{09FF}' => ScriptClass::Bengali,
+        '\u{1200}'..='\u{139F}' | '\u{2D80}'..='\u{2DDF}' | '\u{AB00}'..='\u{AB2F}' => ScriptClass::Ethiopic,
         '\u{0E00}'..='\u{0E7F}' => ScriptClass::Thai,
         '\u{0E80}'..='\u{0EFF}' => ScriptClass::Lao,
         '\u{0F00}'..='\u{0FFF}' => ScriptClass::Tibetan,
@@ -193,6 +205,8 @@ pub const SAMPLES: &[(ScriptClass, [char; 2])] = &[
     (ScriptClass::Myanmar, ['က', 'ခ']),
     (ScriptClass::Tibetan, ['ཀ', 'ཁ']),
     (ScriptClass::Yi, ['ꀀ', 'ꀁ']),
+    (ScriptClass::Bengali, ['অ', 'ব']),
+    (ScriptClass::Ethiopic, ['ሀ', 'ሰ']),
     (ScriptClass::Symbols, ['★', '😀']),
 ];
 
@@ -223,7 +237,17 @@ impl ScriptSet {
 
     /// All scripts at once, for a caller that knows nothing about the text and needs every face.
     pub const fn all() -> Self {
-        Self((1 << ScriptClass::ALL.len()) - 1)
+        // Built bit by bit rather than from `ALL.len()`: the count includes `Common`, which has no
+        // bit, and the set is now full, so a shift by that count would overflow.
+        let mut bits = 0u16;
+        let mut at = 0;
+        while at < ScriptClass::ALL.len() {
+            if let Some(bit) = ScriptClass::ALL[at].bit() {
+                bits |= 1 << bit;
+            }
+            at += 1;
+        }
+        Self(bits)
     }
 
     /// Whether the two sets share a script.
@@ -329,6 +353,11 @@ mod tests {
         assert_eq!(classify('က'), ScriptClass::Myanmar);
         assert_eq!(classify('ཀ'), ScriptClass::Tibetan);
         assert_eq!(classify('ꀀ'), ScriptClass::Yi);
+        assert_eq!(classify('অ'), ScriptClass::Bengali);
+        assert_eq!(classify('\u{09DC}'), ScriptClass::Bengali);
+        assert_eq!(classify('ሀ'), ScriptClass::Ethiopic);
+        assert_eq!(classify('፩'), ScriptClass::Ethiopic);
+        assert_eq!(classify('Ꭰ'), ScriptClass::Common, "Cherokee is not Ethiopic");
         assert_eq!(classify('★'), ScriptClass::Symbols);
         assert_eq!(classify('😀'), ScriptClass::Symbols);
         // Digits, ASCII and CJK punctuation, spaces and variation selectors are shared.
@@ -385,9 +414,44 @@ mod tests {
         assert!(han.has(ScriptClass::Han));
         assert!(han.has(ScriptClass::Symbols));
         assert!(!han.has(ScriptClass::Latin));
+        // Bengali and Ethiopic are their own bits now.
+        let bengali = ScriptSet::of_charset("980-9ff");
+        assert!(bengali.has(ScriptClass::Bengali));
+        assert!(!bengali.has(ScriptClass::Devanagari));
+        let ethiopic = ScriptSet::of_charset("1200-137f 1380-139f");
+        assert!(ethiopic.has(ScriptClass::Ethiopic));
+        assert!(!ethiopic.has(ScriptClass::Bengali));
         // Damage is not a failure.
         assert!(ScriptSet::of_charset("").is_empty());
         assert!(ScriptSet::of_charset("zz-yy").is_empty());
+    }
+
+    #[test]
+    fn every_class_but_common_has_its_own_bit() {
+        let all = ScriptSet::all();
+        let mut bits = Vec::new();
+        for script in ScriptClass::ALL {
+            match script.bit() {
+                Some(bit) => {
+                    assert!(all.has(script), "{script:?} is missing from all()");
+                    bits.push(bit);
+                }
+                None => {
+                    assert_eq!(script, ScriptClass::Common);
+                    assert!(!all.has(script));
+                }
+            }
+        }
+        bits.sort_unstable();
+        bits.dedup();
+        assert_eq!(bits.len(), ScriptClass::ALL.len() - 1, "two classes share a bit");
+        assert_eq!(bits.last().copied(), Some(15), "the u16 set is full");
+    }
+
+    #[test]
+    fn bengali_and_latin_make_two_runs() {
+        assert_eq!(split_runs("ঢাকা, Bangladesh"), [(0..14, ScriptClass::Bengali), (14..24, ScriptClass::Latin)]);
+        assert_eq!(split_runs("አማርኛ"), [(0..12, ScriptClass::Ethiopic)]);
     }
 
     #[test]

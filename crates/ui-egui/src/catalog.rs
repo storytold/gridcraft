@@ -199,6 +199,10 @@ fn preferred_families(script: ScriptClass, serif: bool) -> &'static [&'static st
         (ScriptClass::Tibetan, true) => &["Noto Serif Tibetan", "Jomolhari"],
         (ScriptClass::Yi, false) => &["Noto Sans Yi", "Nuosu SIL"],
         (ScriptClass::Yi, true) => &["Noto Sans Yi", "Nuosu SIL"],
+        (ScriptClass::Bengali, false) => &["Noto Sans Bengali", "Lohit Bengali", "Mukti Narrow"],
+        (ScriptClass::Bengali, true) => &["Noto Serif Bengali", "Noto Sans Bengali", "Lohit Bengali"],
+        (ScriptClass::Ethiopic, false) => &["Noto Sans Ethiopic", "Abyssinica SIL"],
+        (ScriptClass::Ethiopic, true) => &["Noto Serif Ethiopic", "Noto Sans Ethiopic", "Abyssinica SIL"],
         (ScriptClass::Symbols, false) => &["Noto Sans Symbols 2", "Noto Sans Symbols", "DejaVu Sans"],
         (ScriptClass::Symbols, true) => &["Noto Sans Symbols 2", "DejaVu Sans"],
         (ScriptClass::Latin, false) => &["DejaVu Sans", "Liberation Sans", "Noto Sans"],
@@ -291,6 +295,18 @@ mod tests {
         ];
         let catalog = FontCatalog::new(&faces);
         assert_eq!(catalog.font_for_script(ScriptClass::Thai, false).map(|e| e.family.as_str()), Some("Noto Sans Thai"));
+    }
+
+    #[test]
+    fn bengali_and_ethiopic_name_their_own_families() {
+        let faces = [
+            entry("Some Fallback", &["Some Fallback"], 400.0, false, ScriptClass::Bengali),
+            entry("Noto Sans Bengali", &["Noto Sans Bengali"], 400.0, false, ScriptClass::Bengali),
+            entry("Noto Sans Ethiopic", &["Noto Sans Ethiopic"], 400.0, false, ScriptClass::Ethiopic),
+        ];
+        let catalog = FontCatalog::new(&faces);
+        assert_eq!(catalog.font_for_script(ScriptClass::Bengali, false).map(|e| e.family.as_str()), Some("Noto Sans Bengali"));
+        assert_eq!(catalog.font_for_script(ScriptClass::Ethiopic, false).map(|e| e.family.as_str()), Some("Noto Sans Ethiopic"));
     }
 
     #[test]

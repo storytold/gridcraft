@@ -559,12 +559,16 @@ pub fn font_definitions_with_bound(language: crate::i18n::Language, used: &[Stri
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
     let han = HanOrder::of(language);
     let wanted = wanted_scripts(language, scripts);
-    let fallback = load_fallback(&mut fonts, han, false, wanted);
+    // A workbook that has not been scanned reports no scripts and is handed every face; there is
+    // nothing to draw yet, so the catalog supplement waits for the first scan rather than loading
+    // a face per installed script on startup.
+    let known = !scripts.is_empty();
+    let fallback = load_fallback(&mut fonts, han, false, wanted, known);
     // Serif companions (Noto Serif CJK alone is ~55 MB) are loaded only when something asks for a
     // serif face: a workbook font whose name reads as serif, or the serif role. A serif face
     // chained to the sans faces would draw CJK in the wrong style (Times New Roman → sans CJK).
     let want_serif = used.iter().any(|name| family_name_is_serif(name));
-    let serif_fallback = if want_serif { load_fallback(&mut fonts, han, true, wanted) } else { Vec::new() };
+    let serif_fallback = if want_serif { load_fallback(&mut fonts, han, true, wanted, known) } else { Vec::new() };
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -678,7 +682,7 @@ fn wanted_scripts(language: crate::i18n::Language, scripts: ScriptSet) -> Script
 /// when a workbook or role actually asks for a serif face: Noto Serif CJK alone is ~55 MB, so
 /// paying for it on startup would be wrong for the common case.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted: ScriptSet) -> Vec<String> {
+fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted: ScriptSet, known: bool) -> Vec<String> {
     let mut keys = Vec::new();
     // Files already loaded as a fallback face. A file serves at most one key: the region-merged
     // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
@@ -713,7 +717,9 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted
             }
         }
     }
-    keys.extend(load_catalog_fallback(fonts, wanted, covered, serif, &mut loaded));
+    if known {
+        keys.extend(load_catalog_fallback(fonts, wanted, covered, serif, &mut loaded));
+    }
     keys
 }
 
@@ -754,7 +760,7 @@ fn load_catalog_fallback(fonts: &mut FontDefinitions, wanted: ScriptSet, covered
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _serif: bool, _wanted: ScriptSet) -> Vec<String> {
+fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _serif: bool, _wanted: ScriptSet, _known: bool) -> Vec<String> {
     Vec::new()
 }
 
@@ -1457,6 +1463,24 @@ mod tests {
             "a Thai workbook needs a Thai face: {:?}",
             fonts.font_data.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_bengali_or_ethiopic_sheet_asks_for_its_own_family() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(catalog) = crate::catalog::FontCatalog::installed() else { return };
+        for (text, script, chain) in [("ঢাকা", ScriptClass::Bengali, "sys-script-bengali"), ("አማርኛ", ScriptClass::Ethiopic, "sys-script-ethiopic")]
+        {
+            if !catalog.covers(script) {
+                continue; // this machine has no face for the script
+            }
+            let (fonts, _) = font_definitions_with_bound(Language::En, &[], ScriptSet::of_text(text));
+            assert!(
+                fonts.font_data.keys().any(|k| k == chain),
+                "{script:?} needs a face from the catalog: {:?}",
+                fonts.font_data.keys().collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
