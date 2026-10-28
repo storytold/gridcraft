@@ -38,15 +38,15 @@ fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {
     assert!(push_click(&mut app, p, btn, 2, m).is_ok());
     assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
     assert!(push_click(&mut app, p, btn, u32::MAX, m).is_err());
-    assert!(push_drag(&mut app, p, p, usize::MAX, m).is_err());
-    assert!(push_drag(&mut app, p, p, MAX_QUEUED_SYNTHETIC_EVENTS, m).is_err());
+    assert!(push_drag(&mut app, p, p, usize::MAX, btn, m).is_err());
+    assert!(push_drag(&mut app, p, p, MAX_QUEUED_SYNTHETIC_EVENTS, btn, m).is_err());
     assert_eq!(app.synthetic.len(), 2);
     assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
     // Already queued input counts toward the budget.
     assert!(push_click(&mut app, p, btn, (MAX_QUEUED_SYNTHETIC_EVENTS / 2) as u32, m).is_err());
     assert_eq!(app.synthetic.len(), 2);
     // Normal requests still queue in full.
-    assert!(push_drag(&mut app, p, p + egui::vec2(40.0, 40.0), 3, m).is_ok());
+    assert!(push_drag(&mut app, p, p + egui::vec2(40.0, 40.0), 3, btn, m).is_ok());
     assert_eq!(app.synthetic.len(), 8);
 }
 

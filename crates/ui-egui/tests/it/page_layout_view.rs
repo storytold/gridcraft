@@ -242,6 +242,41 @@ fn dragging_a_ruler_edge_previews_commits_on_release_as_one_undo_step_and_esc_ca
     assert_eq!(margins(&h), start_margins);
 }
 
+/// A pending ruler drag dies with a middle-button pan. The pan skips the paper view's
+/// interactions, so the primary release during it is only seen once the pan ends; without this the
+/// margin would commit at the pointer position the pan left it at.
+#[test]
+fn a_middle_press_during_a_ruler_drag_drops_it_without_committing() {
+    let mut h = fixture();
+    let g = geo(&h);
+    let pg = g.paper.clone().expect("Page Layout view lays out pages");
+    let start_margins = margins(&h);
+    let ruler_y = h.state().grid.rect.unwrap().top() + 9.0;
+    let edge = pos2(screen(&g, pg.page_x(0) + pg.margins[0], 0.0).x, ruler_y);
+    let target = pos2(edge.x + per_inch(&g), ruler_y);
+    h.run_steps(40);
+    mouse(&mut h, Event::PointerMoved(edge));
+    mouse(&mut h, Event::PointerButton { pos: edge, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    mouse(&mut h, Event::PointerMoved(pos2(edge.x + 5.0, ruler_y)));
+    mouse(&mut h, Event::PointerMoved(target));
+    h.run_steps(2);
+    assert!(h.state().grid.ruler_drag.is_some(), "the ruler drag is pending");
+
+    let cells = h.state().grid.cells_rect.unwrap();
+    let from = cells.center();
+    mouse(&mut h, Event::PointerMoved(from));
+    mouse(&mut h, Event::PointerButton { pos: from, button: PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
+    mouse(&mut h, Event::PointerMoved(from - vec2(0.0, 40.0)));
+    assert!(h.state().grid.middle_pan, "the middle button pans");
+    assert!(h.state().grid.ruler_drag.is_none(), "the pan drops the pending ruler drag");
+
+    let end = from - vec2(0.0, 40.0);
+    mouse(&mut h, Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    mouse(&mut h, Event::PointerButton { pos: end, button: PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(10);
+    assert_eq!(margins(&h), start_margins, "a pan must not commit a print margin");
+}
+
 fn press(h: &mut Harness, p: Pos2) {
     h.run_steps(40);
     mouse(h, Event::PointerMoved(p));
