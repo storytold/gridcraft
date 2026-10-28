@@ -3,6 +3,7 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+mod levels;
 mod names;
 
 fn c(s: &str) -> CellRef {
@@ -3160,6 +3161,25 @@ fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, Ce
 fn column(values: &[f64]) -> Value {
     let data = values.iter().map(|v| Value::Number(*v)).collect();
     Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn an_array_over_a_python_cells_old_spill_is_laid_out_when_the_cell_is_calculated_too() {
+    // B1, a Python cell, spilled B1:B3; A3's array (A3:B3) was blocked by it. Both are calculated
+    // again, B1 with a result two rows tall: its old spill doesn't block A3, since B1 lays its
+    // array out again in the same pass (B1:B2), and A3 gets B3 in that round. (Blocked by the old
+    // spill, A3 would get B3 only in a second round, once B1's new spill freed it.)
+    let mut t = T::new();
+    let python = plant_python(&mut t, "B1", Value::Number(1.0), column(&[1.0, 2.0, 3.0]));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B3"), 3.0);
+    t.set("A3", "=SEQUENCE(1,2)");
+    assert_eq!(t.get("A3"), Value::Error(CellError::Spill));
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[python, (0, c("A3"))]);
+    assert_eq!(t.calc.rounds_calculated, 1, "A3 laid out in the round that lays B1 out");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A3"), t.num("B3")), (1.0, 2.0));
 }
 
 #[test]

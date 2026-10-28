@@ -29,16 +29,59 @@ fn index_spills<'a>(batch: usize, on_sheet: usize, areas: impl ExactSizeIterator
     batch > INDEX_SPILLS_FROM && areas.len() > 0 && indexing_pays(areas, on_sheet)
 }
 
+/// For `Calc::rebuild`: takes the old node at `k` out of `before` and compares it with `node`,
+/// the new one; `before` is let go at the first difference (or a key it doesn't hold).
+fn take_if_same(before: &mut Option<HashMap<Key, Node>>, k: Key, node: &Node) {
+    if let Some(nodes) = before
+        && nodes.remove(&k).as_ref() != Some(node)
+    {
+        *before = None;
+    }
+}
+
 mod graph;
 mod pass_host;
 
 #[cfg(test)]
 use graph::Intervals;
+#[cfg(test)]
+pub(crate) use graph::NoPlan;
 pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
 #[cfg(test)]
+pub(crate) use graph::{PLAN_SPANS_PEAK, RANGE_LOOK_UP_WORK};
+#[cfg(test)]
 pub(crate) use pass_host::NAMES_PARSED;
-use pass_host::{PassHost, spills_as_before};
+use pass_host::{PassHost, Watch, array_as_stored, spills_as_before};
+
+/// What a round's formulas gave, the arrays they laid out, the circular references found, and
+/// for a planned round what [`Calc::agrees_with_row_major`] looks at.
+#[derive(Default)]
+struct RoundOut {
+    results: HashMap<Key, Value>,
+    spills: HashMap<Key, std::sync::Arc<Array>>,
+    cycles: Vec<Key>,
+    watch: Watch,
+}
+
+/// Why a planned round was calculated again in row-major order (see [`Calc::run`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Redo {
+    /// A formula of a level met a circular reference.
+    Cycle,
+    /// Two arrays of the round, or an array and another anchor's stored spill, meet.
+    Overlap,
+    /// A formula read cells its own array covers or covered.
+    OwnArea,
+    /// A formula read cells of an array laid out differently from what the workbook stores, and
+    /// the plan and row-major order don't surely agree on whether it read them before or after
+    /// the array was laid out.
+    Order,
+    /// What the dynamic formulas of the round read is unknown (noting it would have cost more
+    /// than the round's index-work budget), or checking it would, and an array of the round
+    /// changed.
+    Budget,
+}
 
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
@@ -47,6 +90,10 @@ pub struct Calc {
     rng: u64,
     /// Fixed "now" for deterministic tests; `None` = system clock.
     pub fixed_now: Option<f64>,
+    /// A clock for tests that moves on by one at each reading, so a test sees how many times
+    /// and when it was read (see [`Calc::run`]).
+    #[cfg(test)]
+    pub(crate) ticking_now: Option<f64>,
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
@@ -64,6 +111,40 @@ pub struct Calc {
     name_charges: HashMap<Key, usize>,
     /// The formulas [`Calc::mark_spill_reader`] put in the graph's dynamic set.
     spill_readers: HashSet<Key>,
+    /// Formulas calculated in the last recalculation over every round (a round calculated again
+    /// in row-major order counts once).
+    #[cfg(test)]
+    pub(crate) formulas_calculated: usize,
+    /// Rounds calculated in the last recalculation.
+    #[cfg(test)]
+    pub(crate) rounds_calculated: usize,
+    /// Planned rounds calculated again in row-major order in the last recalculation, and why
+    /// (see [`Calc::run`]).
+    #[cfg(test)]
+    pub(crate) rounds_redone_in_row_major: usize,
+    #[cfg(test)]
+    pub(crate) redo_reasons: Vec<Redo>,
+    /// A planned round of this pass or an earlier one was calculated again in row-major order, or
+    /// planning a round passed its budget of index work: rounds run in row-major order from the
+    /// start, without a plan, until a formula cell is entered, edited, removed or passed as changed
+    /// (see [`Calc::run`]).
+    pub(crate) row_major_only: bool,
+    /// Caps the planner's index work, to test the row-major fallback.
+    #[cfg(test)]
+    pub(crate) plan_budget: Option<usize>,
+    /// Caps the reads a planned round notes, in place of `Plan::note_limit`.
+    #[cfg(test)]
+    pub(crate) note_cap: Option<usize>,
+    /// Plans made in the last recalculation.
+    #[cfg(test)]
+    pub(crate) plans_made: usize,
+    /// For each planned round checked against row-major order in the last recalculation: the
+    /// reads its dynamic formulas noted (entries kept), and whether they weren't all noted.
+    #[cfg(test)]
+    pub(crate) watched: Vec<(usize, bool)>,
+    /// Index work the checks against row-major order spent in the last recalculation.
+    #[cfg(test)]
+    pub(crate) check_work: usize,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -168,6 +249,8 @@ impl Default for Calc {
             graph: Graph::default(),
             rng: 0x9E37_79B9_7F4A_7C15,
             fixed_now: None,
+            #[cfg(test)]
+            ticking_now: None,
             circular: vec![],
             last_recalc_cells: 0,
             standing: Standing::default(),
@@ -175,6 +258,25 @@ impl Default for Calc {
             name_areas: 0,
             name_charges: HashMap::default(),
             spill_readers: HashSet::default(),
+            #[cfg(test)]
+            formulas_calculated: 0,
+            #[cfg(test)]
+            rounds_calculated: 0,
+            #[cfg(test)]
+            rounds_redone_in_row_major: 0,
+            #[cfg(test)]
+            redo_reasons: Vec::new(),
+            row_major_only: false,
+            #[cfg(test)]
+            plan_budget: None,
+            #[cfg(test)]
+            note_cap: None,
+            #[cfg(test)]
+            plans_made: 0,
+            #[cfg(test)]
+            watched: Vec::new(),
+            #[cfg(test)]
+            check_work: 0,
         }
     }
 }
@@ -248,7 +350,13 @@ impl Calc {
         Self::default()
     }
 
-    fn now(&self) -> f64 {
+    fn now(&mut self) -> f64 {
+        #[cfg(test)]
+        if let Some(n) = self.ticking_now.as_mut() {
+            let read = *n;
+            *n += 1.0;
+            return read;
+        }
         if let Some(n) = self.fixed_now {
             return n;
         }
@@ -257,6 +365,15 @@ impl Calc {
 
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        // The formulas and their references (the nodes), kept while row-major order holds to see
+        // whether they changed (see `row_major_only`); the rest of the old graph (its indexes) is
+        // let go before the new one is built. Each new node is compared with the old one at its
+        // key as it is inserted, which takes that one out, so the old nodes shrink as the new
+        // ones grow; at the first difference they are let go.
+        let holding = self.row_major_only;
+        let mut before = holding.then(|| std::mem::take(&mut self.graph.nodes));
+        #[cfg(test)]
+        let whole_before = before.clone();
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
@@ -268,14 +385,18 @@ impl Calc {
                     self.spill_errors.insert((si, c));
                 }
                 if let Some((areas, dynamic)) = self.resolve_charged(&mut names, wb, (si, c), cell.formula.as_deref()) {
-                    self.graph.insert((si, c), Node { areas, dynamic });
+                    let node = Node { areas, dynamic, formula: cell.formula.clone() };
+                    take_if_same(&mut before, (si, c), &node);
+                    self.graph.insert((si, c), node);
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
                 } else if cell.py.is_some() {
                     // A Python cell lays out its kept result, so it is calculated like a formula
                     // that reads nothing: its spill is blocked and unblocked like a formula's.
-                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                    let node = Node { areas: Vec::new(), dynamic: false, formula: None };
+                    take_if_same(&mut before, (si, c), &node);
+                    self.graph.insert((si, c), node);
                 }
             }
         }
@@ -289,6 +410,16 @@ impl Calc {
             }
         }
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
+        // The same formulas (the same text where not the same `Arc`) with the same references:
+        // row-major order still holds. A formula replaced by one that reads the same cells
+        // counts as a change (see `Node`'s `PartialEq`). Every new node matched an old one at its
+        // key, so the old nodes are the same when none is left over.
+        let same = before.is_some_and(|nodes| nodes.is_empty());
+        #[cfg(test)]
+        assert_eq!(same, whole_before.is_some_and(|nodes| nodes == self.graph.nodes), "the nodes compared as they are inserted");
+        if holding && !same {
+            self.row_major_only = false;
+        }
     }
 
     /// Gives back to `names` what the formulas at `keys` were charged, each key once: a batch does
@@ -420,12 +551,14 @@ impl Calc {
     /// Precedents and the what-if trials read the graph at once. A formula that doesn't parse
     /// leaves the graph, as [`Calc::rebuild`] leaves it out; a cell without a formula is skipped.
     pub fn resolve_again(&mut self, wb: &Workbook, keys: &[Key]) {
+        // The formulas' references may change: the next pass plans again (see `row_major_only`).
+        self.row_major_only = false;
         let mut names = NameCache::with_stored(self.name_areas);
         self.give_back_charges(&mut names, keys);
         for &k in keys {
-            let Some(f) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref()) else { continue };
-            match self.resolve_charged(&mut names, wb, k, Some(f)) {
-                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic }),
+            let Some(f) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()) else { continue };
+            match self.resolve_charged(&mut names, wb, k, Some(&**f)) {
+                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic, formula: Some(f.clone()) }),
                 None => self.graph.remove(k),
             }
             self.mark_spill_reader(wb, k);
@@ -448,17 +581,22 @@ impl Calc {
             } else {
                 self.spill_errors.remove(&k);
             }
-            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref());
-            let precedent = self.resolve_charged(&mut names, wb, k, formula);
+            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref());
+            // A formula (or Python cell) entered, changed or removed: the next pass plans again
+            // (see `row_major_only`).
+            if formula.is_some() || self.graph.nodes.contains_key(&k) || wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.py.is_some()) {
+                self.row_major_only = false;
+            }
+            let precedent = self.resolve_charged(&mut names, wb, k, formula.map(|f| &**f));
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match precedent {
-                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic }),
+                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic, formula: formula.cloned() }),
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
-                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false, formula: None });
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -631,32 +769,64 @@ impl Calc {
         seen.into_iter().collect()
     }
 
-    /// Evaluates the dirty set and writes results (and spills) back.
+    /// Evaluates the dirty set and writes results (and spills) back, in rounds: a round
+    /// calculates the dirty formulas, writes them back, and the formulas that read an array laid
+    /// out differently from what the workbook stored (and, once, every dynamic formula) make up
+    /// the next one. At most 8 rounds, as without a plan.
+    ///
+    /// A round is planned (levels) or calculated in row-major order.
+    /// A planned round is kept only when it gives what a row-major round gives from the same
+    /// state (`agrees_with_row_major`): where it may not (a formula of a level met a circular
+    /// reference, two arrays meet, or a formula read cells of an array laid out differently from
+    /// what the workbook stores where the two orders don't surely agree on whether the array was
+    /// laid out by then), it is calculated again in row-major order before anything is written,
+    /// from the same random seed. Every round then ends as a row-major round would, so the pass
+    /// does: the plan and unrelated formulas don't change where a loop through arrays, INDIRECT or
+    /// OFFSET ends.
+    ///
+    /// Once a planned round has been calculated again, the rest of the pass and the passes after
+    /// it run in row-major order from the start, without a plan (`row_major_only`): the round
+    /// would most likely be calculated twice again. So do they once planning a round passed its
+    /// budget of index work, which the next edit would most likely spend again. That lasts until
+    /// a formula cell is entered, edited, removed or passed as changed, as the readers of a
+    /// changed defined name are (`cells_changed`, `resolve_again`, or a `rebuild` that finds the
+    /// graph's formulas changed); a full recalculation alone keeps it. A row-major
+    /// round gives what a kept planned round gives, so only the cost and the order RAND draws in
+    /// change.
+    ///
+    /// The stale-reader rule: when an array comes out differently from what the workbook stores
+    /// for it (new, moved, grown, shrunk, gone, or other values), a formula that read its area
+    /// before it was laid out is stale and is calculated again in the next round. These places
+    /// enforce it:
+    /// - The planner (`spill_waits` in `Graph::levels`) puts the static readers of a dirty
+    ///   anchor's stored spill range after it, and a reader after the nearest dirty formula above
+    ///   its area in each of the area's columns, unless a cell between blocks it.
+    /// - `write_back` sends the static readers of every changed spill area round again; every
+    ///   dynamic formula runs again once, after the first round that laid out arrays, as without
+    ///   a plan.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
-        let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         let mut seen: HashSet<Key> = HashSet::default();
         if !full {
             self.standing = Standing::default();
         }
+        #[cfg(test)]
+        {
+            self.formulas_calculated = 0;
+            self.rounds_calculated = 0;
+            self.rounds_redone_in_row_major = 0;
+            self.redo_reasons.clear();
+            self.watched.clear();
+            self.check_work = 0;
+            self.plans_made = 0;
+        }
+        let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
             }
             if !full {
-                // What each formula held before this calculation touched it.
-                for &k in &dirty {
-                    if seen.insert(k) {
-                        match wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
-                            Some(r) => {
-                                self.standing.areas.insert(k, *r);
-                            }
-                            None => {
-                                self.standing.keys.insert(k);
-                            }
-                        }
-                    }
-                }
+                self.note_standing(wb, &dirty, &mut seen);
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
@@ -666,31 +836,105 @@ impl Calc {
                     exprs.insert(*k, e);
                 }
             }
-            let python: HashMap<Key, Value> = dirty
-                .iter()
-                .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
-                .collect();
-            let now = self.now();
-            let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
-                host.standing = Some(&self.standing);
-                host.iterate = wb.calc.iterative;
-                for k in &dirty {
-                    host.calculate(*k);
-                }
-                if host.iterate && !host.members.is_empty() {
-                    let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
-                    if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
-                        eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
+            // Planned, so the order the formulas are calculated in follows the dependencies rather
+            // than the position on the sheet. Not planned with iterative calculation on: a
+            // loop closed through INDIRECT or OFFSET is one the plan can't see, and in the plan's
+            // order it would be entered at a different cell than in row-major order and end on
+            // different values.
+            let plan = if wb.calc.iterative || self.row_major_only {
+                None
+            } else {
+                match self.plan(wb, &dirty) {
+                    Ok(plan) => Some(plan),
+                    // Planning passed its budget: the next edit would most likely spend it again,
+                    // so what follows runs in row-major order until a formula changes, as after a
+                    // round calculated again (see `row_major_only`).
+                    Err(graph::NoPlan::Budget { work }) => {
+                        self.row_major_only = true;
+                        if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                            eprintln!("  planning given up after {work} index work: row-major order until a formula changes");
+                        }
+                        None
                     }
+                    Err(graph::NoPlan::Other) => None,
                 }
-                (host.results, host.spills, host.cycles)
             };
+            #[cfg(test)]
+            {
+                self.plans_made += usize::from(plan.is_some());
+            }
+            if std::env::var_os("GRIDCRAFT_PROFILE").is_some()
+                && let Some(p) = &plan
+            {
+                let sizes: Vec<usize> = p.level_sizes().take(12).collect();
+                eprintln!(
+                    "  plan: {} levels over {} formulas, {} behind cycles, {} of {} index work, {} wide readers, level sizes {:?}, {:.1} ms",
+                    p.bounds.len(),
+                    p.leveled,
+                    p.order.len() - p.leveled,
+                    p.work(),
+                    p.budget(),
+                    p.wide,
+                    sizes,
+                    prof_now() - tp
+                );
+            }
+            let te = prof_now();
+            let mut rng = self.rng;
+            // One reading of the clock a round, as without a plan: a round calculated again in
+            // row-major order reads the time its planned try read.
+            let now = self.now();
+            let planned = self.calculate_round(wb, &exprs, &dirty, plan.as_ref(), &mut rng, now);
+            let redo = match (&planned, &plan) {
+                (None, _) => Some(Redo::Cycle),
+                (Some(out), Some(p)) => {
+                    let mut budget = p.budget();
+                    let agrees = self.agrees_with_row_major(wb, &dirty, out, &mut budget);
+                    #[cfg(test)]
+                    {
+                        self.watched.push((out.watch.reads.len(), out.watch.unknown));
+                        self.check_work += p.budget().saturating_sub(budget);
+                    }
+                    agrees.err()
+                }
+                (Some(_), None) => None,
+            };
+            // Nothing reads the plan after the check: it is let go before a round calculated again
+            // in row-major order holds its results.
+            drop(plan);
+            let out = match (planned, redo) {
+                (Some(out), None) => out,
+                (planned, why) => {
+                    // No value of the planned try is kept: the round is calculated in row-major
+                    // order from the same random seed, as a round without a plan is, and so is
+                    // what follows until a formula changes (see `row_major_only`). Its output is
+                    // released first, so the two calculations never hold their results at once.
+                    drop(planned);
+                    self.row_major_only = true;
+                    if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                        eprintln!("  round calculated again in row-major order: {why:?}");
+                    }
+                    #[cfg(test)]
+                    {
+                        self.rounds_redone_in_row_major += 1;
+                        if let Some(why) = why {
+                            self.redo_reasons.push(why);
+                        }
+                    }
+                    rng = self.rng;
+                    self.calculate_round(wb, &exprs, &dirty, None, &mut rng, now).unwrap_or_default()
+                }
+            };
+            let RoundOut { results, spills, cycles, watch: _ } = out;
+            #[cfg(test)]
+            {
+                self.formulas_calculated += results.len();
+                self.rounds_calculated += 1;
+            }
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
-                eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
+                eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - te);
             }
             let tw = prof_now();
             self.last_recalc_cells += results.len();
@@ -706,9 +950,6 @@ impl Calc {
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
-            }
-            if full {
-                // Everything was already evaluated once; spill dependents need another pass.
             }
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);
@@ -727,6 +968,381 @@ impl Calc {
         } else {
             self.circular.retain(|k| self.graph.nodes.contains_key(k));
         }
+    }
+
+    /// The plan of a round over `dirty` (see [`Graph::levels`]), or in a test within the index
+    /// work `plan_budget` allows.
+    fn plan(&self, wb: &Workbook, dirty: &[Key]) -> Result<graph::Plan, graph::NoPlan> {
+        #[cfg(test)]
+        if self.plan_budget.is_some() {
+            return self.graph.levels_within(wb, dirty, self.plan_budget);
+        }
+        self.graph.levels(wb, dirty)
+    }
+
+    /// The reads a round planned as `plan` may note (see [`graph::Plan::note_limit`]), or the cap
+    /// a test set (`note_cap`).
+    fn note_limit(&self, plan: &graph::Plan) -> usize {
+        #[cfg(test)]
+        if let Some(n) = self.note_cap {
+            return n;
+        }
+        plan.note_limit()
+    }
+
+    /// What each formula of `dirty` held before this calculation touched it (an incremental
+    /// one; see [`Standing`]): for the ones not in `seen` yet, the area each spill held, and the
+    /// ones that held none.
+    fn note_standing(&mut self, wb: &Workbook, dirty: &[Key], seen: &mut HashSet<Key>) {
+        for &k in dirty {
+            if seen.insert(k) {
+                match wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
+                    Some(r) => {
+                        self.standing.areas.insert(k, *r);
+                    }
+                    None => {
+                        self.standing.keys.insert(k);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Calculates one round's formulas: in `plan`'s order, or in row-major order (`dirty`)
+    /// without one, with `NOW()` and `TODAY()` reading `now`. What they gave, the arrays laid
+    /// out and the circular references found, or `None` when a formula of a level met a cycle
+    /// (only with a plan; the round is then calculated again without it, see `run`).
+    fn calculate_round(
+        &self,
+        wb: &Workbook,
+        exprs: &HashMap<Key, std::sync::Arc<Expr>>,
+        dirty: &[Key],
+        plan: Option<&graph::Plan>,
+        rng: &mut u64,
+        now: f64,
+    ) -> Option<RoundOut> {
+        let python: HashMap<Key, Value> = dirty
+            .iter()
+            .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
+            .collect();
+        let mut host = PassHost::new(wb, exprs, rng, now).with_python(python);
+        host.standing = Some(&self.standing);
+        host.iterate = wb.calc.iterative;
+        host.dynamic = Some(&self.graph.dynamic);
+        // A planned round notes when each formula was calculated and what the dynamic ones read,
+        // for `agrees_with_row_major`, as many reads as `Plan::note_limit` allows.
+        host.watch = plan.is_some();
+        if host.watch {
+            // One time for each formula of the round.
+            host.watch_out.times.reserve(dirty.len());
+        }
+        host.watch_out.budget = plan.map_or(0, |p| self.note_limit(p));
+        // Whether a formula of a level met a cycle: listed in `cycles` (with iteration on there
+        // is no plan; see `run`). The levels after it and the formulas on or behind cycles are
+        // not calculated, as the round starts again.
+        let mut met_cycle = false;
+        match plan {
+            Some(plan) => {
+                met_cycle = plan.levels().any(|level| {
+                    for &k in level {
+                        host.calculate(k);
+                    }
+                    !host.cycles.is_empty()
+                });
+                if !met_cycle {
+                    for &k in plan.rest() {
+                        host.calculate(k);
+                    }
+                }
+            }
+            None => {
+                for k in dirty {
+                    host.calculate(*k);
+                }
+            }
+        }
+        if host.iterate && !host.members.is_empty() {
+            // With iteration on there is no plan (see `run`): the loops go round in row-major order.
+            let passes = host.iterate_loops(dirty, wb.calc.max_iterations, wb.calc.max_change);
+            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
+            }
+        }
+        if met_cycle {
+            return None;
+        }
+        let watch = std::mem::take(&mut host.watch_out);
+        Some(RoundOut { results: host.results, spills: host.spills, cycles: host.cycles, watch })
+    }
+
+    /// Whether the planned round `out` (over `dirty`, in row-major order) gives what a round in
+    /// row-major order gives from the same state, or why it may not (see `run`).
+    ///
+    /// A formula reads the same thing in both orders except where what it reads depends on
+    /// whether a formula was calculated by then. A formula cell isn't such a read: reading one
+    /// calculates it first in both. A cell an array of the round covers, or its anchor's stored
+    /// spill covered, is, when that array reads differently from what the workbook stores (new,
+    /// moved, resized, gone, other values): before it is laid out the cell reads as stored, after
+    /// as the new array. So for each such array, each formula that may read its cells besides the
+    /// anchor (by its references, which the graph lists, or as a dynamic formula of the round read
+    /// them, which the host noted) must surely read them before the array is laid out in both
+    /// orders, or surely after in both:
+    /// - planned: from when each was calculated (`Watch::times`): the array before the reader
+    ///   started, or after it finished;
+    /// - row-major: a formula is calculated at its turn, or earlier inside the calculation of a
+    ///   formula before it that reads it, never before the first formula in row-major order that
+    ///   may read it, directly or through others (`forcing_roots`): the array's turn before the
+    ///   reader could start, or the reader's turn before the array could start.
+    ///
+    /// Two arrays of the round that meet, or an array over another anchor's stored spill, make
+    /// what a cell reads depend on which of them is done; such a round isn't kept either (the
+    /// checks above miss one shape of it, an array laid out as stored that meets a new one; see
+    /// the code). By induction over the row-major order, a round that passes reads the same
+    /// values in both orders and gives the same results and arrays; the random draws are the
+    /// exception (they come in the plan's order).
+    ///
+    /// What it costs: a pass over the round's arrays, and for each changed array the readers of
+    /// its cells, looked up through the graph for each of its two areas (the old and the new)
+    /// in two parts (the rest of the anchor's row, and the rows below): up to four look-ups an
+    /// array where `write_back` makes one. The look-ups, a unit per noted read and per array it
+    /// meets, and, only when a reader is found, the walk of `forcing_roots` are charged to
+    /// `budget` by the budget rule (`Plan::budget`, see `index_budget`), which also says why the
+    /// look-ups' per-cell probes are not. A round whose reads weren't all noted
+    /// (`Plan::note_limit`), or whose check runs out of `budget`, isn't kept when an array of it
+    /// changed; one in which no array changed is kept without looking at them.
+    fn agrees_with_row_major(&self, wb: &Workbook, dirty: &[Key], out: &RoundOut, budget: &mut usize) -> Result<(), Redo> {
+        // Arrays that meet another array of the round or another anchor's stored spill. This scan
+        // runs before the "no array changed" return below on purpose, though it costs more: two
+        // arrays that both read as stored can still have stored areas that cross, since the xlsx
+        // reader keeps Python spill areas unchecked, and such a round must go back to row-major
+        // order (see `two_arrays_stored_across_each_other_send_the_round_back`).
+        let mut laid = SpillIndex::default();
+        for (k, a) in &out.spills {
+            laid.insert(*k, a.rows, a.cols);
+        }
+        let mut hits = Vec::new();
+        for (k, a) in &out.spills {
+            let range = RangeRef::new(k.1, spill_end(k.1, a));
+            if range.start == range.end {
+                continue;
+            }
+            // Two arrays of the round that meet. When both read differently from what is stored,
+            // each is in `changed` below, and every reader of the cells they share is checked
+            // against both, so it sees the same of the two laid out in both orders and reads the
+            // same (of two, the one anchored first). When one of them reads as stored, it is not
+            // in `changed`, yet laying it out still changes what the shared cells read if it is
+            // anchored first and the other is already laid out: the checks below miss that round
+            // (see `a_read_under_an_unchanged_array_and_a_new_one_meeting_it_ends_as_in_row_major_order`).
+            // This return and the next both send it back (its stored spill is under the other
+            // array), so each is a cheap early exit while the other stands, and one of the two
+            // must stay.
+            laid.meeting(k.0, range, &mut hits);
+            if hits.iter().any(|h| *h != k.1) {
+                return Err(Redo::Overlap);
+            }
+            // An array over another anchor's stored spill. That anchor's array laid out as stored
+            // is the case above, which this return catches too. Otherwise the anchor lays out no
+            // array in the round, or one that is in `changed`, as this array is: what the shared
+            // cells read changes only when an array in `changed` is laid out, and the checks
+            // below cover their readers, so this return only sends back early a round they would
+            // decide.
+            if let Some(sh) = wb.sheet(k.0) {
+                let own = sh.spill_ranges.get(&k.1);
+                let mut other = false;
+                pass_host::stored_spill_in(sh, range, &mut |c, _| {
+                    other = !own.is_some_and(|o| o.contains(c));
+                    !other
+                });
+                if other {
+                    return Err(Redo::Overlap);
+                }
+            }
+        }
+        // The arrays that read differently from what is stored, each with the area its anchor's
+        // stored spill covered and the one it covers now. A cell in neither reads the same before
+        // and after the array is laid out.
+        let mut changed: Vec<(Key, [Option<RangeRef>; 2])> = Vec::new();
+        for &k in dirty {
+            let arr = out.spills.get(&k);
+            if array_as_stored(wb, k, arr) {
+                continue;
+            }
+            let stored = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)).copied();
+            let now = arr.map(|a| RangeRef::new(k.1, spill_end(k.1, a)));
+            let areas = match (stored, now) {
+                // One area inside the other: the readers of the larger are all of them.
+                (Some(s), Some(n)) if s.contains_range(&n) => [Some(s), None],
+                (Some(s), Some(n)) if n.contains_range(&s) => [Some(n), None],
+                (s, n) => [s, n],
+            };
+            // An area of the anchor alone: reading it calculates the anchor first, in both orders.
+            if areas.iter().flatten().any(|r| r.end != k.1) {
+                changed.push((k, areas));
+            }
+        }
+        if changed.is_empty() {
+            return Ok(());
+        }
+        if out.watch.unknown {
+            return Err(Redo::Budget);
+        }
+        let times = &out.watch.times;
+        // Each dirty formula's turn in row-major order, built at the first reader that needs it.
+        let mut turn: Option<HashMap<Key, usize>> = None;
+        let mut roots: Option<HashMap<Key, usize>> = None;
+        let mut check = |reader: Key, anchor: Key, budget: &mut usize| -> Result<(), Redo> {
+            if reader == anchor {
+                return Err(Redo::OwnArea);
+            }
+            // A formula not calculated in the round read nothing in it.
+            let Some(&(r0, r1)) = times.get(&reader) else { return Ok(()) };
+            let Some(&(a0, a1)) = times.get(&anchor) else { return Err(Redo::Order) };
+            let planned_after = if a1 < r0 {
+                true
+            } else if a0 > r1 {
+                false
+            } else {
+                return Err(Redo::Order);
+            };
+            let turn = turn.get_or_insert_with(|| dirty.iter().enumerate().map(|(i, k)| (*k, i)).collect());
+            let (Some(&rt), Some(&at)) = (turn.get(&reader), turn.get(&anchor)) else { return Err(Redo::Order) };
+            if roots.is_none() {
+                roots = Some(self.forcing_roots(dirty, &out.watch.reads, budget).ok_or(Redo::Budget)?);
+            }
+            let Some(roots) = roots.as_ref() else { return Err(Redo::Budget) };
+            let first = |k: &Key, t: usize| roots.get(k).copied().unwrap_or(t);
+            let row_major_after = if at < first(&reader, rt) {
+                true
+            } else if rt < first(&anchor, at) {
+                false
+            } else {
+                return Err(Redo::Order);
+            };
+            if planned_after == row_major_after { Ok(()) } else { Err(Redo::Order) }
+        };
+        let mut deps = Vec::new();
+        for &(a, areas) in &changed {
+            deps.clear();
+            // The cells of each area besides the anchor: the rest of its row, and the rows below.
+            for area in areas.into_iter().flatten() {
+                if area.end.col > a.1.col {
+                    let right = RangeRef::new(CellRef::new(a.1.row, a.1.col.saturating_add(1)), CellRef::new(a.1.row, area.end.col));
+                    *budget = budget.checked_sub(1).ok_or(Redo::Budget)?;
+                    if !self.graph.dependents_of_range_within(a.0, right, &mut deps, budget) {
+                        return Err(Redo::Budget);
+                    }
+                }
+                if area.end.row > a.1.row {
+                    let below = RangeRef::new(CellRef::new(a.1.row.saturating_add(1), a.1.col), area.end);
+                    *budget = budget.checked_sub(1).ok_or(Redo::Budget)?;
+                    if !self.graph.dependents_of_range_within(a.0, below, &mut deps, budget) {
+                        return Err(Redo::Budget);
+                    }
+                }
+            }
+            deps.sort_unstable();
+            deps.dedup();
+            for &reader in &deps {
+                check(reader, a, budget)?;
+            }
+        }
+        if !out.watch.reads.is_empty() {
+            // Each array by the rectangle around its areas; a read meeting that rectangle is
+            // checked when it meets one of the areas.
+            let mut boxes = SpillIndex::default();
+            let mut areas_of: HashMap<Key, [Option<RangeRef>; 2]> = HashMap::default();
+            for &(a, areas) in &changed {
+                let around = areas.into_iter().flatten().reduce(|x, y| x.union(&y)).unwrap_or(RangeRef::new(a.1, a.1));
+                boxes.insert_rect(a, around, false);
+                areas_of.insert(a, areas);
+            }
+            for &(reader, sheet, range) in &out.watch.reads {
+                // In order, as `forcing_roots` takes it: the look-up's block walk takes the height
+                // as end minus start, and its area test misses a backward range.
+                let range = RangeRef::new(range.start, range.end);
+                boxes.meeting(sheet, range, &mut hits);
+                *budget = budget.checked_sub(hits.len().saturating_add(1)).ok_or(Redo::Budget)?;
+                for &anchor in &hits {
+                    let meets = areas_of.get(&(sheet, anchor)).is_some_and(|areas| areas.iter().flatten().any(|r| r.intersects(&range)));
+                    // Reading the anchor alone calculates it first, in both orders.
+                    if meets && (range.start != anchor || range.end != anchor) {
+                        check(reader, (sheet, anchor), budget)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// For the formulas of `dirty` (in row-major order) that a formula before them in that order
+    /// may read, directly or through others: the position of the first such formula. A round in
+    /// row-major order calculates a formula at its turn, or earlier inside the calculation of a
+    /// formula before it that reads it; a formula reads within its references (the graph's), and
+    /// a dynamic formula of the round what it read (`reads`, the same reads in both orders while
+    /// it reads the same values). So a formula is never calculated before the position given here
+    /// (its own when not listed). Each formula is reached once, and its references and noted
+    /// reads are looked up once each, through the dirty formulas not reached yet in each column
+    /// they cover. Every look-up, column walked and formula reached costs a unit of `budget`;
+    /// `None` when it runs out (a wide read over many dirty columns, noted many times).
+    fn forcing_roots(&self, dirty: &[Key], reads: &[(Key, usize, RangeRef)], budget: &mut usize) -> Option<HashMap<Key, usize>> {
+        // The formulas not reached yet, by sheet and column.
+        let mut left: BTreeMap<(usize, u32), BTreeSet<u32>> = BTreeMap::new();
+        for k in dirty {
+            left.entry((k.0, k.1.col)).or_default().insert(k.1.row);
+        }
+        let mut read_by: HashMap<Key, Vec<(usize, RangeRef)>> = HashMap::default();
+        for &(k, sheet, range) in reads {
+            read_by.entry(k).or_default().push((sheet, range));
+        }
+        let take =
+            |left: &mut BTreeMap<(usize, u32), BTreeSet<u32>>, sheet: usize, range: RangeRef, out: &mut Vec<Key>, budget: &mut usize| -> Option<()> {
+                // In order: a read noted from a range the workbook stores (an anchor's spill range)
+                // can hold its corners either way round, and the look-ups below panic on a start
+                // past the end.
+                let range = RangeRef::new(range.start, range.end);
+                let cols: Vec<(usize, u32)> =
+                    left.range((sheet, range.start.col)..=(sheet, range.end.col)).map(|(c, _)| *c).take(budget.saturating_add(1)).collect();
+                *budget = budget.checked_sub(cols.len().saturating_add(1))?;
+                for col in cols {
+                    if let Some(rows) = left.get_mut(&col) {
+                        let found: Vec<u32> = rows.range(range.start.row..=range.end.row).copied().take(budget.saturating_add(1)).collect();
+                        *budget = budget.checked_sub(found.len())?;
+                        for r in found {
+                            rows.remove(&r);
+                            out.push((sheet, CellRef::new(r, col.1)));
+                        }
+                        if rows.is_empty() {
+                            left.remove(&col);
+                        }
+                    }
+                }
+                Some(())
+            };
+        let mut roots: HashMap<Key, usize> = HashMap::default();
+        let mut stack: Vec<Key> = Vec::new();
+        let mut found = Vec::new();
+        for (i, &first) in dirty.iter().enumerate() {
+            found.clear();
+            take(&mut left, first.0, RangeRef::new(first.1, first.1), &mut found, budget)?;
+            if found.is_empty() {
+                continue;
+            }
+            stack.push(first);
+            while let Some(x) = stack.pop() {
+                found.clear();
+                for a in self.graph.nodes.get(&x).map(|nd| nd.areas.as_slice()).unwrap_or(&[]) {
+                    take(&mut left, a.sheet, a.range, &mut found, budget)?;
+                }
+                for &(sheet, range) in read_by.get(&x).map(Vec::as_slice).unwrap_or(&[]) {
+                    take(&mut left, sheet, range, &mut found, budget)?;
+                }
+                for &k in &found {
+                    roots.insert(k, i);
+                }
+                stack.extend(found.iter().copied());
+            }
+        }
+        Some(roots)
     }
 
     fn write_back(
@@ -945,6 +1561,11 @@ fn spill_is_blocked(
         || (array_len > 1 && sheet.tables.iter().any(|table| table.range.contains(anchor.1)))
 }
 
+/// The bottom-right cell of `array` laid out from `anchor`.
+fn spill_end(anchor: CellRef, array: &Array) -> CellRef {
+    CellRef::new(anchor.row.saturating_add((array.rows as u32).saturating_sub(1)), anchor.col.saturating_add((array.cols as u32).saturating_sub(1)))
+}
+
 fn fill_spill(sheet: &mut gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, array: &Array) {
     for (index, cell) in range.iter().enumerate() {
         if cell != anchor {
@@ -1037,6 +1658,161 @@ pub(crate) mod tests {
         iv.query(a, b, &mut |t| v.push(*t));
         v.sort_unstable();
         v
+    }
+
+    /// A formula `J1` reading `area` and a dirty formula `B2` inside it, on the first sheet: the
+    /// two in row-major order, and the calculation state that holds them.
+    fn reader_over(area: RangeRef) -> (Workbook, Calc, Vec<Key>) {
+        use super::Node;
+        use crate::eval::Area;
+        let mut wb = Workbook::new();
+        let mut calc = Calc::new();
+        let (reader, inside) = ((0, CellRef::new(0, 9)), (0, CellRef::new(1, 1)));
+        for k in [reader, inside] {
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
+            }
+        }
+        calc.graph.insert(reader, Node { areas: vec![Area { sheet: 0, range: area }], dynamic: false, formula: None });
+        calc.graph.insert(inside, Node { areas: Vec::new(), dynamic: false, formula: None });
+        (wb, calc, vec![reader, inside])
+    }
+
+    /// The levels of a formula `J1` reading `area`, of dirty formulas at `formulas` that read
+    /// nothing, and of constants at `constants`, on the first sheet.
+    fn levels_over(area: RangeRef, formulas: &[CellRef], constants: &[CellRef]) -> Result<Vec<Vec<Key>>, String> {
+        use super::Node;
+        use crate::eval::Area;
+        let mut wb = Workbook::new();
+        let mut calc = Calc::new();
+        let reader = (0, CellRef::new(0, 9));
+        let mut dirty = vec![reader];
+        calc.graph.insert(reader, Node { areas: vec![Area { sheet: 0, range: area }], dynamic: false, formula: None });
+        for &at in formulas {
+            dirty.push((0, at));
+            calc.graph.insert((0, at), Node { areas: Vec::new(), dynamic: false, formula: None });
+        }
+        let sh = wb.sheet_mut(0).ok_or("no sheet")?;
+        for &(_, at) in &dirty {
+            sh.cells.set(at, Cell::formula(Formula::new("=1")));
+        }
+        for &at in constants {
+            sh.cells.set(at, Cell::value(Value::Number(1.0)));
+        }
+        dirty.sort_unstable();
+        let plan = calc.graph.levels(&wb, &dirty).map_err(|e| format!("{e:?}"))?;
+        Ok(plan.levels().map(<[Key]>::to_vec).collect())
+    }
+
+    /// `area` the wrong way round: both corners swapped, the rows only, and the columns only.
+    fn backward(area: RangeRef) -> [RangeRef; 3] {
+        let (top, bottom) = (area.start, area.end);
+        [
+            RangeRef { start: bottom, end: top },
+            RangeRef { start: CellRef::new(bottom.row, top.col), end: CellRef::new(top.row, bottom.col) },
+            RangeRef { start: CellRef::new(top.row, bottom.col), end: CellRef::new(bottom.row, top.col) },
+        ]
+    }
+
+    /// An area with its corners the wrong way round (start after end), as a range read from a
+    /// file as stored can be, is planned as the same area in order, whichever of its rows and
+    /// columns are backward: the column walk took the width as end minus start and overflowed,
+    /// and the rows taken as they came gave an empty span, so the reader missed the formula
+    /// inside. A constant at `B3`, under that formula, blocks the spill wait that otherwise held
+    /// the reader back anyway. A reader of more formulas than get an exact list (counted again
+    /// as levels complete) waits for them too.
+    #[test]
+    fn an_area_the_wrong_way_round_is_planned_as_the_area_in_order() {
+        let (reader, inside) = ((0, CellRef::new(0, 9)), (0, CellRef::new(1, 1)));
+        let ordered = RangeRef::new(CellRef::new(0, 0), CellRef::new(5, 5));
+        for constants in [&[][..], &[CellRef::new(2, 1)]] {
+            let levels = |area| levels_over(area, &[inside.1], constants);
+            assert_eq!(levels(ordered), Ok(vec![vec![inside], vec![reader]]), "{constants:?}");
+            for area in backward(ordered) {
+                assert_eq!(levels(area), levels(ordered), "{area:?}, constants {constants:?}");
+            }
+        }
+        let column = RangeRef::new(CellRef::new(0, 0), CellRef::new(99, 0));
+        let many: Vec<CellRef> = (1..=70).map(|r| CellRef::new(r, 0)).collect();
+        let first: Vec<Key> = many.iter().map(|&c| (0, c)).collect();
+        assert_eq!(levels_over(column, &many, &[]), Ok(vec![first, vec![reader]]));
+        for area in backward(column) {
+            assert_eq!(levels_over(area, &many, &[]), levels_over(column, &many, &[]), "{area:?}");
+        }
+    }
+
+    /// A reader of an area the wrong way round waits for the dirty formula above the area, which
+    /// spills into it, as it would for the area in order: the wait looks at the cell at the top
+    /// of the area (`B6`, empty here), not at its start as it came (`B10`, which holds a value).
+    /// With the spans of the area's columns kept, and with the area over more dirty columns than
+    /// are kept (visited again).
+    #[test]
+    fn a_reader_of_an_area_the_wrong_way_round_waits_for_the_spill_above_it() {
+        let (reader, above) = ((0, CellRef::new(0, 9)), (0, CellRef::new(2, 1)));
+        let bottom = CellRef::new(9, 1);
+        for width in [5u32, 75] {
+            let ordered = RangeRef::new(CellRef::new(5, 1), CellRef::new(9, width));
+            // Below the area, in its columns: they read nothing and have nothing over them.
+            let mut formulas: Vec<CellRef> = (2..=width).filter(|&c| c != 9).map(|c| CellRef::new(20, c)).collect();
+            formulas.push(above.1);
+            let mut first: Vec<Key> = formulas.iter().map(|&c| (0, c)).collect();
+            first.sort_unstable();
+            assert_eq!(levels_over(ordered, &formulas, &[bottom]), Ok(vec![first, vec![reader]]), "{width} columns");
+            for area in backward(ordered) {
+                assert_eq!(levels_over(area, &formulas, &[bottom]), levels_over(ordered, &formulas, &[bottom]), "{area:?}");
+            }
+        }
+    }
+
+    /// The order check looks a read or a reference up as the same range in order, whichever way
+    /// round its corners came: a backward range made the sorted maps it searches panic ("range
+    /// start is greater than range end").
+    #[test]
+    fn a_read_the_wrong_way_round_is_looked_up_as_the_range_in_order() {
+        let ordered = RangeRef::new(CellRef::new(0, 0), CellRef::new(5, 5));
+        let backward = RangeRef { start: ordered.end, end: ordered.start };
+        let roots = |area: RangeRef, read: RangeRef| {
+            let (_, calc, dirty) = reader_over(area);
+            let reads = [(dirty[0], 0, read)];
+            calc.forcing_roots(&dirty, &reads, &mut 1_000)
+        };
+        let expected: HashMap<Key, usize> = [((0, CellRef::new(1, 1)), 0)].into_iter().collect();
+        assert_eq!(roots(ordered, ordered), Some(expected.clone()));
+        // Through the graph's areas, and through the noted reads.
+        assert_eq!(roots(backward, ordered), Some(expected.clone()));
+        assert_eq!(roots(RangeRef::cell(CellRef::new(0, 9)), backward), Some(expected));
+    }
+
+    /// The order check looks a noted read up among the round's arrays as the same range in
+    /// order, whichever way round its corners came, as `forcing_roots` does: `J1`, planned before
+    /// the new array at `D10` and reading its cells, sends the round back. The block walk took a
+    /// backward read's height as end minus start and overflowed, and in a build without overflow
+    /// checks the read met no array and the round was kept.
+    #[test]
+    fn a_noted_read_the_wrong_way_round_meets_the_array_it_covers() {
+        use super::{Node, Redo, RoundOut, pass_host::Watch};
+        let (reader, anchor) = ((0, CellRef::new(0, 9)), (0, CellRef::new(9, 3)));
+        let mut calc = Calc::new();
+        for k in [reader, anchor] {
+            calc.graph.insert(k, Node { areas: Vec::new(), dynamic: false, formula: None });
+        }
+        let wb = Workbook::new();
+        let dirty = [reader, anchor];
+        let check = |read: RangeRef| {
+            let column = gridcraft_core::Array::new(3, 1, vec![Value::Number(1.0); 3]).ok_or("no array")?;
+            let times = [(reader, (0, 1)), (anchor, (2, 3))].into_iter().collect();
+            let watch = Watch { times, reads: vec![(reader, 0, read)], ..Default::default() };
+            let out = RoundOut {
+                results: HashMap::default(),
+                spills: [(anchor, std::sync::Arc::new(column))].into_iter().collect(),
+                cycles: Vec::new(),
+                watch,
+            };
+            Ok::<_, String>(calc.agrees_with_row_major(&wb, &dirty, &out, &mut 1_000))
+        };
+        let ordered = RangeRef::new(CellRef::new(0, 3), CellRef::new(299, 3));
+        assert_eq!(check(ordered), Ok(Err(Redo::Order)));
+        assert_eq!(check(RangeRef { start: ordered.end, end: ordered.start }), check(ordered));
     }
 
     /// One changed cell on a sheet with many small spills does not index them just because the
@@ -1270,7 +2046,7 @@ pub(crate) mod tests {
                 if let Some(sh) = wb.sheet_mut(0) {
                     sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
                 }
-                calc.graph.insert(k, Node { areas, dynamic: false });
+                calc.graph.insert(k, Node { areas, dynamic: false, formula: None });
                 keys.push(k);
                 if rng(&mut s).is_multiple_of(7) {
                     calc.graph.settle();

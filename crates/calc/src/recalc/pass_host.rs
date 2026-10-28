@@ -29,6 +29,24 @@ thread_local! {
 /// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
 type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
+/// What a planned round notes for `Calc::agrees_with_row_major`.
+#[derive(Default)]
+pub(super) struct Watch {
+    /// When each formula of the round started and finished being calculated, on one clock.
+    pub(super) times: HashMap<Key, (u64, u64)>,
+    /// What the dynamic formulas of the round read: the formula, the sheet and the cells. Reads
+    /// of formulas they calculate on demand belong to those formulas, whose references the graph
+    /// lists. A read is joined to the formula's entry before it when the two make one rectangle
+    /// (see `note_read`).
+    pub(super) reads: Vec<(Key, usize, RangeRef)>,
+    /// Entries `reads` may still take, from `Plan::note_limit` (the notes' own limit beside the
+    /// budget rule of `index_budget`). An entry is charged before it is stored.
+    pub(super) budget: usize,
+    /// The dynamic formulas read more than `budget` let them note: `reads` was let go, and what
+    /// they read is unknown, so the round is kept only if none of its arrays changed.
+    pub(super) unknown: bool,
+}
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -112,6 +130,17 @@ pub(super) struct PassHost<'a> {
     /// then scans the workbook's names at every lookup instead of going through `name_lookup`,
     /// whose index would cost a String and a hash insert per defined name at each call.
     pub(super) one_shot: bool,
+    /// The graph's formulas whose references are only known while evaluating (INDIRECT, OFFSET,
+    /// volatile): what they read is noted (see [`Watch::reads`]).
+    pub(super) dynamic: Option<&'a HashSet<Key>>,
+    /// A planned round: what it notes in `watch_out` (see [`Watch`]).
+    pub(super) watch: bool,
+    pub(super) watch_out: Watch,
+    /// The clock of `Watch::times`.
+    clock: u64,
+    /// While `watch`: the formulas being evaluated, innermost last, each with whether it is
+    /// dynamic (its reads are noted).
+    current: Vec<(Key, bool)>,
 }
 
 impl<'a> PassHost<'a> {
@@ -155,6 +184,11 @@ impl<'a> PassHost<'a> {
             name_lookup: NameLookup::default(),
             names_text: 0,
             one_shot: false,
+            dynamic: None,
+            watch: false,
+            watch_out: Watch::default(),
+            clock: 0,
+            current: Vec::new(),
         }
     }
 
@@ -247,7 +281,7 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
 /// outside the range are not walked: with fewer rows in the range than spilled values, each row
 /// is looked up on its own; otherwise one ordered scan visits each spilled value at most once.
 /// Returns how many values were looked at.
-fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &mut dyn FnMut(CellRef, &'s Value) -> bool) -> usize {
+pub(super) fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &mut dyn FnMut(CellRef, &'s Value) -> bool) -> usize {
     let mut seen = 0usize;
     if sheet.spill.is_empty() {
         return 0;
@@ -270,6 +304,19 @@ fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &m
         }
     }
     seen
+}
+
+/// Whether what `k` spills in this pass (`arr`, or nothing) reads as what the workbook stores
+/// for it: an array laid out as before, or no array and no stored spill range. An array of one
+/// cell is its anchor's value, which a reader gets from the formula itself wherever it is
+/// calculated, so one laid out anew, or one stored and gone, changes nothing a reader sees.
+pub(super) fn array_as_stored(wb: &Workbook, k: Key, arr: Option<&std::sync::Arc<Array>>) -> bool {
+    match (wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1).map(|r| (s, *r))), arr) {
+        (None, None) => true,
+        (None, Some(a)) => a.rows == 1 && a.cols == 1,
+        (Some((_, r)), None) => r.start == r.end,
+        (Some((s, r)), Some(a)) => spills_as_before(s, k.1, r, a),
+    }
 }
 
 impl PassHost<'_> {
@@ -365,10 +412,18 @@ impl PassHost<'_> {
         }
         let expr = std::sync::Arc::clone(expr);
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
+        let started = self.tick();
+        if self.watch {
+            let dynamic = self.dynamic.is_some_and(|d| d.contains(&k));
+            self.current.push((k, dynamic));
+        }
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        if self.watch {
+            self.current.pop();
+        }
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
             // It ran out of the stack left below the formulas that read it: it is calculated
@@ -465,7 +520,54 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        self.note_time(k, started);
         v
+    }
+
+    /// The next tick of the clock of `Watch::times` (in a planned round).
+    fn tick(&mut self) -> u64 {
+        if self.watch {
+            self.clock = self.clock.saturating_add(1);
+        }
+        self.clock
+    }
+
+    /// Notes that `k` was calculated from `started` to now (see [`Watch::times`]).
+    fn note_time(&mut self, k: Key, started: u64) {
+        if self.watch {
+            let done = self.tick();
+            self.watch_out.times.insert(k, (started, done));
+        }
+    }
+
+    /// Notes a read of `range` on `sheet` by the formula being evaluated, if it is dynamic (see
+    /// [`Watch::reads`]). A read that makes one rectangle with the formula's entry before it
+    /// (the same cells again, or the next ones down a column or along a row, as a loop over
+    /// INDIRECT or OFFSET reads them) widens that entry, which then lists the same cells as the
+    /// two would. Otherwise it takes one of the entries the round may note (`Watch::budget`)
+    /// before it is stored; with none left, the reads noted so far are let go and the round's
+    /// reads are unknown.
+    fn note_read(&mut self, sheet: usize, range: RangeRef) {
+        let Some(&(k, true)) = self.current.last() else { return };
+        let watch = &mut self.watch_out;
+        if watch.unknown {
+            return;
+        }
+        if let Some(last) = watch.reads.last_mut()
+            && last.0 == k
+            && last.1 == sheet
+            && let Some(both) = joined(last.2, range)
+        {
+            last.2 = both;
+            return;
+        }
+        if watch.budget == 0 {
+            watch.unknown = true;
+            watch.reads = Vec::new();
+            return;
+        }
+        watch.budget -= 1;
+        watch.reads.push((k, sheet, range));
     }
 
     /// A Python cell's kept result as its value: an array spills from the cell unless it is
@@ -497,6 +599,8 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        let now = self.tick();
+        self.note_time(k, now);
         v
     }
 
@@ -591,6 +695,23 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
     Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
 }
 
+/// `a` and `b` as one rectangle holding the cells of both and no other: `a` when it holds `b`,
+/// `b` when it holds `a`, or the two side by side over the same rows or columns.
+fn joined(a: RangeRef, b: RangeRef) -> Option<RangeRef> {
+    if a.contains_range(&b) {
+        return Some(a);
+    }
+    if b.contains_range(&a) {
+        return Some(b);
+    }
+    let next = |end: u32, start: u32| end.checked_add(1) == Some(start);
+    let same_cols = (a.start.col, a.end.col) == (b.start.col, b.end.col);
+    let same_rows = (a.start.row, a.end.row) == (b.start.row, b.end.row);
+    let side_by_side = (same_cols && (next(a.end.row, b.start.row) || next(b.end.row, a.start.row)))
+        || (same_rows && (next(a.end.col, b.start.col) || next(b.end.col, a.start.col)));
+    side_by_side.then(|| a.union(&b))
+}
+
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
@@ -632,6 +753,7 @@ impl Host for PassHost<'_> {
         expr
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
+        self.note_read(sheet, RangeRef::new(anchor, anchor));
         let k = (sheet, anchor);
         if !(self.pending.contains(&k) || self.results.contains_key(&k)) {
             return self.wb.sheet(sheet)?.spill_ranges.get(&anchor).copied();
@@ -651,7 +773,44 @@ impl Host for PassHost<'_> {
             || sh.merges.iter().any(|m| m.intersects(&range));
         (!blocked).then_some(range)
     }
+    // A read by a dynamic formula of a planned round is noted (see `Watch::reads`); the reads
+    // these make inside, cell by cell, are not noted again.
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
+        self.note_read(sheet, RangeRef::new(c, c));
+        self.read_cell(sheet, c)
+    }
+    fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        self.note_read(sheet, range);
+        self.read_values(sheet, range)
+    }
+    fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
+        self.note_read(sheet, range);
+        self.visit_values(sheet, range, f)
+    }
+    fn range_sum(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
+        self.note_read(sheet, range);
+        self.sum_constants(sheet, range)
+    }
+    fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
+        let wb = self.wb;
+        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+    }
+    fn now_serial(&self) -> f64 {
+        self.now
+    }
+    fn random(&mut self) -> f64 {
+        // xorshift64*
+        let mut x = *self.rng;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *self.rng = x;
+        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+impl PassHost<'_> {
+    fn read_cell(&mut self, sheet: usize, c: CellRef) -> Value {
         let k = (sheet, c);
         if self.pending.contains(&k) || self.results.contains_key(&k) {
             return self.compute(k);
@@ -672,7 +831,7 @@ impl Host for PassHost<'_> {
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
-    fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+    fn read_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
@@ -701,7 +860,7 @@ impl Host for PassHost<'_> {
             self.spill_visits += _seen;
         }
         for (i, c) in formulas {
-            let v = self.cell_value(sheet, c);
+            let v = self.read_cell(sheet, c);
             if let Some(slot) = out.get_mut(i) {
                 *slot = v;
             }
@@ -750,7 +909,7 @@ impl Host for PassHost<'_> {
         }
         out
     }
-    fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
+    fn visit_values(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
         // Formula and Python cells first, in row-major order like `range_values`: reading one
@@ -758,7 +917,7 @@ impl Host for PassHost<'_> {
         // the walk below gets the same value again without this method holding any.
         for (c, cell) in sh.cells.iter_range(range) {
             if cell.formula.is_some() || cell.py.is_some() {
-                let _ = self.cell_value(sheet, c);
+                let _ = self.read_cell(sheet, c);
             }
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
@@ -778,17 +937,17 @@ impl Host for PassHost<'_> {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
-            let go = if cell.formula.is_some() || cell.py.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
+            let go = if cell.formula.is_some() || cell.py.is_some() { f(&self.read_cell(sheet, c)) } else { f(&cell.value) };
             if !go {
                 break;
             }
         }
         true
     }
-    fn range_sum(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
+    fn sum_constants(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
         // Constants can't change during a pass, so a block's result stays valid for it. Spills
         // found in this pass (and iteration, which tracks what a read depends on) go the long way.
-        if self.iterate || self.spills.keys().any(|a| a.0 == sheet) {
+        if self.iterate || self.spill_index.has_sheet(sheet) {
             return None;
         }
         let sh = self.wb.sheet(sheet)?;
@@ -828,21 +987,5 @@ impl Host for PassHost<'_> {
         let result = plain.then_some((sum, count));
         known.insert(last, result);
         result
-    }
-    fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
-        let wb = self.wb;
-        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
-    }
-    fn now_serial(&self) -> f64 {
-        self.now
-    }
-    fn random(&mut self) -> f64 {
-        // xorshift64*
-        let mut x = *self.rng;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        *self.rng = x;
-        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
     }
 }
