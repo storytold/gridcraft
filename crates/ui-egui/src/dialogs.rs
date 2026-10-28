@@ -21,6 +21,7 @@ mod cond_format_rules;
 mod data;
 mod find;
 mod format_cells;
+mod import_text;
 mod insert_function;
 mod names;
 mod paste;
@@ -1111,6 +1112,7 @@ impl Dialog {
                 dialog.picture_target = app.view_key();
                 dialog
             }
+            "importText" => return import_text::open(app, &params),
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "assignAction" => return crate::control_ui::open_assign(app, &params),
             "formatControl" => return crate::control_ui::open_format(app, &params),
