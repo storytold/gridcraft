@@ -8,6 +8,7 @@
 
 pub mod backstage;
 mod border_preview;
+pub mod catalog;
 mod cell_pictures;
 pub mod chartview;
 pub mod control;
