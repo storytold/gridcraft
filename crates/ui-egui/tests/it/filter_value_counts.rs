@@ -16,12 +16,12 @@ fn filter_menu_shows_counts_for_values_and_blanks() {
     values.push(vec![json!("A very long payment method that must leave room for its count")]);
     session.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
     session.execute("data.filter", json!({"range": "A1:A17"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     for pressed in [true, false] {
