@@ -1294,6 +1294,13 @@ Current relevant tests:
   - `families_are_listed_once_and_sorted`
   - `a_script_names_the_families_that_cover_it`
   - `the_installed_catalog_lists_families_and_scripts`
+  - `the_preferred_family_wins_over_another_that_covers_the_script`
+  - `a_script_without_its_preferred_family_uses_any_covering_one`
+  - `a_family_that_lacks_the_script_is_not_offered`
+  - `a_serif_request_prefers_the_serif_face`
+  - `an_auxiliary_family_is_not_used_for_text`
+  - `the_regular_upright_face_wins_within_a_family`
+  - `the_installed_catalog_answers_for_the_scripts_it_covers`
 - `crates/ui-egui/src/theme.rs`:
   - `fallback_faces_are_appended_to_every_family`
   - `fallback_faces_load_each_file_once`
@@ -1310,6 +1317,7 @@ Current relevant tests:
   - `chromeos_font_layout_is_probed`
   - `only_the_scripts_in_use_load_their_fallbacks`
   - `a_latin_sheet_skips_the_cjk_and_thai_faces`
+  - `a_wanted_script_gets_a_face_from_the_chains_or_the_catalog`
 
 Rich-text tests to add:
 
@@ -1338,7 +1346,7 @@ Current test result:
 
 ```text
 cargo +1.95.0 test -p gridcraft-ui-egui --lib
-187 passed, 0 failed
+195 passed, 0 failed
 ```
 
 Full `cargo xtask ci` is currently blocked by a pre-existing unrelated clippy
@@ -1503,13 +1511,24 @@ Done (2026-10-28):
 - `used_scripts()` walks cell and shape text once per rebind (200 000-character
   budget) and `load_fallback` loads only the fallback faces whose script the
   workbook or interface needs.
+- `FontCatalog::font_for_script(script, serif)` picks the face for a script: a
+  preferred family for that script first (`preferred_families`), then any family
+  covering it that does not read as an auxiliary design (symbol, emoji, mono…),
+  ranked serif-match, upright, distance from 400, name.
+- `load_catalog_fallback` closes the gap between the hand-written chains and the
+  system: a wanted script the chains did not cover gets `sys-script-<script>`
+  (`-serif` for serif), one face from the catalog, skipped when its file is
+  already loaded (a CJK collection serves several scripts). Latin never gets
+  one — the interface font and every bound font already cover it.
 
 Still open:
 
-- `font_for_script` as the fallback selector: today the chains still list every
-  loaded face and epaint picks by coverage; a per-run family choice comes with
-  Phase 1/2 rich text.
-- Per-run families (only needed once runs exist).
+- Per-run families: itemization still hands epaint one chain per role, so a
+  fallback face is chosen by coverage at draw time rather than by script at
+  layout time. Only meaningful once runs exist (Phase 1/2).
+- The chains remain the first choice and are still hand-written; replacing them
+  with catalog-generated chains would change every host's behaviour and is not
+  part of this phase.
 
 ### Phase 4: shaping and paint separation
 
@@ -1543,6 +1562,7 @@ Still open:
 - HEAD after the weight/face-selection fix: `57df98d`
 - HEAD after binding substitutes for uninstalled standard names: `0d58e8d`
 - HEAD after Phase 3 (scripts, catalog, per-script fallback loading): `561e539`
+- HEAD after the catalog fallback selector: `b9283ba`
 - Remote PR branch: `fork/fix/linux-fontconfig` at `57df98d` (everything after it
   is local only, not pushed)
 - PR: `#1972`
@@ -1552,6 +1572,7 @@ Still open:
 Commits on the branch (newest first):
 
 ```text
+b9283ba  feat(ui): choose a fallback family from the catalog for an uncovered script (#1231)
 561e539  fix(ui): reload fallback faces when the cell text gains a script (#1231)
 8eafe63  feat(ui): load fallback faces only for the scripts in use (#1231)
 70444ae  feat(ui): index installed faces by family and script (#1231)
@@ -1601,6 +1622,11 @@ Current app behavior:
   changes, not only the used font names).
 - `FontCatalog` answers "which families cover script X" and "which faces answer
   to this name (any language)" without touching the file system.
+- A script the hard-written chains do not resolve still renders when the system
+  installs it under another family: the catalog names the face and it is bound
+  as `sys-script-<script>` (single face, coverage-level fallback like the
+  hand-written ones). Verified in a UI render with the sales sample; the
+  hand-written chains keep winning, so hosts that resolve today are unchanged.
 - Per-character rich text is not implemented; XLSX runs are flattened.
 
 ---
