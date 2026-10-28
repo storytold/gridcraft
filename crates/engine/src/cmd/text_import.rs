@@ -2,7 +2,7 @@
 //! sample rows) and the import itself, with a column mapping (keep, rename, reorder, data type)
 //! and an optional PivotTable built from the imported table.
 
-use gridcraft_core::date::serial_from_ymd;
+use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
@@ -252,9 +252,8 @@ fn parse_date(s: &str, decimal_comma: bool, sys: DateSystem) -> Option<(f64, &'s
     if !(1000..=9999).contains(&y) || !(1..=12).contains(&m) || d < 1 {
         return None;
     }
-    let first = serial_from_ymd(sys, y, m, 1)?;
-    let next = serial_from_ymd(sys, y, m + 1, 1)?;
-    if (d as f64) > next - first {
+    // The month's length directly: the first of the next month would be year 10000 in December 9999.
+    if d > i64::from(days_in_month_in(sys, y as i32, m as u32)) {
         return None;
     }
     let day = serial_from_ymd(sys, y, m, d)?;
@@ -391,50 +390,53 @@ pub(crate) fn from_text(s: &mut Session, p: &Json) -> Result<Json> {
     for r in &rec.rows {
         values.push(cols.iter().map(|t| cell_value(r.get(t.source).map_or("", String::as_str), t.kind, rec.decimal_comma, sys)).collect());
     }
-    let name = str_param(p, "sheet").map(str::to_string).or_else(|| {
-        str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(|f| f.to_str()).map(|f| f.chars().take(31).collect()))
-    });
-    let sheet = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
-    s.execute("range.setValues", json!({"range": "A1", "values": values}))?;
-    let last_row = values.len() as u32 - 1;
-    let last_col = cols.len() as u32 - 1;
-    for (i, t) in cols.iter().enumerate() {
-        if t.kind == Kind::Date && last_row > 0 {
-            let with_time =
-                rec.rows.iter().filter_map(|r| r.get(t.source)).filter_map(|f| parse_date(f, rec.decimal_comma, sys)).any(|(n, _)| n.fract() != 0.0);
-            let range = RangeRef::new(CellRef::new(1, i as u32), CellRef::new(last_row, i as u32));
-            s.execute("home.numberFormat", json!({"range": range.a1(), "code": if with_time { "yyyy-mm-dd hh:mm" } else { "yyyy-mm-dd" }}))?;
-        }
-    }
-    let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(last_row, last_col));
-    let table = s.execute("insert.table", json!({"range": range.a1(), "header": true})).ok().and_then(|t| t.get("table").cloned());
-    let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, last_col).a1()}));
-    let pivot = match p.get("pivot") {
-        None | Some(Json::Null) | Some(Json::Bool(false)) => Json::Null,
-        Some(spec) => {
-            let source = match &table {
-                Some(t) => t.clone(),
-                None => json!(format!("'{}'!{}", sheet["name"].as_str().unwrap_or_default().replace('\'', "''"), range.a1())),
-            };
-            if last_row == 0 {
-                return Err(EngineError::Other("A PivotTable needs at least one row of data.".into()));
+    // One undo step, and all or nothing: a PivotTable that can't be built leaves no new sheet behind.
+    s.grouped("Import Text/CSV", |s| {
+        let name = str_param(p, "sheet").map(str::to_string).or_else(|| {
+            str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(|f| f.to_str()).map(|f| f.chars().take(31).collect()))
+        });
+        let sheet = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
+        s.execute("range.setValues", json!({"range": "A1", "values": values}))?;
+        let last_row = values.len() as u32 - 1;
+        let last_col = cols.len() as u32 - 1;
+        for (i, t) in cols.iter().enumerate() {
+            if t.kind == Kind::Date && last_row > 0 {
+                let with_time =
+                    rec.rows.iter().filter_map(|r| r.get(t.source)).filter_map(|f| parse_date(f, rec.decimal_comma, sys)).any(|(n, _)| n.fract() != 0.0);
+                let range = RangeRef::new(CellRef::new(1, i as u32), CellRef::new(last_row, i as u32));
+                s.execute("home.numberFormat", json!({"range": range.a1(), "code": if with_time { "yyyy-mm-dd hh:mm" } else { "yyyy-mm-dd" }}))?;
             }
-            if spec.as_bool() == Some(true) {
-                s.execute("insert.recommendedPivotTables", json!({"source": source, "apply": 0}))?
-            } else {
-                let mut q = json!({"source": source, "destination": "new"});
-                for area in ["rows", "columns", "values", "filters"] {
-                    if let Some(v) = spec.get(area) {
-                        q[area] = v.clone();
-                    }
+        }
+        let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(last_row, last_col));
+        let table = s.execute("insert.table", json!({"range": range.a1(), "header": true})).ok().and_then(|t| t.get("table").cloned());
+        let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, last_col).a1()}));
+        let pivot = match p.get("pivot") {
+            None | Some(Json::Null) | Some(Json::Bool(false)) => Json::Null,
+            Some(spec) => {
+                let source = match &table {
+                    Some(t) => t.clone(),
+                    None => json!(format!("'{}'!{}", sheet["name"].as_str().unwrap_or_default().replace('\'', "''"), range.a1())),
+                };
+                if last_row == 0 {
+                    return Err(EngineError::Other("A PivotTable needs at least one row of data.".into()));
                 }
-                s.execute("insert.pivotTable", q)?
+                if spec.as_bool() == Some(true) {
+                    s.execute("insert.recommendedPivotTables", json!({"source": source, "apply": 0}))?
+                } else {
+                    let mut q = json!({"source": source, "destination": "new"});
+                    for area in ["rows", "columns", "values", "filters"] {
+                        if let Some(v) = spec.get(area) {
+                            q[area] = v.clone();
+                        }
+                    }
+                    s.execute("insert.pivotTable", q)?
+                }
             }
-        }
-    };
-    Ok(
-        json!({"sheet": sheet["name"], "table": table, "rows": rec.rows.len(), "cols": cols.len(), "delimiter": delimiter_name(rec.delimiter), "pivot": pivot}),
-    )
+        };
+        Ok(
+            json!({"sheet": sheet["name"], "table": table, "rows": rec.rows.len(), "cols": cols.len(), "delimiter": delimiter_name(rec.delimiter), "pivot": pivot}),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -512,6 +514,27 @@ mod tests {
         let si = d.wb.sheet_index(pv["sheet"].as_str().unwrap()).unwrap();
         let text = crate::display::range_text(&d.wb, si, RangeRef::parse(pv["range"].as_str().unwrap()).unwrap());
         assert!(text.contains("Północ") && text.contains("1244.5"), "{text}");
+    }
+
+    #[test]
+    fn a_pivot_table_that_fails_leaves_the_workbook_as_it_was() {
+        let mut s = session();
+        let sheets = s.doc().unwrap().wb.sheets.len();
+        let pivot = json!({"rows": ["No such field"], "values": [{"field": "Kwota", "func": "sum"}]});
+        assert!(s.execute("data.fromTextCsv", json!({"text": SALES, "sheet": "Dane", "pivot": pivot})).is_err());
+        let d = s.doc().unwrap();
+        assert_eq!(d.wb.sheets.len(), sheets, "no new sheet is left behind");
+        assert!(d.wb.sheet_index("Dane").is_none());
+    }
+
+    #[test]
+    fn december_9999_is_a_date() {
+        let sys = DateSystem::D1900;
+        assert_eq!(parse_date("9999-12-31", false, sys).map(|(n, _)| n), serial_from_ymd(sys, 9999, 12, 31));
+        assert_eq!(parse_date("31.12.9999", true, sys).map(|(n, _)| n), serial_from_ymd(sys, 9999, 12, 31));
+        assert!(parse_date("9999-12-32", false, sys).is_none());
+        assert!(parse_date("2026-02-29", false, sys).is_none());
+        assert!(parse_date("2028-02-29", false, sys).is_some());
     }
 
     #[test]
