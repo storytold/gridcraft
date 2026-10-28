@@ -626,7 +626,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
                 app.toast = Some((
-                    crate::i18n::current(ui.ctx())
+                    crate::i18n::current(&input.context)
                         .tr("Width: {size} ({px} pixels)")
                         .replace("{size}", &format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64)))
                         .replace("{px}", &w.round().to_string()),
@@ -645,7 +645,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
                 app.toast = Some((
-                    crate::i18n::current(ui.ctx())
+                    crate::i18n::current(&input.context)
                         .tr("Height: {size} ({px} pixels)")
                         .replace("{size}", &format!("{:.2}", h * 0.75))
                         .replace("{px}", &h.round().to_string()),
