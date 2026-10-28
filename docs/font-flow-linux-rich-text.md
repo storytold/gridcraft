@@ -5,7 +5,7 @@ Status: design note and implementation map.
 - Repository: `storytold/gridcraft`
 - Branch: `fix/linux-fontconfig`
 - HEAD at the start of this rewrite: `775a14a docs: add Linux font flow design note (#1231)`
-- Last updated: 2026-10-28 (substitutes for uninstalled standard names bind all four roles)
+- Last updated: 2026-10-28 (the script class set is full; widening to `u32` is the next step)
 - Related issue: `#1231`
 - Current PR: `#1972` (open; remote PR branch at `57df98d`, local `HEAD` at `0d58e8d`)
 
@@ -707,11 +707,24 @@ pub enum ScriptClass {
     Japanese,
     Korean,
     Thai,
+    Lao,
     Hebrew,
+    Arabic,
+    Devanagari,
+    Khmer,
+    Myanmar,
+    Tibetan,
+    Yi,
+    Bengali,
+    Ethiopic,
     Symbols,
     Common,
 }
 
+/// One bit per class, `Common` excepted. Currently `u16`, and all 16 bits are in
+/// use (fourteen original classes, then Bengali and Ethiopic): a seventeenth
+/// class needs `u32`. That is a one-line change here plus the `bit()` numbers,
+/// because callers only use `has`/`with`/`intersects`/`iter`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ScriptMask(u16);
 
@@ -1540,6 +1553,14 @@ Done (2026-10-28):
 
 Still open:
 
+- The class set is full: `ScriptSet(u16)` uses all 16 bits (`Common` has none),
+  so the next class that has to be routed needs `ScriptSet` widened to `u32`
+  first. Callers only use the set's methods, so the widening is contained in
+  `crates/ui-egui/src/script.rs`, but `Face`, `FontEntry` and `ScriptSet::all()`
+  grow with it. Deliberate choice: widen when a script is actually missing, not
+  now — a wider set buys nothing until then. Tests gate on
+  `every_class_but_common_has_its_own_bit`, which asserts the last bit is 15 and
+  will fail the day a class is added without widening.
 - Per-run families: itemization still hands epaint one chain per role, so a
   fallback face is chosen by coverage at draw time rather than by script at
   layout time. Only meaningful once runs exist (Phase 1/2).
@@ -1688,6 +1709,11 @@ Current app behavior:
 14. Should `model::Font` gain a numeric weight now, or keep `bold: bool` until
     the catalog exposes real weights? §5.3.1 supports both; the family-key
     constraint only becomes visible once a workbook uses more than 400/700.
+15. Widen `ScriptSet` to `u32` now (headroom for Tamil, Telugu, Sinhala,
+    Armenian, Georgian, …) or only when a workbook actually needs a script that
+    has no class? Decided: only when needed. The widening is contained and
+    `every_class_but_common_has_its_own_bit` fails as soon as the last bit would
+    collide, so it cannot be forgotten.
 
 ---
 
