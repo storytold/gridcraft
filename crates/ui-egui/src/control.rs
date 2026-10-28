@@ -37,7 +37,7 @@ use screenshots::{Shot, check_encoding_budget, check_peak_budget, reject_shot};
 use screenshots::{base64_len, png_worst_bytes, validate_image};
 pub(crate) use screenshots::{current_capture_geometry, note_capture_geometry};
 pub use synthetic::{MAX_QUEUED_SYNTHETIC_BYTES, MAX_QUEUED_SYNTHETIC_EVENTS, MAX_SYNTHETIC_TEXT_BYTES};
-use synthetic::{cell_center, key_from, modifiers, push_click, push_drag, push_key, push_move, push_text};
+use synthetic::{cell_center, key_from, modifiers, pointer_button, push_click, push_drag, push_key, push_move, push_text};
 
 pub type ControlResponse = Json;
 
@@ -350,16 +350,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             Err(e) => err(e),
         },
         "ui.click" => {
-            let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
-            match push_click(app, egui::pos2(f("x"), f("y")), button, count, modifiers(p)) {
+            match push_click(app, egui::pos2(f("x"), f("y")), pointer_button(p), count, modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
         }
         "ui.drag" => {
             let steps = p.get("steps").and_then(Json::as_u64).unwrap_or(8).min(u64::from(u32::MAX)) as usize;
-            match push_drag(app, egui::pos2(f("x"), f("y")), egui::pos2(f("toX"), f("toY")), steps, modifiers(p)) {
+            match push_drag(app, egui::pos2(f("x"), f("y")), egui::pos2(f("toX"), f("toY")), steps, pointer_button(p), modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
@@ -367,9 +366,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "ui.cell.click" => {
             let Some(c) = s("cell").and_then(CellRef::parse) else { return err("missing `cell`") };
             let Some(pos) = cell_center(app, c) else { return err("no grid yet") };
-            let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
-            match push_click(app, pos, button, count, modifiers(p)) {
+            match push_click(app, pos, pointer_button(p), count, modifiers(p)) {
                 Ok(()) => ok(json!({"x": pos.x, "y": pos.y})),
                 Err(e) => err(e),
             }
@@ -379,7 +377,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 return err("missing `from`/`to`");
             };
             let (Some(pa), Some(pb)) = (cell_center(app, a), cell_center(app, b)) else { return err("no grid yet") };
-            match push_drag(app, pa, pb, 8, modifiers(p)) {
+            match push_drag(app, pa, pb, 8, pointer_button(p), modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }

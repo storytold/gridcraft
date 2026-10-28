@@ -9,6 +9,11 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     }
     let ctx = ui.ctx();
     let pointer = ctx.input(|i| i.pointer.clone());
+    // A middle-button pan owns the cursor even when the pointer leaves the grid mid-drag.
+    if app.grid.middle_pan {
+        ctx.set_cursor_icon(CursorIcon::Grabbing);
+        return;
+    }
     let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
     let (freeze_cols, freeze_rows) = freeze_handles(geo);

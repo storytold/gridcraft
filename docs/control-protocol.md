@@ -59,8 +59,8 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
 | `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
-| `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
-| `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
+| `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, steps?, shift?, cmd?, alt?}` | Real pointer input in window points; `button` is `left` (the default), `middle` or `right`, and a middle drag pans the grid as the middle mouse button does; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
+| `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to, button?}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
 | `ui.key` / `ui.text` | `{key, shift?, cmd?, alt?, ctrl?}` / `{text}` | Keyboard input (typing in the grid starts editing); same shared queue limits, and one `ui.text` string may be at most 1 MiB |
 | `ui.edit.begin` / `ui.edit.text` / `ui.edit.commit` / `ui.edit.cancel` | `{text?}` / `{move?: down\|right\|up\|left\|none}` | Drive the cell editor |
 | `ui.ribbon` | `{tab}` | Switch ribbon tab |

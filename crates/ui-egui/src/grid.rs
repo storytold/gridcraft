@@ -250,6 +250,13 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// The middle mouse button held on the grid (AutoCAD's pan): the sheet follows the pointer
+    /// instead of selecting.
+    pub middle_pan: bool,
+    /// The pointer position the middle pan has moved the sheet up to. Movement before the press
+    /// (and up to the release) is measured from here rather than from egui's frame-wide delta, so
+    /// the sheet neither jumps on the press nor drops the last move before the release.
+    pub middle_pan_pos: Option<Pos2>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
