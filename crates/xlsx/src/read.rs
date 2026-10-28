@@ -230,6 +230,30 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
         wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
+        wb.calc.multi_threaded = match c.attr("concurrentCalc") {
+            None => true,
+            Some(v) => match c.attr_bool("concurrentCalc") {
+                Some(b) => b,
+                None => {
+                    cx.warn(format!("calcPr: concurrentCalc {v:?} is not a boolean; multi-threaded calculation stays on"));
+                    true
+                }
+            },
+        };
+        wb.calc.threads = match c.attr("concurrentManualCount").map(str::trim) {
+            None => 0,
+            Some(v) => match v.parse::<u64>() {
+                Ok(n) if n <= 1024 => n as u32,
+                Ok(n) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {n} is above Excel's limit; kept 1024"));
+                    1024
+                }
+                Err(_) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {v:?} is not a count; calculation uses every processor"));
+                    0
+                }
+            },
+        };
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
