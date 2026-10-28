@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CalcSettings, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
+    WorkbookView,
 };
 
 use crate::package::{Package, Rel};
@@ -298,6 +299,37 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
         wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
+        wb.calc.multi_threaded = match c.attr("concurrentCalc") {
+            None => true,
+            Some(v) => match c.attr_bool("concurrentCalc") {
+                Some(b) => b,
+                None => {
+                    cx.warn(format!("calcPr: concurrentCalc {v:?} is not a boolean; multi-threaded calculation stays on"));
+                    true
+                }
+            },
+        };
+        wb.calc.threads = match c.attr("concurrentManualCount").map(str::trim) {
+            None => 0,
+            Some(v) => match v.parse::<u64>() {
+                // Excel writes the automatic count by leaving the attribute out, not as 0, and
+                // opens a file that says 0 with a manual count of one thread (observed in
+                // Microsoft 365, 2026-10-27).
+                Ok(0) => {
+                    cx.warn("calcPr: concurrentManualCount is 0; Excel reads that as one thread".to_string());
+                    1
+                }
+                Ok(n) if n <= u64::from(CalcSettings::MAX_THREADS) => n as u32,
+                Ok(n) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {n} is above Excel's limit; kept {}", CalcSettings::MAX_THREADS));
+                    CalcSettings::MAX_THREADS
+                }
+                Err(_) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {v:?} is not a count; the automatic count is used"));
+                    0
+                }
+            },
+        };
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);

@@ -1,7 +1,7 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Workbook};
+use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently), multiThreaded?: bool (Enable multi-threaded calculation), threads?: 0–1024 (0: the automatic count, the processors present up to 64; at most the processors present run)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -1020,6 +1020,24 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         Some("automatic") => Some(CalcMode::Automatic),
         _ => None,
     };
+    // Absent or null means not given, as for the other settings; a value that can't be used is
+    // refused before anything changes.
+    let multi_threaded = p
+        .get("multiThreaded")
+        .filter(|v| !v.is_null())
+        .map(|v| v.as_bool().ok_or_else(|| bad("formulas.calculationOptions", format!("`multiThreaded` must be a boolean, not {v}"))))
+        .transpose()?;
+    let threads = p
+        .get("threads")
+        .filter(|v| !v.is_null())
+        .map(|v| {
+            let n = v.as_u64().ok_or_else(|| bad("formulas.calculationOptions", format!("`threads` must be a non-negative integer, not {v}")))?;
+            u32::try_from(n)
+                .ok()
+                .filter(|n| *n <= CalcSettings::MAX_THREADS)
+                .ok_or_else(|| bad("formulas.calculationOptions", format!("`threads` must be at most {}, not {n}", CalcSettings::MAX_THREADS)))
+        })
+        .transpose()?;
     edit(s, |cx| {
         let before = cx.wb.calc.clone();
         if let Some(m) = mode {
@@ -1041,6 +1059,12 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
                 crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
             }
         }
+        if let Some(v) = multi_threaded {
+            cx.wb.calc.multi_threaded = v;
+        }
+        if let Some(n) = threads {
+            cx.wb.calc.threads = n;
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, leaving manual mode for any other mode (what waited in manual
         // mode is calculated, as F9 calculates it), or changing how circular references are
@@ -1059,6 +1083,8 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             "maxIterations": c.max_iterations,
             "maxChange": c.max_change,
             "precisionAsDisplayed": c.precision_as_displayed,
+            "multiThreaded": c.multi_threaded,
+            "threads": c.threads,
         }))
     })
 }
