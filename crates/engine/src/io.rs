@@ -331,6 +331,12 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if dropped > 0 {
                 warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
             }
+            // As the XLSX reader keeps `concurrentManualCount`: a count past Excel's limit is kept at it.
+            let max_threads = gridcraft_model::CalcSettings::MAX_THREADS;
+            if wb.calc.threads > max_threads {
+                warnings.push(format!("{name}: calculation threads {} is above Excel's limit; kept {max_threads}", wb.calc.threads));
+                wb.calc.threads = max_threads;
+            }
             Ok((wb, warnings))
         }
         Some(FileKind::Sylk) => {

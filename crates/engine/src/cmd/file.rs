@@ -230,7 +230,7 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
             gridcraft_model::CalcMode::AutomaticExceptTables => "automaticExceptTables",
             gridcraft_model::CalcMode::Manual => "manual",
         };
-        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed})
+        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed, "multiThreaded": c.multi_threaded, "threads": c.threads})
     });
     Ok(json!({"calculation": calculation}))
 }

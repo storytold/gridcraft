@@ -99,6 +99,28 @@ pub struct CalcSettings {
     /// GridCraft itself shows and takes A1 references.
     #[serde(default)]
     pub r1c1: bool,
+    /// Calculate on several threads (Excel's "Enable multi-threaded calculation"; XLSX
+    /// `calcPr concurrentCalc`).
+    /// Left out of the JSON workbook while on, so files written before it existed save back as they were.
+    #[serde(default = "multi_threaded_default", skip_serializing_if = "multi_threaded_is_default")]
+    pub multi_threaded: bool,
+    /// Calculation threads; 0 is the automatic count: the processors present, at most 64, and one
+    /// thread with `multi_threaded` off (XLSX `concurrentManualCount`).
+    /// Left out of the JSON workbook while 0, as `multi_threaded` is while on.
+    #[serde(default, skip_serializing_if = "threads_is_default")]
+    pub threads: u32,
+}
+
+fn multi_threaded_default() -> bool {
+    true
+}
+
+fn multi_threaded_is_default(multi_threaded: &bool) -> bool {
+    *multi_threaded
+}
+
+fn threads_is_default(threads: &u32) -> bool {
+    *threads == 0
 }
 
 impl Default for CalcSettings {
@@ -110,6 +132,8 @@ impl Default for CalcSettings {
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
             r1c1: false,
+            multi_threaded: true,
+            threads: 0,
         }
     }
 }
@@ -119,6 +143,8 @@ impl CalcSettings {
     pub const DEFAULT_CHANGE: f64 = 0.001;
     /// The largest Maximum Iterations Excel accepts.
     pub const MAX_ITERATIONS: u32 = 32_767;
+    /// The most calculation threads Excel accepts (`concurrentManualCount`).
+    pub const MAX_THREADS: u32 = 1024;
 
     /// Sets Maximum Iterations, kept within 1 to [`CalcSettings::MAX_ITERATIONS`].
     pub fn set_max_iterations(&mut self, n: u32) {
