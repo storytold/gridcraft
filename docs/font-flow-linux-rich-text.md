@@ -5,9 +5,9 @@ Status: design note and implementation map.
 - Repository: `storytold/gridcraft`
 - Branch: `fix/linux-fontconfig`
 - HEAD at the start of this rewrite: `775a14a docs: add Linux font flow design note (#1231)`
-- Last updated: 2026-10-28 (the script class set is full; widening to `u32` is the next step)
+- Last updated: 2026-10-28 (section 3 realigned with HEAD `ac0bacd`; function names replace line numbers)
 - Related issue: `#1231`
-- Current PR: `#1972` (open; remote PR branch at `57df98d`, local `HEAD` at `0d58e8d`)
+- Current PR: `#1972` (open; remote PR branch at `57df98d`, local `HEAD` at `ac0bacd`)
 
 This document has three layers:
 
@@ -113,60 +113,67 @@ Fonts remain external assets. GridCraft must not bundle fonts outside the
 
 ## 3. Current implementation
 
-This section describes HEAD `09b0d1d` plus the documentation commit `775a14a`.
-Line numbers refer to that code state.
+This section describes the code on this branch at HEAD `ac0bacd`. It states what
+the code does now, not how it differs from an earlier version: superseded
+behaviour appears only in §12. Functions and files are the anchors; line numbers
+are omitted on purpose because every phase moves them.
 
 ### 3.1 Startup and scan
 
 Entry point:
 
-- `crates/ui-egui/src/lib.rs:348` `setup_context_for_language()`
-- `crates/ui-egui/src/lib.rs:349` `fonts::start_scan()`
+- `setup_context_for_language()` in `crates/ui-egui/src/lib.rs`
+- `fonts::start_scan()`
 
-`start_scan()` (`crates/ui-egui/src/fonts.rs:347`) starts a named background
+`start_scan()` (in `crates/ui-egui/src/fonts.rs`) starts a named background
 thread (`font-scan`) once. The thread calls `catalog()`.
 
-`catalog()` (`crates/ui-egui/src/fonts.rs:336`) is a `OnceLock<Vec<Face>>`.
+`catalog()` (in `crates/ui-egui/src/fonts.rs`) is a `OnceLock<Vec<Face>>`.
 It blocks only the first caller; the background thread normally does that work.
 
-`scan_installed()` (`crates/ui-egui/src/fonts.rs:322`):
+`scan_installed()` (in `crates/ui-egui/src/fonts.rs`):
 
 1. On Linux, call `fontconfig_faces()`.
 2. If it returns faces, use them.
 3. Otherwise fall back to `scan_dirs(system_font_dirs())`.
 
-`fontconfig_faces()` (`fonts.rs:228`) runs:
+`fontconfig_faces()` runs:
 
 ```text
-fc-list -f "%{file}\t%{index}\t%{family[0]}\t%{style[0]}\t%{weight}\t%{slant}\n"
+fc-list -f "%{file}\t%{index}\t%{family[0]}\t%{family}\t%{style[0]}\t%{weight}\t%{slant}\t%{charset}\n"
 ```
 
 with `LC_ALL=C` so family and style are the English names. Each record becomes a
 `Face` directly: family, face index, weight mapped from fontconfig's
 `FC_WEIGHT_*` constants to the 100–900 scale, italic from `FC_SLANT_ITALIC`
-(`100`) and up, and the serif hint from the family name. Paths are kept
-byte-exact (a font path need not be valid UTF-8), filtered to existing files
-with supported extensions (`ttf`, `otf`, `ttc`, `otc`), and deduplicated by
-`(path, index)`. A variable font's default-instance range row (`[80 200]`, empty
-style) is not a usable face and is skipped.
+(`100`) and up, the serif hint from the family name, and the covered scripts from
+`%{charset}`. Paths are kept byte-exact (a font path need not be valid UTF-8),
+filtered to existing files with supported extensions (`ttf`, `otf`, `ttc`, `otc`),
+and deduplicated by `(path, index)`. A variable font's default-instance range row
+(`[80 200]`, empty style) is not a usable face and is skipped.
+
+`%{charset}` keeps the script knowledge inside the metadata pass: no font file is
+opened to learn coverage. The field lists the Unicode blocks the face covers
+(`4e00-9fff 1f600-1f64f …`); `ScriptSet::of_charset()` turns it into bits by
+bisecting the per-script `SAMPLES` pairs from `crates/ui-egui/src/script.rs`.
 
 This is also why startup no longer opens every font: the list arrives as
 metadata from the fontconfig cache. `fc-list` still runs once, on the background
 `font-scan` thread.
 
-`scan_dirs()` (`fonts.rs:202`) recursively walks platform font folders,
-canonicalizes directories to avoid symlink loops, and calls `scan_file()` for
-each candidate.
+`scan_dirs()` (in `crates/ui-egui/src/fonts.rs`) recursively walks platform font
+folders, canonicalizes directories to avoid symlink loops, and calls
+`scan_file()` for each candidate.
 
 ### 3.2 Metadata-only face scanning (non-Linux)
 
-`scan_file()` (`fonts.rs:184`) enforces `MAX_FONT_FILE` (256 MiB) and then calls
-`file_faces()` (`:110`), which uses `skrifa`'s `FileRef`/`FontRef`: `fonts()`
-iterates the faces of a plain sfnt or a collection, `localized_strings` reads
-the typographic family/subfamily (falling back to the legacy name IDs) in
-English or the first available language, and `os2().panose_10()` supplies the
-serif flag. Damaged files, unreadable tables, and out-of-range table offsets
-yield no faces, not a panic.
+`scan_file()` enforces `MAX_FONT_FILE` (256 MiB) and then calls `file_faces()`,
+which uses `skrifa`'s `FileRef`/`FontRef`: `fonts()` iterates the faces of a plain
+sfnt or a collection, `localized_strings` reads the typographic
+family/subfamily (falling back to the legacy name IDs) in English or the first
+available language, `os2().panose_10()` supplies the serif flag, and
+`charmap()` supplies the coverage that becomes `Face::scripts`. Damaged files,
+unreadable tables, and out-of-range table offsets yield no faces, not a panic.
 
 Unlike the Linux path, this reads each candidate file once (peak memory is the
 largest file, not the sum), because `skrifa` needs the bytes. The 256 MiB cap
@@ -174,7 +181,7 @@ bounds that read; it is not a claim that a larger font could not render.
 
 ### 3.3 Face catalog and family list
 
-`Face` (`crates/ui-egui/src/fonts.rs:35`) contains:
+`Face` (in `crates/ui-egui/src/fonts.rs`) contains:
 
 ```rust
 pub struct Face {
@@ -185,6 +192,7 @@ pub struct Face {
     pub weight: f32,
     pub italic: bool,
     pub serif: bool,
+    pub scripts: ScriptSet,
 }
 ```
 
@@ -194,16 +202,18 @@ workbook that names the font by any of them binds to it (#1898). On Linux the
 list comes from `%{family}` in `fc-list`, which also reports aliases; elsewhere
 it comes from the `name` table. `serif` is a catalog hint from the OS/2 panose
 (or, on Linux, the family name); binding re-reads panose from the loaded bytes.
+`scripts` is the coverage the catalog queries (`FontCatalog::families_covering`,
+`font_for_script`); it is not used to pick a face inside a family.
 
 Style names are converted to weight and italic flags by `style_weight()` and
 `style_italic()`. On Linux the weight comes from `fc_weight()`
-(`crates/ui-egui/src/fonts.rs:312`), which maps fontconfig's OpenType-style
+(in `crates/ui-egui/src/fonts.rs`), which maps fontconfig's OpenType-style
 constants (`FC_WEIGHT_REGULAR` 80, `FC_WEIGHT_BOLD` 200) onto the CSS scale.
 `FC_WEIGHT_EXTRABOLD` (205) has its own point at 800: it is equally far from
 Bold (200) and Black (210), and while it was missing from the table
 `min_by_key` rounded it down to 700 and tied it with Bold.
 
-`families()` (`crates/ui-egui/src/fonts.rs:418`) builds the font picker list:
+`families()` (in `crates/ui-egui/src/fonts.rs`) builds the font picker list:
 
 - standard `ribbon::FONTS` names first;
 - then installed family names, A–Z, case-insensitively deduplicated.
@@ -212,7 +222,8 @@ It never blocks: if the scan is not done, it returns only the standard names.
 
 ### 3.4 Font roles and `fc-match`
 
-`theme.rs:340 candidates(role)` produces candidate `(path, index)` pairs.
+`candidates(role)` (in `crates/ui-egui/src/theme.rs`) produces candidate
+`(path, index)` pairs.
 
 On Linux, fontconfig candidates are added first:
 
@@ -224,7 +235,7 @@ v.extend(linux_fontconfig_candidates(role));
 The remaining hard-coded paths are a fallback for systems where fontconfig is
 missing or returns nothing usable.
 
-`linux_fontconfig_candidates()` (`theme.rs:472`) maps roles to patterns:
+`linux_fontconfig_candidates()` maps roles to patterns:
 
 | Role | Patterns, in order |
 |---|---|
@@ -237,11 +248,10 @@ missing or returns nothing usable.
 | `serif` | Liberation Serif, DejaVu Serif, serif |
 | `mono` | Liberation Mono, DejaVu Sans Mono, Noto Sans Mono, monospace |
 
-`fc_match_candidates()` (`theme.rs:499`) calls `fc_match()` for each pattern,
-drops duplicate `(path, index)` pairs, and returns the candidates.
+`fc_match_candidates()` calls `fc_match()` for each pattern, drops duplicate
+`(path, index)` pairs, and returns the candidates.
 
-`fc_match()` (`theme.rs:780`) first checks the thread-local `FC_MATCH_CACHE`.
-On a miss it runs:
+`fc_match()` first checks the thread-local `FC_MATCH_CACHE`. On a miss it runs:
 
 ```text
 fc-match -f "%{file}\n%{index}\n" <pattern>
@@ -253,11 +263,11 @@ restart.
 
 The fontconfig `index` carries two fields: the face index in the low 16 bits and
 a **1-based named instance** in the high 16 bits (`0` means the font's default
-instance). `try_load()` (`theme.rs:275`) splits them with `fc_index_parts()`,
+instance). `try_load()` splits them with `fc_index_parts()`,
 keeps the low half in `FontData::index` (a face index, as egui expects) and
 applies the named instance through `FontTweak::coords` (`apply_named_instance()`),
 reading the axis values with `skrifa`. The bytes themselves come from
-`font_file()` (`theme.rs:298`), which reads each file once per process, keeps a
+`font_file()`, which reads each file once per process, keeps a
 parseable copy for `'static`, and feeds `FontData::from_static` — otherwise egui
 kept a second copy of every loaded face (about 100 MB on a Mac). Without that, a variable font always
 rendered its default instance: fontconfig resolves `Noto Sans:weight=bold` to
@@ -271,19 +281,27 @@ fontconfig 2.17, so it cannot distinguish a static face from a named instance.
 
 ### 3.5 Font definitions and script fallback
 
-`font_definitions_with_bound()` (`theme.rs:551`) builds the egui font set and
-returns `(FontDefinitions, Vec<String>)`.
+`font_definitions_with_bound()` (in `crates/ui-egui/src/theme.rs`) builds the egui
+font set and returns `(FontDefinitions, Vec<String>)`. Its third argument is the
+`ScriptSet` the workbook's text needs.
 
 It:
 
 1. starts from egui's defaults;
-2. loads the sans script fallback faces with `load_fallback(fonts, han, false)`;
-3. decides whether serif faces are needed: `want_serif` is true when a workbook
+2. turns that set into `wanted = wanted_scripts(language, scripts)`: the
+   workbook's scripts, unioned with the interface language's scripts
+   (`interface_scripts()`: Han for Chinese; Han and Japanese for Japanese;
+   Korean for Korean) and with `Symbols`. An empty workbook set means "nothing
+   known yet" and widens to `ScriptSet::all()`, the pre-gating behaviour.
+   `known` records whether the workbook set was non-empty;
+3. loads the sans script fallback faces with
+   `load_fallback(fonts, han, false, wanted, known)`;
+4. decides whether serif faces are needed: `want_serif` is true when a workbook
    family in `used` reads as serif (`family_name_is_serif()`: Times, Georgia,
    Cambria, Garamond, any `*Serif*` that is not a `*Sans*` name). Only then does
-   it call `load_fallback(fonts, han, true)`. Noto Serif CJK alone is ~55 MB, so
-   a sans-only workbook must not pay for it;
-4. for each role (`ui`, `ui-bold`, `cell`, `cell-bold`, `cell-italic`,
+   it call `load_fallback(fonts, han, true, wanted, known)`. Noto Serif CJK
+   alone is ~55 MB, so a sans-only workbook must not pay for it;
+5. for each role (`ui`, `ui-bold`, `cell`, `cell-bold`, `cell-italic`,
    `cell-bold-italic`, `serif`, `mono`):
    - resolves candidates;
    - loads the first parseable face with `try_load()`;
@@ -292,33 +310,43 @@ It:
    - extends the chain with egui's base proportional/monospace chain and the
      script fallback keys; the `serif` role uses the serif set when `want_serif`,
      every other role uses the sans set;
-5. binds installed workbook families with `bind_family()`; each bound role chain
+6. binds installed workbook families with `bind_family()`; each bound role chain
    ends with the fallbacks that match its primary face — `ScriptFallbacks::serif`
    for a serif face, `ScriptFallbacks::sans` otherwise. The keys are explicit
    because at this point `FontFamily::Proportional` may still be egui's bundled
    Latin-only fonts, so a Latin family such as DejaVu Sans would otherwise show
    tofu for CJK (#1231);
-6. binds the OS substitute for a standard Excel name that is not installed
-   (`substitute_family()`, `fonts.rs`): `fc-match` resolves `Times New Roman` to
+7. binds the OS substitute for a standard Excel name that is not installed
+   (`substitute_family()`): `fc-match` resolves `Times New Roman` to
    `Liberation Serif`, `Cambria` to `Caladea`, `Courier New` to
    `Liberation Mono`, and `bind_faces()` binds that family's four roles **under
    the requested name**, so the cell keeps bold and italic. Only
    `ribbon::FONTS` names qualify: fontconfig answers any pattern, so a misspelt
    name would silently bind DejaVu Sans and hide the miss. macOS and Windows
    resolve the standard names themselves and bind nothing extra (#1231);
-7. inserts the cell face before script fallback faces in interface chains;
-8. sets `FontFamily::Proportional` to the UI chain;
-9. drops unparseable faces with `drop_unparseable_fonts()`.
+8. closes the gap between the hand-written chains and the catalog:
+   `load_catalog_fallback(fonts, wanted, covered, serif, &mut loaded)` asks
+   `FontCatalog::font_for_script()` for every script in `wanted` that the chains
+   did not cover and binds it as `sys-script-<script>` (serif companion
+   `sys-script-<script>-serif`). `covered` is the union of `covers` over the
+   faces each chain actually resolved. The step is skipped when `!known`, so an
+   empty workbook does not load one face per installed script; a path already in
+   `loaded` is skipped, because one CJK collection serves several scripts; and
+   Latin is always skipped, because the interface and bound families cover it;
+9. inserts the cell face before script fallback faces in interface chains;
+10. sets `FontFamily::Proportional` to the UI chain;
+11. drops unparseable faces with `drop_unparseable_fonts()`.
 
-`font_definitions_with()` (`theme.rs:542`) is the non-deferred wrapper: it calls
+`font_definitions_with()` is the non-deferred wrapper: it calls
 `font_definitions_with_bound()` and immediately publishes `set_bound(bound)`.
 
 `font_definitions_with_bound()` is used when egui will activate the new set on
 the next pass. Publishing the roles immediately would let `cell_family()` name a
 family that the current pass has not installed yet.
 
-`fallback_faces()` (`theme.rs:683`) returns `ScriptFace { key, sans, serif }`
-entries in chain order:
+`fallback_faces()` returns `ScriptFace { key, sans, serif, covers }` entries in
+chain order; `covers` is what decides whether the face is loaded for a given
+`wanted` set:
 
 | Key | Script | Serif companion |
 |---|---|---|
@@ -333,23 +361,28 @@ entries in chain order:
 | `sys-myanmar` | Myanmar | — (Padauk has one design) |
 | `sys-tibetan` | Tibetan | — (Jomolhari has one design) |
 | `sys-yi` | Yi | — (Noto Sans Yi) |
-| `sys-script-bengali` | Bengali (from the catalog) | `sys-script-bengali-serif` |
-| `sys-script-ethiopic` | Ethiopic (from the catalog) | `sys-script-ethiopic-serif` |
 | `sys-symbols` / `sys-symbols-2` | symbols | — |
+
+These are the hand-written keys and their `covers` bits. A script in `wanted`
+that none of them covers is bound by `load_catalog_fallback()` instead, as
+`sys-script-<script>` (plus `sys-script-<script>-serif` for the serif set);
+Bengali and Ethiopic take that path today.
 
 Each script function asks fontconfig first on Linux (`sans-serif:lang=…` for
 the sans list, `serif:lang=…` for the serif list; Arabic's serif companion is
 Noto Naskh Arabic), then appends the hard-coded paths in
-`LINUX_CJK_FALLBACK_DIRS` (`theme.rs:714`) and the platform-specific paths.
+`LINUX_CJK_FALLBACK_DIRS` and the platform-specific paths.
 
-`load_fallback()` (`theme.rs:642`) loads at most one file per key and records
-loaded paths **within one call**. Sans and serif are two independent calls, so
-the region-merged Sans CJK TTC and the Serif CJK TTC each load once, and a
-script whose serif companion is missing simply has no serif key. A serif face
-whose script has no serif companion (Myanmar, Tibetan, Yi) keeps the sans key:
-the script still renders, only the style is not distinct.
+`load_fallback(fonts, han, serif, wanted, known)` loads at most one file per key
+and records loaded paths **within one call**. A face whose `covers` does not
+intersect `wanted` is skipped before any candidate path is tried, so a Latin-only
+workbook never opens the CJK or Thai faces. Sans and serif are two independent
+calls, so the region-merged Sans CJK TTC and the Serif CJK TTC each load once,
+and a script whose serif companion is missing simply has no serif key. A serif
+face whose script has no serif companion (Myanmar, Tibetan, Yi) keeps the sans
+key: the script still renders, only the style is not distinct.
 
-`bind_faces()` (`fonts.rs:501`) selects the column from the panose of the bytes
+`bind_faces()` selects the column from the panose of the bytes
 it just loaded (`face_is_serif()`, `(2, 2..=10)`), not from the catalog hint: on
 Linux `Face.serif` comes from the family name because `fc-list` does not expose
 panose, so only the loaded OS/2 table can decide. No separate `serif_variant()`
@@ -357,24 +390,30 @@ mapping is needed: a serif family never inherits the sans script set.
 
 ### 3.6 Binding workbook fonts
 
-`used_fonts()` (`lib.rs:356`) collects the families the workbook actually uses:
+`used_fonts()` (in `crates/ui-egui/src/lib.rs`) collects the families the
+workbook actually uses:
 
 - cell styles;
 - theme heading/body fonts;
 - shape text fonts.
 
-`installed_among()` (`fonts.rs:393`) filters that list against the catalog,
-sorts it, and deduplicates it.
+`used_scripts()` (in `crates/ui-egui/src/lib.rs`) walks the same workbook once
+more and returns the `ScriptSet` of its text: cell string values and shape text,
+capped at 200 000 characters so a huge sheet cannot make the rebind pass
+expensive. Both values are compared when the workbook revision changes (§3.7).
+
+`installed_among()` (in `crates/ui-egui/src/fonts.rs`) filters that list against
+the catalog, sorts it, and deduplicates it.
 
 For each installed family, `bind_family()` calls `bind_faces()`.
 
-`bind_faces()` (`fonts.rs:501`):
+`bind_faces()` (in `crates/ui-egui/src/fonts.rs`):
 
 - returns no roles for an empty face list;
 - for each `(bold, italic)` combination, calls `pick_face()`;
 - chains the primary face with the family's regular face;
 - loads the primary first, so its real panose is available;
-- calls `load_face()` (`:394`) for a missing key: it reads the file, splits the
+- calls `load_face()` for a missing key: it reads the file, splits the
   fontconfig index with `fc_index_parts()`, sets `FontData::index` to the face,
   and applies the named instance through `apply_named_instance()`;
 - picks the script fallback column from the primary face (`ScriptFallbacks::serif`
@@ -385,12 +424,12 @@ For each installed family, `bind_family()` calls `bind_faces()`.
 - inserts a `FontFamily::Name("fnt:{family}:{b|n}{i|n}")`;
 - returns the bound role keys.
 
-`pick_face()` (`fonts.rs:445`) chooses the eligible face **nearest the role's
+`pick_face()` chooses the eligible face **nearest the role's
 own weight** — 700 for bold, 400 for regular — within the requested slant, and
 only then falls back to the family's regular face. Taking the first eligible
 face instead went wrong once `fc-list` began reporting every named instance of a
-variable font: `faces_named()` hands the catalog over in ascending weight order
-(`fonts.rs:378`), so the bold role took `SemiBold` and the italic role took
+variable font: `faces_named()` hands the catalog over in ascending weight order,
+so the bold role took `SemiBold` and the italic role took
 `Thin Italic` or `Light Italic` — on the host this hit Noto Sans, Open Sans,
 Montserrat, Adwaita Sans and 51 more families that ship the full weight range
 (#1231). The regular fallback still means an italic role can be bound to a
@@ -406,17 +445,25 @@ without an italic face. This is a known limitation.
 
 - `fonts_rebind: bool`
 - `pending_bound: Option<Vec<String>>`
+- `fonts_bound: Vec<String>` (the families the current set was built for)
+- `fonts_scripts: ScriptSet` (the scripts it was built for)
 
-Flow (`lib.rs:1042`–`1079`):
+Flow:
 
 1. If `!fonts_ready`, rebuild the base font set, clear `pending_bound`, and wait
    for the next pass.
 2. Else if `fonts_rebind`, egui has activated the set made on the previous pass:
    publish `pending_bound` with `fonts::set_bound()`, clear the flag.
 3. Else if the scan is done and the workbook revision changed, compute
-   `used_fonts()`. If it differs from `fonts_bound`, build with
-   `font_definitions_with_bound()`, call `ctx.set_fonts()`, store
-   `pending_bound`, set `fonts_rebind`, and request a repaint.
+   `used_fonts()` and `used_scripts()`. If either differs from `fonts_bound` or
+   `fonts_scripts`, build with `font_definitions_with_bound()`, call
+   `ctx.set_fonts()`, store `pending_bound` and the two new values, set
+   `fonts_rebind`, and request a repaint.
+
+Comparing the script set matters as much as the family list: a cell whose text
+gains a script after the fonts were bound (typing Thai into a Latin sheet) would
+otherwise never rebuild the set, and the new script would draw tofu until a
+restart (#1231).
 
 The UI no longer returns early solely because `fonts_rebind` is true. This
 removed the one-frame blank flash. First use of a large unbound family still
@@ -429,14 +476,14 @@ per-character text model.
 
 Evidence:
 
-- `crates/ui-egui/src/grid.rs:1215` and `:1320` lay out cell text with
+- `crates/ui-egui/src/grid.rs` lays out cell text with
   `LayoutJob::simple`, which takes one font and one color.
-- `crates/ui-egui/src/formula_bar.rs:266` builds sections only to color
+- `crates/ui-egui/src/formula_bar.rs` builds sections only to color
   formula-reference tokens; this is not a cell rich-text model.
 - XLSX shared strings are flattened to a single string:
-  - `crates/xlsx/src/sheet_read.rs:149`
-  - `crates/xlsx/src/sheet_read.rs:408`
-  - `xml::rich_text(...)` returns `String`, not runs.
+  - `crates/xlsx/src/sheet_read.rs` (`xml::rich_text` for inline and shared
+    strings)
+  - `xml::rich_text(...)` in `crates/xlsx/src/xml.rs` returns `String`, not runs.
 - There is no engine/model type that stores a cell's character runs, and no
   editing operation that applies a style to a character range.
 
@@ -462,6 +509,9 @@ Consequences:
 | `families()` rebuilds the list on every call | Ribbon calls it per frame; potentially wasteful. |
 | Missing bold/italic face binds regular | A font without a bold or italic face renders both as regular. `SERIF` and `MONO` have no style roles either, so a standard name that is *not* installed used to lose bold and italic. Its substitute is now bound in all four roles (#1231); a family really installed but lacking a face still falls back to its regular. |
 | No cache invalidation | Fonts installed while running are not picked up until restart. |
+| `ScriptSet` is full | All 16 bits are used (Latin … Ethiopic); a new script class needs the set widened to `u32` first (§13 question 15). |
+| An empty workbook asks for everything | Until the first text is seen, `wanted_scripts()` returns `ScriptSet::all()` so the first frame cannot show tofu; an empty sheet therefore loads every installed fallback. |
+| Latin never asks the catalog | The interface and bound families cover Latin, so `load_catalog_fallback()` skips it; a Latin-only face missing from every chain is not repaired. |
 | Host/Flatpak fontconfig differs | The Flatpak ships `65-lang.conf`, `70-noto-cjk.conf` and `75-noto-color-emoji.conf`; the 28 East/Southeast Asian `lang` probes now match the host exactly. |
 | No rich-text model | Per-character formatting is lost; XLSX runs are flattened. |
 
@@ -951,10 +1001,8 @@ Required behavior:
 - preserve unknown `<rPr>` attributes or explicitly drop them with a test;
 - define whether formula cells can carry rich text; do not assume they can.
 
-Current flattening sites:
-
-- `crates/xlsx/src/sheet_read.rs:149`
-- `crates/xlsx/src/sheet_read.rs:408`
+Current flattening sites (`crates/xlsx/src/sheet_read.rs`, inline and shared
+strings):
 
 `xml::rich_text(...)` must gain a runs-returning variant or be replaced at those
 call sites.
@@ -1376,9 +1424,8 @@ cargo +1.95.0 test -p gridcraft-ui-egui --lib
 199 passed, 0 failed
 ```
 
-Full `cargo xtask ci` is currently blocked by a pre-existing unrelated clippy
-error in `crates/xlsx/src/xls/mod.rs:273`
-(`clippy::collapsible_match`).
+The full `cargo xtask ci` was not run for this branch; the affected crates are
+checked directly (`clippy -p gridcraft-ui-egui --all-targets -D warnings`).
 
 ---
 
