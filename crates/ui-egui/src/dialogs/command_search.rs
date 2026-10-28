@@ -26,16 +26,17 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     // A command is found by its id, its English label or its label in the UI language (the hint
     // suggests words in that language).
     let lang = crate::i18n::current(ui.ctx());
-    let q = d.search.to_lowercase();
+    let q = fold(&d.search);
     let cmds: Vec<(String, String, String)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| {
-            q.is_empty() || c.id.to_lowercase().contains(&q) || c.label.to_lowercase().contains(&q) || lang.tr(c.label).to_lowercase().contains(&q)
+        .filter_map(|c| {
+            let label = command_label(lang, c.menu.first().copied(), c.label);
+            let found = q.is_empty() || fold(c.id).contains(&q) || fold(c.label).contains(&q) || fold(&label).contains(&q);
+            found.then(|| (c.id.to_string(), label, c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
         })
-        .map(|c| (c.id.to_string(), lang.tr(c.label).to_string(), c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
         .take(40)
         .collect();
 
@@ -93,5 +94,37 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+/// A command's label as the ribbon shows it: the tab-qualified key (`Page Layout|Orientation`)
+/// when the language has one, otherwise the plain label.
+fn command_label(lang: crate::i18n::Language, tab: Option<&str>, label: &str) -> String {
+    let contextual = tab.map(|tab| lang.tr(&format!("{tab}|{label}")).to_string()).filter(|t| t != label);
+    contextual.unwrap_or_else(|| lang.tr(label).to_string())
+}
+
+/// Lower case for matching, without the combining dot that lower-casing Turkish `İ` leaves
+/// (`İtalik` → `i̇talik`), so `italik` finds it.
+fn fold(s: &str) -> String {
+    s.to_lowercase().replace('\u{307}', "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_label, fold};
+    use crate::i18n::Language;
+
+    #[test]
+    fn a_command_shows_the_label_its_ribbon_tab_uses() {
+        assert_eq!(command_label(Language::De, Some("Page Layout"), "Orientation"), "Seitenausrichtung");
+        assert_eq!(command_label(Language::En, Some("Page Layout"), "Orientation"), "Orientation");
+        assert_eq!(command_label(Language::Pl, Some("Home"), "Bold"), "Pogrubienie");
+    }
+
+    #[test]
+    fn matching_ignores_case_turkish_dotted_capital_i_included() {
+        assert!(fold("İtalik").contains(&fold("italik")));
+        assert!(fold("Pogrubienie").contains(&fold("POGRUB")));
     }
 }
