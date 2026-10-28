@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (formulas using most defined names no longer recalculate on every edit; earlier: AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (recalculation runs levels of independent formulas on every core; earlier: formulas using most defined names no longer recalculate on every edit; AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -64,7 +64,7 @@ collaboration, mobile, AI).
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
 | Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
-| Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
+| Hardware (multi-core calc, GPU, pen, multi-window) | ~45% | 17–30 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | AI features | ~15% (agent control strong; no in-app assistant) | 30–50 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -125,7 +125,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
    correctness, chart kind round-trip, CJK font fallback, macOS Finder open, German and Chinese
    UI). Review and merge: 8–15 h.
 2. **XLSX fidelity on a real-world corpus**, with Excel opening our output without repair: 25–35 h.
-3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows, multi-threaded recalc: 40–60 h.
+3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows (multi-threaded recalc landed 2026-10-29): 30–50 h.
 4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
 5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
 6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-29 | Recalculation runs on every core: the dirty formulas are planned into levels of formulas that don't read one another, and wide levels are calculated on worker threads, each reading the main pass's results so far and handing back any formula that turns out to read one not done yet (INDIRECT, OFFSET, a spill of this pass), which the main thread finishes with the usual bounded-stack machinery. When a formula lays an array out differently from what the workbook stores, the formulas after it in its level that read its area, and every dynamic formula after it, are calculated again on the main thread at their turn, so the result is one thread's whatever the thread count and a level costs one worker pass. RAND stays on the main thread in row-major order; iterative calculation and wasm stay single-threaded. Each worker keeps a copy of the blocks it reads twice in a level (text included, within a byte budget the workers share), which is where much of the gain on lookups comes from; the single-threaded pass has no such copies yet. A 1M-cell workbook with 51K LAMBDA-name calls opens in 2.1 s on 8 threads (7.2 s on one); 41K lookups over columns of formulas in 1.1 s (2.2 s). On one thread, too, the pass now follows the plan, so the order RAND draws in is the same on every machine (RAND sequences differ from earlier releases); formulas on or behind a cycle still run in row-major order after the levels, so `#CIRC!` moves only where a leveled INDIRECT or OFFSET reader reaches the cycle first. Planning costs about 20 ms per 100K dirty formulas, up to 0.6 s and 430 MB for a million formulas with 64 precedents each. `calcPr concurrentCalc`/`concurrentManualCount` round-trip; `formulas.calculationOptions` sets `multiThreaded`/`threads` |
 | 2026-10-29 | Recalc: defined names are static precedents (a range name contributes its range, a LAMBDA name the references in its body; parameters and LET variables are bound names), so a column of LAMBDA calls is no longer re-evaluated on every edit; a recalc pass parses each name once (keeping up to 1 MiB of definitions parsed); `TEXT(n,"0")` on an integer skips the general renderer. A real 1M-cell, 49K-formula workbook: open 447 s → 109 s, an unrelated edit ~10 s → ~1 s |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
 | 2026-10-24 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
@@ -245,6 +246,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Progress log: multi-threaded recalculation |
 | 2026-10-29 | minor | Progress log: defined names as static precedents, names parsed once per pass, TEXT fast path |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
