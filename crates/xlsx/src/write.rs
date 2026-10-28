@@ -214,6 +214,19 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write_xlsx_named(wb, kind, None)
 }
 
+/// The `<calcPr>` attributes for multi-threaded calculation, written only when they differ from
+/// the format's defaults (calculation on several threads, their count left to the app).
+fn concurrency_attrs(calc: &CalcSettings) -> String {
+    let mut s = String::new();
+    if !calc.multi_threaded {
+        s.push_str(" concurrentCalc=\"0\"");
+    }
+    if calc.threads > 0 {
+        let _ = write!(s, " concurrentManualCount=\"{}\"", calc.threads);
+    }
+    s
+}
+
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
 /// that differ from the format's defaults. An ordinary workbook gets none, so its file
 /// is unchanged; a workbook Excel saved with the sheet tabs or scroll bars hidden
@@ -339,6 +352,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     if wb.calc.r1c1 {
         w.push_str(" refMode=\"R1C1\"");
     }
+    w.push_str(&concurrency_attrs(&wb.calc));
     if out.needs_calc {
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
