@@ -169,11 +169,6 @@ impl SpillIndex {
         out.sort_unstable();
         out.dedup();
     }
-
-    /// The rectangle indexed for `anchor` and whether it covers no cells.
-    pub(crate) fn area(&self, sheet: usize, anchor: CellRef) -> Option<(RangeRef, bool)> {
-        self.sheets.get(&sheet)?.entries.get(&anchor).map(|e| (e.rect, e.empty))
-    }
 }
 
 #[cfg(test)]
