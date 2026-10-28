@@ -247,3 +247,18 @@ fn command_search_hides_disabled_and_handles_missing_shortcuts() {
         h.get_by_label_contains("Align Right    Home");
     }
 }
+
+#[test]
+fn command_search_finds_a_command_by_its_label_in_the_ui_language() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "pl"})).unwrap();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    // The Polish hint suggests "pogrubienie": it finds Bold, as "bold" does in English.
+    type_and_enter(&mut h, "pogrubienie");
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter ran the command");
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("C3").unwrap())).font.bold, "C3 is bold");
+}
