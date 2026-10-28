@@ -763,6 +763,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stacked Bar" => "Barre in pila",
         "100% Stacked Bar" => "Barre in pila 100%",
         "Line" => "Linee",
+        "Shapes|Line" => "Linea",
         "Line with Markers" => "Linee con indicatori",
         "Stacked Line" => "Linee in pila",
         "Pie" => "Torta",

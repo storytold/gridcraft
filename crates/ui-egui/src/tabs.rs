@@ -321,6 +321,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
@@ -344,7 +345,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(ui, egui::RichText::new(lang.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -354,8 +355,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => format!("{} {}", lang.tr("Circular References:"), c.a1()),
+                            None => lang.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -407,7 +408,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(lang.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -433,6 +434,7 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         return vec![];
     }
     let on = app.session.prefs.status_bar;
+    let lang = app.ui.language;
     let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
@@ -443,22 +445,22 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(lang.tr("Average: {n}").replace("{n}", &fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(lang.tr("Count: {n}").replace("{n}", &st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(lang.tr("Numerical Count: {n}").replace("{n}", &st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(lang.tr("Minimum: {n}").replace("{n}", &fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(lang.tr("Maximum: {n}").replace("{n}", &fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(lang.tr("Sum: {n}").replace("{n}", &fmt(st.sum)));
     }
     parts
 }

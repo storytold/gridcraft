@@ -763,6 +763,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stacked Bar" => "Bare stivuite",
         "100% Stacked Bar" => "Bare 100% stivuite",
         "Line" => "Linie",
+        "Shapes|Line" => "Linie",
         "Line with Markers" => "Linii cu marcaje",
         "Stacked Line" => "Linii stivuite",
         "Pie" => "Radială",

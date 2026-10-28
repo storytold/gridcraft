@@ -84,7 +84,8 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.grid.drag == Drag::None && !pointer.any_down() {
-            resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
+            resp.clone()
+                .on_hover_text_at_pointer(crate::i18n::current(&resp.ctx).tr("Drag to fill cells. Drag from inside a cell to select a range."));
         }
     } else if in_cells && app.editor.is_none() && on_cur_border {
         ctx.set_cursor_icon(CursorIcon::Move);

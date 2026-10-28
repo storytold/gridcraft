@@ -293,7 +293,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(app.ui.language.tr("Sheets: {names}").replace("{names}", &sheets.join(", "))),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -410,7 +410,7 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("{} {}", app.ui.language.tr("Hidden:"), opts.join(", ")))],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
