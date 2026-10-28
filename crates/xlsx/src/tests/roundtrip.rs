@@ -20,7 +20,15 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
+    wb.calc = CalcSettings {
+        mode: CalcMode::Manual,
+        iterative: true,
+        max_iterations: 42,
+        max_change: 0.5,
+        precision_as_displayed: true,
+        multi_threaded: false,
+        threads: 3,
+    };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -723,6 +731,38 @@ fn iterative_calculation_settings_roundtrip() {
         let calc = read_xlsx(&bytes).unwrap().0.calc;
         assert!(calc.iterative, "{attrs}");
         assert_eq!((calc.max_iterations, calc.max_change), (count, change), "{attrs}");
+    }
+    // The calculation-thread attributes: anything but a boolean keeps the default (on) with a
+    // warning naming the value; a count that isn't a non-negative integer is "every processor"
+    // and a large one saturates, each with a warning naming the value, while a count at the
+    // limit is kept as it is.
+    for (attrs, multi, threads, warning) in [
+        (r#"concurrentCalc="2""#, true, 0, Some(r#"concurrentCalc "2" is not a boolean"#)),
+        (r#"concurrentCalc="0" concurrentManualCount="-1""#, false, 0, Some(r#""-1" is not a count"#)),
+        (r#"concurrentCalc="false" concurrentManualCount="7""#, false, 7, None),
+        (r#"concurrentManualCount="1024""#, true, 1024, None),
+        (r#"concurrentManualCount="1025""#, true, 1024, Some("1025 is above Excel's limit; kept 1024")),
+        (r#"concurrentManualCount="99999999999""#, true, 1024, Some("99999999999 is above")),
+        (r#"concurrentManualCount="5000""#, true, 1024, Some("5000 is above")),
+        (r#"concurrentManualCount="abc""#, true, 0, Some(r#""abc" is not a count"#)),
+    ] {
+        let wbx = xml(attrs);
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let ws = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let bytes = super::make_zip(&[
+            ("[Content_Types].xml", super::CT.as_bytes()),
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wbx.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", ws.as_bytes()),
+        ]);
+        let (wb, report) = read_xlsx(&bytes).unwrap();
+        assert_eq!((wb.calc.multi_threaded, wb.calc.threads), (multi, threads), "{attrs}");
+        let about_count: Vec<&String> = report.warnings.iter().filter(|w| w.contains("concurrent")).collect();
+        match warning {
+            Some(text) => assert!(about_count.len() == 1 && about_count[0].contains(text), "{attrs}: {about_count:?}"),
+            None => assert!(about_count.is_empty(), "{attrs}: {about_count:?}"),
+        }
     }
 }
 
