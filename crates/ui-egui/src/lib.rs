@@ -380,6 +380,35 @@ impl SheetApp {
         names
     }
 
+    /// The scripts the workbook's cell text uses, up to a character budget so a big sheet is not
+    /// walked on every rebind. Empty until text is seen: the font set then loads every fallback.
+    pub fn used_scripts(&self) -> crate::script::ScriptSet {
+        /// Stop after this many characters: the first scripts seen say what to load, and a hostile
+        /// sheet of millions of cells must not stall the frame.
+        const LIMIT: usize = 200_000;
+        let mut scripts = crate::script::ScriptSet::EMPTY;
+        let mut seen = 0usize;
+        if let Some(d) = self.session.active() {
+            // Shapes carry their own text, so a text box in Thai counts like a cell in Thai.
+            let texts = d.wb.sheets.iter().flat_map(|sheet| {
+                let shapes = sheet.shapes.iter().map(|shape| shape.text.as_str());
+                let cells = sheet.cells.iter().filter_map(|(_, cell)| match &cell.value {
+                    gridcraft_engine::core::Value::Text(text) => Some(&**text),
+                    _ => None,
+                });
+                shapes.chain(cells)
+            });
+            for text in texts {
+                scripts = scripts.union(crate::script::ScriptSet::of_text(text));
+                seen += text.chars().count();
+                if seen >= LIMIT {
+                    break;
+                }
+            }
+        }
+        scripts
+    }
+
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let r = self.run_command(id, params);
@@ -1197,7 +1226,7 @@ impl SheetApp {
                 let used = self.used_fonts();
                 self.fonts_seen = seen;
                 if used != self.fonts_bound {
-                    let (fonts, bound) = theme::font_definitions_with_bound(self.ui.language, &used);
+                    let (fonts, bound) = theme::font_definitions_with_bound(self.ui.language, &used, self.used_scripts());
                     ctx.set_fonts(fonts);
                     self.fonts_bound = used;
                     self.pending_bound = Some(bound);

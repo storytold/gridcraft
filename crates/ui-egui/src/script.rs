@@ -221,6 +221,16 @@ impl ScriptSet {
         *self = self.with(script);
     }
 
+    /// All scripts at once, for a caller that knows nothing about the text and needs every face.
+    pub const fn all() -> Self {
+        Self((1 << ScriptClass::ALL.len()) - 1)
+    }
+
+    /// Whether the two sets share a script.
+    pub const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
     /// Both sets together.
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)

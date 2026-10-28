@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
+use crate::script::{ScriptClass, ScriptSet};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
     pub dark: bool,
@@ -533,14 +535,14 @@ impl HanOrder {
 
 /// Builds the font set with the Han fallback faces ordered for the interface language.
 pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDefinitions {
-    font_definitions_with(language, &[])
+    font_definitions_with(language, &[], ScriptSet::default())
 }
 
 /// [`font_definitions_for_language`] that also binds the workbook fonts in `used` that are
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
-pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
-    let (fonts, bound) = font_definitions_with_bound(language, used);
+pub fn font_definitions_with(language: crate::i18n::Language, used: &[String], scripts: ScriptSet) -> FontDefinitions {
+    let (fonts, bound) = font_definitions_with_bound(language, used, scripts);
     crate::fonts::set_bound(bound);
     fonts
 }
@@ -548,7 +550,7 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
 /// Builds the font set and returns the role families it bound, without publishing them to
 /// [`crate::fonts`]. Used when egui will activate the set on its next pass: publishing the roles
 /// now would let [`cell_family`] name families the current pass has not installed yet.
-pub fn font_definitions_with_bound(language: crate::i18n::Language, used: &[String]) -> (FontDefinitions, Vec<String>) {
+pub fn font_definitions_with_bound(language: crate::i18n::Language, used: &[String], scripts: ScriptSet) -> (FontDefinitions, Vec<String>) {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
@@ -556,12 +558,13 @@ pub fn font_definitions_with_bound(language: crate::i18n::Language, used: &[Stri
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
     let han = HanOrder::of(language);
-    let fallback = load_fallback(&mut fonts, han, false);
+    let wanted = wanted_scripts(language, scripts);
+    let fallback = load_fallback(&mut fonts, han, false, wanted);
     // Serif companions (Noto Serif CJK alone is ~55 MB) are loaded only when something asks for a
     // serif face: a workbook font whose name reads as serif, or the serif role. A serif face
     // chained to the sans faces would draw CJK in the wrong style (Times New Roman → sans CJK).
     let want_serif = used.iter().any(|name| family_name_is_serif(name));
-    let serif_fallback = if want_serif { load_fallback(&mut fonts, han, true) } else { Vec::new() };
+    let serif_fallback = if want_serif { load_fallback(&mut fonts, han, true, wanted) } else { Vec::new() };
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -640,6 +643,29 @@ struct ScriptFace {
     key: &'static str,
     sans: Vec<(String, u32)>,
     serif: Option<(&'static str, Vec<(String, u32)>)>,
+    /// The scripts this face exists for: it is loaded only when the text or the interface needs one.
+    covers: ScriptSet,
+}
+
+/// The scripts the interface itself draws: a Chinese, Japanese or Korean interface needs its
+/// script loaded even when the workbook holds only Latin text.
+fn interface_scripts(language: crate::i18n::Language) -> ScriptSet {
+    match language {
+        crate::i18n::Language::Zh => ScriptSet::EMPTY.with(ScriptClass::Han),
+        crate::i18n::Language::Ja => ScriptSet::EMPTY.with(ScriptClass::Han).with(ScriptClass::Japanese),
+        crate::i18n::Language::Ko => ScriptSet::EMPTY.with(ScriptClass::Korean),
+        _ => ScriptSet::EMPTY,
+    }
+}
+
+/// The scripts whose fallback faces to load: the workbook's, the interface's and the symbols every
+/// interface draws. An empty workbook set (no text yet, or nothing scanned) keeps the old
+/// behaviour and loads every face.
+fn wanted_scripts(language: crate::i18n::Language, scripts: ScriptSet) -> ScriptSet {
+    if scripts.is_empty() {
+        return ScriptSet::all();
+    }
+    scripts.union(interface_scripts(language)).with(ScriptClass::Symbols)
 }
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
@@ -652,13 +678,16 @@ struct ScriptFace {
 /// when a workbook or role actually asks for a serif face: Noto Serif CJK alone is ~55 MB, so
 /// paying for it on startup would be wrong for the common case.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool) -> Vec<String> {
+fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool, wanted: ScriptSet) -> Vec<String> {
     let mut keys = Vec::new();
     // Files already loaded as a fallback face. A file serves at most one key: the region-merged
     // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
     // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
     let mut loaded: Vec<String> = Vec::new();
     for face in fallback_faces(han) {
+        if !face.covers.intersects(wanted) {
+            continue; // nothing in this workbook or interface asks for the script
+        }
         let (key, cands) = if serif {
             match &face.serif {
                 Some((key, cands)) => (*key, cands),
@@ -683,7 +712,7 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, serif: bool) -> Vec
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _serif: bool) -> Vec<String> {
+fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _serif: bool, _wanted: ScriptSet) -> Vec<String> {
     Vec::new()
 }
 
@@ -694,8 +723,19 @@ fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _serif: bool) -> 
 /// else.
 #[cfg(not(target_arch = "wasm32"))]
 fn fallback_faces(han: HanOrder) -> Vec<ScriptFace> {
-    let ja = ScriptFace { key: "sys-cjk-han-ja", sans: cjk_han_japanese(), serif: Some(("sys-cjk-han-ja-serif", cjk_han_japanese_serif())) };
-    let zh = ScriptFace { key: "sys-cjk-han-zh", sans: cjk_han_simplified(), serif: Some(("sys-cjk-han-zh-serif", cjk_han_simplified_serif())) };
+    let han_scripts = ScriptSet::EMPTY.with(ScriptClass::Han);
+    let ja = ScriptFace {
+        key: "sys-cjk-han-ja",
+        sans: cjk_han_japanese(),
+        serif: Some(("sys-cjk-han-ja-serif", cjk_han_japanese_serif())),
+        covers: han_scripts.with(ScriptClass::Japanese),
+    };
+    let zh = ScriptFace {
+        key: "sys-cjk-han-zh",
+        sans: cjk_han_simplified(),
+        serif: Some(("sys-cjk-han-zh-serif", cjk_han_simplified_serif())),
+        covers: han_scripts,
+    };
     let (first, second) = match han {
         HanOrder::Japanese => (ja, zh),
         HanOrder::Chinese => (zh, ja),
@@ -703,18 +743,43 @@ fn fallback_faces(han: HanOrder) -> Vec<ScriptFace> {
     vec![
         first,
         second,
-        ScriptFace { key: "sys-cjk-hangul", sans: cjk_hangul(), serif: Some(("sys-cjk-hangul-serif", cjk_hangul_serif())) },
-        ScriptFace { key: "sys-thai", sans: thai(), serif: Some(("sys-thai-serif", thai_serif())) },
-        ScriptFace { key: "sys-lao", sans: lao(), serif: Some(("sys-lao-serif", lao_serif())) },
-        ScriptFace { key: "sys-khmer", sans: khmer(), serif: Some(("sys-khmer-serif", khmer_serif())) },
-        ScriptFace { key: "sys-hebrew", sans: hebrew(), serif: Some(("sys-hebrew-serif", hebrew_serif())) },
-        ScriptFace { key: "sys-arabic", sans: arabic(), serif: Some(("sys-arabic-serif", arabic_serif())) },
-        ScriptFace { key: "sys-devanagari", sans: devanagari(), serif: Some(("sys-devanagari-serif", devanagari_serif())) },
-        ScriptFace { key: "sys-myanmar", sans: myanmar(), serif: None },
-        ScriptFace { key: "sys-tibetan", sans: tibetan(), serif: None },
-        ScriptFace { key: "sys-yi", sans: yi(), serif: None },
-        ScriptFace { key: "sys-symbols", sans: symbols(), serif: None },
-        ScriptFace { key: "sys-symbols-2", sans: symbols_more(), serif: None },
+        ScriptFace {
+            key: "sys-cjk-hangul",
+            sans: cjk_hangul(),
+            serif: Some(("sys-cjk-hangul-serif", cjk_hangul_serif())),
+            covers: ScriptSet::EMPTY.with(ScriptClass::Korean),
+        },
+        ScriptFace { key: "sys-thai", sans: thai(), serif: Some(("sys-thai-serif", thai_serif())), covers: ScriptSet::EMPTY.with(ScriptClass::Thai) },
+        ScriptFace { key: "sys-lao", sans: lao(), serif: Some(("sys-lao-serif", lao_serif())), covers: ScriptSet::EMPTY.with(ScriptClass::Lao) },
+        ScriptFace {
+            key: "sys-khmer",
+            sans: khmer(),
+            serif: Some(("sys-khmer-serif", khmer_serif())),
+            covers: ScriptSet::EMPTY.with(ScriptClass::Khmer),
+        },
+        ScriptFace {
+            key: "sys-hebrew",
+            sans: hebrew(),
+            serif: Some(("sys-hebrew-serif", hebrew_serif())),
+            covers: ScriptSet::EMPTY.with(ScriptClass::Hebrew),
+        },
+        ScriptFace {
+            key: "sys-arabic",
+            sans: arabic(),
+            serif: Some(("sys-arabic-serif", arabic_serif())),
+            covers: ScriptSet::EMPTY.with(ScriptClass::Arabic),
+        },
+        ScriptFace {
+            key: "sys-devanagari",
+            sans: devanagari(),
+            serif: Some(("sys-devanagari-serif", devanagari_serif())),
+            covers: ScriptSet::EMPTY.with(ScriptClass::Devanagari),
+        },
+        ScriptFace { key: "sys-myanmar", sans: myanmar(), serif: None, covers: ScriptSet::EMPTY.with(ScriptClass::Myanmar) },
+        ScriptFace { key: "sys-tibetan", sans: tibetan(), serif: None, covers: ScriptSet::EMPTY.with(ScriptClass::Tibetan) },
+        ScriptFace { key: "sys-yi", sans: yi(), serif: None, covers: ScriptSet::EMPTY.with(ScriptClass::Yi) },
+        ScriptFace { key: "sys-symbols", sans: symbols(), serif: None, covers: ScriptSet::EMPTY.with(ScriptClass::Symbols) },
+        ScriptFace { key: "sys-symbols-2", sans: symbols_more(), serif: None, covers: ScriptSet::EMPTY.with(ScriptClass::Symbols) },
     ]
 }
 
@@ -1244,7 +1309,7 @@ mod font_binding_tests {
         if crate::fonts::substitute_family("Times New Roman").is_none() {
             return; // installed already, or no fontconfig and no folder-scan substitute
         }
-        let (fonts, bound) = font_definitions_with_bound(Language::En, &["Times New Roman".to_string()]);
+        let (fonts, bound) = font_definitions_with_bound(Language::En, &["Times New Roman".to_string()], ScriptSet::default());
         crate::fonts::set_bound(bound.clone());
         let face = |bold: bool, italic: bool| -> String {
             let family = cell_family("Times New Roman", bold, italic);
@@ -1329,6 +1394,29 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_latin_sheet_skips_the_cjk_and_thai_faces() {
+        let (fonts, _) = font_definitions_with_bound(Language::En, &[], ScriptSet::of_text("Total 42"));
+        assert!(!fonts.font_data.keys().any(|k| k.starts_with("sys-cjk")), "Latin text loads no CJK face");
+        assert!(!fonts.font_data.keys().any(|k| k.starts_with("sys-thai")), "Latin text loads no Thai face");
+    }
+
+    #[test]
+    fn only_the_scripts_in_use_load_their_fallbacks() {
+        // Nothing known yet: every face, as before.
+        assert_eq!(wanted_scripts(Language::En, ScriptSet::EMPTY), ScriptSet::all());
+        let latin = wanted_scripts(Language::En, ScriptSet::of_text("Total"));
+        assert!(latin.has(ScriptClass::Latin) && latin.has(ScriptClass::Symbols));
+        assert!(!latin.has(ScriptClass::Han) && !latin.has(ScriptClass::Thai), "no CJK or Thai face for a Latin sheet");
+        // A Chinese, Japanese or Korean interface needs its script even when the cells are Latin.
+        assert!(wanted_scripts(Language::Zh, latin).has(ScriptClass::Han));
+        assert!(wanted_scripts(Language::Ja, latin).has(ScriptClass::Japanese));
+        assert!(wanted_scripts(Language::Ko, latin).has(ScriptClass::Korean));
+        assert!(!wanted_scripts(Language::En, latin).has(ScriptClass::Han), "an English interface adds no script");
+        assert!(wanted_scripts(Language::En, ScriptSet::of_text("สวัสดี")).has(ScriptClass::Thai));
+    }
+
     #[test]
     fn language_reorders_only_the_han_faces() {
         let keys = |han| fallback_faces(han).into_iter().map(|f| f.key).collect::<Vec<_>>();
@@ -1394,7 +1482,7 @@ mod tests {
 
     #[test]
     fn serif_workbook_fonts_load_the_serif_fallbacks() {
-        let (fonts, _) = font_definitions_with_bound(Language::En, &["Times New Roman".into()]);
+        let (fonts, _) = font_definitions_with_bound(Language::En, &["Times New Roman".into()], ScriptSet::default());
         if !cjk_han_simplified_serif().iter().any(|(p, _)| std::path::Path::new(p).is_file()) {
             return; // no serif CJK face on this machine
         }
@@ -1409,7 +1497,7 @@ mod tests {
     #[test]
     fn sans_workbook_fonts_skip_the_serif_fallbacks() {
         // Noto Serif CJK is ~55 MB; a workbook that asks for no serif face must not load it.
-        let (fonts, _) = font_definitions_with_bound(Language::En, &["Arial".into()]);
+        let (fonts, _) = font_definitions_with_bound(Language::En, &["Arial".into()], ScriptSet::default());
         let serif_keys = ["sys-cjk-han-zh-serif", "sys-cjk-han-ja-serif", "sys-thai-serif"];
         assert!(!serif_keys.iter().any(|k| fonts.font_data.contains_key(*k)), "sans-only workbook loaded serif faces");
     }
