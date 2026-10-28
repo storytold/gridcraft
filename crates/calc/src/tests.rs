@@ -3,6 +3,7 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+mod levels;
 mod names;
 
 fn c(s: &str) -> CellRef {
