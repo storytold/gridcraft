@@ -333,6 +333,8 @@ entries in chain order:
 | `sys-myanmar` | Myanmar | — (Padauk has one design) |
 | `sys-tibetan` | Tibetan | — (Jomolhari has one design) |
 | `sys-yi` | Yi | — (Noto Sans Yi) |
+| `sys-script-bengali` | Bengali (from the catalog) | `sys-script-bengali-serif` |
+| `sys-script-ethiopic` | Ethiopic (from the catalog) | `sys-script-ethiopic-serif` |
 | `sys-symbols` / `sys-symbols-2` | symbols | — |
 
 Each script function asks fontconfig first on Linux (`sans-serif:lang=…` for
@@ -1091,12 +1093,20 @@ Use Unicode scalar ranges, not locale:
 - Japanese: Hiragana and Katakana.
 - Korean: Hangul syllables and Jamo.
 - Thai: Thai block.
+- Lao: Lao block.
+- Bengali: Bengali block (also used for Assamese).
+- Ethiopic: Ethiopic, Ethiopic Supplement and Ethiopic Extended (Amharic, Tigrinya).
 - Hebrew: Hebrew block.
 - Symbols: arrows, geometric shapes, dingbats, technical symbols, emoji.
 - Common: ASCII punctuation, digits, whitespace, combining marks.
 
 Digits and punctuation are intentionally `Common` so they do not force a font
 switch inside a word.
+
+A class costs one bit of `ScriptSet`, and all 16 bits are now used (Latin …
+Ethiopic, `Common` excepted, which owns no bit). Adding another script class
+means widening `ScriptSet` to `u32`; nothing outside `script.rs` depends on the
+width because callers only use the set's methods.
 
 ### 7.2 `split_runs`
 
@@ -1289,12 +1299,15 @@ Current relevant tests:
   - `runs_cover_the_whole_text_without_gaps`
   - `a_texts_scripts_are_collected`
   - `a_charset_string_becomes_a_script_set`
+  - `every_class_but_common_has_its_own_bit`
+  - `bengali_and_latin_make_two_runs`
 - `crates/ui-egui/src/catalog.rs`:
   - `a_localized_name_finds_the_same_faces`
   - `families_are_listed_once_and_sorted`
   - `a_script_names_the_families_that_cover_it`
   - `the_installed_catalog_lists_families_and_scripts`
   - `the_preferred_family_wins_over_another_that_covers_the_script`
+  - `bengali_and_ethiopic_name_their_own_families`
   - `a_script_without_its_preferred_family_uses_any_covering_one`
   - `a_family_that_lacks_the_script_is_not_offered`
   - `a_serif_request_prefers_the_serif_face`
@@ -1318,6 +1331,7 @@ Current relevant tests:
   - `only_the_scripts_in_use_load_their_fallbacks`
   - `a_latin_sheet_skips_the_cjk_and_thai_faces`
   - `a_wanted_script_gets_a_face_from_the_chains_or_the_catalog`
+  - `a_bengali_or_ethiopic_sheet_asks_for_its_own_family`
 
 Rich-text tests to add:
 
@@ -1346,7 +1360,7 @@ Current test result:
 
 ```text
 cargo +1.95.0 test -p gridcraft-ui-egui --lib
-195 passed, 0 failed
+199 passed, 0 failed
 ```
 
 Full `cargo xtask ci` is currently blocked by a pre-existing unrelated clippy
@@ -1515,6 +1529,9 @@ Done (2026-10-28):
   preferred family for that script first (`preferred_families`), then any family
   covering it that does not read as an auxiliary design (symbol, emoji, mono…),
   ranked serif-match, upright, distance from 400, name.
+- `ScriptClass` covers Bengali and Ethiopic, so Amharic, Tigrinya, Bengali and
+  Assamese text joins `used_scripts()` and asks for a fallback face instead of
+  falling through to `Common` and drawing boxes.
 - `load_catalog_fallback` closes the gap between the hand-written chains and the
   system: a wanted script the chains did not cover gets `sys-script-<script>`
   (`-serif` for serif), one face from the catalog, skipped when its file is
@@ -1563,6 +1580,7 @@ Still open:
 - HEAD after binding substitutes for uninstalled standard names: `0d58e8d`
 - HEAD after Phase 3 (scripts, catalog, per-script fallback loading): `561e539`
 - HEAD after the catalog fallback selector: `b9283ba`
+- HEAD after classifying Bengali and Ethiopic: `ac0bacd`
 - Remote PR branch: `fork/fix/linux-fontconfig` at `57df98d` (everything after it
   is local only, not pushed)
 - PR: `#1972`
@@ -1572,6 +1590,7 @@ Still open:
 Commits on the branch (newest first):
 
 ```text
+ac0bacd  feat(ui): classify Bengali and Ethiopic text (#1231)
 b9283ba  feat(ui): choose a fallback family from the catalog for an uncovered script (#1231)
 561e539  fix(ui): reload fallback faces when the cell text gains a script (#1231)
 8eafe63  feat(ui): load fallback faces only for the scripts in use (#1231)
@@ -1622,6 +1641,10 @@ Current app behavior:
   changes, not only the used font names).
 - `FontCatalog` answers "which families cover script X" and "which faces answer
   to this name (any language)" without touching the file system.
+- Bengali (Bangladesh) and Ethiopic (Ethiopia) text renders on Linux: the two
+  classes were missing from `classify()`, so the text fell through to `Common`,
+  never entered `used_scripts()` and drew boxes even though Noto Sans Bengali and
+  Noto Sans Ethiopic are installed.
 - A script the hard-written chains do not resolve still renders when the system
   installs it under another family: the catalog names the face and it is bound
   as `sys-script-<script>` (single face, coverage-level fallback like the
