@@ -280,7 +280,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "saveCopy" => {
                     let fmt = d.values.get("format").and_then(Json::as_str).unwrap_or("xlsx").to_string();
-                    ui.label(lang.tr("Save a copy as .{fmt}").replace("{fmt}", &fmt));
+                    ui.label(lang.tr("Save a copy as .{format}").replace("{format}", &fmt));
                     let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                     ui.text_edit_singleline(&mut path);
                     d.values.insert("path".into(), json!(path.clone()));
@@ -308,7 +308,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
-                    ui.label(lang.tr("Do you want to save the changes you made to {name}?").replace("{name}", d.values.get("title").and_then(Json::as_str).unwrap_or(lang.tr("this workbook"))));
+                    ui.label(lang.tr("Do you want to save the changes you made to {title}?").replace("{title}", d.values.get("title").and_then(Json::as_str).unwrap_or(lang.tr("this workbook"))));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
                         for (label, answer) in

@@ -1001,11 +1001,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Search commands (⌘⇧Space)" => "Wyszukaj polecenia (⌘⇧Space)",
         "Table (⌘T)" => "Tabela (⌘T)",
         "Undo (⌘Z)" => "Cofnij (⌘Z)",
-        "{n} cell(s) found" => "Znalezione komórki: {n}",
-        "All done. We made {n} replacements." => "Gotowe. Liczba wprowadzonych zamian: {n}.",
-        "Do you want to save the changes you made to {name}?" => "Czy chcesz zapisać zmiany wprowadzone w pliku {name}?",
-        "Save a copy as .{fmt}" => "Zapisz kopię jako .{fmt}",
-        "Copy.{fmt}" => "Kopia.{fmt}",
         "Hidden:" => "Ukryte:",
         "(Blanks)" => "(Puste)",
         "(Select All)" => "(Zaznacz wszystko)",
@@ -1411,7 +1406,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Select locked cells" => "Zaznaczanie zablokowanych komórek",
         "Select unlocked cells" => "Zaznaczanie odblokowanych komórek",
         "Row height (points):" => "Wysokość wiersza (w punktach):",
-        "Sheets: {names}" => "Arkusze: {names}",
         "More Table Styles" => "Więcej stylów tabeli",
         "Resize Table" => "Zmień rozmiar tabeli",
         "New range for the table:" => "Nowy zakres dla tabeli:",
@@ -1456,8 +1450,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{n} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
             "Dostępne polecenia silnika: {n}. Zobacz docs/mcp.md i docs/control-protocol.md."
         }
-        "— {n} step" => "— 1 krok",
-        "— {n} steps" => "— kroki: {n}",
         "{n} contributors · {c} commits" => "Współtwórcy: {n} · commity: {c}",
         _ => return None,
     })
