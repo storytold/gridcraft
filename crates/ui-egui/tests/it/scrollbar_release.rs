@@ -62,52 +62,31 @@ fn begin_drag(h: &mut Harness, axis: Axis) -> Pos2 {
 }
 
 #[test]
-fn a_press_before_canvas_focus_can_start_a_scrollbar_drag() {
-    for axis in [Axis::Vertical, Axis::Horizontal] {
-        let mut h = crate::support::blank_harness(4);
-        let p = axis.start(&h);
-        h.input_mut().focused = false;
-        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
-        // Web pointerdown can run the app before mousedown focuses the canvas.
-        h.input_mut().focused = true;
-        events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
-        assert!(axis.scroll(&h) > 0.0, "{axis:?}: gaining focus must preserve the activating drag");
-        let before = axis.scroll(&h);
-        h.input_mut().focused = false;
-        events(&mut h, []);
-        h.input_mut().focused = true;
-        events(&mut h, [Event::PointerMoved(p + axis.movement() * 2.0)]);
-        assert_eq!(axis.scroll(&h), before, "{axis:?}: later focus loss still cancels the gesture");
-    }
-}
-
-#[test]
-fn a_track_press_before_canvas_focus_still_pages_on_release() {
-    for axis in [Axis::Vertical, Axis::Horizontal] {
-        let mut h = crate::support::blank_harness(4);
-        let p = track_end(axis, &h);
-        h.input_mut().focused = false;
-        events(&mut h, [Event::PointerMoved(p), button(p, true)]);
-        h.input_mut().focused = true;
-        events(&mut h, [Event::WindowFocused(true), button(p, false)]);
-        assert!(axis.scroll(&h) > 0.0, "{axis:?}: gaining focus must preserve the activating track click");
-    }
-}
-
-#[test]
-fn polling_canvas_focus_after_pointerdown_preserves_the_activating_press() {
-    for track_click in [false, true] {
+fn activating_scrollbar_presses_survive_initial_canvas_focus_ordering() {
+    for (track_click, poll_focus) in [(false, false), (true, false), (false, true), (true, true)] {
         for axis in [Axis::Vertical, Axis::Horizontal] {
             let mut h = crate::support::blank_harness(4);
             let p = if track_click { track_end(axis, &h) } else { axis.start(&h) };
-            // eframe starts with raw.focused=true. Its pointerdown handler queues
-            // the press, then update_focus discovers the canvas is not focused.
+            // Web pointerdown can run before canvas focus. The first eframe focus
+            // poll can also append Focused(false) after that activating press.
             h.input_mut().focused = false;
-            events(&mut h, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(false)]);
+            let mut press = vec![Event::PointerMoved(p), button(p, true)];
+            if poll_focus {
+                press.push(Event::WindowFocused(false));
+            }
+            events(&mut h, press);
             h.input_mut().focused = true;
             let next = if track_click { button(p, false) } else { Event::PointerMoved(p + axis.movement()) };
             events(&mut h, [Event::WindowFocused(true), next]);
-            assert!(axis.scroll(&h) > 0.0, "{axis:?}: canvas focus polling must preserve activating click={track_click}");
+            assert!(axis.scroll(&h) > 0.0, "{axis:?}: activating click={track_click}, focus poll={poll_focus}");
+            if !track_click {
+                let before = axis.scroll(&h);
+                h.input_mut().focused = false;
+                events(&mut h, []);
+                h.input_mut().focused = true;
+                events(&mut h, [Event::PointerMoved(p + axis.movement() * 2.0)]);
+                assert_eq!(axis.scroll(&h), before, "{axis:?}: later focus loss still cancels the gesture");
+            }
         }
     }
 }
@@ -170,17 +149,25 @@ fn dragging_with_policy(axis: Axis, release_on_pointer_gone: bool) -> (Harness, 
 }
 
 #[test]
-fn releasing_outside_the_window_ends_both_scrollbar_drags() {
-    for axis in [Axis::Vertical, Axis::Horizontal] {
-        let (mut h, p) = dragging(axis);
-        let outside = match axis {
-            Axis::Vertical => pos2(1250.0, p.y),
-            Axis::Horizontal => pos2(p.x, 850.0),
-        };
-        events(&mut h, [Event::PointerMoved(outside), button(outside, false)]);
-        let stopped = axis.scroll(&h);
-        events(&mut h, [Event::PointerMoved(outside + axis.movement())]);
-        assert_eq!(axis.scroll(&h), stopped, "{axis:?}: mouse movement after release must not scroll");
+fn a_delivered_outside_release_ends_both_scrollbar_drags() {
+    for pointer_gone in [false, true] {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let (mut h, p) = dragging(axis);
+            let outside = match axis {
+                Axis::Vertical => pos2(1250.0, p.y),
+                Axis::Horizontal => pos2(p.x, 850.0),
+            };
+            if pointer_gone {
+                events(&mut h, [Event::PointerGone]);
+                events(&mut h, [button(p, false)]);
+            } else {
+                events(&mut h, [Event::PointerMoved(outside), button(outside, false)]);
+            }
+            let stopped = axis.scroll(&h);
+            let released = if pointer_gone { p } else { outside };
+            events(&mut h, [Event::PointerMoved(released + axis.movement())]);
+            assert_eq!(axis.scroll(&h), stopped, "{axis:?}: mouse movement after release must not scroll, pointer gone={pointer_gone}");
+        }
     }
 }
 
@@ -205,18 +192,6 @@ fn losing_focus_ends_both_scrollbar_drags_without_a_release_event() {
         let stopped = axis.scroll(&h);
         events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
         assert_eq!(axis.scroll(&h), stopped, "{axis:?}: focus loss must release scrollbar capture");
-    }
-}
-
-#[test]
-fn a_release_after_pointer_gone_ends_both_scrollbar_drags() {
-    for axis in [Axis::Vertical, Axis::Horizontal] {
-        let (mut h, p) = dragging(axis);
-        events(&mut h, [Event::PointerGone]);
-        events(&mut h, [button(p, false)]);
-        let stopped = axis.scroll(&h);
-        events(&mut h, [Event::PointerMoved(p + axis.movement())]);
-        assert_eq!(axis.scroll(&h), stopped, "{axis:?}: returning with the button up must not scroll");
     }
 }
 
@@ -296,10 +271,7 @@ fn interrupted_capture_cannot_steal_a_new_press(interruption: &[Event]) {
         let next_press = axis.outside_track(p);
         let mut batch = interruption.to_vec();
         batch.extend([Event::PointerMoved(next_press), button(next_press, true)]);
-        let ctx = h.ctx.clone();
-        let mut raw = egui::RawInput { events: batch, ..Default::default() };
-        h.state_mut().raw_input_hook(&ctx, &mut raw);
-        events(&mut h, raw.events);
+        events(&mut h, batch);
         let stopped = axis.scroll(&h);
         events(&mut h, [Event::PointerMoved(next_press + axis.movement())]);
         assert_eq!(axis.scroll(&h), stopped, "{axis:?}: the old capture must not steal a new press after interruption");
