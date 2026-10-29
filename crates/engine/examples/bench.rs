@@ -100,7 +100,13 @@ fn run() -> R<()> {
 fn stats(times: &[Duration]) -> (f64, f64) {
     let mut v: Vec<f64> = times.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
     v.sort_by(f64::total_cmp);
-    let med = v.get(v.len() / 2).copied().unwrap_or(0.0);
+    // An even count averages the two middle samples.
+    let mid = v.len() / 2;
+    let med = match (v.len() % 2, v.get(mid.wrapping_sub(1)), v.get(mid)) {
+        (0, Some(a), Some(b)) => (a + b) / 2.0,
+        (_, _, Some(m)) => *m,
+        _ => 0.0,
+    };
     (med, v.first().copied().unwrap_or(0.0))
 }
 
