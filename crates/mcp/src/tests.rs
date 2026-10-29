@@ -106,6 +106,7 @@ fn tools_list_has_schemas() {
         "redo",
         "screenshot",
         "list_functions",
+        "list_windows",
     ] {
         assert!(names.contains(&want), "missing tool {want}");
     }
@@ -594,4 +595,32 @@ fn invalid_sort_keys_are_invalid_params() {
         assert_eq!(err_code(&v), -32602, "{v}");
     }
     ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
+}
+
+#[test]
+fn a_window_argument_routes_tools_to_that_window() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "book one"}));
+    ok(&mut s, "new_workbook", json!({}));
+    let windows = ok(&mut s, "list_windows", json!({}));
+    let rows = windows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{windows}");
+    let (w1, book1) = (rows[0]["window"].as_u64().unwrap(), rows[0]["doc"].as_u64().unwrap());
+    assert_eq!((rows[0]["title"].as_str(), rows[1]["active"].as_bool()), (Some("Book1"), Some(true)));
+
+    // Book2 stays active; reads and writes go to Book1's window.
+    ok(&mut s, "set_cell", json!({"cell": "B1", "input": "=A1", "window": w1}));
+    let got = ok(&mut s, "get_cell", json!({"cell": "B1", "doc": book1}));
+    assert!(got.to_string().contains("book one"), "{got}");
+    let book2 = ok(&mut s, "read_range", json!({"range": "A1:B1"}));
+    assert!(!book2.to_string().contains("book one"), "{book2}");
+    let info = ok(&mut s, "inspect_workbook", json!({"window": w1}));
+    assert!(info.to_string().contains("Book1"), "{info}");
+    assert!(fails(&mut s, "get_cell", json!({"cell": "A1", "window": 999})).contains("no open window"));
+
+    // A second window on Book1 gets a numbered title.
+    ok(&mut s, "execute_command", json!({"command": "view.newWindow", "window": w1}));
+    let titles: Vec<String> =
+        ok(&mut s, "list_windows", json!({})).as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect();
+    assert_eq!(titles, ["Book1:1", "Book2", "Book1:2"]);
 }

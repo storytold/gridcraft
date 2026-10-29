@@ -60,15 +60,47 @@ fn borders(preset: &str) -> Shortcut {
 pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Option<Shortcut> {
     use Key::*;
     let navigation = matches!(key, ArrowLeft | ArrowRight | ArrowUp | ArrowDown | PageUp | PageDown | Home | End | Insert | Delete);
-    let k = if navigation { key } else { physical.unwrap_or(key) };
-    // Control itself (Excel for Mac also uses Control for these), Ctrl on Windows / Cmd on Mac,
-    // and Alt/Option alone.
-    let ctrl = m.ctrl && !m.alt;
-    let cmd = m.command && !m.alt;
-    let alt = m.alt && !m.ctrl && !m.command;
-    let ctrl_alt = m.alt && (m.ctrl || m.command);
-    let plain = !m.ctrl && !m.command && !m.alt;
-    let s = m.shift;
+    let key = if navigation { key } else { physical.unwrap_or(key) };
+    let ctx = LookupContext {
+        key,
+        modifiers: m,
+        ctrl: m.ctrl && !m.alt,
+        cmd: m.command && !m.alt,
+        alt: m.alt && !m.ctrl && !m.command,
+        ctrl_alt: m.alt && (m.ctrl || m.command),
+        plain: !m.ctrl && !m.command && !m.alt,
+        shift: m.shift,
+        mac,
+    };
+    lookup_number_formats(ctx)
+        .or_else(|| lookup_control_shortcuts(ctx))
+        .or_else(|| lookup_windows_shortcuts(ctx))
+        .or_else(|| lookup_platform_letters(ctx))
+        .or_else(|| lookup_selection_shortcuts(ctx))
+        .or_else(|| lookup_control_alt_shortcuts(ctx))
+        .or_else(|| lookup_alt_shortcuts(ctx))
+        .or_else(|| lookup_function_shortcuts(ctx))
+}
+
+#[derive(Clone, Copy)]
+struct LookupContext {
+    key: Key,
+    modifiers: Modifiers,
+    ctrl: bool,
+    cmd: bool,
+    alt: bool,
+    ctrl_alt: bool,
+    plain: bool,
+    shift: bool,
+    mac: bool,
+}
+
+fn lookup_number_formats(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
     Some(match k {
         // Ctrl+Shift+~ ! @ # $ % ^ & _ : number formats and borders (Windows and Mac).
         Backtick if ctrl && s => Shortcut::Run("home.numberFormat", json!({"format": "General"})),
@@ -89,9 +121,31 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         OpenBracket if ctrl => Shortcut::Run("formulas.selectPrecedents", json!({"all": true})),
         CloseBracket if ctrl && !s => run("formulas.selectDependents"),
         CloseBracket if ctrl => Shortcut::Run("formulas.selectDependents", json!({"all": true})),
+        _ => return None,
+    })
+}
+
+fn lookup_control_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
         Semicolon if mac && ctrl => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,
+        _ => return None,
+    })
+}
+
+fn lookup_windows_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Ctrl+2..5 (Windows).
         Num2 if ctrl && !mac => run("home.bold"),
         Num3 if ctrl && !mac => run("home.italic"),
@@ -99,6 +153,17 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Num5 if ctrl && !mac => run("home.strikethrough"),
         // Ctrl+6 hides and shows objects (Windows, and Control+6 in Excel for Mac).
         Num6 if ctrl && !s => run("view.showObjects"),
+        _ => return None,
+    })
+}
+
+fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Letters that differ between Windows and Mac.
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),
@@ -119,6 +184,17 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Period if cmd && s => run("home.increaseFontSize"),
         Comma if cmd && s => run("home.decreaseFontSize"),
         Space if cmd && s => run("edit.selectAll"),
+        _ => return None,
+    })
+}
+
+fn lookup_selection_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Shift+Space selects the row; Ctrl+Space (Windows) / Control+Space (Excel for Mac) the
         // column. Cmd+Space stays free: it is the macOS Spotlight shortcut.
         Space if plain && s => run("selection.row"),
@@ -127,6 +203,17 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Home if cmd && s => Shortcut::ExtendToStart,
         End if cmd && s => Shortcut::ExtendToEnd,
         Home if plain && s => Shortcut::ExtendToRowStart,
+        _ => return None,
+    })
+}
+
+fn lookup_control_alt_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Ctrl+Alt / Cmd+Option combinations.
         V if ctrl_alt || (mac && m.ctrl && m.command) => Shortcut::Dialog("pasteSpecial", json!({})),
         Equals | Plus if ctrl_alt => Shortcut::Zoom(10),
@@ -139,6 +226,17 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         ArrowRight if ctrl_alt && mac => borders("right"),
         ArrowUp if ctrl_alt && mac => borders("top"),
         ArrowDown if ctrl_alt && mac => borders("bottom"),
+        _ => return None,
+    })
+}
+
+fn lookup_alt_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Alt / Option alone.
         Equals if alt && !s && !mac => run("formulas.autoSum"),
         ArrowDown if alt && !s => Shortcut::DropDown,
@@ -151,6 +249,17 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         F1 if alt && s => run("home.insertSheet"),
         F1 if alt => run("insert.chart"),
         F10 if alt && s => Shortcut::Dialog("errorChecking", json!({})),
+        _ => return None,
+    })
+}
+
+fn lookup_function_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
+    use Key::*;
+    let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
+    let _ = (ctrl, cmd, alt, ctrl_alt, plain, s, mac);
+    let m = ctx.modifiers;
+    let _ = m;
+    Some(match k {
         // Function keys.
         F1 if cmd && !s => run("view.collapseRibbon"),
         F2 if (cmd || ctrl) && s => Shortcut::Dialog("comment", json!({"threaded": true})),

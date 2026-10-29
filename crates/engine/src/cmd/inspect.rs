@@ -3,7 +3,7 @@
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -64,7 +64,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "path": d.path,
         "dirty": d.is_dirty(),
         "trust": d.trust,
-        "activeSheet": wb.active_sheet,
+        "activeSheet": wb.active_sheet(),
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),

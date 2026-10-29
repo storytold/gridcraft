@@ -55,7 +55,8 @@ impl OldPage {
         let s = format!("{}\n{} w [] 0 d\n{} {} {} {} re S", old_rgb_op(color, true), n(width), n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
-    pub fn stroke_line_dashed(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Rgb, dash: &[f32]) {
+    pub fn stroke_line_dashed(&mut self, start: Point, end: Point, width: f32, color: Rgb, dash: &[f32]) {
+        let (x0, y0, x1, y1) = (start.x, start.y, end.x, end.y);
         let d: Vec<String> = dash.iter().take(8).map(|v| n(v.max(0.0))).collect();
         let s = format!(
             "{}\n{} w [{}] 0 d\n{} {} m {} {} l S",
@@ -159,7 +160,8 @@ impl OldPage {
         });
         self.op(&s);
     }
-    pub fn text_rotated(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+    pub fn text_rotated(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        let (x, y) = (origin.x, origin.y);
         let fi = font.index();
         let (sn, cs) = angle.sin_cos();
         let s = format!(

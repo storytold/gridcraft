@@ -416,6 +416,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print" => "Yazdır",
         "Print What" => "Yazdırılacaklar",
         "Text Box" => "Metin Kutusu",
+        "Macros" => "Makrolar",
+        "Record Macro" => "Makro Kaydet",
+        "Stop Recording" => "Kaydı Durdur",
+        "Use Relative References" => "Göreli Başvuruları Kullan",
+        "Run\nMacro" => "Makro Çalıştır",
+        "Macros…" => "Makrolar…",
+        "Recording" => "Kaydediliyor",
+        "Stop" => "Durdur",
+        "New Macro" => "Yeni Makro",
+        "Show" => "Göster",
         _ => return None,
     })
 }

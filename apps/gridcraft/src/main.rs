@@ -23,24 +23,27 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gridcraft_engine::Session;
+use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
+struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &self.1 {
-                m.poll(&mut self.0, ctx);
+            if let Some(m) = &mut self.2 {
+                m.poll(&mut self.0, ctx, self.1.focused_viewport());
             }
-            apple_events::poll(&self.2, &mut self.0, ctx);
+            apple_events::poll(&self.3, &mut self.0, ctx);
         }
         self.0.logic(ctx);
+        self.1.logic(&mut self.0, ctx);
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -56,7 +59,7 @@ impl eframe::App for App {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
+        self.1.show(&mut self.0, ui);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -335,7 +338,20 @@ fn main() -> eframe::Result<()> {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
+    let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut options = options;
+    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
+    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
+    // keeps the native Wayland backend.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
+        options.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        }));
+    }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -372,8 +388,10 @@ fn main() -> eframe::Result<()> {
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
+                let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
                 Ok(Box::new(App(
                     app,
+                    windows,
                     #[cfg(target_os = "macos")]
                     None,
                     #[cfg(target_os = "macos")]

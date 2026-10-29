@@ -57,7 +57,7 @@ fn double_click(h: &mut Harness, label: &str) {
 
 fn place(h: &Harness) -> (usize, String) {
     let d = h.state().session.active().unwrap();
-    (d.wb.active_sheet, d.selection.a1())
+    (d.wb.active_sheet(), d.selection.a1())
 }
 
 #[test]

@@ -112,7 +112,7 @@ fn circular_references_lists_the_loops_and_selects_the_cell_picked() {
     h.run_steps(4);
     let app = h.state();
     let d = app.session.active().unwrap();
-    assert_eq!(d.wb.active_sheet, 1, "picking a cell on Q1 Data goes to Q1 Data");
+    assert_eq!(d.wb.active_sheet(), 1, "picking a cell on Q1 Data goes to Q1 Data");
     assert_eq!(format!("'Q1 Data'!{}", d.selection.active.a1()), other);
 }
 

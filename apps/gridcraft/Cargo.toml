@@ -24,8 +24,13 @@ chrono = { workspace = true }
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
+# Same craft-libs revision as the workspace's craft-update and craft-window (see the root
+# Cargo.toml).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }

@@ -22,6 +22,8 @@ finish-args:
   - --socket=fallback-x11
   # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
   - --share=ipc
+  # Network access for update checks against GitHub.
+  - --share=network
   # GPU access for rendering.
   - --device=dri
   # Open/Save dialogs use the file-chooser portal (rfd), and drag-and-drop uses the document
@@ -29,9 +31,7 @@ finish-args:
   # opening workbooks by path from the command line.
   - --filesystem=xdg-documents
   - --filesystem=xdg-download
-  # Deliberately not granted: network (the optional --control channel listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.gridcraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Network: update checks reach GitHub. Home/host filesystem access is deliberately not granted.
 modules:
   - name: gridcraft
     buildsystem: simple
