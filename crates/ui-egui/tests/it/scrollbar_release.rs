@@ -323,12 +323,20 @@ fn a_focused_logic_tick_does_not_replay_old_interruption_events() {
 }
 
 fn child_harness(release_on_pointer_gone: bool) -> (Harness, std::sync::Arc<std::sync::Mutex<Vec<Event>>>) {
+    child_harness_with_focus(release_on_pointer_gone, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)))
+}
+
+fn child_harness_with_focus(
+    release_on_pointer_gone: bool,
+    focused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> (Harness, std::sync::Arc<std::sync::Mutex<Vec<Event>>>) {
     let queued = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let input = queued.clone();
     egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {
         let mut raw = egui::RawInput {
             viewport_id: viewport.ids.this,
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+            focused: focused.load(std::sync::atomic::Ordering::Relaxed),
             events: std::mem::take(&mut *input.lock().unwrap()),
             ..Default::default()
         };
@@ -361,10 +369,13 @@ fn child_events(h: &mut Harness, queued: &std::sync::Mutex<Vec<Event>>, events: 
 #[test]
 fn a_child_focus_loss_in_the_activating_batch_cancels_the_scrollbar() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
-        let (mut h, queued) = child_harness(false);
+        let focused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (mut h, queued) = child_harness_with_focus(false, focused.clone());
         child_events(&mut h, &queued, [Event::WindowFocused(true)]);
         let p = axis.start(&h);
+        focused.store(false, std::sync::atomic::Ordering::Relaxed);
         child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(false)]);
+        focused.store(true, std::sync::atomic::Ordering::Relaxed);
         child_events(&mut h, &queued, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
         assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: child focus loss after the press must end capture");
     }
