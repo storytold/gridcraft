@@ -108,7 +108,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 } else {
                     json!({"column": col_to_letters(col), "values": [v], "blanks": false})
                 };
-                let _ = app.run("data.filterBy", p);
+                app.run_or_alert("data.filterBy", p);
                 close = true;
             }
             ui.ctx().data_mut(|d| {
