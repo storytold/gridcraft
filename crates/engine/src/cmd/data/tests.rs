@@ -42,15 +42,15 @@ fn filter_by_dates_shows_the_checked_months_and_days() {
     let list = filter_list(wb, 0, 0);
     assert_eq!(tree(&list.dates), ["2025[December[24]]", "2026[March[05 20] April[01-]]"]);
     assert_eq!(list.values, [("n/a".to_string(), false), ("(Blanks)".to_string(), false)]);
-    // A text value next to the dates: Excel keeps values or date groups, not both, so the dates
-    // are stored as the texts their cells show, and the same rows stay visible.
+    // A text value next to the dates: both stay in the filter, as Excel keeps them, and a row
+    // shows when it matches either.
     s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2025}]})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
     let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
     assert_eq!(hidden, [2, 3, 4, 6, 7]);
     let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
-    let text_2025 = crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(1, 0));
-    assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into(), text_2025], blanks: false, dates: vec![] }));
+    let y2025 = DateGroupItem { grouping: DateGrouping::Year, year: 2025, month: 0, day: 0, hour: 0, minute: 0, second: 0 };
+    assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![y2025] }));
 }
 
 #[test]
@@ -104,28 +104,29 @@ fn dates_follow_the_second_shown_and_durations_stay_values() {
 }
 
 #[test]
-fn a_mixed_selection_keeps_the_texts_the_dates_show_and_a_mixed_file_is_converted_on_open() {
+fn a_selection_of_values_and_dates_keeps_both_and_shows_either() {
     let mut s = dated_session();
     s.execute("home.numberFormat", json!({"range": "A2:A8", "code": "d mmm yyyy"})).unwrap();
     s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2026, "month": 3}]})).unwrap();
     let wb = &s.doc().unwrap().wb;
     let sh = wb.active().unwrap();
     let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
-    let want = ["n/a", "5 Mar 2026", "20 Mar 2026"].map(String::from).to_vec();
-    assert_eq!(crit, Some(FilterCriterion::Values { values: want.clone(), blanks: false, dates: vec![] }));
+    // Excel keeps a text ticked together with a month in one filter and shows the rows of either
+    // (observed in Excel 365): so does GridCraft, and the dropdown shows both ticked.
+    let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+    assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] }));
     let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
     assert_eq!(hidden, [1, 4, 6], "December, April and the blank are hidden");
-    // A file that holds both kinds in one filter is converted when it opens, with a warning.
-    let mut wb = (**wb).clone();
-    let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
-    if let Some(af) = wb.sheet_mut(0).and_then(|sh| sh.autofilter.as_mut()) {
-        af.criteria = vec![(0, FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] })];
-    }
-    let bytes = serde_json::to_vec(&wb).unwrap();
-    let (opened, warnings) = crate::io::open_bytes("mixed.json", &bytes).unwrap();
-    assert!(warnings.iter().any(|w| w.contains("mixed values and date groups")), "{warnings:?}");
+    let mut list = filter_list(wb, 0, 0);
+    list.refresh("");
+    assert!(list.values.iter().any(|(t, on)| t == "n/a" && *on), "{:?}", list.values);
+    assert_eq!(checked_date_items(&list.dates), [march]);
+    // Through XLSX the filter keeps both kinds.
+    let bytes = crate::io::save_bytes(wb, "mixed.xlsx").unwrap();
+    let (opened, warnings) = crate::io::open_bytes("mixed.xlsx", &bytes).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
     let crit = opened.sheet(0).and_then(|sh| sh.autofilter.as_ref()).and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
-    assert_eq!(crit, Some(FilterCriterion::Values { values: want, blanks: false, dates: vec![] }));
+    assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] }));
 }
 
 #[test]

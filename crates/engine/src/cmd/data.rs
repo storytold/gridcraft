@@ -20,7 +20,7 @@ mod validation;
 
 #[cfg(test)]
 use filter::DateSet;
-pub use filter::{DateNode, FilterList, cell_date, checked_date_items, filter_list, normalize_mixed_filters};
+pub use filter::{DateNode, FilterList, cell_date, checked_date_items, filter_list};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};

@@ -98,18 +98,9 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
             }
             None => vec![],
         };
-        let mut values: Vec<String> = vals.iter().map(crate::cmd::edit::json_to_input).collect();
-        // Excel takes either values or date groups in one filter, never both: a selection that
-        // mixes them is kept as text, the dates becoming the texts their cells show.
-        let dates = if values.is_empty() || dates.is_empty() {
-            dates
-        } else {
-            let doc = s.doc()?;
-            if let Some(sh) = doc.wb.sheet(sheet) {
-                values = with_date_texts(&doc.wb, sh, af.range, col, values, &dates);
-            }
-            vec![]
-        };
+        // Values and date groups can share one filter, as Excel saves a text ticked together with a
+        // month: a cell passes by either.
+        let values: Vec<String> = vals.iter().map(crate::cmd::edit::json_to_input).collect();
         Some(FilterCriterion::Values { values, blanks: bool_param(p, "blanks").unwrap_or(false), dates })
     } else if let Some(c) = p.get("custom") {
         let a =
@@ -142,132 +133,6 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
-/// `values` with the texts shown by the date cells of column `col` of a filter range that fall in
-/// `dates` added (each text once, ignoring case): the form Excel gives a selection that mixes values
-/// and date groups, since one filter holds one kind or the other (MS-OI29500 §18.3.2.8). The text
-/// is the value as formatted, not a formula Show Formulas would put there. Like Excel's, the result
-/// matches by text: another cell showing the same text passes too.
-fn with_date_texts(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, mut values: Vec<String>, dates: &[DateGroupItem]) -> Vec<String> {
-    let set = DateSet::new(dates);
-    let mut seen: std::collections::HashSet<String> = values.iter().map(|v| v.to_ascii_lowercase()).collect();
-    for row in range.start.row + 1..=range.end.row {
-        let c = CellRef::new(row, col);
-        if cell_date(wb, sh, c).is_some_and(|d| set.contains(&d)) {
-            let t = crate::display::value_text(wb, sh, c);
-            if seen.insert(t.to_ascii_lowercase()) {
-                values.push(t);
-            }
-        }
-    }
-    values
-}
-
-/// Turns every value-list filter of a workbook that holds both values and date groups (a file from
-/// another program, a hand-made session) into text, as [`with_date_texts`] does for `data.filterBy`.
-/// Returns how many filters changed.
-pub fn normalize_mixed_filters(wb: &mut Workbook) -> usize {
-    let mixed = |c: &FilterCriterion| matches!(c, FilterCriterion::Values { values, dates, .. } if !values.is_empty() && !dates.is_empty());
-    let mut changes: Vec<(usize, Option<usize>, usize, FilterCriterion)> = vec![];
-    for (si, sh) in wb.sheets.iter().enumerate() {
-        let lists = sh
-            .autofilter
-            .iter()
-            .map(|a| (None, a.range, &a.criteria))
-            .chain(sh.tables.iter().enumerate().map(|(ti, t)| (Some(ti), t.range, &t.filter)));
-        for (table, range, criteria) in lists {
-            for (ci, (off, c)) in criteria.iter().enumerate() {
-                if let FilterCriterion::Values { values, blanks, dates } = c
-                    && mixed(c)
-                {
-                    let values = with_date_texts(wb, sh, range, range.start.col.saturating_add(*off), values.clone(), dates);
-                    changes.push((si, table, ci, FilterCriterion::Values { values, blanks: *blanks, dates: vec![] }));
-                }
-            }
-        }
-    }
-    let n = changes.len();
-    for (si, table, ci, crit) in changes {
-        let Some(sh) = wb.sheet_mut(si) else { continue };
-        let slot = match table {
-            None => sh.autofilter.as_mut().and_then(|a| a.criteria.get_mut(ci)),
-            Some(ti) => sh.tables.get_mut(ti).and_then(|t| t.filter.get_mut(ci)),
-        };
-        if let Some((_, c)) = slot {
-            *c = crit;
-        }
-    }
-    n
-}
-
-/// One `dates` entry of `data.filterBy`: `{year: 2026, month: 3}` is March 2026; the deepest
-/// field given is the grouping.
-fn date_item_param(j: &Json) -> Result<DateGroupItem> {
-    let err = || bad("data.filterBy", "a `dates` entry needs a year and valid month, day, hour, minute and second");
-    // A misspelt key (`months`) would otherwise widen the group without a word.
-    const KEYS: [&str; 6] = ["year", "month", "day", "hour", "minute", "second"];
-    match j.as_object() {
-        Some(o) if o.keys().all(|k| KEYS.contains(&k.as_str())) => {}
-        _ => return Err(err()),
-    }
-    // Months and days start at 1; hours, minutes and seconds at 0.
-    let field = |name: &str, min: u64, max: u64| -> Result<Option<u32>> {
-        match j.get(name) {
-            None => Ok(None),
-            Some(v) => v.as_u64().filter(|n| (min..=max).contains(n)).map(|n| Some(n as u32)).ok_or_else(err),
-        }
-    };
-    let year = field("year", 0, 9999)?.ok_or_else(err)?;
-    let fields = [field("month", 1, 12)?, field("day", 1, 31)?, field("hour", 0, 23)?, field("minute", 0, 59)?, field("second", 0, 59)?];
-    // Each field needs the ones above it (a day without a month means nothing).
-    let depth = fields.iter().take_while(|f| f.is_some()).count();
-    if fields.iter().skip(depth).any(Option::is_some) {
-        return Err(err());
-    }
-    let get = |i: usize| fields.get(i).copied().flatten().unwrap_or(0);
-    Ok(DateGroupItem {
-        grouping: DateGrouping::ALL.get(depth).copied().unwrap_or(DateGrouping::Second),
-        year: year as i32,
-        month: get(0),
-        day: get(1),
-        hour: get(2),
-        minute: get(3),
-        second: get(4),
-    })
-}
-
-/// The date and time a cell shows, when it is a number in a format that shows a calendar date.
-/// Times and durations (`h:mm`, `[h]:mm`) stay in the plain value list, as in Excel, and so do
-/// serials below 1 in the 1900 system (serial 0 is the fictitious 1900-01-00); the 1904 system's
-/// serial 0 is the real 1904-01-01. The serial is rounded to the second the cell shows, so a
-/// value a hair before midnight is filed under the day it displays.
-pub fn cell_date(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<gridcraft_core::date::DateTime> {
-    let n = sh.value(c).as_f64()?;
-    let first = match wb.date_system {
-        gridcraft_core::DateSystem::D1900 => 1.0,
-        gridcraft_core::DateSystem::D1904 => 0.0,
-    };
-    // `kind` reads the first section, the one a positive number uses: `0.00;yyyy-mm-dd` is no date.
-    let fmt = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    if !n.is_finite() || n < first || fmt.kind() != gridcraft_numfmt::FormatKind::Date {
-        return None;
-    }
-    gridcraft_core::date::datetime_from_serial(wb.date_system, (n * 86_400.0).round() / 86_400.0)
-}
-
-/// A criterion's date groups, looked up by each level of a cell's date: at most six lookups per
-/// cell however many groups a file lists.
-pub(super) struct DateSet(std::collections::HashSet<DateGroupItem>);
-
-impl DateSet {
-    pub(super) fn new(items: &[DateGroupItem]) -> DateSet {
-        DateSet(items.iter().map(DateGroupItem::normalized).collect())
-    }
-
-    pub(super) fn contains(&self, dt: &gridcraft_core::date::DateTime) -> bool {
-        DateGrouping::ALL.iter().any(|g| self.0.contains(&DateGroupItem::of(dt, *g)))
-    }
-}
-
 /// A value-list criterion, prepared once per filter instead of once per row.
 struct ValueFilter {
     /// The checked values, ASCII-lowercased (the list matches case-insensitively).
@@ -295,10 +160,10 @@ impl ValueFilter {
     }
 
     /// Does a cell pass? `date` gives the cell's [`cell_date`], asked only when needed. With date
-    /// groups a date cell passes by its date alone, as the dropdown's tree shows it; without them it
-    /// passes by the text it shows, so filters that list dates as text (Excel's form for a selection
-    /// that mixes dates and other values, older files, scripts) keep working. A date's serial number
-    /// does not count as its text.
+    /// groups a date cell passes by its date alone, as the dropdown's tree shows it, and any other
+    /// cell by its text (a filter can hold both, as Excel saves them); without date groups a date
+    /// passes by the text it shows, so filters that list dates as text (older files, scripts) keep
+    /// working. A date's serial number does not count as its text.
     fn pass(&self, v: &Value, text: &str, date: impl Fn() -> Option<gridcraft_core::date::DateTime>) -> bool {
         if filter_blank(v) {
             return self.blanks;

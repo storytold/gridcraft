@@ -78,14 +78,11 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
                 }
-                // Excel takes `filter` or `dateGroupItem` children, not both (MS-OI29500 §18.3.2.8).
-                // The engine turns a mixed selection, and a mixed filter in an opened file, into text
-                // before it gets here; a criterion that has both anyway keeps its values. Items from a
-                // session file are unchecked: out-of-range ones would make an invalid file.
-                if values.is_empty() {
-                    for d in dates.iter().filter(|d| d.is_valid()) {
-                        date_group_item_xml(&d.normalized(), &mut s);
-                    }
+                // After the values, as Excel writes a text ticked together with a month (observed in
+                // Excel 365). Items from a session file are unchecked: out-of-range ones would make an
+                // invalid file.
+                for d in dates.iter().filter(|d| d.is_valid()) {
+                    date_group_item_xml(&d.normalized(), &mut s);
                 }
                 s.push_str("</filters>");
             }

@@ -1529,7 +1529,7 @@ fn invalid_date_groups_are_not_written() {
 /// Excel takes `filter` or `dateGroupItem` children in one `filters`, not both: a criterion that
 /// has both (the engine converts them to text first) is written with its values.
 #[test]
-fn a_filter_with_values_and_date_groups_writes_only_the_values() {
+fn a_filter_with_values_and_date_groups_writes_and_reads_both() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
     let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
@@ -1540,5 +1540,10 @@ fn a_filter_with_values_and_date_groups_writes_only_the_values() {
     let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
     let filters = sheet.child("autoFilter").and_then(|a| a.child("filterColumn")).and_then(|f| f.child("filters")).unwrap();
     assert_eq!(filters.kids("filter").filter_map(|f| f.attr("val")).collect::<Vec<_>>(), ["n/a"]);
-    assert_eq!(filters.kids("dateGroupItem").count(), 0);
+    // The values come first, as Excel writes them.
+    let kids: Vec<&str> = filters.children.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(kids, ["filter", "dateGroupItem"]);
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let crit = back.sheet(0).and_then(|sh| sh.autofilter.as_ref()).and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+    assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] }));
 }
