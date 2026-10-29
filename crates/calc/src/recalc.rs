@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Evaluator, Host, NameCache, precedents_with, stack_position};
 use crate::spill_index::{SpillIndex, indexing_pays};
 
 /// Changed cells (in one `cells_changed`) from which a sheet's spill areas may be indexed.
@@ -53,6 +53,11 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// Areas the formulas of the graph hold from names, so the budget on them holds across edits
+    /// as well as within one build (see [`NameCache`]), and what each formula holding some was
+    /// charged, given back when the formula is resolved again or removed.
+    name_areas: usize,
+    name_charges: HashMap<Key, usize>,
 }
 
 /// A set of cells by row, each row's columns in their own set: a window of rows and columns is
@@ -102,6 +107,8 @@ impl Default for Calc {
             circular: vec![],
             last_recalc_cells: 0,
             spill_errors: SpillErrors::default(),
+            name_areas: 0,
+            name_charges: HashMap::default(),
         }
     }
 }
@@ -187,14 +194,21 @@ impl Calc {
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
+        let mut names = NameCache::default();
+        self.name_charges.clear();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if cell.value == Value::Error(CellError::Spill) {
                     self.spill_errors.insert((si, c));
                 }
+                let before = names.stored();
                 if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
+                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents_with(wb, si, e, &mut names))
                 {
+                    let charge = names.stored().saturating_sub(before);
+                    if charge > 0 {
+                        self.name_charges.insert((si, c), charge);
+                    }
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
@@ -207,6 +221,7 @@ impl Calc {
             }
         }
         self.graph.settle();
+        self.name_areas = names.stored();
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
     }
 
@@ -286,20 +301,35 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        // The budget on areas taken from names counts on from what the graph's formulas hold: an
+        // edited formula gives its charge back before it is resolved again, so editing or refilling
+        // the same readers doesn't spend it.
+        let mut names = NameCache::with_stored(self.name_areas);
         for &k in changed {
             if wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.value == Value::Error(CellError::Spill)) {
                 self.spill_errors.insert(k);
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+            if let Some(old) = self.name_charges.remove(&k) {
+                names.give_back(old);
+            }
+            let before = names.stored();
+            let precedent = wb
+                .sheet(k.0)
+                .and_then(|s| s.cell(k.1))
+                .and_then(|c| c.formula.as_ref())
+                .and_then(|f| f.with_expr(|e| precedents_with(wb, k.0, e, &mut names)));
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match precedent {
                 Some((areas, dynamic)) => {
+                    let charge = names.stored().saturating_sub(before);
+                    if charge > 0 {
+                        self.name_charges.insert(k, charge);
+                    }
                     self.graph.insert(k, Node { areas, dynamic });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
@@ -337,6 +367,7 @@ impl Calc {
                 }
             }
         }
+        self.name_areas = names.stored();
         self.graph.settle();
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.

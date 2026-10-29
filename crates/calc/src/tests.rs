@@ -3,6 +3,8 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+mod names;
+
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
