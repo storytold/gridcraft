@@ -1,5 +1,7 @@
 use super::chart::format_series;
-use super::*;
+use super::{
+    Anchor, CellRef, Color, EngineError, Json, Result, Session, Shape, Sheet, anchor_mode_name, bad, bool_param, edit, json, str_param, u32_param,
+};
 
 pub(super) fn shape_fill(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "kind") == Some("shape") {

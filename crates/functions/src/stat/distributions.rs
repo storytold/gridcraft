@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions

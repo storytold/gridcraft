@@ -462,6 +462,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Alle Blätter",
         "New sheet (⇧F11)" => "Neues Blatt (⇧F11)",
         "Text Box" => "Textfeld",
+        "Macros" => "Makros",
+        "Record Macro" => "Makro aufzeichnen",
+        "Stop Recording" => "Aufzeichnung beenden",
+        "Use Relative References" => "Relative Verweise verwenden",
+        "Run\nMacro" => "Makro ausführen",
+        "Macros…" => "Makros…",
+        "Recording" => "Aufzeichnung",
+        "Stop" => "Beenden",
+        "New Macro" => "Neues Makro",
+        "Show" => "Anzeigen",
         _ => return None,
     })
 }

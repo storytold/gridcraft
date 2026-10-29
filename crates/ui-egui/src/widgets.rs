@@ -109,6 +109,9 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     }
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
     paint_big_label(ui, rect, &lines, dropdown);
+    let name = label.replace('\n', " ");
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     resp.on_hover_text(tip_text(ui, tip))
 }
 
@@ -203,6 +206,32 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
+    // The accessible name is the label, or the tooltip for an icon-only button.
+    let name = if label.is_empty() { tr(ui, tip) } else { label };
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
+    resp.on_hover_text(tip_text(ui, tip))
+}
+
+/// Small labelled toggle button (Use Relative References): drawn pressed while `on`. Its
+/// accessible role is a checkbox, selected while `on`.
+pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 23.0), Sense::click());
+    if on || resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    let color = if ui.is_enabled() { t.text } else { t.text_disabled };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, color);
+    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, color);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, label));
     resp.on_hover_text(tip_text(ui, tip))
 }
 

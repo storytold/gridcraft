@@ -330,30 +330,32 @@ mod tests {
     }
 
     #[test]
-    fn set_get_remove() {
+    fn set_get_remove() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         s.set(c(0, 0), Cell::value(1.0.into()));
         s.set(c(100, 5), Cell::value("x".into()));
         assert_eq!(s.len(), 2);
         assert_eq!(s.get(c(100, 5)).map(|x| x.value.clone()), Some(Value::from("x")));
-        assert_eq!(s.used_range().unwrap().a1(), "A1:F101");
+        assert_eq!(s.used_range().ok_or("none")?.a1(), "A1:F101");
         s.set(c(0, 0), Cell::default());
         assert_eq!(s.len(), 1);
         assert!(s.remove(c(100, 5)).is_some());
         assert!(s.is_empty());
         assert!(s.used_range().is_none());
+        Ok(())
     }
 
     #[test]
-    fn cow_snapshots() {
+    fn cow_snapshots() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         for r in 0..1000 {
             s.set(c(r, 0), Cell::value((r as f64).into()));
         }
         let snap = s.clone();
         s.set(c(5, 0), Cell::value(99.0.into()));
-        assert_eq!(snap.get(c(5, 0)).unwrap().value, Value::Number(5.0));
-        assert_eq!(s.get(c(5, 0)).unwrap().value, Value::Number(99.0));
+        assert_eq!(snap.get(c(5, 0)).ok_or("none")?.value, Value::Number(5.0));
+        assert_eq!(s.get(c(5, 0)).ok_or("none")?.value, Value::Number(99.0));
+        Ok(())
     }
 
     #[test]
@@ -371,14 +373,16 @@ mod tests {
     }
 
     #[test]
-    fn range_iteration_order() {
+    fn range_iteration_order() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         s.set(c(70, 2), Cell::value(3.0.into()));
         s.set(c(1, 1), Cell::value(1.0.into()));
         s.set(c(1, 3), Cell::value(2.0.into()));
         s.set(c(500, 0), Cell::value(4.0.into()));
-        let v: Vec<f64> = s.iter_range(RangeRef::parse("A1:D100").unwrap()).map(|(_, x)| x.value.as_f64().unwrap()).collect();
+        let v: Vec<f64> =
+            s.iter_range(RangeRef::parse("A1:D100").ok_or("none")?).map(|(_, x)| x.value.as_f64()).collect::<Option<_>>().ok_or("none")?;
         assert_eq!(v, [1.0, 2.0, 3.0]);
+        Ok(())
     }
 
     #[test]

@@ -152,7 +152,8 @@ fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
     let (mut h, id) = fixture();
     let inside = corner(&h, id) - vec2(100.0, 80.0);
     right_click(&mut h, inside, vec2(0.0, 0.0));
-    h.get_by_role_and_label(Role::Button, "Delete").click();
+    // Home › Cells › Delete has the same accessible name; the menu is drawn over the ribbon, last.
+    h.get_all_by_role_and_label(Role::Button, "Delete").last().unwrap().click();
     h.run_steps(3);
     assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
     assert!(h.state().grid.object_menu.is_none());

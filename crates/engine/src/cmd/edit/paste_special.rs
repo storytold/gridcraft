@@ -1,5 +1,76 @@
 use super::clipboard::What;
-use super::*;
+use super::{
+    Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
+    target_sheet,
+};
+
+fn tiled_cells(rows: u32, cols: u32, tiles_r: u32, tiles_c: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> + Clone {
+    (0..tiles_r).flat_map(move |tr| (0..tiles_c).flat_map(move |tc| (0..rows).flat_map(move |r| (0..cols).map(move |c| (tr, tc, r, c)))))
+}
+
+fn apply_operation(op: &str, old: &Cell, new: &mut Cell) {
+    let operand = new.value.clone();
+    if let (Ok(x), Ok(y)) = (old.value.to_number(), operand.to_number())
+        && (old.value.is_number() || old.value.is_empty() || old.value.is_text())
+        && (operand.is_number() || operand.is_empty())
+    {
+        new.value = match op {
+            "add" => Value::number(x + y),
+            "subtract" => Value::number(x - y),
+            "multiply" => Value::number(x * y),
+            "divide" if y == 0.0 => Value::Error(gridcraft_core::CellError::Div0),
+            "divide" => Value::number(x / y),
+            _ => operand.clone(),
+        };
+    } else if (old.value.is_text() || old.value.is_error()) && (operand.is_number() || operand.is_empty()) {
+        new.value = old.value.clone();
+    }
+    if let Some(formula) = &old.formula
+        && let Ok(y) = operand.to_number()
+        && (operand.is_number() || operand.is_empty())
+        && let Some(symbol) = operation_symbol(op)
+    {
+        let text = format!("=({}){symbol}{}", formula.text, gridcraft_core::number_to_text(y));
+        new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
+        new.value = Value::Empty;
+    }
+}
+
+fn operation_symbol(op: &str) -> Option<char> {
+    match op {
+        "add" => Some('+'),
+        "subtract" => Some('-'),
+        "multiply" => Some('*'),
+        "divide" => Some('/'),
+        _ => None,
+    }
+}
+
+fn copy_merges(
+    cx: &mut crate::cmd::Ctx,
+    dest_sheet: usize,
+    src_sheet: &gridcraft_model::Sheet,
+    src: RangeRef,
+    at: CellRef,
+    what: What,
+    transpose: bool,
+) -> Result<()> {
+    if !matches!(what, What::All | What::Formats) || transpose {
+        return Ok(());
+    }
+    let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
+    for merge in merges {
+        let row_offset = at.row as i64 - src.start.row as i64;
+        let col_offset = at.col as i64 - src.start.col as i64;
+        if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+            let moved = RangeRef::new(start, end);
+            let sheet = cx.sheet_mut(dest_sheet)?;
+            sheet.merges.retain(|existing| !existing.intersects(&moved));
+            sheet.merges.push(moved);
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
@@ -74,209 +145,145 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             moved_formulas = taken;
         }
-        for tr in 0..tiles_r {
-            for tc in 0..tiles_c {
-                for r in 0..src.height() {
-                    for c in 0..src.width() {
-                        let sc = CellRef::new(src.start.row + r, src.start.col + c);
-                        let (dr, dc) = if transpose { (c, r) } else { (r, c) };
-                        let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-                        let src_cell = if cut_move {
-                            moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone())
+        for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
+            let sc = CellRef::new(src.start.row + r, src.start.col + c);
+            let (dr, dc) = if transpose { (c, r) } else { (r, c) };
+            let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
+            let src_cell = if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
+            let src_val = src_sheet.value(sc);
+            let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
+            if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
+                continue;
+            }
+            let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
+            let old_picture = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell_pictures.get(&dest)).cloned();
+            let mut new_picture = old_picture.clone();
+            let mut new = old.clone();
+            let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
+                let f = cell.formula.as_ref()?;
+                let e = f.expr()?;
+                if cut_move {
+                    // A moved formula still reads cells on its original sheet. Qualify
+                    // those references before the workbook-wide move adjustment below.
+                    let e = if dest_sheet != clip.sheet {
+                        e.map(&mut |x| match x {
+                            gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Current => {
+                                r.sheet = gridcraft_formula::SheetSel::Named(src_sheet_name.clone());
+                                gridcraft_formula::Expr::Ref(r)
+                            }
+                            other => other,
+                        })
+                    } else {
+                        e
+                    };
+                    let mut moved = Formula::from_expr(e);
+                    // The array range moves with its formula.
+                    let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                    moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
+                    moved.dynamic = f.dynamic;
+                    return Some(std::sync::Arc::new(moved));
+                }
+                let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+            };
+            if link {
+                let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
+                    String::new()
+                } else {
+                    format!("{}!", gridcraft_formula::quote_sheet(&src_sheet_name))
+                };
+                new.formula = Some(std::sync::Arc::new(Formula::new(&format!("={sheet_prefix}{}", sc.a1()))));
+                new.value = Value::Empty;
+                new_picture = None;
+            } else {
+                let sc_cell = src_cell.clone().unwrap_or_default();
+                match what {
+                    What::All | What::AllExceptBorders => {
+                        new_picture = src_picture.clone();
+                        new.formula = shift(&sc_cell);
+                        new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                        let st = map_style(sc_cell.style, &mut cx.wb);
+                        new.style = if what == What::AllExceptBorders {
+                            let borders = cx.wb.styles.get(old.style).borders;
+                            cx.wb.styles.derive(st, |s| s.borders = borders)
                         } else {
-                            src_sheet.cell(sc).cloned()
+                            st
                         };
-                        let src_val = src_sheet.value(sc);
-                        let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
-                        if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
-                            continue;
+                    }
+                    What::Formulas | What::FormulasAndNumberFormats => {
+                        new_picture = src_picture.clone();
+                        new.formula = shift(&sc_cell);
+                        new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                        if what == What::FormulasAndNumberFormats {
+                            let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
+                            new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
                         }
-                        let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
-                        let old_picture = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell_pictures.get(&dest)).cloned();
-                        let mut new_picture = old_picture.clone();
-                        let mut new = old.clone();
-                        let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
-                            let f = cell.formula.as_ref()?;
-                            let e = f.expr()?;
-                            if cut_move {
-                                // A moved formula still reads cells on its original sheet. Qualify
-                                // those references before the workbook-wide move adjustment below.
-                                let e = if dest_sheet != clip.sheet {
-                                    e.map(&mut |x| match x {
-                                        gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Current => {
-                                            r.sheet = gridcraft_formula::SheetSel::Named(src_sheet_name.clone());
-                                            gridcraft_formula::Expr::Ref(r)
-                                        }
-                                        other => other,
-                                    })
-                                } else {
-                                    e
-                                };
-                                let mut moved = Formula::from_expr(e);
-                                // The array range moves with its formula.
-                                let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                                moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
-                                moved.dynamic = f.dynamic;
-                                return Some(std::sync::Arc::new(moved));
-                            }
-                            let moved =
-                                gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                            Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
-                        };
-                        if link {
-                            let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
-                                String::new()
-                            } else {
-                                format!("{}!", gridcraft_formula::quote_sheet(&src_sheet_name))
-                            };
-                            new.formula = Some(std::sync::Arc::new(Formula::new(&format!("={sheet_prefix}{}", sc.a1()))));
-                            new.value = Value::Empty;
-                            new_picture = None;
-                        } else {
-                            let sc_cell = src_cell.clone().unwrap_or_default();
-                            match what {
-                                What::All | What::AllExceptBorders => {
-                                    new_picture = src_picture.clone();
-                                    new.formula = shift(&sc_cell);
-                                    new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
-                                    let st = map_style(sc_cell.style, &mut cx.wb);
-                                    new.style = if what == What::AllExceptBorders {
-                                        let borders = cx.wb.styles.get(old.style).borders;
-                                        cx.wb.styles.derive(st, |s| s.borders = borders)
-                                    } else {
-                                        st
-                                    };
-                                }
-                                What::Formulas | What::FormulasAndNumberFormats => {
-                                    new_picture = src_picture.clone();
-                                    new.formula = shift(&sc_cell);
-                                    new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
-                                    if what == What::FormulasAndNumberFormats {
-                                        let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
-                                        new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
-                                    }
-                                }
-                                What::Values | What::ValuesAndNumberFormats => {
-                                    new_picture = src_picture.clone();
-                                    new.formula = None;
-                                    new.value = src_val.clone();
-                                    if what == What::ValuesAndNumberFormats {
-                                        let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
-                                        new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
-                                    }
-                                }
-                                What::Formats => new.style = map_style(sc_cell.style, &mut cx.wb),
-                                What::Comments | What::Validation | What::ColumnWidths => {}
-                            }
-                            // Operations combine numbers with what is already there.
-                            if op != "none"
-                                && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas)
-                                && new.formula.is_none()
-                            {
-                                if old_picture.is_some() || new_picture.is_some() {
-                                    new_picture = None;
-                                    new.value = Value::Error(gridcraft_core::CellError::Value);
-                                }
-                                let a = old.value.clone();
-                                let b = new.value.clone();
-                                // Numbers stored as text take part (multiplying by 1 turns them into
-                                // numbers); other text and errors stay as they are.
-                                if let (Ok(x), Ok(y)) = (a.to_number(), b.to_number())
-                                    && (a.is_number() || a.is_empty() || a.is_text())
-                                    && (b.is_number() || b.is_empty())
-                                {
-                                    new.value = match op.as_str() {
-                                        "add" => Value::number(x + y),
-                                        "subtract" => Value::number(x - y),
-                                        "multiply" => Value::number(x * y),
-                                        "divide" => {
-                                            if y == 0.0 {
-                                                Value::Error(gridcraft_core::CellError::Div0)
-                                            } else {
-                                                Value::number(x / y)
-                                            }
-                                        }
-                                        _ => b.clone(),
-                                    };
-                                } else if (a.is_text() || a.is_error()) && (b.is_number() || b.is_empty()) {
-                                    new.value = a;
-                                }
-                                // A formula already there is kept and combined with the pasted number.
-                                if let Some(f) = &old.formula
-                                    && let Ok(y) = b.to_number()
-                                    && (b.is_number() || b.is_empty())
-                                    && let Some(sym) = match op.as_str() {
-                                        "add" => Some('+'),
-                                        "subtract" => Some('-'),
-                                        "multiply" => Some('*'),
-                                        "divide" => Some('/'),
-                                        _ => None,
-                                    }
-                                {
-                                    let text = format!("=({}){sym}{}", f.text, gridcraft_core::number_to_text(y));
-                                    new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
-                                    new.value = Value::Empty;
-                                }
-                            }
+                    }
+                    What::Values | What::ValuesAndNumberFormats => {
+                        new_picture = src_picture.clone();
+                        new.formula = None;
+                        new.value = src_val.clone();
+                        if what == What::ValuesAndNumberFormats {
+                            let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
+                            new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
                         }
-                        // The copied cell's validation rule replaces whatever rule the destination had.
-                        if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-                            let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
-                            let sh = cx.sheet_mut(dest_sheet)?;
-                            crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
-                            if let Some(mut dv) = rule {
-                                // Relative references move with the rule, as pasted formulas do.
-                                let first = dv.ranges.first().map_or(sc, |r| r.start);
-                                dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
-                                dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
-                                dv.ranges = vec![RangeRef::new(dest, dest)];
-                                sh.validations.push(dv);
-                            }
-                        }
-                        match what {
-                            What::Comments => {
-                                if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
-                                    cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
-                                }
-                            }
-                            What::ColumnWidths => {
-                                if let Some(info) = src_sheet.cols.get(&sc.col).copied() {
-                                    cx.sheet_mut(dest_sheet)?.cols.insert(dest.col, info);
-                                }
-                            }
-                            What::All => {
-                                if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
-                                    cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
-                                }
-                                if let Some(h) = src_sheet.hyperlinks.get(&sc).cloned() {
-                                    cx.sheet_mut(dest_sheet)?.hyperlinks.insert(dest, h);
-                                }
-                                cx.sheet_mut(dest_sheet)?.set_cell(dest, new);
-                            }
-                            _ => cx.sheet_mut(dest_sheet)?.set_cell(dest, new),
-                        }
-                        if let Some(picture) = new_picture {
-                            cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
-                        }
-                        cx.touch(dest_sheet, dest);
+                    }
+                    What::Formats => new.style = map_style(sc_cell.style, &mut cx.wb),
+                    What::Comments | What::Validation | What::ColumnWidths => {}
+                }
+                // Operations combine numbers with what is already there.
+                if op != "none" && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas) && new.formula.is_none() {
+                    if old_picture.is_some() || new_picture.is_some() {
+                        new_picture = None;
+                        new.value = Value::Error(gridcraft_core::CellError::Value);
+                    }
+                    // Numbers stored as text participate; other text and errors stay as they are.
+                    apply_operation(&op, &old, &mut new);
+                }
+            }
+            // The copied cell's validation rule replaces whatever rule the destination had.
+            if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
+                let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
+                let sh = cx.sheet_mut(dest_sheet)?;
+                crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
+                if let Some(mut dv) = rule {
+                    // Relative references move with the rule, as pasted formulas do.
+                    let first = dv.ranges.first().map_or(sc, |r| r.start);
+                    dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
+                    dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
+                    dv.ranges = vec![RangeRef::new(dest, dest)];
+                    sh.validations.push(dv);
+                }
+            }
+            match what {
+                What::Comments => {
+                    if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
+                        cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                     }
                 }
+                What::ColumnWidths => {
+                    if let Some(info) = src_sheet.cols.get(&sc.col).copied() {
+                        cx.sheet_mut(dest_sheet)?.cols.insert(dest.col, info);
+                    }
+                }
+                What::All => {
+                    if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
+                        cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
+                    }
+                    if let Some(h) = src_sheet.hyperlinks.get(&sc).cloned() {
+                        cx.sheet_mut(dest_sheet)?.hyperlinks.insert(dest, h);
+                    }
+                    cx.sheet_mut(dest_sheet)?.set_cell(dest, new);
+                }
+                _ => cx.sheet_mut(dest_sheet)?.set_cell(dest, new),
             }
+            if let Some(picture) = new_picture {
+                cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
+            }
+            cx.touch(dest_sheet, dest);
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
-            let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
-            for m in merges {
-                let dr = at.row as i64 - src.start.row as i64;
-                let dc = at.col as i64 - src.start.col as i64;
-                if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
-                    let nm = RangeRef::new(a, b);
-                    let sh = cx.sheet_mut(dest_sheet)?;
-                    sh.merges.retain(|x| !x.intersects(&nm));
-                    sh.merges.push(nm);
-                }
-            }
-        }
+        copy_merges(cx, dest_sheet, src_sheet, src, at, what, transpose)?;
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let dest_name = cx.wb.sheet(dest_sheet).map(|s| s.name.clone()).unwrap_or_default();

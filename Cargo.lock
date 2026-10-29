@@ -889,12 +889,12 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 
 [[package]]
 name = "craft-i18n"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
  "fixed_decimal",
  "icu_decimal",
@@ -917,7 +917,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
  "craft-winprint-gdi",
  "miniz_oxide 0.9.1",
@@ -930,7 +930,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
  "craft-fonts-build",
  "craft-i18n",
@@ -950,7 +950,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
  "chrono",
  "dunce",
@@ -975,7 +975,7 @@ dependencies = [
 [[package]]
 name = "craft-window"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b926b5c03e256c86ca10934f58d03f628810b5b7#b926b5c03e256c86ca10934f58d03f628810b5b7"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
 dependencies = [
  "egui",
  "objc2 0.6.5",
@@ -1935,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -1962,7 +1962,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-calc"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-chart"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-calc",
  "gridcraft-core",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-cli"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
@@ -1997,7 +1997,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-core"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "chrono",
  "js-sys",
@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-engine"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-calc",
  "gridcraft-chart",
@@ -2024,12 +2024,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "web-time",
  "zip 3.0.0",
 ]
 
 [[package]]
 name = "gridcraft-formula"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-core",
  "serde",
@@ -2038,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-functions"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-core",
  "regex",
@@ -2046,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-mcp"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-engine",
  "log",
@@ -2055,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-model"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
@@ -2067,18 +2068,18 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-numfmt"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-core",
 ]
 
 [[package]]
 name = "gridcraft-pdf"
-version = "0.12.1"
+version = "0.13.0"
 
 [[package]]
 name = "gridcraft-ui-egui"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "craft-ui",
  "craft-update",
@@ -2097,12 +2098,13 @@ dependencies = [
  "sys-locale",
  "toml",
  "web-sys",
+ "web-time",
  "zbus",
 ]
 
 [[package]]
 name = "gridcraft-web"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2119,11 +2121,12 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-xlsx"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "aes",
  "gridcraft-core",
  "gridcraft-formula",
+ "gridcraft-functions",
  "gridcraft-model",
  "quick-xml 0.41.0",
  "sha1 0.11.0",
@@ -6399,7 +6402,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "gridcraft-engine",
  "serde_json",

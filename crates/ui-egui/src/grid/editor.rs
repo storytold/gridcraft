@@ -1,6 +1,6 @@
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::*;
+use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,

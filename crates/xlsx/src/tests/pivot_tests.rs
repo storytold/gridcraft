@@ -236,104 +236,119 @@ fn pivots_round_trip() {
 
 #[test]
 fn pivot_package_structure() {
-    let bytes = write_xlsx(&workbook()).unwrap();
-    let parts = unzip(&bytes);
+    let parts = unzip(&write_xlsx(&workbook()).unwrap());
+    assert_pivot_content_types(&parts);
+    assert_relationship_targets_exist(&parts);
+    let cache_ids = assert_workbook_cache_relationships(&parts);
+    assert_pivot_tables_reference_caches(&parts, &cache_ids);
+    assert_sheet_pivot_relationships(&parts);
+}
+
+fn assert_pivot_content_types(parts: &HashMap<String, Vec<u8>>) {
     let ct = xml::parse(parts.get("[Content_Types].xml").unwrap()).unwrap();
     let overrides: HashMap<String, String> = ct
         .kids("Override")
         .map(|o| (o.attr("PartName").unwrap().trim_start_matches('/').to_string(), o.attr("ContentType").unwrap().to_string()))
         .collect();
     let defaults: HashSet<String> = ct.kids("Default").map(|d| d.attr("Extension").unwrap().to_string()).collect();
-    // Every override names an existing part; every part has a content type.
-    for p in overrides.keys() {
-        assert!(parts.contains_key(p), "override for missing part {p}");
+    for part in overrides.keys() {
+        assert!(parts.contains_key(part), "override for missing part {part}");
     }
-    for p in parts.keys() {
-        if p == "[Content_Types].xml" {
-            continue;
-        }
-        let ext = p.rsplit('.').next().unwrap();
-        assert!(overrides.contains_key(p) || defaults.contains(ext), "no content type for {p}");
+    for part in parts.keys().filter(|p| p.as_str() != "[Content_Types].xml") {
+        let ext = part.rsplit('.').next().unwrap();
+        assert!(overrides.contains_key(part) || defaults.contains(ext), "no content type for {part}");
     }
-    let count = |ct: &str| overrides.values().filter(|v| v.as_str() == ct).count();
+    let count = |content_type: &str| overrides.values().filter(|value| value.as_str() == content_type).count();
     assert_eq!(count(crate::pivot::CT_PIVOT_TABLE), 3);
     assert_eq!(count(crate::pivot::CT_PIVOT_CACHE_DEF), 3);
     assert_eq!(count(crate::pivot::CT_PIVOT_CACHE_REC), 3);
-    // Every relationship target exists.
-    let mut kinds: Vec<String> = vec![];
-    for (name, data) in &parts {
-        if !name.ends_with(".rels") {
-            continue;
-        }
+}
+
+fn assert_relationship_targets_exist(parts: &HashMap<String, Vec<u8>>) {
+    let mut kinds: Vec<String> = Vec::new();
+    for (name, data) in parts.iter().filter(|(name, _)| name.ends_with(".rels")) {
         let dir = name.trim_end_matches(".rels").rsplit_once("/_rels/").map(|(d, _)| d).unwrap_or("");
-        let rels = xml::parse(data).unwrap();
-        for r in rels.kids("Relationship") {
-            if r.attr("TargetMode") == Some("External") {
+        for relation in xml::parse(data).unwrap().kids("Relationship") {
+            if relation.attr("TargetMode") == Some("External") {
                 continue;
             }
-            let target = crate::package::resolve(dir, r.attr("Target").unwrap());
+            let target = crate::package::resolve(dir, relation.attr("Target").unwrap());
             assert!(parts.contains_key(&target), "{name} points at missing {target}");
-            kinds.push(r.attr("Type").unwrap().rsplit('/').next().unwrap().to_string());
+            kinds.push(relation.attr("Type").unwrap().rsplit('/').next().unwrap().to_string());
         }
     }
-    for k in ["pivotTable", "pivotCacheDefinition", "pivotCacheRecords"] {
-        assert!(kinds.iter().any(|x| x == k), "no {k} relationship");
+    for kind in ["pivotTable", "pivotCacheDefinition", "pivotCacheRecords"] {
+        assert!(kinds.iter().any(|found| found == kind), "no {kind} relationship");
     }
-    // The workbook lists the caches by id with relationships of the right type.
-    let wbx = xml::parse(parts.get("xl/workbook.xml").unwrap()).unwrap();
-    let wb_rels = xml::parse(parts.get("xl/_rels/workbook.xml.rels").unwrap()).unwrap();
-    let caches: Vec<&xml::El> = wbx.child("pivotCaches").unwrap().kids("pivotCache").collect();
+}
+
+fn assert_workbook_cache_relationships(parts: &HashMap<String, Vec<u8>>) -> HashSet<String> {
+    let workbook = xml::parse(parts.get("xl/workbook.xml").unwrap()).unwrap();
+    let relationships = xml::parse(parts.get("xl/_rels/workbook.xml.rels").unwrap()).unwrap();
+    let caches: Vec<&xml::El> = workbook.child("pivotCaches").unwrap().kids("pivotCache").collect();
     assert_eq!(caches.len(), 3);
     let mut ids = HashSet::new();
-    for c in &caches {
-        assert!(ids.insert(c.attr("cacheId").unwrap().to_string()));
-        let rid = c.attr("id").unwrap();
-        let rel = wb_rels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
-        assert!(rel.attr("Type").unwrap().ends_with("/pivotCacheDefinition"));
+    for cache in &caches {
+        assert!(ids.insert(cache.attr("cacheId").unwrap().to_string()));
+        let rid = cache.attr("id").unwrap();
+        let relation = relationships.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
+        assert!(relation.attr("Type").unwrap().ends_with("/pivotCacheDefinition"));
     }
-    // Each table's cacheId is one of the workbook's caches and its field counts agree.
-    for t in 1..=3 {
-        let pt = xml::parse(parts.get(&format!("xl/pivotTables/pivotTable{t}.xml")).unwrap()).unwrap();
-        assert!(ids.contains(pt.attr("cacheId").unwrap()));
-        let trels = xml::parse(parts.get(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels")).unwrap()).unwrap();
-        let target = crate::package::resolve("xl/pivotTables", trels.kids("Relationship").next().unwrap().attr("Target").unwrap());
-        let cache = xml::parse(parts.get(&target).unwrap()).unwrap();
-        let nf = cache.child("cacheFields").unwrap().kids("cacheField").count();
-        assert_eq!(pt.child("pivotFields").unwrap().kids("pivotField").count(), nf);
-        assert_eq!(cache.child("cacheFields").unwrap().attr_u32("count"), Some(nf as u32));
-        // Item indices stay inside the shared/group items.
-        for (i, pf) in pt.child("pivotFields").unwrap().kids("pivotField").enumerate() {
-            let cf = cache.child("cacheFields").unwrap().kids("cacheField").nth(i).unwrap();
-            let n = cf
-                .path(&["fieldGroup", "groupItems"])
-                .map(|g| g.children.len())
-                .unwrap_or_else(|| cf.child("sharedItems").map(|s| s.children.len()).unwrap_or(0));
-            if let Some(items) = pf.child("items") {
-                assert_eq!(items.attr_u32("count"), Some(items.children.len() as u32));
-                for it in items.kids("item") {
-                    if let Some(x) = it.attr_u32("x") {
-                        assert!((x as usize) < n, "item x={x} out of {n} in table {t} field {i}");
-                    }
+    ids
+}
+
+fn assert_pivot_tables_reference_caches(parts: &HashMap<String, Vec<u8>>, ids: &HashSet<String>) {
+    for table_number in 1..=3 {
+        let table = xml::parse(parts.get(&format!("xl/pivotTables/pivotTable{table_number}.xml")).unwrap()).unwrap();
+        assert!(ids.contains(table.attr("cacheId").unwrap()));
+        let table_rels = xml::parse(parts.get(&format!("xl/pivotTables/_rels/pivotTable{table_number}.xml.rels")).unwrap()).unwrap();
+        let cache_path = crate::package::resolve("xl/pivotTables", table_rels.kids("Relationship").next().unwrap().attr("Target").unwrap());
+        let cache = xml::parse(parts.get(&cache_path).unwrap()).unwrap();
+        assert_pivot_table_fields_match_cache(&table, &cache);
+        assert_pivot_cache_records_match_fields(parts, &cache, &cache_path);
+    }
+}
+
+fn assert_pivot_table_fields_match_cache(table: &xml::El, cache: &xml::El) {
+    let cache_fields = cache.child("cacheFields").unwrap();
+    let field_count = cache_fields.kids("cacheField").count();
+    assert_eq!(table.child("pivotFields").unwrap().kids("pivotField").count(), field_count);
+    assert_eq!(cache_fields.attr_u32("count"), Some(field_count as u32));
+    for (field_index, pivot_field) in table.child("pivotFields").unwrap().kids("pivotField").enumerate() {
+        let cache_field = cache_fields.kids("cacheField").nth(field_index).unwrap();
+        let item_count = cache_field
+            .path(&["fieldGroup", "groupItems"])
+            .map(|items| items.children.len())
+            .unwrap_or_else(|| cache_field.child("sharedItems").map(|items| items.children.len()).unwrap_or(0));
+        if let Some(items) = pivot_field.child("items") {
+            assert_eq!(items.attr_u32("count"), Some(items.children.len() as u32));
+            for item in items.kids("item") {
+                if let Some(item_index) = item.attr_u32("x") {
+                    assert!((item_index as usize) < item_count, "item x={item_index} out of {item_count} in field {field_index}");
                 }
             }
         }
-        // Records match the database fields.
-        if let Some(rid) = cache.attr("id") {
-            let crels_name = target.replace("pivotCache/", "pivotCache/_rels/") + ".rels";
-            let crels = xml::parse(parts.get(&crels_name).unwrap()).unwrap();
-            let rel = crels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
-            let rec = xml::parse(parts.get(&crate::package::resolve("xl/pivotCache", rel.attr("Target").unwrap())).unwrap()).unwrap();
-            let db = cache.child("cacheFields").unwrap().kids("cacheField").filter(|f| f.attr("databaseField") != Some("0")).count();
-            assert_eq!(rec.attr_u32("count"), cache.attr_u32("recordCount"));
-            assert_eq!(rec.kids("r").count(), 8);
-            for r in rec.kids("r") {
-                assert_eq!(r.children.len(), db);
-            }
-        }
     }
-    // Sheet 2 (Report) relates to all three tables.
-    let srels = xml::parse(parts.get("xl/worksheets/_rels/sheet2.xml.rels").unwrap()).unwrap();
-    assert_eq!(srels.kids("Relationship").filter(|r| r.attr("Type").unwrap().ends_with("/pivotTable")).count(), 3);
+}
+
+fn assert_pivot_cache_records_match_fields(parts: &HashMap<String, Vec<u8>>, cache: &xml::El, cache_path: &str) {
+    let Some(rid) = cache.attr("id") else { return };
+    let rels_path = cache_path.replace("pivotCache/", "pivotCache/_rels/") + ".rels";
+    let cache_rels = xml::parse(parts.get(&rels_path).unwrap()).unwrap();
+    let relation = cache_rels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
+    let records_path = crate::package::resolve("xl/pivotCache", relation.attr("Target").unwrap());
+    let records = xml::parse(parts.get(&records_path).unwrap()).unwrap();
+    let database_fields = cache.child("cacheFields").unwrap().kids("cacheField").filter(|f| f.attr("databaseField") != Some("0")).count();
+    assert_eq!(records.attr_u32("count"), cache.attr_u32("recordCount"));
+    assert_eq!(records.kids("r").count(), 8);
+    for record in records.kids("r") {
+        assert_eq!(record.children.len(), database_fields);
+    }
+}
+
+fn assert_sheet_pivot_relationships(parts: &HashMap<String, Vec<u8>>) {
+    let sheet_rels = xml::parse(parts.get("xl/worksheets/_rels/sheet2.xml.rels").unwrap()).unwrap();
+    assert_eq!(sheet_rels.kids("Relationship").filter(|r| r.attr("Type").unwrap().ends_with("/pivotTable")).count(), 3);
 }
 
 #[test]

@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (274 / 290).
+separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -142,7 +142,8 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+Shift+U | Control+Shift+U | expand or collapse the formula bar (`view.expandFormulaBar`), on the grid and while editing; on Windows and Linux it no longer underlines | **added** |
-| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
+| Alt+F8, Ctrl+Shift+letter | Option+F8, Cmd+Shift+letter | Macros dialog, a macro's own shortcut (letters GridCraft uses keep their meaning) | **added** |
+| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F11 / F12 | same | group sheets, shape cycling, full screen, window keys, VBA, Power Query | missing |
 | — | Cmd+= (calculate), Cmd+T (references while editing; F4 works), Shift+F7, Cmd+Shift+L | Mac-only extras | missing (Cmd+= is egui's zoom key; no thesaurus or Modify Cell Style) |
 
 On Windows, AltGr arrives as Ctrl+Alt: a Ctrl+Alt key that also types a character is treated as
@@ -153,7 +154,9 @@ a character (e.g. Ctrl+Alt+A for `ä`) never trigger a shortcut, Ctrl+letter one
 
 Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
-Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing or partial: Options,
+Seek, Scenario Manager, Data Analysis, Forecast Sheet, Macros (macros, Automate scripts and a
+note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
+editor (Excel's VBA editor has no counterpart here) and others exist. Missing or partial: Options,
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker. Like Excel's, every dialog opens centred and moves by its
 title bar, keeping its place while it is open (#1250).
@@ -189,6 +192,9 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 |---|---|---|
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
+| 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
+| 2026-10-24 | minor | Automate › Macros group (Record Macro, Use Relative References, Run Macro), recording status in the status bar, Macros dialog with macros beside scripts, Record Macro dialog, Ctrl+Shift+letter macro shortcuts; View › Macros keytips open the dialogs |
+| 2026-10-24 | minor | Ribbon catalog count 275 / 291 → 276 / 292 (View › Macros › Record Macro) |
 | 2026-10-24 | minor | Go To lists the named ranges on every sheet, as Excel's does ("The Go to popup window shows named ranges on every worksheet in your workbook"): a name scoped to another sheet appears as `Sheet2!Name`, and hidden names, constants and formulas are left out. It keeps the references entered (newest first, ten at most), and a double-click on an entry goes there. The Reference box and `edit.goTo` take several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30,H21:H29`) and select them all; `edit.goTo {list: true}` returns the list |
 | 2026-10-24 | minor | Right-clicking the status bar opens a menu of its statistics, as in Excel ("If you want to customize the status bar, right-click it, and then click the options that you want"): Average, Count and Sum are on by default, and Numerical Count, Minimum and Maximum are new and off by default. The choice is a preference (`view.statusBar`), kept in `prefs.json` |
 | 2026-10-24 | minor | Ctrl+Shift+U (Control+Shift+U on a Mac) expands or collapses the formula bar, as in Excel ("Expand or collapse the formula bar. Ctrl+Shift+U"), on the grid and in the cell editor or formula bar while editing. On Windows and Linux it used to underline the selection, as Ctrl+U does. The command is `view.expandFormulaBar` (`{on?}`, toggles without it) |

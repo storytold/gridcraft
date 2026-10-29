@@ -1,5 +1,8 @@
 use super::header_footer::HF_FIXED_SIDE_MARGIN;
-use super::*;
+use super::{
+    Anchor, CellRef, Json, MAX_COLS, MAX_PAGES, MAX_ROWS, Orientation, PX_TO_PT, PrintSettings, RangeRef, Result, Sheet, Visibility, Workbook, bad,
+    bool_param, split_sheet, str_param,
+};
 
 /// Cells in a page block above which only stored cells are visited (not every grid position).
 pub(super) const DENSE_BLOCK: u64 = 60_000;
@@ -287,10 +290,13 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     Some(lay)
 }
 
+/// Inclusive-start/end index spans of the pages along one axis.
+pub(crate) type Bands = Vec<(u32, u32)>;
+
 /// Splits a layout's area into row and column bands that fit its pages (at most `cap` of each),
 /// honouring manual breaks (when `lay.manual_breaks`), print headings and repeated titles. The
 /// one pagination rule shared by printing, PDF export, Page Break Preview and Page Layout view.
-pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Bands, Bands) {
     let k = lay.k();
     let (aw, ah) = lay.avail();
     let (aw, ah) = (aw / k, ah / k);

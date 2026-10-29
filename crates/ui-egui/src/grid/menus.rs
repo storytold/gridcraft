@@ -1,7 +1,7 @@
 use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
-use super::*;
+use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
