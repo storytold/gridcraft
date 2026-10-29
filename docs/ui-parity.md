@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (conditional-format text rules: blank cells, Greek case matching and shared work limits) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -57,6 +57,7 @@ this logic, with one undo step.
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done; Command/Ctrl-click adds separate arguments with the edit's locale separator, and Shift-click extends the current reference from a fixed anchor on the same sheet. Pointer-event regressions cover repeated/reversed selections, manual separators, sheet switches and keyboard continuation. |
 | Number-format colors (`[Green]`, `[Color1]`–`[Color56]`) | Rendered in grid and PDF from shared RGB mappings (#1452) |
+| Conditional-format text rules | Contains / Does Not Contain use SEARCH-style `*`, `?` and `~` wildcards with case-insensitive Greek sigma matching. Of these two rules, blank cells and zero-length formula results match only Does Not Contain. Shared rendering work limits skip both rules on exhaustion; Begins With / Ends With stay literal (#1161) |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done |
 | AutoComplete in columns, function autocomplete and argument tips | done; cell helpers clip to the worksheet and hide when the editor scrolls out (#200) |
 | Header resize and double-click AutoFit | done (#42, #88 for header dividers) |
@@ -190,6 +191,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Review corrections for #1161: blank and zero-length formula cells do not match Contains, Greek sigma forms compare without case, and exhausted matching applies neither positive nor inverse text styling. Shared frame/export work limits bound repeated expensive matches, while cached results keep repeated lookups stable |
+| 2026-10-28 | minor | Conditional-format Contains / Does Not Contain share SEARCH's bounded wildcard matcher, so `a*c` formats `abc` and `abxc`, `?` matches one character and `~` escapes the next character (#1161). Begins With / Ends With remain literal, and error-value handling is preserved |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |

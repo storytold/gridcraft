@@ -1,6 +1,7 @@
 //! Conditional formatting evaluation: what extra style, data bar, colour scale or icon a cell
 //! gets.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
@@ -20,10 +21,26 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
-/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
-#[derive(Default)]
+/// Conditional-format results for one immutable workbook snapshot. Recreate after edits.
+/// Statistics and text outcomes are reused; expensive text matching shares one work allowance.
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    text_results: HashMap<(usize, CellRef, usize), Option<bool>>,
+    text_work: u64,
+}
+
+// A frame stays responsive even when several cells repeat a hostile wildcard pattern.
+const TEXT_WORK_PER_FRAME: u64 = 1_000_000;
+// Printing reuses one cache across a sheet's pages, including repeated title cells.
+const TEXT_WORK_PER_EXPORT: u64 = 64_000_000;
+// Enough for full-length Unicode literals while bounding backtracking in any one rule.
+const TEXT_WORK_PER_MATCH: u64 = 300_000;
+const MAX_TEXT_RESULTS: usize = 1_000_000;
+
+impl Default for CfCache {
+    fn default() -> Self {
+        Self::with_text_work(TEXT_WORK_PER_FRAME)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -144,10 +161,13 @@ struct RuleEval<'a> {
     value: &'a Value,
     text: &'a str,
     stats: &'a RuleStats,
+    /// Some(false) is a completed non-match; None is a refused or inapplicable search.
+    text_match: Option<bool>,
 }
 
+/// Resolves non-statistical rules, applying neither text style when matching was refused.
 fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Style> {
-    let RuleEval { wb, sheet, cell, first, value, text, stats } = ctx;
+    let RuleEval { wb, sheet, cell, first, value, text, stats, text_match } = ctx;
     match rule {
         CfRule::CellIs { op, a, b, style } => {
             let eval = |f: &str| gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(f, *first, *cell));
@@ -171,12 +191,8 @@ fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Sty
         CfRule::Expression { formula, style } => {
             gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(formula, *first, *cell)).to_bool().unwrap_or(false).then_some(style.as_ref())
         }
-        CfRule::ContainsText { text: needle, style } => {
-            (!value.is_error() && text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
-        }
-        CfRule::NotContainsText { text: needle, style } => {
-            (value.is_error() || !text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
-        }
+        CfRule::ContainsText { style, .. } => (*text_match == Some(true)).then_some(style.as_ref()),
+        CfRule::NotContainsText { style, .. } => (*text_match == Some(false)).then_some(style.as_ref()),
         CfRule::BeginsWith { text: needle, style } => {
             (!value.is_error() && text.to_lowercase().starts_with(&needle.to_lowercase())).then_some(style.as_ref())
         }
@@ -226,8 +242,47 @@ fn time_period_matches(wb: &Workbook, period: &str, serial: f64) -> bool {
 }
 
 impl CfCache {
+    /// Creates a cache for one viewport rendering pass.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a cache shared across every page of one exported sheet.
+    /// Export has a larger aggregate allowance; the per-match ceiling is unchanged.
+    pub fn for_export() -> Self {
+        Self::with_text_work(TEXT_WORK_PER_EXPORT)
+    }
+
+    /// Initializes one snapshot's statistics, stable outcomes and bounded text work bank.
+    fn with_text_work(text_work: u64) -> Self {
+        Self { stats: HashMap::new(), text_results: HashMap::new(), text_work }
+    }
+
+    /// Returns a known match/non-match or refuses without activating either inverse style.
+    fn text_outcome(&mut self, key: (usize, CellRef, usize), rule: &CfRule, value: &Value, text: &str) -> Option<bool> {
+        let needle = match rule {
+            CfRule::ContainsText { text, .. } | CfRule::NotContainsText { text, .. } => text,
+            _ => return None,
+        };
+        if value.is_error() || text.is_empty() {
+            return Some(false);
+        }
+        if needle.is_empty() {
+            return Some(true);
+        }
+        // Repeated print titles and merged-cell borders retain their first result after exhaustion.
+        if let Some(result) = self.text_results.get(&key) {
+            return *result;
+        }
+        if self.text_work == 0 || self.text_results.len() >= MAX_TEXT_RESULTS {
+            return None;
+        }
+        let allowance = self.text_work.min(TEXT_WORK_PER_MATCH);
+        let mut remaining = allowance;
+        let result = gridcraft_functions::wildcard_contains_with_budget(needle, text, &mut remaining).ok();
+        self.text_work -= allowance.saturating_sub(remaining);
+        self.text_results.insert(key, result);
+        result
     }
 
     /// Conditional look of `c`, or `None` when no rule applies.
@@ -242,15 +297,20 @@ impl CfCache {
             sh.cond_formats.iter().enumerate().filter(|(_, cf)| cf.ranges.iter().any(|r| r.contains(c))).collect();
         rules.sort_by_key(|(_, cf)| cf.priority);
         let v = sh.value(c);
+        // Borrow document text before admission checks; a hostile string must not be cloned first.
+        let text = match &v {
+            Value::Text(text) => Cow::Borrowed(text.as_ref()),
+            _ => Cow::Owned(v.display()),
+        };
         let no_stats = RuleStats::default();
         for (idx, cf) in rules {
             let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
+            let text_match = self.text_outcome((sheet, c, idx), &cf.rule, &v, &text);
             let st: &RuleStats = match stats_need(&cf.rule) {
                 Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
                 None => &no_stats,
             };
-            let text = v.display();
-            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st };
+            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st, text_match };
             let matched_style = simple_rule_style(&context, &cf.rule).or_else(|| match &cf.rule {
                 CfRule::Top10 { bottom, percent, rank, style } => match v.as_f64() {
                     Some(n) if !st.sorted.is_empty() => {

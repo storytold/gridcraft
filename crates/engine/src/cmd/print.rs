@@ -105,7 +105,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut pics = PicCache::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
-        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
+        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::for_export()) };
         let k = lay.k();
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {

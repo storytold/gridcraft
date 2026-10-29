@@ -2,6 +2,8 @@
 
 mod autofit_filter_buttons;
 mod cf_formula_validate;
+mod cf_text_wildcards;
+mod cf_text_work;
 mod chart_area_stacked100;
 mod chart_workbook_names;
 mod command_sequence_fuzz;

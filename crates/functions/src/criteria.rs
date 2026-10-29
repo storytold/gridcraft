@@ -240,18 +240,24 @@ enum Tok {
     Star,
 }
 
+/// Parses wildcard tokens with the legacy one-char lowercase mapping.
 fn tokenize(pattern: &str) -> Vec<Tok> {
+    tokenize_with_fold(pattern, lower_char)
+}
+
+/// Parses wildcard syntax while applying the caller's one-to-one fold to literal characters.
+fn tokenize_with_fold(pattern: &str, fold: fn(char) -> char) -> Vec<Tok> {
     let mut out = Vec::new();
     let mut it = pattern.chars();
     while let Some(c) = it.next() {
         match c {
             '~' => match it.next() {
-                Some(n) => out.extend(std::iter::once(lower_char(n)).map(Tok::Char)),
+                Some(n) => out.push(Tok::Char(fold(n))),
                 None => out.push(Tok::Char('~')),
             },
             '*' => out.push(Tok::Star),
             '?' => out.push(Tok::Any),
-            c => out.extend(std::iter::once(lower_char(c)).map(Tok::Char)),
+            c => out.push(Tok::Char(fold(c))),
         }
     }
     out
@@ -267,6 +273,14 @@ fn lower_chars(s: &str) -> Vec<char> {
     s.chars().map(lower_char).collect()
 }
 
+/// CF preserves characters whose lowercase expands (İ), then unifies Greek final sigma.
+fn cf_fold(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    let first = lower.next().unwrap_or(c);
+    let folded = if lower.next().is_none() { first } else { c };
+    if folded == 'ς' { 'σ' } else { folded }
+}
+
 /// Whether the pattern contains an unescaped wildcard.
 pub(crate) fn has_wildcards(pattern: &str) -> bool {
     tokenize(pattern).iter().any(|t| !matches!(t, Tok::Char(_))) || pattern.contains('~')
@@ -277,10 +291,28 @@ pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = tokenize(pattern);
     let t = lower_chars(text);
     let mut budget = MAX_STEPS;
-    match_from(&p, &t, true, &mut budget).is_some()
+    match_from(&p, &t, true, &mut budget).ok().flatten().is_some()
 }
 
-/// Steps one `match_from` call may take. An honest match against Excel's 32,767-character
+/// Exhaustion of a caller-provided wildcard work budget, distinct from a completed non-match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WildcardLimit;
+
+/// Charges work before it is performed; a refused charge exhausts the remaining allowance.
+fn charge_wildcard(budget: &mut u64, steps: u64) -> Result<(), WildcardLimit> {
+    match budget.checked_sub(steps) {
+        Some(remaining) => {
+            *budget = remaining;
+            Ok(())
+        }
+        None => {
+            *budget = 0;
+            Err(WildcardLimit)
+        }
+    }
+}
+
+/// Steps one legacy wildcard match may take. An honest match against Excel's 32,767-character
 /// cell ceiling costs a few hundred thousand; a hostile one (star churn) is capped instead
 /// of quadratic — a call that spends more gives up and reports no match, quiet degradation
 /// like the other work caps on far-past-realistic input.
@@ -289,16 +321,15 @@ const MAX_STEPS: u64 = 1 << 26;
 /// Greedy-free matcher: returns the matched length of `t` when `p` matches a prefix of `t`
 /// (or all of `t` when `whole`). Iterative with backtracking on the last star (linear-ish,
 /// quadratic at worst). `(budget, whole)`: the budget is spent one per loop step; a call that
-/// would spend more than it has gives up and reports no match — quiet degradation, as with the
-/// other work caps on far-past-realistic input (an honest match against Excel's 32,767-char
-/// cell ceiling costs a few hundred thousand steps).
-fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Option<usize> {
+/// would spend more than it has returns [`WildcardLimit`]. Legacy callers map that refusal to
+/// no match; conditional formatting can distinguish it from a completed non-match.
+fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Result<Option<usize>, WildcardLimit> {
     let (mut pi, mut ti) = (0usize, 0usize);
     let mut star: Option<(usize, usize)> = None;
     loop {
-        *budget = budget.checked_sub(1)?;
+        charge_wildcard(budget, 1)?;
         if pi == p.len() && (!whole || ti == t.len()) {
-            return Some(ti);
+            return Ok(Some(ti));
         }
         let step = match (p.get(pi), t.get(ti)) {
             (Some(Tok::Star), _) => {
@@ -321,42 +352,75 @@ fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Option<us
                 pi = sp + 1;
                 ti = st + 1;
             }
-            _ => return None,
+            _ => return Ok(None),
         }
     }
 }
 
 /// SEARCH-style find: the char index (0-based) of the first position at or after `start` where
-/// the wildcard pattern matches, case-insensitively.
+/// the wildcard pattern matches, case-insensitively. `*` matches any run of characters, `?`
+/// matches one character, and `~` escapes the next character. Keeps the legacy one-char lowercase
+/// and inner-matcher allowance; exhaustion is reported as no match for SEARCH.
 pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
     let p = tokenize(pattern);
     let t = lower_chars(text);
+    let mut budget = MAX_STEPS;
+    find_tokens(&p, &t, start, &mut budget, false).ok().flatten()
+}
+
+/// Conditional-format contains-text matching with `*`, `?` and `~` escapes, ignoring case.
+/// Greek final sigma `ς` and `σ` compare alike. Lowercase mappings that expand keep their original
+/// character (dotted `İ` stays `İ`), so wildcards count source characters. A trailing `~` is literal.
+///
+/// Pattern and text bytes are charged before tokenization/allocation. Literal searches prepay
+/// one unit per text character; wildcard searches spend one per search attempt and matcher step.
+/// [`WildcardLimit`] means the search was refused, not false;
+/// refusal sets `budget` to zero. Callers can share the remaining allowance across searches.
+pub fn wildcard_contains_with_budget(pattern: &str, text: &str, budget: &mut u64) -> Result<bool, WildcardLimit> {
+    charge_wildcard(budget, pattern.len() as u64)?;
+    charge_wildcard(budget, text.len() as u64)?;
+    let p = tokenize_with_fold(pattern, cf_fold);
+    let t: Vec<char> = text.chars().map(cf_fold).collect();
+    if p.iter().all(|token| matches!(token, Tok::Char(_))) {
+        charge_wildcard(budget, t.len() as u64)?;
+        let literal: String = p.iter().filter_map(|token| if let Tok::Char(c) = token { Some(*c) } else { None }).collect();
+        let text: String = t.iter().collect();
+        return Ok(text.contains(&literal));
+    }
+    find_tokens(&p, &t, 0, budget, true).map(|position| position.is_some())
+}
+
+/// Searches prepared tokens, sharing the inner budget and optionally charging outer scan work.
+/// Legacy SEARCH leaves its scan uncharged; conditional formatting charges it as well.
+fn find_tokens(p: &[Tok], t: &[char], start: usize, budget: &mut u64, charge_scan: bool) -> Result<Option<usize>, WildcardLimit> {
     // A leading run of stars never matters for a prefix match (it consumes nothing), so
     // dropping it lets the anchor below skip linearly through the text (#2382).
     let skip = p.iter().take_while(|tk| matches!(tk, Tok::Star)).count();
     let p = &p[skip.min(p.len())..];
     if p.is_empty() {
-        return if start <= t.len() { Some(start) } else { None };
+        return Ok(if start <= t.len() { Some(start) } else { None });
     }
     // The first token that consumes a character anchors the scan: a literal skips straight
     // to its occurrences, and after leading `?`s each attempt only pays for the `?` run and
     // one suffix try. Every attempt shares one budget, so the total work stays flat.
     let anys = p.iter().take_while(|tk| matches!(tk, Tok::Any)).count();
     let anchor = p.get(anys);
-    let mut budget = MAX_STEPS;
     let mut i = start;
     while i < t.len() {
+        if charge_scan {
+            charge_wildcard(budget, 1)?;
+        }
         let hit = match (anchor, t.get(i + anys)) {
-            (Some(Tok::Char(c)), Some(rest)) => *rest == *c && match_from(p, &t[i..], false, &mut budget).is_some(),
+            (Some(Tok::Char(c)), Some(rest)) => *rest == *c && match_from(p, &t[i..], false, budget)?.is_some(),
             (Some(Tok::Char(_)), None) => break, // the anchor char no longer exists ahead
-            _ => match_from(p, &t[i..], false, &mut budget).is_some(),
+            _ => match_from(p, &t[i..], false, budget)?.is_some(),
         };
         if hit {
-            return Some(i);
+            return Ok(Some(i));
         }
         i += 1;
     }
-    None
+    Ok(None)
 }
 
 /// Exact-or-wildcard equality used by MATCH/VLOOKUP/XLOOKUP exact modes: text with wildcards
@@ -453,5 +517,154 @@ mod tests {
         assert!(wildcard_match("i*", "\u{130}stanbul"));
         assert!(has_wildcards("a*"));
         assert!(!has_wildcards("abc"));
+    }
+
+    /// A completed non-match stays distinct from pre-allocation, scan and inner-matcher refusal.
+    #[test]
+    fn bounded_contains_reports_exhaustion_instead_of_a_non_match() {
+        let mut budget = 1;
+        assert_eq!(wildcard_contains_with_budget("a", "a", &mut budget), Err(WildcardLimit));
+        assert_eq!(budget, 0, "input bytes are charged before allocating match buffers");
+        let mut budget = 2;
+        assert_eq!(wildcard_contains_with_budget("z", "a", &mut budget), Err(WildcardLimit));
+        assert_eq!(budget, 0, "a text scan must have an allowance");
+        let mut budget = 3;
+        assert_eq!(wildcard_contains_with_budget("z", "a", &mut budget), Ok(false));
+        assert_eq!(budget, 0, "a non-match may complete exactly at the limit");
+        let mut budget = 4;
+        assert_eq!(wildcard_contains_with_budget("?", "a", &mut budget), Err(WildcardLimit));
+        assert_eq!(budget, 0, "the inner matcher also spends the shared allowance");
+        let mut budget = 5;
+        assert_eq!(wildcard_contains_with_budget("?", "a", &mut budget), Ok(true));
+        assert_eq!(budget, 0);
+    }
+
+    /// Both ordinary calls and adversarial star backtracking debit one caller-owned budget.
+    #[test]
+    fn bounded_contains_shares_and_caps_its_work() {
+        let mut budget = 10;
+        assert_eq!(wildcard_contains_with_budget("?", "a", &mut budget), Ok(true));
+        assert_eq!(budget, 5);
+        assert_eq!(wildcard_contains_with_budget("z", "a", &mut budget), Ok(false));
+        assert_eq!(budget, 2);
+        assert_eq!(wildcard_contains_with_budget("a", "a", &mut budget), Err(WildcardLimit));
+        assert_eq!(budget, 0);
+        let text = "a".repeat(32_767);
+        let mut budget = 33_000;
+        assert_eq!(wildcard_contains_with_budget("a*b", &text, &mut budget), Err(WildcardLimit));
+        assert_eq!(budget, 0, "star churn stops at the exact deterministic work limit");
+    }
+
+    /// Long literals use a linear substring search instead of retrying their prefix at every anchor.
+    #[test]
+    fn bounded_contains_searches_long_literals_with_linear_work() {
+        let text = "A".repeat(32_767);
+        let absent = format!("{}b", "a".repeat(16_383));
+        let mut budget = 100_000;
+        assert_eq!(wildcard_contains_with_budget(&absent, &text, &mut budget), Ok(false));
+        assert_eq!(budget, 100_000 - absent.len() as u64 - text.len() as u64 - 32_767);
+        let pattern = "a".repeat(32_767);
+        let mut budget = 100_000;
+        assert_eq!(wildcard_contains_with_budget(&pattern, &text, &mut budget), Ok(true));
+        assert_eq!(budget, 100_000 - 3 * 32_767);
+        let mut budget = 100_000;
+        assert_eq!(wildcard_contains_with_budget("a~*b", &format!("{}A*B", "x".repeat(32_764)), &mut budget), Ok(true));
+    }
+
+    /// Full-cell CJK and astral literals fit the CF allowance despite their UTF-8 byte widths.
+    #[test]
+    fn bounded_contains_searches_max_length_unicode_literals() {
+        let cjk = "漢".repeat(32_767);
+        let mut budget = 300_000;
+        assert_eq!(wildcard_contains_with_budget("z", &cjk, &mut budget), Ok(false));
+        assert_eq!(budget, 300_000 - 1 - cjk.len() as u64 - 32_767);
+        let astral = "😀".repeat(32_767);
+        let mut budget = 300_000;
+        assert_eq!(wildcard_contains_with_budget(&astral, &astral, &mut budget), Ok(true));
+        assert_eq!(budget, 300_000 - 2 * astral.len() as u64 - 32_767);
+    }
+
+    /// Final sigma is canonicalized on both sides, after one-char lowercase and escape parsing.
+    #[test]
+    fn bounded_contains_matches_all_greek_sigma_forms() {
+        for pattern in ["σ", "ς", "Σ", "~ς"] {
+            for text in ["σ", "ς", "Σ", "xΣy", "xςy"] {
+                assert_eq!(wildcard_contains_with_budget(pattern, text, &mut 1000), Ok(true), "{pattern} in {text}");
+            }
+        }
+        for (pattern, text) in [("καλος", "ΚΑΛΟΣ"), ("ΚΑΛΟΣ", "καλος"), ("καλοσ", "καλος"), ("καλο?", "ΚΑΛΟΣ"), ("κα*ς", "ΚΑΛΟΣ")]
+        {
+            assert_eq!(wildcard_contains_with_budget(pattern, text, &mut 1000), Ok(true), "{pattern} in {text}");
+        }
+    }
+
+    /// The bounded path retains escapes, newline matching, empty patterns and dotted-I cardinality.
+    #[test]
+    fn bounded_contains_preserves_wildcard_and_character_semantics() {
+        for (pattern, text, matched) in [
+            ("a*c", "xA\nβcy", true),
+            ("a?c", "xA\ncy", true),
+            ("a~*c", "xa*cy", true),
+            ("a~*c", "abc", false),
+            ("a~?c", "xa?cy", true),
+            ("~~", "a~b", true),
+            ("~", "a~b", true),
+            ("", "", true),
+            ("*", "", true),
+            ("?", "", false),
+            ("i?", "İβ", false),
+            ("?β", "İβ", true),
+            ("??β", "İβ", false),
+        ] {
+            assert_eq!(wildcard_contains_with_budget(pattern, text, &mut 1000), Ok(matched), "{pattern:?} in {text:?}");
+        }
+    }
+
+    /// Excel's one-to-one CF comparison keeps dotted I distinct without changing wildcard length.
+    #[test]
+    fn bounded_contains_keeps_expanding_lowercase_characters_distinct() {
+        for (pattern, text, matched) in [
+            ("İ", "İ", true),
+            ("İ", "i", false),
+            ("i", "İ", false),
+            ("I", "İ", false),
+            ("i?", "İx", false),
+            ("İ?", "İx", true),
+            ("~İ", "İ", true),
+            ("~İ", "i", false),
+            ("~i?", "İx", false),
+            ("~İ?", "İx", true),
+            ("?", "İ", true),
+            ("??", "İ", false),
+            ("ı", "i", false),
+            ("I", "ı", false),
+            ("ſ", "S", false),
+            ("S", "ſ", false),
+            ("ẞ", "ß", true),
+            ("ß", "ẞ", true),
+            ("ß", "SS", false),
+            ("SS", "ß", false),
+        ] {
+            assert_eq!(wildcard_contains_with_budget(pattern, text, &mut 1000), Ok(matched), "{pattern:?} in {text:?}");
+        }
+    }
+
+    /// The CF-only sigma normalization and caller budget do not change SEARCH or criteria results.
+    #[test]
+    fn bounded_contains_leaves_legacy_search_and_criteria_unchanged() {
+        use crate::util::testutil::{ev, n, t};
+        assert_eq!(wildcard_find("ς", "Σ", 0), None);
+        assert_eq!(wildcard_find("σ", "ς", 0), None);
+        assert!(!wildcard_match("ς", "σ"));
+        assert_eq!(wildcard_find("β", "İβ", 0), Some(1));
+        assert_eq!(wildcard_find("i?", "İx", 0), Some(0));
+        assert_eq!(wildcard_find("İ", "i", 0), Some(0));
+        assert_eq!(wildcard_find("*", "", 0), Some(0));
+        assert_eq!(ev("SEARCH", vec![t("ς"), t("Σ")]), Value::Error(CellError::Value));
+        assert_eq!(ev("SEARCH", vec![t("β"), t("İβ")]), Value::Number(2.0));
+        assert_eq!(ev("SEARCH", vec![t("i?"), t("İx")]), Value::Number(1.0));
+        assert_eq!(ev("SEARCH", vec![t("b?d"), t("abcd bcd"), n(3.0)]), Value::Number(6.0));
+        assert!(!m("ς*", Value::from("Σ")));
+        assert!(m("a*c", Value::from("Abbc")));
     }
 }
