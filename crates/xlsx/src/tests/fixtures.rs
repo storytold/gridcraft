@@ -127,6 +127,12 @@ fn styles_theme_and_sizes() {
     let bytes = minimal(body, &[("xl/styles.xml", styles), ("xl/theme/theme1.xml", theme)], rels, "");
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
+    assert_style_definitions(&wb, s);
+    assert_theme(&wb);
+    assert_sheet_settings(s);
+}
+
+fn assert_style_definitions(wb: &gridcraft_model::Workbook, s: &gridcraft_model::Sheet) {
     let st1 = wb.styles.get(s.cell(at("A1")).unwrap().style);
     assert_eq!(st1.num_fmt.as_str(), "0.000\"kg\"");
     assert!(st1.font.bold && st1.font.italic && st1.font.strike);
@@ -152,6 +158,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(st3.fill.pattern, PatternType::DarkGrid);
     assert_eq!(st3.fill.fg, Color::Theme(5, 0));
     assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "General");
+}
+
+fn assert_theme(wb: &gridcraft_model::Workbook) {
     // Theme: file order dk1, lt1… maps to lt1, dk1… in the model.
     assert_eq!(wb.theme.colors[0], 0xFFFFFF);
     assert_eq!(wb.theme.colors[1], 0x000000);
@@ -159,6 +168,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(wb.theme.colors[3], 0x44546A);
     assert_eq!(wb.theme.colors[4], 0x4472C4);
     assert_eq!(wb.theme.major_font, "Calibri Light");
+}
+
+fn assert_sheet_settings(s: &gridcraft_model::Sheet) {
     // Sheet settings.
     assert_eq!(s.tab_color, Some(Color::Rgb(0x00B050)));
     assert_eq!(s.freeze, Some((2, 1)));
@@ -689,4 +701,38 @@ fn custom_widths_equal_to_the_default_round_trip() {
     let cols: Vec<_> =
         sheet.child("cols").unwrap().kids("col").map(|c| (c.attr_u32("min"), c.attr_u32("max"), c.flag("customWidth", false))).collect();
     assert_eq!(cols, [(Some(4), Some(7), true)]);
+}
+
+#[test]
+fn every_skipped_drawing_object_is_reported() {
+    let frame = |row: u32, rid: &str| {
+        format!(
+            r#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="C"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2014/chartex">{rid}</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#,
+            row + 5
+        )
+    };
+    let missing = r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId9"/>"#;
+    let gone = r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/>"#;
+    let drawing = format!(
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{}{}{}{}{}</xdr:wsDr>"#,
+        frame(0, ""),
+        frame(10, ""),
+        frame(20, ""),
+        frame(30, missing),
+        frame(40, gone)
+    );
+    let drels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart9.xml"/></Relationships>"#;
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = super::minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", srels), ("xl/drawings/drawing1.xml", &drawing), ("xl/drawings/_rels/drawing1.xml.rels", drels)],
+        "",
+        "",
+    );
+    let (_, rep) = read_xlsx(&bytes).unwrap();
+    for n in 1..=5 {
+        let tag = format!("object {n})");
+        let hits = rep.warnings.iter().filter(|w| w.contains("skipped") && w.contains("drawing1.xml") && w.contains(&tag)).count();
+        assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
+    }
 }

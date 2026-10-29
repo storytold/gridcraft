@@ -16,12 +16,12 @@ fn harness(setup: impl FnOnce(&mut Session)) -> Harness {
     s.new_workbook();
     setup(&mut s);
     s.execute("selection.set", json!({"range": "A20"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h

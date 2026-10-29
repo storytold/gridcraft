@@ -2,6 +2,7 @@
 
 mod autofit_filter_buttons;
 mod cf_formula_validate;
+mod chart_area_stacked100;
 mod chart_workbook_names;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;
@@ -10,6 +11,7 @@ mod custom_filter_blanks;
 mod custom_view_freeze;
 mod dynamicmetadata;
 mod extreme_selection_moves;
+mod font_scheme_minor;
 mod format_as_table_restyle;
 mod hidden_sheet_navigation;
 mod ink_roundtrip;

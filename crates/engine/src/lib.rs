@@ -15,6 +15,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod macros;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
@@ -23,6 +24,7 @@ pub mod record;
 pub mod sample;
 pub mod selection;
 pub mod tables;
+pub mod windows;
 
 use std::sync::Arc;
 
@@ -39,6 +41,7 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
+pub use windows::{Target, TargetGuard, WindowState, WindowView};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -52,6 +55,12 @@ pub enum EngineError {
     NoDocument,
     #[error("{0}")]
     Other(String),
+    /// The command would replace something; run it again with `overwrite: true` to go ahead.
+    #[error("confirm: {0} (run again with `overwrite: true`)")]
+    Confirm(String),
+    /// Active content (a macro) asks to run; run it again with `approve: true` to allow it.
+    #[error("approve: {0} (run again with `approve: true`)")]
+    Approve(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
 }
@@ -95,6 +104,9 @@ struct OpenGroup {
     selection: Selection,
     /// The redo stack when the group began (a rollback puts it back).
     redo: Vec<HistoryEntry>,
+    /// Where the recording was when the group began (`None` when nothing was recording): a
+    /// rollback takes back the steps recorded since, as it takes back their edits.
+    recorded: Option<(u64, u64)>,
 }
 
 /// Where the last [`Session::group_end`] or [`Session::group_rollback`] left its document: the
@@ -180,6 +192,8 @@ pub struct DocState {
     pub path: Option<String>,
     pub saved: Arc<Workbook>,
     pub revision: u64,
+    /// Identifies this open workbook for the rest of the session: it never changes while the
+    /// workbook is open (saving, renaming, reordering) and is never reused for another one.
     pub uid: u64,
     pub title: String,
     /// Per-sheet selection memory.
@@ -199,6 +213,15 @@ pub struct DocState {
     /// workbook is opened from a file, carried by content pasted from such a workbook, and never
     /// changed by a trust decision.
     pub trust: Trust,
+    /// While a macro's footprint is measured: every cell a command wrote, by sheet name, even
+    /// where it wrote what was already there.
+    pub touched: Option<Vec<(String, CellRef)>>,
+    /// While a macro step runs: the structural edits its command made (the sheet's name, the
+    /// edit), so the macro's inputs, output and Repeat ranges follow their cells as formulas do.
+    pub edits: Option<Vec<(String, gridcraft_formula::adjust::Edit)>>,
+    /// The references `edit.goTo` with `record: true` went to in this document, newest first,
+    /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
+    pub go_to_recent: Vec<String>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -223,6 +246,10 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
         let empty = gridcraft_model::CellStore::new();
         let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
         bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
+    }
+    // Snapshots share the macro list until a change to it; a snapshot with its own list keeps it.
+    if !older.macros.shares(&newer.macros) {
+        bytes = bytes.saturating_add(older.macros.estimated_bytes());
     }
     bytes
 }
@@ -266,6 +293,17 @@ impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    /// A workbook as its file saved it: the dependency graph is built but nothing is
+    /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
+    /// is as for [`DocState::new`].
+    pub fn from_saved(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -285,20 +323,23 @@ impl DocState {
             content_kind: None,
             scripts_trusted,
             trust,
+            touched: None,
+            edits: None,
+            go_to_recent: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
     pub fn sheet_index(&self) -> usize {
-        self.wb.active_sheet
+        self.wb.active_sheet()
     }
     /// Records the view state that is saved with the file (`sheetView topLeftCell`, the active
     /// cell): the first visible cell of the scrolling area per sheet index in `tops`, and the
     /// active sheet's active cell. View state never makes the workbook dirty.
     pub fn store_view(&mut self, tops: &[(usize, CellRef)]) {
         let active = self.selection.active;
-        let si = self.wb.active_sheet;
+        let si = self.wb.active_sheet();
         let changed = tops.iter().any(|(i, c)| self.wb.sheets.get(*i).is_some_and(|sh| sh.view_top_left != *c))
             || self.wb.sheets.get(si).is_some_and(|sh| sh.view_active != active);
         if !changed {
@@ -347,6 +388,27 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// The statistics the status bar shows for a selection (right-click the status bar).
+    pub status_bar: StatusBarStats,
+}
+
+/// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
+/// Average, Count and Sum by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StatusBarStats {
+    pub average: bool,
+    pub count: bool,
+    pub numerical_count: bool,
+    pub minimum: bool,
+    pub maximum: bool,
+    pub sum: bool,
+}
+
+impl Default for StatusBarStats {
+    fn default() -> Self {
+        StatusBarStats { average: true, count: true, numerical_count: false, minimum: false, maximum: false, sum: true }
+    }
 }
 
 impl Default for Prefs {
@@ -361,6 +423,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            status_bar: StatusBarStats::default(),
         }
     }
 }
@@ -372,6 +435,9 @@ pub enum UiRequest {
     Message(String),
     /// Start editing the active cell (F2) with optional initial text.
     EditCell(Option<String>),
+    /// Put a defined name at the caret of the cell being edited, in place of selected text; with
+    /// no edit under way, start editing the active cell with `=` and the name.
+    InsertName(String),
     OpenUrl(String),
 }
 
@@ -385,7 +451,15 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Index in `docs` of the active window's workbook.
     active: usize,
+    /// Windows on the open workbooks ([`windows`]); every workbook has at least one.
+    windows: Vec<WindowState>,
+    active_window: Option<u64>,
+    /// Last window id handed out.
+    next_window: u64,
+    /// Window activation counter (most recently used order).
+    activation: u64,
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
@@ -394,6 +468,9 @@ pub struct Session {
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
     journal_sizes: Vec<usize>,
     journal_bytes: usize,
+    /// While a dry run runs (the footprint, `macro.check`), its commands are not journaled: the
+    /// dry run is put back, and journaling it would evict the person's own oldest entries.
+    pub(crate) journal_paused: u32,
     pub ui_requests: Vec<UiRequest>,
     /// Format painter source style (sticky when double-clicked).
     pub format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
@@ -408,8 +485,17 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
-    /// Windows hidden with View › Hide.
-    pub hidden_windows: Vec<usize>,
+    /// The steps the last successful `automate.runScript` or `macro.run` ran while a recorder was
+    /// on, for the recorder to keep with that step (see [`record::Recorder::ran`]); taken by the
+    /// recording hook.
+    pub(crate) script_ran: Option<Vec<(String, Json)>>,
+    /// Macros the person allowed to run in this session: (document uid, the macro's content as
+    /// canonical JSON, from [`macros::fingerprint`]).
+    pub macro_approvals: std::collections::HashSet<(u64, String)>,
+    /// The macro being debugged, between debugger actions.
+    pub macro_debug: Option<macros::debug::Debugger>,
+    /// Where the macro recorder started (beside `recorder`, its buffer).
+    pub macro_recording: Option<macros::recorder::RecordingStart>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
@@ -445,13 +531,23 @@ impl Session {
     pub fn active_index(&self) -> usize {
         self.active
     }
+    /// Makes the workbook at `i` active, in its most recently active window (unless the active
+    /// window already shows it).
     pub fn set_active(&mut self, i: usize) {
-        if i < self.docs.len() {
-            self.active = i;
+        let Some(uid) = self.docs.get(i).map(|d| d.uid) else { return };
+        if self.active == i && self.active_window.and_then(|w| self.window(w)).is_some_and(|w| w.doc_uid == uid) {
+            return;
+        }
+        if let Some(w) = self.doc_window(uid) {
+            self.activate_window(w);
         }
     }
     pub fn active(&self) -> Option<&DocState> {
         self.docs.get(self.active)
+    }
+    /// Where the open workbook with this [`DocState::uid`] is in [`Session::documents`].
+    pub fn document_index(&self, uid: u64) -> Option<usize> {
+        self.docs.iter().position(|d| d.uid == uid)
     }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
@@ -462,17 +558,28 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
+    /// Opens a workbook in a new window, which becomes the active one.
     pub fn add_document(&mut self, d: DocState) -> usize {
+        let uid = d.uid;
         self.docs.push(d);
-        self.active = self.docs.len() - 1;
-        self.active
+        let w = self.push_window(uid);
+        self.activate_window(w);
+        self.docs.len() - 1
     }
+    /// Closes a workbook and its windows; the most recently active remaining window comes forward.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
             self.groups.retain(|g| g.doc != d.uid);
-            if self.active >= self.docs.len() {
-                self.active = self.docs.len().saturating_sub(1);
+            // A macro being debugged in this workbook ends with it; its group just went.
+            if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
+                self.macro_debug = None;
+            }
+            self.windows.retain(|w| w.doc_uid != d.uid);
+            if self.active_window.is_some_and(|w| self.window(w).is_none()) {
+                self.activate_recent();
+            } else if let Some(di) = self.active_window.and_then(|w| self.window(w)).and_then(|w| self.document_index(w.doc_uid)) {
+                self.active = di;
             }
         }
     }
@@ -519,6 +626,16 @@ impl Session {
         }
     }
 
+    /// Cuts the journal back to its first `keep` entries, with its size bookkeeping.
+    pub(crate) fn truncate_journal(&mut self, keep: usize) {
+        if self.journal_sizes.len() == self.journal.len() {
+            self.journal_sizes.truncate(keep);
+            self.journal_bytes = self.journal_sizes.iter().sum();
+        }
+        self.journal.truncate(keep);
+        self.recording = self.recording.map(|r| r.min(self.journal.len()));
+    }
+
     pub fn commands(&self) -> Vec<CommandInfo> {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
@@ -531,7 +648,25 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
+        // A debugger whose undo group something else ended locks nothing any more (`macro.debug`
+        // itself says that the run had ended).
+        if id != "macro.debug" {
+            macros::debug::drop_if_ended(self);
+        }
+        let query = !spec.journal && !spec.undoable;
+        // While a macro is being debugged its undo group is open, and its workbook is locked:
+        // between steps only the debugger, queries and commands that look around run there
+        // (`macros::debug::LOOKS_AROUND`). Anything else waits, undoable or not (saving, view
+        // modes, stopping Record Actions, which saves a script), also when another command runs
+        // it. Only the run's own steps go ahead. Other workbooks stay editable.
+        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid) && !m.stepping()));
+        if locked && !macros::debug::runs_while_locked(id, query) {
+            return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
+        }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        // A dry run inside this command that a panic cuts short leaves journaling paused and its
+        // touch log open; the panic branch puts both back.
+        let paused_before = self.journal_paused;
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let (first_group, group_epoch) = (self.next_group, self.group_epoch);
         // Whether a group was open on the document before the command, and how long its history was.
@@ -541,7 +676,6 @@ impl Session {
         // because a nested `edit.undo` removes entries. A query runs nothing that changes the
         // history (`every_query_leaves_the_history_alone` runs each one), so it needs no
         // copy; front ends run queries all the time.
-        let query = !spec.journal && !spec.undoable;
         let history_before = before.as_ref().filter(|_| !query).and_then(|(uid, ..)| {
             #[cfg(test)]
             tests::HISTORY_COPIES.with(|n| n.set(n.get().saturating_add(1)));
@@ -556,7 +690,7 @@ impl Session {
         };
         // The recorder keeps top-level calls with the place they ran in.
         let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
-            Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
+            Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
         let doc_uid = before.as_ref().map(|(uid, ..)| *uid);
@@ -572,8 +706,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
@@ -599,7 +736,16 @@ impl Session {
                     }
                     d.calc.rebuild(&d.wb);
                 }
+                if self.journal_paused != paused_before {
+                    self.journal_paused = paused_before;
+                    for d in self.docs.iter_mut() {
+                        d.touched = None;
+                    }
+                }
                 if self.depth == 0 {
+                    // Only the `macro.debug` call itself can lose the run's place: a command nested
+                    // in a step that panics is an error of that step, which the run handles.
+                    macros::debug::recover(self);
                     self.trim_history();
                     self.group_step = None;
                 }
@@ -617,13 +763,33 @@ impl Session {
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
             // file, `home.formatCells` with no style) is not recorded either: the dialog's own
             // call is, so playing the recording back runs the command once, with its parameters.
+            // A call that opened a dialog and changed the workbook too (a script with an edit before
+            // a menu-style step) is recorded: the edit happened, and the dialog's confirming call
+            // is a step of its own.
             let opened_dialog = self.ui_requests.get(requests_before..).is_some_and(|new| new.iter().any(|q| matches!(q, UiRequest::Dialog(..))));
-            if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| !opened_dialog)
+            let changed = before.as_ref().is_some_and(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb)));
+            if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| (!opened_dialog || changed) && !record::NOT_RECORDED.contains(&id))
                 && let Some(rec) = self.recorder.as_mut()
             {
-                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params: cmd::journal_params(&params) });
+                // A toggle (Bold) is recorded with the state it set, as Excel records
+                // `Bold = True`: playing it back sets that state rather than flipping it again.
+                let params = match &result {
+                    Ok(r) if params.is_object() => record::with_toggle_state(cmd::journal_params(&params), r),
+                    _ => cmd::journal_params(&params),
+                };
+                let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
+                // A script or macro run is kept with the steps it ran, so editing or deleting the
+                // script or macro before the recording stops does not change what was recorded.
+                if let Some(ran) = self.script_ran.take()
+                    && kept
+                    && matches!(id, "automate.runScript" | "macro.run")
+                {
+                    rec.attach_ran(ran);
+                }
             }
-            self.push_journal(id, cmd::journal_params(&params));
+            if self.journal_paused == 0 {
+                self.push_journal(id, cmd::journal_params(&params));
+            }
         }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
@@ -738,6 +904,7 @@ impl Session {
             wb: d.wb.clone(),
             selection: d.selection.clone(),
             redo: d.redo.clone(),
+            recorded: self.recorder.as_ref().map(record::Recorder::mark),
         };
         let token = GroupToken { id: g.id, doc: g.doc };
         self.next_group = self.next_group.saturating_add(1);
@@ -834,6 +1001,11 @@ impl Session {
         d.undo.truncate(g.start);
         d.redo = g.redo;
         d.revision += 1;
+        // The steps recorded while the group was open go with their edits (all of them when the
+        // recording started inside the group).
+        if let Some(rec) = self.recorder.as_mut() {
+            rec.cut_back(g.recorded.unwrap_or((0, 0)), g.doc);
+        }
         // The record of the last group step stays when the document is back exactly where that
         // step left it (this group began there); otherwise the rollback is where the group ended.
         let kept = self.group_step.as_ref().is_some_and(|st| st.doc == g.doc && st.len == g.start && Arc::ptr_eq(&st.after, &d.wb));
@@ -863,6 +1035,21 @@ impl Session {
     /// command run by a command, and so on.
     pub fn depth(&self) -> u32 {
         self.depth
+    }
+
+    /// Runs a command as a command in progress would (one level deeper), for tests of what a
+    /// nested call may do.
+    #[cfg(test)]
+    pub(crate) fn execute_nested(&mut self, id: &str, params: Json) -> Result<Json> {
+        self.depth = self.depth.saturating_add(1);
+        let r = self.execute(id, params);
+        self.depth = self.depth.saturating_sub(1);
+        r
+    }
+
+    /// Whether the token's undo group is still open (nothing has ended or rolled it back).
+    pub fn group_is_open(&self, token: &GroupToken) -> bool {
+        self.groups.iter().any(|g| g.id == token.id)
     }
 
     /// Whether an undo group is open on the document with this uid.

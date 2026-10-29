@@ -8,6 +8,7 @@ use wasm_bindgen::JsValue;
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
+/// Starts the eframe web runner for the GridCraft canvas. It adjusts the WebGPU device limits to the adapter's, optionally selects the WebGL backend from the query string, and builds the shell with the requested sample or host bridge, browser language rules, stored preferences and the loading/error page state.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     wasm_bindgen_futures::spawn_local(async {
@@ -60,8 +61,21 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
+                    // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
+                    // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps
+                    // everything, as the default does.
+                    if let Some(chrome) = query_param("chrome") {
+                        match chrome.as_str() {
+                            "none" => app.chrome = gridcraft_ui_egui::Chrome { title_bar: false, file_tab: false },
+                            "notitlebar" => app.chrome.title_bar = false,
+                            "nofiletab" => app.chrome.file_tab = false,
+                            _ => {}
+                        }
+                    }
+                    // Follow the browser's language, except a CJK one. CJK coverage comes from
+                    // optional craft-fonts input, not a guaranteed web font set, so a CJK browser
+                    // cannot be assumed to render localized labels without tofu. Users can still
+                    // choose a language explicitly.
                     let browser = gridcraft_ui_egui::i18n::Language::system();
                     if !matches!(
                         browser,
@@ -156,8 +170,9 @@ impl eframe::App for WebShell {
         }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(raw);
+    /// Forwards a browser frame's raw input to the shared app before eframe handles it.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -352,7 +367,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
         js_sys::Reflect::get(&window, &JsValue::from_str("showSaveFilePicker")).ok().and_then(|v| v.dyn_into().ok());
 
     if let Some(picker_fn) = show_picker_fn {
-        let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("xlsx").to_ascii_lowercase();
+        let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("xlsx").to_ascii_lowercase();
         let dot_ext = format!(".{ext}");
         let mime = mime_for(name);
 

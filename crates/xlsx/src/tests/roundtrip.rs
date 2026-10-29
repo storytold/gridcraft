@@ -429,6 +429,7 @@ fn sample() -> Workbook {
         ChartKind::Doughnut,
         ChartKind::Area,
         ChartKind::AreaStacked,
+        ChartKind::AreaStacked100,
         ChartKind::Scatter,
         ChartKind::ScatterLines,
         ChartKind::Bubble,
@@ -489,7 +490,16 @@ fn full_roundtrip() {
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.iter().all(|w| !w.contains("skipped") || w.contains("chart")), "{:?}", rep.warnings);
+    assert_workbook_metadata_roundtrip(&wb, &back);
 
+    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+    assert_sheet_cells_and_settings(&wb, &back, a, b);
+    assert_table_roundtrip(a, b);
+    assert_drawing_and_chart_roundtrip(a, b);
+    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
+}
+
+fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert_eq!(back.date_system, wb.date_system);
     assert_eq!(back.calc, wb.calc);
     assert!(back.protected_structure);
@@ -504,8 +514,9 @@ fn full_roundtrip() {
     assert_eq!(back.sheets[2].visibility, Visibility::VeryHidden);
     assert_eq!(back.sheets[2].name, "2024");
     assert_eq!(back.sheets[2].comments, wb.sheets[2].comments);
+}
 
-    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+fn assert_sheet_cells_and_settings(wb: &Workbook, back: &Workbook, a: &Sheet, b: &Sheet) {
     assert_eq!(b.name, a.name);
     // Cells: values, formulas and resolved styles.
     let skip = [at("H2"), at("H3")];
@@ -541,6 +552,9 @@ fn full_roundtrip() {
     let mut sp = a.sparklines.clone();
     sp[0].source = "'Data & Stuff'!B2:B3".into();
     assert_eq!(b.sparklines, sp);
+}
+
+fn assert_table_roundtrip(a: &Sheet, b: &Sheet) {
     // Tables: name sanitized, ids reassigned.
     let (ta, tb) = (&a.tables[0], &b.tables[0]);
     assert_eq!(tb.name, "Sales_Table");
@@ -548,6 +562,9 @@ fn full_roundtrip() {
     assert_eq!((tb.banded_rows, tb.banded_cols, tb.first_col, tb.last_col, tb.filter_button), (true, true, true, false, true));
     assert_eq!(tb.filter, ta.filter, "the table's filter criteria survive (SUBTOTAL tells filtered rows apart)");
     assert_eq!(b.value(at("P1")), Value::text("Region"), "header cells carry the column names");
+}
+
+fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
     // Drawings.
     assert_eq!(b.images.len(), 1);
     assert_eq!(b.images[0].data, a.images[0].data);
@@ -586,7 +603,6 @@ fn full_roundtrip() {
         }
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
     }
-    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
 }
 
 #[test]
@@ -1244,6 +1260,32 @@ fn default_font_survives_a_round_trip() {
     );
     let saved = write_xlsx(&read_xlsx(&file).unwrap().0).unwrap();
     assert_eq!(font0(&saved), (Some("12".into()), Some("Calibri".into()), Some("2".into()), Some("minor".into())));
+}
+
+/// Every font that follows the theme's body font keeps `<scheme val="minor"/>`, not only font 0,
+/// and a body-face font without the scheme does not gain one (#2517).
+#[test]
+fn minor_scheme_survives_on_every_font() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><i/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font></fonts>
+        <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+        <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+        <cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
+        <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" s="1"><v>1</v></c><c r="B1" s="2"><v>2</v></c></row></sheetData>"#;
+    let file = super::minimal(body, &[("xl/styles.xml", styles)], rels, "");
+    let saved = write_xlsx(&read_xlsx(&file).unwrap().0).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let fonts: Vec<(bool, bool, Option<String>)> = st
+        .child("fonts")
+        .unwrap()
+        .kids("font")
+        .map(|f| (f.child("b").is_some(), f.child("i").is_some(), f.child("scheme").and_then(|e| e.attr("val")).map(str::to_string)))
+        .collect();
+    let scheme = |b: bool, i: bool| fonts.iter().find(|f| f.0 == b && f.1 == i).map(|f| f.2.clone());
+    assert_eq!(scheme(true, false), Some(Some("minor".into())), "{fonts:?}");
+    assert_eq!(scheme(false, true), Some(None), "{fonts:?}");
 }
 
 fn one_font_workbook(font: &str) -> Vec<u8> {

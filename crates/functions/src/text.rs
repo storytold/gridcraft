@@ -523,7 +523,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
         let mut j = t.len();
         while j > 0 {
             let best =
-                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
             match best {
                 Some(l) => {
                     out.push((j - l, j));
@@ -537,7 +537,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
     }
     let mut i = 0;
     while i < t.len() {
-        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
         match best {
             Some(l) => {
                 out.push((i, i + l));
@@ -588,7 +588,7 @@ fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char>> {
-    if delims.iter().all(|d| d.is_empty()) {
+    if delims.iter().all(Vec::is_empty) {
         return vec![s.to_vec()];
     }
     let mut out = Vec::new();
@@ -748,9 +748,9 @@ fn convert_replacement(r: &str) -> String {
     let mut i = 0;
     while i < c.len() {
         let ch = c[i];
-        if ch == '$' && c.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+        if ch == '$' && c.get(i + 1).is_some_and(char::is_ascii_digit) {
             let mut j = i + 1;
-            while c.get(j).is_some_and(|d| d.is_ascii_digit()) {
+            while c.get(j).is_some_and(char::is_ascii_digit) {
                 j += 1;
             }
             out.push_str("${");
