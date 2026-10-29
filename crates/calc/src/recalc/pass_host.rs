@@ -1,8 +1,10 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
+use crate::eval::Area;
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
+use std::collections::VecDeque;
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -879,6 +881,7 @@ impl Host for PassHost<'_> {
 #[cfg(test)]
 mod criteria_tests {
     use super::*;
+    use crate::Calc;
     use gridcraft_model::{Cell, Formula};
 
     #[test]

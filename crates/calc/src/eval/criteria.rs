@@ -1,4 +1,4 @@
-use super::*;
+use super::{Area, Evaluator, Expr, Value, resized_sum_range};
 
 impl Evaluator<'_> {
     /// Fast path for one literal text equality over constant reference ranges. No expression is
