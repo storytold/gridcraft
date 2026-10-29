@@ -425,6 +425,12 @@ struct ScrollbarCapture {
     was_focused: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ScrollbarFocus {
+    before_input: bool,
+    observed: bool,
+}
+
 struct ScrollbarInput;
 
 impl egui::plugin::Plugin for ScrollbarInput {
@@ -433,6 +439,17 @@ impl egui::plugin::Plugin for ScrollbarInput {
     }
 
     fn input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Raw focus can start true before the web canvas is focused. Only an
+        // observed focus event establishes focus before a later input batch.
+        let focus_key = egui::Id::unique(("worksheet_scrollbar_focus", raw.viewport_id));
+        let mut focus = ctx.data(|d| d.get_temp::<ScrollbarFocus>(focus_key)).unwrap_or_default();
+        focus.before_input = focus.observed;
+        for event in &raw.events {
+            if let egui::Event::WindowFocused(focused) = event {
+                focus.observed = *focused;
+            }
+        }
+        ctx.data_mut(|d| d.insert_temp(focus_key, focus));
         let key = egui::Id::unique(("worksheet_scrollbar_capture", raw.viewport_id));
         let Some(mut capture) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(key)) else { return };
         // A delivered release completes the old gesture. Only an interruption that
@@ -476,6 +493,12 @@ impl egui::plugin::Plugin for ScrollbarInput {
     }
 }
 
+pub(crate) fn setup_scrollbar_input(ctx: &egui::Context) {
+    if ctx.plugin_opt::<ScrollbarInput>().is_none() {
+        ctx.add_plugin(ScrollbarInput);
+    }
+}
+
 /// Both worksheet scrollbars share capture cleanup. `PointerGone` alone is not a release on
 /// hosts with working pointer capture. The native shell enables that fallback only on Wayland:
 /// egui-winit drops MouseInput without a pointer position, leaving primary_down stale on return.
@@ -512,18 +535,18 @@ pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context) {
 }
 
 fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_gone: bool) -> bool {
-    if ui.ctx().plugin_opt::<ScrollbarInput>().is_none() {
-        ui.ctx().add_plugin(ScrollbarInput);
-    }
+    setup_scrollbar_input(ui.ctx());
     if (resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down())) || resp.dragged_by(egui::PointerButton::Primary) {
         let capture = egui::Id::unique(("worksheet_scrollbar_capture", ui.ctx().viewport_id()));
         if ui.ctx().data(|d| d.get_temp::<ScrollbarCapture>(capture)).is_none_or(|state| state.id != resp.id) {
             // The plugin handles existing captures before input. A new capture can
             // still be interrupted after its press in this same batch.
+            let focus_key = egui::Id::unique(("worksheet_scrollbar_focus", ui.ctx().viewport_id()));
+            let previously_focused = ui.ctx().data(|d| d.get_temp::<ScrollbarFocus>(focus_key)).is_some_and(|focus| focus.before_input);
             let (was_focused, cancelled) = ui.input(|i| {
                 let was_focused = i.raw.focused && i.focused;
                 // Web focus polling can report false before the canvas ever gains focus.
-                let focus_seen = was_focused || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)));
+                let focus_seen = previously_focused || was_focused || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)));
                 let cancelled = i.events.iter().rev().find_map(|event| match event {
                     egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } => Some(false),
                     egui::Event::WindowFocused(false) if focus_seen => Some(true),

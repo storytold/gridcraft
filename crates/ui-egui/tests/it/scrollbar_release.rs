@@ -92,6 +92,21 @@ fn activating_scrollbar_presses_survive_initial_canvas_focus_ordering() {
 }
 
 #[test]
+fn losing_focus_in_the_activating_press_batch_cancels_the_scrollbar() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut h = crate::support::blank_harness(4);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::WindowFocused(true)]);
+        let p = axis.start(&h);
+        h.input_mut().focused = false;
+        events(&mut h, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(false)]);
+        h.input_mut().focused = true;
+        events(&mut h, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
+        assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: focus lost after the press must end capture");
+    }
+}
+
+#[test]
 fn focus_acquired_and_lost_after_a_new_press_in_one_batch_still_cancels_it() {
     for axis in [Axis::Vertical, Axis::Horizontal] {
         let mut h = crate::support::blank_harness(4);
@@ -341,6 +356,18 @@ fn child_harness(release_on_pointer_gone: bool) -> (Harness, std::sync::Arc<std:
 fn child_events(h: &mut Harness, queued: &std::sync::Mutex<Vec<Event>>, events: impl IntoIterator<Item = Event>) {
     queued.lock().unwrap().extend(events);
     h.run_steps(2);
+}
+
+#[test]
+fn a_child_focus_loss_in_the_activating_batch_cancels_the_scrollbar() {
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let (mut h, queued) = child_harness(false);
+        child_events(&mut h, &queued, [Event::WindowFocused(true)]);
+        let p = axis.start(&h);
+        child_events(&mut h, &queued, [Event::PointerMoved(p), button(p, true), Event::WindowFocused(false)]);
+        child_events(&mut h, &queued, [Event::WindowFocused(true), Event::PointerMoved(p + axis.movement())]);
+        assert_eq!(axis.scroll(&h), 0.0, "{axis:?}: child focus loss after the press must end capture");
+    }
 }
 
 #[test]
