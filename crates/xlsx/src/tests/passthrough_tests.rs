@@ -213,6 +213,14 @@ fn unmodelled_parts_survive_a_round_trip() {
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
     u.assert_valid();
+    assert_kept_workbook_parts(&u);
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_kept_sheet_parts(&u, &sheet, &sx);
+    assert_round_trip_kept_content(&wb, &out);
+}
+
+fn assert_kept_workbook_parts(u: &Unpacked) {
     // Every kept part is in the output byte for byte.
     for d in [
         PRINTER,
@@ -244,34 +252,37 @@ fn unmodelled_parts_survive_a_round_trip() {
     let item = u.find(CUSTOM_XML.as_bytes())[0].clone();
     assert!(u.rels(&item).iter().any(|r| r.1.ends_with("/customXmlProps")));
     // Formulas using the link are written as they were.
-    let sheet = sheet_part(&u, "Data");
+    let sheet = sheet_part(u, "Data");
     let sx = u.text(&sheet);
     assert!(sx.contains("<f>[1]Sheet1!$A$1</f>"), "{sx}");
     assert!(sx.contains("<f>SUM([1]Sheet1!A1:A3)*2</f>"), "{sx}");
+}
+
+fn assert_kept_sheet_parts(u: &Unpacked, sheet: &str, sx: &str) {
     // Printer settings (#324).
-    let ps = attr_of(&sx, "pageSetup", "r:id");
-    let (ty, target) = u.target(&sheet, &ps);
+    let ps = attr_of(sx, "pageSetup", "r:id");
+    let (ty, target) = u.target(sheet, &ps);
     assert!(ty.ends_with("/printerSettings"));
     assert_eq!(u.parts.get(&target).unwrap(), PRINTER);
     // The OLE object and its preview image, re-linked.
-    let ole = attr_of(&sx, "oleObject", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ole).1).unwrap(), OLE);
-    let preview = attr_of(&sx, "objectPr", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &preview).1).unwrap(), EMF);
+    let ole = attr_of(sx, "oleObject", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ole).1).unwrap(), OLE);
+    let preview = attr_of(sx, "objectPr", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &preview).1).unwrap(), EMF);
     // Namespace declarations travel with the fragment.
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
     // The form control.
-    let ctrl = attr_of(&sx, "control", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
+    let ctrl = attr_of(sx, "control", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
     // Schema order: pageSetup < legacyDrawing < oleObjects < controls.
     let pos = |t: &str| sx.find(t).unwrap_or_else(|| panic!("no {t}"));
     assert!(pos("<pageSetup") < pos("<legacyDrawing") && pos("<legacyDrawing") < pos("<oleObjects") && pos("<oleObjects") < pos("<controls"));
     // Query table: a sheet relationship only.
-    assert!(u.rels(&sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
+    assert!(u.rels(sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
     // One VML drawing: the kept control shapes plus GridCraft's note, in a fresh shape block.
-    let vml_id = attr_of(&sx, "legacyDrawing", "r:id");
-    let vml_part = u.target(&sheet, &vml_id).1;
+    let vml_id = attr_of(sx, "legacyDrawing", "r:id");
+    let vml_part = u.target(sheet, &vml_id).1;
     let vml = u.text(&vml_part);
     assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"));
     assert!(!vml.contains("old note") && !vml.contains("_x0000_s1027"), "the source's note shape is replaced");
@@ -280,9 +291,11 @@ fn unmodelled_parts_survive_a_round_trip() {
     let img = u.rels(&vml_part);
     assert_eq!(img.len(), 1);
     assert_eq!(u.parts.get(&img[0].2).unwrap(), EMF);
+}
 
+fn assert_round_trip_kept_content(wb: &gridcraft_model::Workbook, out: &[u8]) {
     // Reading the output keeps the same content again.
-    let (wb2, rep2) = read_xlsx(&out).unwrap();
+    let (wb2, rep2) = read_xlsx(out).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
     let a = wb.sheet(0).unwrap().preserved.as_deref().unwrap();
     let b = wb2.sheet(0).unwrap().preserved.as_deref().unwrap();
@@ -293,7 +306,6 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert_eq!(da, db);
     assert_eq!(a.elements.len(), b.elements.len());
     assert_eq!(wb.preserved.as_deref().unwrap().parts.len(), wb2.preserved.as_deref().unwrap().parts.len());
-    u.assert_valid();
 }
 
 #[test]

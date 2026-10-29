@@ -185,16 +185,23 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             for (l, k, s) in [
                 ("Column", "column", ""),
-                ("Stacked", "column", "stacked"),
+                ("Stacked Column", "column", "stacked"),
+                ("100% Stacked Column", "column", "stacked100"),
                 ("Bar", "bar", ""),
+                ("Stacked Bar", "bar", "stacked"),
+                ("100% Stacked Bar", "bar", "stacked100"),
                 ("Line", "line", "markers"),
+                ("Stacked Line", "line", "stacked"),
                 ("Area", "area", ""),
+                ("Stacked Area", "area", "stacked"),
+                ("100% Stacked Area", "area", "stacked100"),
                 ("Pie", "pie", ""),
                 ("Doughnut", "doughnut", ""),
                 ("Scatter", "scatter", ""),
                 ("Radar", "radar", ""),
             ] {
-                if ui.button(l).clicked() {
+                let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
+                if ui.selectable_label(cur, l).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
                 }
             }
