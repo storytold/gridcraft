@@ -2350,3 +2350,100 @@ fn spill_error_field_probe() {
     }
     eprintln!("100 edits of A65 beside 1,040,000 spill errors: best of 9 = {best:?}");
 }
+
+/// A full-height column spill (inside the 10,000,000-cell cap) and a paste of 17 cells elsewhere:
+/// the paste must not register the spill's 65,536 blocks, and a paste over the spill must still
+/// block it.
+fn tall_spill_book() -> T {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(1048576)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    t
+}
+
+fn paste_into(t: &mut T, cells: &[(u32, u32)]) {
+    let changed: Vec<(usize, CellRef)> = cells.iter().map(|&(r, c)| (0, CellRef::new(r, c))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+}
+
+#[test]
+fn a_paste_beside_a_tall_spill_leaves_it_alone_and_one_over_it_blocks_it() {
+    let mut t = tall_spill_book();
+    let beside: Vec<(u32, u32)> = (0..17).map(|i| (i, 5)).collect();
+    paste_into(&mut t, &beside);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    let over: Vec<(u32, u32)> = (0..17).map(|i| (500_000 + i, if i == 9 { 0 } else { 5 })).collect();
+    paste_into(&mut t, &over);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+}
+
+/// Probe: `cells_changed` for a 17-cell paste in column F beside the tall spill.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture tall_spill_paste_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn tall_spill_paste_probe() {
+    let mut t = tall_spill_book();
+    let mut best = std::time::Duration::MAX;
+    for round in 0..9u32 {
+        let beside: Vec<(u32, u32)> = (0..17).map(|i| (round * 20 + i, 5)).collect();
+        let start = std::time::Instant::now();
+        paste_into(&mut t, &beside);
+        best = best.min(start.elapsed());
+    }
+    eprintln!("tall spill, 17-cell paste beside it: best of 9 = {best:?}");
+}
+
+#[test]
+fn many_spills_are_read_and_blocked_by_a_paste() {
+    let mut t = T::new();
+    // 40 arrays of 3 rows side by side in rows 1-3, and a reader of a range over two of them.
+    for i in 0..40u32 {
+        let anchor = CellRef::new(0, 2 * i);
+        t.wb.sheet_mut(0).unwrap().cells.set(anchor, Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.set("A10", "=SUM(C1:F3)");
+    t.set("A12", "=COUNT(C1:F3)");
+    t.set("A11", "=C2*1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A10"), (10 + 11 + 12 + 20 + 21 + 22) as f64);
+    assert_eq!(t.num("A11"), 11.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // Pasting 20 cells (more than one spill's width worth, so the changed set is indexed) over
+    // the second row of every other array blocks those arrays; the rest are unchanged.
+    let changed: Vec<(usize, CellRef)> = (0..20u32).map(|i| (0, CellRef::new(1, 4 * i))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C1"), Value::Number(10.0));
+    assert_eq!(t.get("G2"), Value::Number(31.0));
+    assert_eq!(t.get("A10"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("A12"), 4.0);
+}
+
+#[test]
+fn a_paste_over_small_and_tall_spills_blocks_those_it_touches() {
+    let mut t = T::new();
+    for i in 0..40u32 {
+        t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 2 * i), Cell::formula(Formula::new("=SEQUENCE(3)")));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 200), Cell::formula(Formula::new("=SEQUENCE(1048576)")));
+    t.calc.recalc_all(&mut t.wb);
+    // 20 cells: the middle row of the small arrays in columns 0, 8, 16 ... 72 (columns 80 and up hit
+    // nothing), and one deep inside the tall one.
+    let mut cells: Vec<(u32, u32)> = (0..19u32).map(|i| (1, 8 * i)).collect();
+    cells.push((700_000, 200));
+    paste_into(&mut t, &cells);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("GS1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C1"), 1.0);
+    assert_eq!(t.num("C3"), 3.0);
+    assert_eq!(t.get("I1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E3"), 3.0);
+}

@@ -17,6 +17,10 @@ use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
 use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::spill_index::{SpillIndex, indexing_pays};
+
+/// Changed cells (in one `cells_changed`) from which a sheet's spill areas may be indexed.
+const INDEX_SPILLS_FROM: usize = 16;
 
 mod graph;
 mod pass_host;
@@ -316,11 +320,33 @@ impl Calc {
         let mut emptied: Vec<Key> = Vec::new();
         // Typing into (or clearing) a cell a dynamic array spills over (or would spill over)
         // re-evaluates the anchor, which may now be blocked or unblocked.
+        // With many changed cells (a paste) a sheet's spill areas are indexed once instead of being
+        // walked for each one, when registering them costs less than walking them would.
+        let mut areas = SpillIndex::default();
+        let mut strategy: HashMap<usize, bool> = HashMap::default();
+        let mut at = Vec::new();
         for &k in changed {
             if let Some(sh) = wb.sheet(k.0) {
-                for (anchor, r) in &sh.spill_ranges {
-                    if *anchor != k.1 && r.contains(k.1) {
-                        seeds.push((k.0, *anchor));
+                let indexed = changed.len() > INDEX_SPILLS_FROM
+                    && !sh.spill_ranges.is_empty()
+                    && *strategy.entry(k.0).or_insert_with(|| {
+                        let indexed = indexing_pays(sh.spill_ranges.values(), changed.len());
+                        if indexed {
+                            for (anchor, r) in &sh.spill_ranges {
+                                areas.insert_rect((k.0, *anchor), *r, false);
+                            }
+                        }
+                        indexed
+                    });
+                if indexed {
+                    // Anchor order, as walking `spill_ranges` gives.
+                    areas.meeting(k.0, RangeRef::new(k.1, k.1), &mut at);
+                    seeds.extend(at.iter().filter(|a| **a != k.1).map(|a| (k.0, *a)));
+                } else {
+                    for (anchor, r) in &sh.spill_ranges {
+                        if *anchor != k.1 && r.contains(k.1) {
+                            seeds.push((k.0, *anchor));
+                        }
                     }
                 }
                 if !self.spill_errors.is_empty() {
