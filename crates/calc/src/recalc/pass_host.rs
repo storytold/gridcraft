@@ -25,6 +25,8 @@ pub(super) struct PassHost<'a> {
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
     rng: &'a mut u64,
+    /// Who held a spill before the calculation; unset: every formula did (reading order decides).
+    pub(super) standing: Option<&'a super::Standing>,
     now: f64,
     cycle: bool,
     pub(super) cycles: Vec<Key>,
@@ -77,6 +79,7 @@ impl<'a> PassHost<'a> {
             spills: HashMap::default(),
             used: HashMap::default(),
             rng,
+            standing: None,
             now,
             cycle: false,
             cycles: vec![],
@@ -101,21 +104,22 @@ impl<'a> PassHost<'a> {
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or the spill of another formula anchored earlier in
-/// reading order (unless that formula is recalculated in this pass, and so may spill elsewhere
-/// now). A spill of a later anchor gives way to it when written back.
+/// overlaps merged cells, holds other cells, or the spill of another formula that outranks it
+/// (see `Standing`; unless that formula is recalculated in this pass, and so may spill elsewhere
+/// now). A spill it outranks gives way to it when written back.
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
     let own = sh.spill_ranges.get(&anchor);
+    let default = super::Standing::default();
+    let standing = host.standing.unwrap_or(&default);
     let spilled_over = |c: CellRef| {
         !own.is_some_and(|o| o.contains(c))
-            && sh
-                .spill_ranges
-                .iter()
-                .any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && (o.row, o.col) < (anchor.row, anchor.col))
+            && sh.spill_ranges.iter().any(|(o, r)| {
+                *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && standing.outranks((sheet, *o), (sheet, anchor))
+            })
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS

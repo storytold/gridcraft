@@ -2663,30 +2663,61 @@ fn assert_matches_full_recalc(s: &Session) {
 fn filling_a_formula_next_to_a_spill_matches_a_full_recalc() {
     // Found by the command-sequence fuzzer: C14 spills along row 14; filling `=D14:E18` over
     // E13:F13 puts two array formulas whose areas run into that spill and into each other. The
-    // incremental pass left F13 as #SPILL! (C14 kept its cells) while a full recalc gave F13 its
-    // array and C14 #SPILL!. Of two arrays that overlap, the one anchored first wins in both.
+    // incremental pass left F13 as #SPILL! while a full recalc gave F13 its array and C14
+    // #SPILL!. The spill that already exists keeps its cells (as in Excel), in both.
     let mut s = s();
     s.execute("range.setValues", json!({"range": "B18", "values": [[1], [2], [3], [4], [5], [6], [7]]})).unwrap();
     s.execute("cell.set", json!({"cell": "C14", "input": "=TRANSPOSE(B18:B24)"})).unwrap();
     s.execute("selection.set", json!({"range": "E13"})).unwrap();
     s.execute("range.fill", json!({"range": "E13:F13", "input": "=D14:E18"})).unwrap();
-    assert_eq!(v(&s, "C14"), Value::Error(gridcraft_core::CellError::Spill));
-    assert_eq!(v(&s, "F13"), Value::Number(0.0));
+    assert_eq!(v(&s, "C14"), Value::Number(1.0));
+    assert_eq!(v(&s, "I14"), Value::Number(7.0));
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
     assert_matches_full_recalc(&s);
 }
 
 #[test]
-fn overlapping_spills_are_resolved_the_same_whichever_was_entered_first() {
-    let mut s = s();
-    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)"})).unwrap();
-    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(5)"})).unwrap();
-    assert_eq!((v(&s, "F8"), v(&s, "F10")), (Value::Number(1.0), Value::Number(3.0)));
-    assert_eq!(v(&s, "E10"), Value::Error(gridcraft_core::CellError::Spill));
-    assert_matches_full_recalc(&s);
-    // Clearing the earlier one gives the later one its cells back.
-    s.execute("edit.clearContents", json!({"range": "F8"})).unwrap();
-    assert_eq!((v(&s, "E10"), v(&s, "G10")), (Value::Number(1.0), Value::Number(3.0)));
-    assert_matches_full_recalc(&s);
+fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
+    use gridcraft_core::CellError::Spill;
+    // E10 spills along row 10, F8 down over F10: F8 is first in reading order, E10 may be first
+    // to spill. Excel keeps whichever spilled first.
+    for (first, second) in [(("E10", "=SEQUENCE(1,3)"), ("F8", "=SEQUENCE(5)")), (("F8", "=SEQUENCE(5)"), ("E10", "=SEQUENCE(1,3)"))] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": first.0, "input": first.1})).unwrap();
+        s.execute("cell.set", json!({"cell": second.0, "input": second.1})).unwrap();
+        assert_ne!(v(&s, first.0), Value::Error(Spill), "{} keeps its cells", first.0);
+        assert_eq!(v(&s, second.0), Value::Error(Spill), "{} is blocked", second.0);
+        assert_matches_full_recalc(&s);
+        // Clearing the winner lets the other one spill.
+        s.execute("edit.clearContents", json!({"range": first.0})).unwrap();
+        assert_ne!(v(&s, second.0), Value::Error(Spill), "{} spills once {} is cleared", second.0, first.0);
+        assert_matches_full_recalc(&s);
+    }
+}
+
+#[test]
+fn overlapping_spills_with_no_history_go_to_the_earlier_anchor() {
+    use gridcraft_core::CellError::Spill;
+    // A workbook calculated for the first time (a file that carries no layout) has no entry
+    // order: the anchor first in reading order wins, whatever order the formulas were set in.
+    for order in [["E10", "F8"], ["F8", "E10"]] {
+        let mut s = s();
+        for a in order {
+            let input = if a == "E10" { "=SEQUENCE(1,3)" } else { "=SEQUENCE(5)" };
+            s.execute("cell.set", json!({"cell": a, "input": input})).unwrap();
+        }
+        let mut fresh = (*s.doc().unwrap().wb).clone();
+        for i in 0..fresh.sheets.len() {
+            let sh = fresh.sheet_mut(i).unwrap();
+            sh.spill.clear();
+            sh.spill_ranges.clear();
+        }
+        gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+        let a = fresh.active().unwrap();
+        let cell = |r: &str| a.value(CellRef::parse(r).unwrap());
+        assert_ne!(cell("F8"), Value::Error(Spill), "order {order:?}");
+        assert_eq!(cell("E10"), Value::Error(Spill), "order {order:?}");
+    }
 }
 
 #[test]
