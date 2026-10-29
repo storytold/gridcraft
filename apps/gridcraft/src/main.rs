@@ -28,7 +28,13 @@ use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App(
+    SheetApp,
+    DocWindows,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "linux")] Option<craft_desktop::appmenu::Bridge>,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -44,6 +50,18 @@ impl eframe::App for App {
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &mut self.2 {
+            for click in menu.take_events() {
+                // Only the root surface is bound. Never send a cached root-menu event to a
+                // child window, including a second view of the same workbook.
+                if self.1.root_menu_active(&self.0)
+                    && !ctx.input(|i| i.raw.viewports.iter().any(|(id, v)| *id != egui::ViewportId::ROOT && v.focused == Some(true)))
+                {
+                    gridcraft_ui_egui::desktop_menu::activate(&mut self.0, ctx, click.document, &click.action);
+                }
+            }
+        }
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -60,8 +78,16 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.1.show(&mut self.0, ui);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &self.2 {
+            let snapshot =
+                if self.1.root_menu_active(&self.0) { gridcraft_ui_egui::desktop_menu::snapshot(&self.0) } else { craft_desktop::Menu::default() };
+            menu.publish(snapshot);
+        }
     }
     fn on_exit(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.2.take();
         print::finish_pending_jobs();
         save_prefs(&self.0);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
@@ -315,7 +341,6 @@ fn main() -> eframe::Result<()> {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
-    app.watch_desktop_theme();
     app.start_update_check();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
@@ -382,6 +407,7 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                app.watch_desktop_theme(&cc.egui_ctx);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
@@ -389,6 +415,17 @@ fn main() -> eframe::Result<()> {
                     }
                 }
                 let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
+                #[cfg(target_os = "linux")]
+                let menu = cc.winit_window().cloned().and_then(|window| {
+                    let ctx = cc.egui_ctx.clone();
+                    craft_desktop::appmenu::Bridge::start(
+                        window,
+                        "ai.storyteller.gridcraft",
+                        "GRIDCRAFT",
+                        craft_desktop::Menu::default(),
+                        move || ctx.request_repaint(),
+                    )
+                });
                 Ok(Box::new(App(
                     app,
                     windows,
@@ -396,6 +433,8 @@ fn main() -> eframe::Result<()> {
                     None,
                     #[cfg(target_os = "macos")]
                     apple_events.connect(&cc.egui_ctx),
+                    #[cfg(target_os = "linux")]
+                    menu,
                 )))
             }),
         )

@@ -6,8 +6,9 @@ impl SheetApp {
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
     /// Follow the desktop's light/dark choice while the app runs (Linux; the desktop app calls
     /// this once — tests and embedders don't start the watcher thread).
-    pub fn watch_desktop_theme(&mut self) {
-        self.desktop_theme = desktop_theme::DesktopTheme::start();
+    pub fn watch_desktop_theme(&mut self, ctx: &egui::Context) {
+        let ctx = ctx.clone();
+        self.desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
     }
 
     /// Follows the desktop/system theme preference and records the effective theme.

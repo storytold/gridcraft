@@ -27,6 +27,8 @@ finish-args:
   - --share=network
   # GPU access for rendering.
   - --device=dri
+  # Global Menu on X11/XWayland; Wayland associates the same export with its surface.
+  - --talk-name=com.canonical.AppMenu.Registrar
   # Open/Save dialogs use the file-chooser portal (rfd), and drag-and-drop uses the document
   # portal, so broad filesystem access isn't needed. Documents and Downloads are granted for
   # opening workbooks by path from the command line.

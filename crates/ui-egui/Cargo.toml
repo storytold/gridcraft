@@ -9,6 +9,7 @@ description = "GridCraft egui frontend (Excel-style UI); swappable — nothing b
 workspace = true
 
 [dependencies]
+craft-desktop = { path = "../../vendor/craft-desktop", default-features = false }
 # The shared capture slot (`craft_ui::capture`) comes from the one craft-libs revision every
 # craft-libs dependency uses (see the root Cargo.toml).
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
@@ -25,11 +26,10 @@ image = { workspace = true }
 skrifa = { workspace = true }
 web-time = { workspace = true }
 
-# Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
-# `desktop_theme.rs`). Already in the tree, with these features, through egui's own
-# accessibility bus; pinned to one version so nothing is built twice.
+# Linux only: shared portal appearance watcher (see `desktop_theme.rs`).
+# The portable menu model above does not enable desktop transports on other targets.
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = "=5.19.0"
+craft-desktop = { path = "../../vendor/craft-desktop", default-features = false, features = ["portal"] }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

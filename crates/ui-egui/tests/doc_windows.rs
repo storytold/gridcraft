@@ -148,6 +148,23 @@ fn each_window_keeps_its_own_selection_and_draft() {
     assert!(desk.app.session.documents().iter().all(|d| !d.is_dirty()), "drawing the other window commits no draft");
 }
 
+/// Root-only menu activation cannot follow another view of the same workbook.
+#[test]
+fn root_global_menu_context_rejects_a_child_of_the_same_workbook() {
+    let mut desk = Desk::new(true);
+    let root = desk.windows.root_window().unwrap();
+    assert!(desk.windows.root_menu_active(&desk.app));
+    let doc = desk.app.session.active().unwrap().uid;
+    desk.app.run("view.newWindow", json!({})).unwrap();
+    assert!(!desk.windows.root_menu_active(&desk.app), "fail closed before the next frame");
+    desk.frames(3);
+    assert_eq!(desk.app.session.active().unwrap().uid, doc);
+    assert!(!desk.windows.root_menu_active(&desk.app));
+    desk.app.enter_window(root);
+    desk.frames(2);
+    assert!(desk.windows.root_menu_active(&desk.app));
+}
+
 #[test]
 fn closing_one_of_two_windows_on_a_workbook_does_not_ask() {
     let mut desk = Desk::new(true);

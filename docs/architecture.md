@@ -1,5 +1,7 @@
 # Architecture
 
+> **KDE reconciliation (2026-10-29):** Global Menu currently binds only the original native window. Child windows retain local controls, and panel actions are rejected while a child is active, including another window on the same document. Upstream ribbon and multiwindow behavior are retained. See [KDE integration](KDE.md) for validation limits.
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).

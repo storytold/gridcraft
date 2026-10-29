@@ -62,6 +62,7 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            desktop_clipboard: vec![],
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -111,7 +112,7 @@ impl SheetApp {
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
+            self.desktop_dark = answer.dark;
         }
         self.sync_theme_preference(ctx);
         self.sync_input_options(ctx);
@@ -191,6 +192,7 @@ impl SheetApp {
         let t0 = now_ms();
         // A script may have switched windows since the last frame.
         self.follow_active_window();
+        crate::desktop_menu::guard_clipboard(self, &ctx);
         text_box::before_ui(self, &ctx);
         // Another window came forward without going through a command (which settles drafts
         // first): the draft goes into its own window instead of floating over this one. If its

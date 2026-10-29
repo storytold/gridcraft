@@ -1,6 +1,6 @@
 # GridCraft roadmap
 
-**Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
+> **KDE review/update:** 2026-10-29 · **Change:** minor (upstream reconciliation, delayed clipboard guards, full CI and root-window Wayland smoke; parity estimates unchanged)
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
@@ -133,6 +133,16 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+KDE reconciliation (2026-10-29): retained upstream ribbon and document-window behavior,
+restricted panel dispatch to the active original window, and guarded delayed clipboard
+delivery against changed targets. All ten `cargo xtask ci` stages passed. A fresh isolated
+Wayland Collapse Ribbon action and checked-state update passed with a real Plasma consumer;
+child-window export and the broader live clipboard matrix remain open. See [evidence](docs/KDE.md).
+
+Linux integration update (2026-10-21): portable Global Menu model with guarded interactive
+dispatch and a shared standard XDG appearance watcher. Existing parity estimates are unchanged;
+see [KDE verification](docs/KDE.md) for the separate compositor/manual checks.
+
 | Date | What landed |
 |---|---|
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
@@ -244,6 +254,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | KDE reconciliation: full CI passed; root-window Wayland menu smoke passed, child-window export remains pending |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |

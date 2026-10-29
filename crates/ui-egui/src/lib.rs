@@ -14,6 +14,7 @@ pub mod code_editor;
 pub mod control;
 mod craft_fonts_policy;
 pub mod credits;
+pub mod desktop_menu;
 pub mod dialogs;
 pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -242,6 +243,7 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    desktop_clipboard: Vec<desktop_menu::ClipboardRequest>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,

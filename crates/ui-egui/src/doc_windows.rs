@@ -59,6 +59,14 @@ impl DocWindows {
         self.viewports.root().and_then(|w| self.list.get(w).copied())
     }
 
+    /// The root surface's Global Menu may only represent its own active workbook window.
+    /// Child windows keep their local menus until they have individual native bindings.
+    pub fn root_menu_active(&self, app: &SheetApp) -> bool {
+        self.root_window().is_some_and(|root| app.session.active_window() == Some(root))
+            && self.focused_viewport() == egui::ViewportId::ROOT
+            && !self.root_hidden
+    }
+
     /// The engine windows that have a native window, in opening order.
     pub fn shown_windows(&self) -> Vec<u64> {
         self.list.iter().map(|(_, w)| *w).collect()

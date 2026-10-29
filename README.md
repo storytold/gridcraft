@@ -154,6 +154,9 @@ Browsers or desktop environments may reserve Alt/F10 for their own menus.
 
 ### Logs
 
+Linux/KDE appearance and menu architecture, plus reproducible desktop verification:
+[`docs/KDE.md`](docs/KDE.md).
+
 The desktop app writes its log to standard error and to `gridcraft.log` in the `logs` folder
 next to its settings: `~/.config/gridcraft/logs` on Linux and BSD (`$XDG_CONFIG_HOME/gridcraft/logs`
 when set), `~/Library/Application Support/GridCraft/logs` on macOS and

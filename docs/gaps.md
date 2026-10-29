@@ -1,5 +1,7 @@
 # Gaps
 
+> **KDE review/update:** 2026-10-29 · Original-window Global Menu and delayed clipboard guards pass automated checks; per-window export and broader live acceptance remain open. See [KDE evidence](KDE.md).
+
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
@@ -176,6 +178,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
 
 ### 24. Fonts and look (U)
+- KDE Global Menu currently exports only the original native window; child windows retain local controls. Full CI and a native Wayland root-window toggle passed on 2026-10-29, but per-window menu ownership and the live clipboard/portal/DPI matrix remain unverified. See [KDE integration](KDE.md).
 - Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
   chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
 
@@ -183,6 +186,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Record current KDE root-window scope and remaining live acceptance gaps |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
