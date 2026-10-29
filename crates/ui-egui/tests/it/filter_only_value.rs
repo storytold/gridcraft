@@ -99,3 +99,15 @@ fn only_replaces_an_existing_filter_on_the_column() {
     click_only(&mut h, "Cherry");
     assert_eq!(hidden(&h), [true, true, true, true, false]);
 }
+
+#[test]
+fn only_on_a_protected_sheet_says_why_nothing_changed() {
+    // Protect Sheet without Use AutoFilter refuses `data.filterBy`; the menu still opens on the
+    // existing filter, so Only has to show the refusal instead of closing silently.
+    let mut h = filter_menu_open();
+    h.state_mut().run("review.protectSheet", json!({})).unwrap();
+    click_only(&mut h, "Apple");
+    assert_eq!(hidden(&h), [false; 5], "the refused filter changes nothing");
+    let msg = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
+    assert!(msg.contains("protected sheet"), "Only reports the refusal: {msg:?}");
+}
