@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (performance: formulas using most defined names no longer recalculate on every edit; earlier: automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -205,6 +205,8 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Formulas referencing defined names | static dependencies where the cells a name reads are known when the graph is built (names with relative references, INDIRECT, OFFSET, volatile functions or tables, cycles between names, a name given to SUMIF or AVERAGEIF as a range, sheet-scoped names used from another sheet, unknown or unparsable names and names past the graph build's bounds stay dynamic) (2026-10-29; were volatile: every name made its formula recalculate on every edit) | static | measured: 1M-cell workbook with 49K LAMBDA-name calls, unrelated edit ~10 s → ~1 s |
+| Open a 1M-cell, 49K-formula XLSX (no cached values) | 109 s single-threaded (2026-10-29; was 447 s) | seconds, multi-threaded | measured on a 2-core sandbox |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
@@ -334,6 +336,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Performance: defined names are static precedents (formulas calling LAMBDA names no longer recalculate on every edit), parsed names cached per pass, `TEXT(n,"0")` integer fast path; measured on a 1M-cell workbook (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |

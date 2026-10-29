@@ -285,6 +285,11 @@ impl Graph {
         }
     }
 
+    /// Whether the formula at `k` is evaluated on every recalc (its references aren't known
+    /// statically: INDIRECT, OFFSET, tables, unresolvable names).
+    pub fn is_dynamic(&self, k: Key) -> bool {
+        self.dynamic.contains(&k)
+    }
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
