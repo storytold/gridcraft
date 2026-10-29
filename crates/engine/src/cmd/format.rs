@@ -234,7 +234,7 @@ fn with(p: &Json, key: &str, v: Json) -> Json {
 
 /// The rows of `sheet` a filter hides: formatting leaves them as they are.
 fn filtered_rows(s: &Session, sheet: usize) -> Result<std::collections::BTreeSet<u32>> {
-    Ok(s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect()).unwrap_or_default())
+    Ok(s.doc()?.wb.sheet(sheet).map(|sh| sh.filtered_rows()).unwrap_or_default())
 }
 
 /// Applies `f` to the style of every targeted cell (whole rows/columns set the line format too).

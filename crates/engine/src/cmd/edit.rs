@@ -341,8 +341,7 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
             let cols = dest.is_full_cols() && !dest.is_full_rows();
             let src_full = (rows && src.is_full_rows()) || (cols && src.is_full_cols());
             // Rows a filter hides keep their format, as with the ribbon's formatting commands.
-            let filtered: std::collections::BTreeSet<u32> =
-                cx.wb.sheet(dest_sheet).map(|sh| sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect()).unwrap_or_default();
+            let filtered = cx.wb.sheet(dest_sheet).map(|sh| sh.filtered_rows()).unwrap_or_default();
             if rows || cols {
                 let (first, src_first, n) = if rows { (dest.start.row, src.start.row, h) } else { (dest.start.col, src.start.col, w) };
                 let lines = if rows { dest.start.row..=dest.end.row } else { dest.start.col..=dest.end.col };
