@@ -3,8 +3,8 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, fixed_scale, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
+    SeriesData, TEXT, VAlign, WHITE, clean, fixed_scale, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -77,6 +77,58 @@ impl BarRun {
             ctx.rect(self.lo, self.a0, self.hi - self.lo, along, color, None);
         } else {
             ctx.rect(self.a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
+/// Whether bars of width `bw` are merged per pixel column (never when they carry data labels).
+fn merge_hairlines(bw: f32, labels_on: bool) -> bool {
+    bw < MIN_BAR_PX && !labels_on
+}
+
+/// Draws the bars of one series: a rectangle each, or, for hairline bars, one merged [`BarRun`]
+/// per pixel column.
+struct BarSink {
+    run: Option<BarRun>,
+    bw: f32,
+    horizontal: bool,
+    color: Rgba,
+    nslots: f32,
+    k: f32,
+}
+
+impl BarSink {
+    fn new(bw: f32, horizontal: bool, color: Rgba, nslots: f32, k: f32) -> Self {
+        BarSink { run: None, bw, horizontal, color, nslots, k }
+    }
+    /// Start of this series' slot along the category axis, for the category centered at `c`.
+    fn pos(&self, c: f32) -> f32 {
+        if self.horizontal { c + self.nslots * self.bw / 2.0 - (self.k + 1.0) * self.bw } else { c - self.nslots * self.bw / 2.0 + self.k * self.bw }
+    }
+    /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when
+    /// `merge` is set, adds it to the current run.
+    fn bar(&mut self, ctx: &mut Ctx, merge: bool, c: f32, lo: f32, len: f32) {
+        let pos = self.pos(c);
+        if !merge {
+            if self.horizontal {
+                ctx.rect(lo, pos, len, self.bw, self.color, None);
+            } else {
+                ctx.rect(pos, lo, self.bw, len, self.color, None);
+            }
+            return;
+        }
+        match &mut self.run {
+            Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
+            run => {
+                if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                    m.draw(ctx, self.bw, self.horizontal, self.color);
+                }
+            }
+        }
+    }
+    fn finish(self, ctx: &mut Ctx) {
+        if let Some(m) = self.run {
+            m.draw(ctx, self.bw, self.horizontal, self.color);
         }
     }
 }
@@ -307,33 +359,15 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     // Hairline bars are merged per pixel column (their envelope is what shows).
-                    let cull = bw < MIN_BAR_PX && !labels_on;
-                    let mut run: Option<BarRun> = None;
+                    let cull = merge_hairlines(bw, labels_on);
+                    let mut sink = BarSink::new(bw, horizontal, s.color, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
-                        if cull {
-                            let pos = if horizontal { c + nslots * bw / 2.0 - (k + 1.0) * bw } else { c - nslots * bw / 2.0 + k * bw };
-                            match &mut run {
-                                Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
-                                _ => {
-                                    if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
-                                        m.draw(ctx, bw, horizontal, s.color);
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        if horizontal {
-                            let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
-                        } else {
-                            let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
-                        }
+                        sink.bar(ctx, cull, c, lo, len);
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;
@@ -359,9 +393,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             }
                         }
                     }
-                    if let Some(m) = run {
-                        m.draw(ctx, bw, horizontal, s.color);
-                    }
+                    sink.finish(ctx);
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
