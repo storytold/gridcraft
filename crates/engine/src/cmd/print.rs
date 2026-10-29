@@ -10,11 +10,16 @@
 //! codes.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::*;
-use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
+#[cfg(test)]
+use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId, StyleTable,
+    Underline, VAlign, Visibility, Workbook,
+};
+use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
 
 mod draw;
 mod header_footer;
@@ -27,6 +32,9 @@ use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
+/// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
+type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
+
 #[cfg(test)]
 use layout::bands;
 pub(crate) use layout::split_bands;
@@ -94,7 +102,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
-    let mut pics: std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>> = std::collections::HashMap::new();
+    let mut pics = PicCache::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
@@ -116,7 +124,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             for (rsi, rs) in rsegs.iter().enumerate() {
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
-                    let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
+                    let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
@@ -155,7 +163,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             && let Some(page) = doc.page_mut(link.page)
         {
             let (lx, ly, w, h) = link.rect;
-            page.link_page(lx, ly, w, h, target_page, x, y);
+            page.link_page(Rect::new(lx, ly, w, h), target_page, Point::new(x, y));
         }
     }
     let n = doc.page_count();

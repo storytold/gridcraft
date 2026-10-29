@@ -1,7 +1,10 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
-use super::text::draw_text;
-use super::*;
+use super::text::{TextPlacement, draw_text};
+use super::{
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Workbook,
+    split_sheet,
+};
 
 // ---------------------------------------------------------------- drawing
 
@@ -151,7 +154,7 @@ pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf)
                 };
                 let (sn, cs) = if rotation.is_finite() { rotation.sin_cos() } else { (0.0, 1.0) };
                 let (ax, ay) = xf.p(*x, *y);
-                pg.text_rotated(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs, size, font, blend(*color), text, *rotation);
+                pg.text_rotated(Point::new(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs), size, font, blend(*color), text, *rotation);
             }
         }
     }
@@ -207,10 +210,11 @@ fn border_dash(style: BorderStyle, k: f32) -> Vec<f32> {
     }
 }
 
-fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x1: f32, y1: f32, k: f32) {
+fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, start: Point, end: Point, k: f32) {
     if b.is_none() {
         return;
     }
+    let (x0, y0, x1, y1) = (start.x, start.y, end.x, end.y);
     let color = rgb_of(b.color, wb).unwrap_or([0, 0, 0]);
     if b.style == BorderStyle::Double {
         let off = 1.0 * k;
@@ -221,7 +225,7 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
         return;
     }
     let lw = (b.style.width() * k).clamp(0.25, 6.0);
-    pg.stroke_line_dashed(x0, y0, x1, y1, lw, color, &border_dash(b.style, k));
+    pg.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), lw, color, &border_dash(b.style, k));
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
@@ -324,12 +328,12 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             ),
             None => (bd.right, bd.bottom),
         };
-        draw_border(pg, &bd.top, b.wb, x, y, x + w, y, b.k);
-        draw_border(pg, &bottom, b.wb, x, y + h, x + w, y + h, b.k);
-        draw_border(pg, &bd.left, b.wb, x, y, x, y + h, b.k);
-        draw_border(pg, &right, b.wb, x + w, y, x + w, y + h, b.k);
-        draw_border(pg, &bd.diag_down, b.wb, x, y, x + w, y + h, b.k);
-        draw_border(pg, &bd.diag_up, b.wb, x, y + h, x + w, y, b.k);
+        draw_border(pg, &bd.top, b.wb, Point::new(x, y), Point::new(x + w, y), b.k);
+        draw_border(pg, &bottom, b.wb, Point::new(x, y + h), Point::new(x + w, y + h), b.k);
+        draw_border(pg, &bd.left, b.wb, Point::new(x, y), Point::new(x, y + h), b.k);
+        draw_border(pg, &right, b.wb, Point::new(x + w, y), Point::new(x + w, y + h), b.k);
+        draw_border(pg, &bd.diag_down, b.wb, Point::new(x, y), Point::new(x + w, y + h), b.k);
+        draw_border(pg, &bd.diag_up, b.wb, Point::new(x, y + h), Point::new(x + w, y), b.k);
     }
     // Text.
     for (c, l) in &looks {
@@ -340,7 +344,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else {
-            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+            draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
         }
     }
     pg.restore();
@@ -444,10 +448,10 @@ pub(super) fn make_block<'a>(
     sh: &'a Sheet,
     rows: (u32, u32),
     cols: (u32, u32),
-    x: f32,
-    y: f32,
+    origin: (f32, f32),
     lay: &SheetLayout,
 ) -> Block<'a> {
+    let (x, y) = origin;
     let k = lay.k();
     let mut xs = Vec::with_capacity((cols.1 - cols.0 + 2) as usize);
     let mut acc = x;
