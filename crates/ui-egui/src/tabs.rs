@@ -75,6 +75,12 @@ fn dragged_share(x: f32, bar: (f32, f32), right: f32) -> f32 {
     ((x - left) / width).clamp(min, max)
 }
 
+/// The bar's left edge. A row that flows right to left has no left bound in its cursor (it reads
+/// as minus infinity), so the free rectangle's edge stands in for it.
+fn bar_left(rtl: bool, cursor_left: f32, free_left: f32) -> f32 {
+    if rtl { free_left } else { cursor_left }
+}
+
 /// `x` as it would be in a left-to-right bar: in a mirrored window the tabs start at the bar's right
 /// edge, so a point's distance from that edge is what [`dragged_share`] measures.
 fn from_leading_edge(rtl: bool, bar: (f32, f32), x: f32) -> f32 {
@@ -135,7 +141,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 ui.add_space(8.0);
                 let Some(d) = app.session.active() else { return };
-                let (bar_left, bar_width) = (ui.cursor().left(), ui.available_width());
+                // A row that flows right to left has no left bound in its cursor: the free rectangle's edge is the bar's.
+                let bar_left = bar_left(rtl, ui.cursor().left(), ui.available_rect_before_wrap().left());
+                let bar_width = ui.available_width();
                 let uid = d.uid;
                 // The track ends where the grid does, so it stops under the vertical scrollbar. A share
                 // dragged in a wider window is held to the same limits as a drag at this width.
@@ -529,7 +537,7 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, from_leading_edge, navigator_items,
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, bar_left, dragged_share, drop_copies_sheet, from_leading_edge, navigator_items,
         rename_needs_focus, tab_drop,
     };
     use crate::SheetApp;
@@ -640,6 +648,13 @@ mod tests {
         assert_eq!(app.session.active().unwrap().wb.active_sheet(), 1, "the corrected value commits and the sheet changes");
         let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
         assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
+    }
+
+    #[test]
+    fn a_mirrored_row_takes_its_left_edge_from_the_free_rectangle() {
+        assert_eq!(bar_left(true, f32::NEG_INFINITY, 120.0), 120.0);
+        assert_eq!(bar_left(false, 40.0, 120.0), 40.0, "left to right is unchanged");
+        assert_eq!(dragged_share(600.0, (bar_left(true, f32::NEG_INFINITY, 100.0), 1000.0), 1100.0), 0.5);
     }
 
     #[test]
