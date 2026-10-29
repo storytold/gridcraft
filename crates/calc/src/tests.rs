@@ -2371,3 +2371,25 @@ fn a_paste_over_small_and_tall_spills_blocks_those_it_touches() {
     assert_eq!(t.get("I1"), Value::Error(CellError::Spill));
     assert_eq!(t.num("E3"), 3.0);
 }
+
+#[test]
+fn a_big_paste_on_one_sheet_and_one_cell_over_many_spills_on_another() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for i in 0..1_500u32 {
+        t.wb.sheet_mut(1).unwrap().cells.set(CellRef::new(4 * i, 0), Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.wb.sheet(1).unwrap().value(CellRef::new(4 * 700 + 2, 0)), Value::Number(7002.0));
+    // 5000 cells pasted on the first sheet, one over the middle of the 701st array on the second.
+    let mut changed: Vec<(usize, CellRef)> = (0..5_000u32).map(|i| (0, CellRef::new(i / 50, i % 50))).collect();
+    changed.push((1, CellRef::new(4 * 700 + 1, 0)));
+    for k in &changed {
+        t.wb.sheet_mut(k.0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    let data = t.wb.sheet(1).unwrap();
+    assert_eq!(data.value(CellRef::new(4 * 700, 0)), Value::Error(CellError::Spill));
+    assert_eq!(data.value(CellRef::new(4 * 699 + 2, 0)), Value::Number(6992.0));
+    assert_eq!(data.value(CellRef::new(4 * 701 + 2, 0)), Value::Number(7012.0));
+}
