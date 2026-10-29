@@ -41,7 +41,17 @@ impl FormulaLocale {
         if self == Self::Es || self == Self::Tr { ',' } else { '.' }
     }
     pub fn array_column_separator(self) -> char {
-        if self == Self::Es || self == Self::Tr { '\\' } else { ',' }
+        match self {
+            Self::Es => '\\',
+            Self::Tr => ';',
+            Self::En => ',',
+        }
+    }
+    pub fn array_row_separator(self) -> char {
+        match self {
+            Self::Tr => '\\',
+            _ => ';',
+        }
     }
     pub fn function_name(self, canonical: &str) -> &str {
         match self {
@@ -180,6 +190,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
             }
             Tok::Number(_) => out.push_str(&text.replace('.', &locale.decimal_separator().to_string())),
             Tok::Comma => out.push(if array_depth > 0 { locale.array_column_separator() } else { locale.list_separator() }),
+            Tok::Semicolon => out.push(if array_depth > 0 { locale.array_row_separator() } else { ';' }),
             Tok::Error(e) => out.push_str(locale.error_name(e)),
             _ => out.push_str(text),
         }
