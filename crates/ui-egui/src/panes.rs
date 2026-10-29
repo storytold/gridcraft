@@ -185,16 +185,23 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             for (l, k, s) in [
                 ("Column", "column", ""),
-                ("Stacked", "column", "stacked"),
+                ("Stacked Column", "column", "stacked"),
+                ("100% Stacked Column", "column", "stacked100"),
                 ("Bar", "bar", ""),
+                ("Stacked Bar", "bar", "stacked"),
+                ("100% Stacked Bar", "bar", "stacked100"),
                 ("Line", "line", "markers"),
+                ("Stacked Line", "line", "stacked"),
                 ("Area", "area", ""),
+                ("Stacked Area", "area", "stacked"),
+                ("100% Stacked Area", "area", "stacked100"),
                 ("Pie", "pie", ""),
                 ("Doughnut", "doughnut", ""),
                 ("Scatter", "scatter", ""),
                 ("Radar", "radar", ""),
             ] {
-                if ui.button(l).clicked() {
+                let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
+                if ui.selectable_label(cur, l).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
                 }
             }
@@ -235,7 +242,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     ui.collapsing("Series", |ui| {
-        let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, &chart));
+        let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &chart));
         for (i, s) in chart.series.iter().enumerate() {
             let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series {}", i + 1));
             let col =

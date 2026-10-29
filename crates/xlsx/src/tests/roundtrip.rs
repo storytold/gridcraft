@@ -490,7 +490,16 @@ fn full_roundtrip() {
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.iter().all(|w| !w.contains("skipped") || w.contains("chart")), "{:?}", rep.warnings);
+    assert_workbook_metadata_roundtrip(&wb, &back);
 
+    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+    assert_sheet_cells_and_settings(&wb, &back, a, b);
+    assert_table_roundtrip(a, b);
+    assert_drawing_and_chart_roundtrip(a, b);
+    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
+}
+
+fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert_eq!(back.date_system, wb.date_system);
     assert_eq!(back.calc, wb.calc);
     assert!(back.protected_structure);
@@ -505,8 +514,9 @@ fn full_roundtrip() {
     assert_eq!(back.sheets[2].visibility, Visibility::VeryHidden);
     assert_eq!(back.sheets[2].name, "2024");
     assert_eq!(back.sheets[2].comments, wb.sheets[2].comments);
+}
 
-    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+fn assert_sheet_cells_and_settings(wb: &Workbook, back: &Workbook, a: &Sheet, b: &Sheet) {
     assert_eq!(b.name, a.name);
     // Cells: values, formulas and resolved styles.
     let skip = [at("H2"), at("H3")];
@@ -542,6 +552,9 @@ fn full_roundtrip() {
     let mut sp = a.sparklines.clone();
     sp[0].source = "'Data & Stuff'!B2:B3".into();
     assert_eq!(b.sparklines, sp);
+}
+
+fn assert_table_roundtrip(a: &Sheet, b: &Sheet) {
     // Tables: name sanitized, ids reassigned.
     let (ta, tb) = (&a.tables[0], &b.tables[0]);
     assert_eq!(tb.name, "Sales_Table");
@@ -549,6 +562,9 @@ fn full_roundtrip() {
     assert_eq!((tb.banded_rows, tb.banded_cols, tb.first_col, tb.last_col, tb.filter_button), (true, true, true, false, true));
     assert_eq!(tb.filter, ta.filter, "the table's filter criteria survive (SUBTOTAL tells filtered rows apart)");
     assert_eq!(b.value(at("P1")), Value::text("Region"), "header cells carry the column names");
+}
+
+fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
     // Drawings.
     assert_eq!(b.images.len(), 1);
     assert_eq!(b.images[0].data, a.images[0].data);
@@ -587,7 +603,6 @@ fn full_roundtrip() {
         }
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
     }
-    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
 }
 
 #[test]

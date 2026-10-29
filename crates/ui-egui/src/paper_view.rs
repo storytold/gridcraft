@@ -120,19 +120,20 @@ fn pages_iter(geo: &Geo, pg: &PageGrid) -> impl Iterator<Item = (usize, usize)> 
 }
 
 /// Paints the desk, the pages and their cells; returns the per-page quadrants for the headings.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_pages(
-    app: &SheetApp,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+pub(crate) struct PagePaintInput<'a> {
+    pub(crate) app: &'a SheetApp,
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) workbook: &'a Workbook,
+    pub(crate) sheet_index: usize,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) outline: Rect,
+    pub(crate) tokens: &'a Tokens,
+}
+
+pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
+    let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
@@ -161,7 +162,7 @@ pub(crate) fn paint_pages(
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        grid::paint_quadrant(grid::QuadrantPaint { painter: &pc, geo, workbook: wb, sheet_index: si, sheet: sh, rows, cols, cf, tokens: t });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
@@ -170,7 +171,17 @@ pub(crate) fn paint_pages(
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
-        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols);
+        grid::paint_selection(grid::SelectionPaintInput {
+            painter: &p.with_clip_rect(sel_clip),
+            geo,
+            sheet: sh,
+            selection: sel,
+            outline,
+            tokens: t,
+            app,
+            rows,
+            cols,
+        });
     }
     quads
 }
@@ -280,14 +291,14 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
 pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Leaving the sheet or the view commits.
     if let Some(e) = &app.grid.hf_edit
-        && (e.sheet != wb.active_sheet || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
+        && (e.sheet != wb.active_sheet() || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
     {
         commit(app);
     }
     let Some(pg) = geo.paper.clone() else { return };
-    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet);
+    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet());
     if std::mem::take(&mut app.grid.hf_start) {
-        begin(app, wb.active_sheet, sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
+        begin(app, wb.active_sheet(), sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
     }
     if resp.clicked_by(egui::PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
@@ -295,7 +306,7 @@ pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let (x, y) =
             (geo.scroll.x as f64 + ((p.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((p.y - geo.cells.top()) / geo.z) as f64);
         match pg.hf_zone_at(x, y) {
-            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet, sh, page, zone),
+            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet(), sh, page, zone),
             _ => {
                 // A click anywhere else ends the edit; the grid then handles the click.
                 if app.grid.hf_edit.is_some() {

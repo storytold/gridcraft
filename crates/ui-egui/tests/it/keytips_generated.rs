@@ -2539,14 +2539,14 @@ fn keytip_wm_() {
 fn keytip_wmr_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMR", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMR must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMR must open the recordMacro dialog");
 }
 
 #[test]
 fn keytip_wmv_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMV", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMV must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMV must open the macros dialog");
 }
 
 #[test]
@@ -2647,7 +2647,8 @@ fn keytip_wvr_() {
 fn keytip_ww_() {
     let mut h = harness(blank());
     sequence(&mut h, "WW", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must run view.switchWindows cleanly");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]

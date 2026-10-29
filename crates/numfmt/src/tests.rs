@@ -250,7 +250,7 @@ fn question_mark_pads_thousands_separator() {
 }
 
 #[test]
-fn literals_and_fill() {
+fn literals_and_fill() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(f("\"$\"#,##0.00", 3.0), "$3.00");
     assert_eq!(f("$#,##0.00", -3.0), "-$3.00");
     assert_eq!(f("[$€-407]#,##0.00", 1234.5), "€1,234.50");
@@ -270,6 +270,7 @@ fn literals_and_fill() {
     assert_eq!((r.text.as_str(), r.numeric), (" abc ", false));
     let r = full("-* 0", Value::Number(-5.0));
     assert_eq!((r.text.as_str(), r.fill), ("--5", Some((' ', 2))));
+    Ok(())
 }
 
 #[test]
@@ -282,6 +283,10 @@ fn dates_and_times() {
     assert_eq!(f("d-mmm-yy", 46302.0), "7-Oct-26");
     assert_eq!(f("e", 46302.0), "2026");
     assert_eq!(f("YYYY-MM-DD", 46302.0), "2026-10-07");
+}
+
+#[test]
+fn time_formats() {
     assert_eq!(f("yyyy-mm-dd hh:mm:ss", 46302.5), "2026-10-07 12:00:00");
     assert_eq!(f("h:mm AM/PM", 0.75), "6:00 PM");
     assert_eq!(f("h AM/PM", 0.0), "12 AM");
@@ -293,6 +298,10 @@ fn dates_and_times() {
     assert_eq!(f("[s]", 1.0 / 1440.0), "60");
     assert_eq!(f("mm:ss.0", 61.2 / 86400.0), "01:01.2");
     assert_eq!(f("mm:ss.00", 61.25 / 86400.0), "01:01.25");
+}
+
+#[test]
+fn date_serial_boundaries() {
     assert_eq!(f("h:mm:ss", 0.5 + 59.6 / 86400.0), "12:01:00");
     assert_eq!(f("h:mm", 0.5 + 40.0 / 86400.0), "12:00");
     assert_eq!(f("m/d/yyyy", 60.0), "2/29/1900");
@@ -345,7 +354,7 @@ fn general() {
 }
 
 #[test]
-fn kinds() {
+fn kinds() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(NumberFormat::general().kind(), FormatKind::General);
     assert_eq!(NumberFormat::parse("0.00").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("#,##0.00;[Red](#,##0.00)").kind(), FormatKind::Number);
@@ -359,6 +368,7 @@ fn kinds() {
     assert_eq!(NumberFormat::parse("@").kind(), FormatKind::Text);
     assert_eq!(NumberFormat::parse("00000").kind(), FormatKind::Special);
     assert_eq!(NumberFormat::parse("\"hello\"").kind(), FormatKind::Custom);
+    Ok(())
 }
 
 #[test]
@@ -833,28 +843,29 @@ fn format_codes_are_capped_at_255_characters() {
     assert_eq!(f(&huge, 0.5), "0.5");
 }
 
-/// Parses and renders `code` on a worker thread; panics if that takes more than 20 s, so a quadratic
+/// Parses and renders `code` on a worker thread; errors if that takes more than 20 s, so a quadratic
 /// parser fails the test instead of hanging CI. Not a benchmark: at this size an O(n^2) pass takes
 /// minutes and an O(n) pass milliseconds, so the margin is decades wide.
-fn finishes_in_time(code: String) -> String {
+fn finishes_in_time(code: String) -> Result<String, std::sync::mpsc::RecvTimeoutError> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // Uncapped: `parse` turns a code past 255 characters into General before the parser sees it.
         let _ = tx.send(format_value(&Value::Number(1234.5), &NumberFormat::parse_uncapped(&code), S).text);
     });
-    rx.recv_timeout(std::time::Duration::from_secs(20)).expect("format code did not parse and render in time")
+    rx.recv_timeout(std::time::Duration::from_secs(20))
 }
 
 #[test]
-fn hostile_codes_parse_in_linear_time() {
+fn hostile_codes_parse_in_linear_time() -> Result<(), std::sync::mpsc::RecvTimeoutError> {
     let n = 1_000_000;
     // Unclosed brackets, a run of commas after a digit, a run of fraction bars.
-    assert!(finishes_in_time("[".repeat(n)).starts_with('['));
-    finishes_in_time(format!("0{}", ",".repeat(n)));
-    finishes_in_time(format!("0{}", "/".repeat(n)));
-    finishes_in_time(format!("0{}0", ",".repeat(n)));
+    assert!(finishes_in_time("[".repeat(n))?.starts_with('['));
+    finishes_in_time(format!("0{}", ",".repeat(n)))?;
+    finishes_in_time(format!("0{}", "/".repeat(n)))?;
+    finishes_in_time(format!("0{}0", ",".repeat(n)))?;
     // Unclosed brackets mixed with semicolons: each is a literal and a section separator stays one.
-    finishes_in_time("[;".repeat(n / 2));
+    finishes_in_time("[;".repeat(n / 2))?;
+    Ok(())
 }
 
 #[test]

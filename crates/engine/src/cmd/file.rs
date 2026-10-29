@@ -2,7 +2,7 @@
 
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -12,7 +12,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
-        cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
+        cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
@@ -25,7 +25,9 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             options
         ),
-        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
+        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
+        cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
+        cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{window, doc, index, title, dirty, active, hidden}]", always, |s, _| Ok(s.window_list())),
     ]
 }
 
@@ -160,7 +162,16 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 
+/// File › Close closes the active window; the workbook closes with its last window.
 fn close(s: &mut Session, p: &Json) -> Result<Json> {
+    if !bool_param(p, "document").unwrap_or(false)
+        && let Some(id) = s.active_window()
+        && let Some(doc) = s.window(id).map(|w| w.doc_uid)
+        && s.windows().iter().filter(|w| w.doc_uid == doc).count() > 1
+    {
+        s.close_window(id);
+        return Ok(json!({"closed": true, "document": false}));
+    }
     let force = bool_param(p, "force").unwrap_or(false);
     let d = s.doc()?;
     if d.is_dirty() && !force {
@@ -175,9 +186,9 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
     let d = s.doc()?;
-    let mut wb = (*d.wb).clone();
+    let wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
-        wb.active_sheet = target_sheet(s, p)?;
+        wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
     let bytes = crate::io::save_bytes(&wb, &target)?;
@@ -221,10 +232,35 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
-    let i = u32_param(p, "index").ok_or_else(|| bad("window.activate", "missing `index`"))? as usize;
-    if i >= s.documents().len() {
-        return Err(bad("window.activate", "no such window"));
-    }
-    s.set_active(i);
+    let id = match u32_param(p, "index").filter(|_| p.get("window").is_none_or(Json::is_null) && p.get("doc").is_none_or(Json::is_null)) {
+        Some(i) => {
+            let uid = s.documents().get(i as usize).map(|d| d.uid).ok_or_else(|| bad("window.activate", "no such window"))?;
+            s.doc_window(uid).ok_or_else(|| bad("window.activate", "no such window"))?
+        }
+        None if p.get("window").is_none_or(Json::is_null) && p.get("doc").is_none_or(Json::is_null) => {
+            return Err(bad("window.activate", "missing `window`"));
+        }
+        None => super::extra::window_param(s, "window.activate", p)?,
+    };
+    s.unhide_window(id);
     ok()
+}
+
+fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
+    let id = super::extra::window_param(s, "window.close", p)?;
+    let doc = s.window(id).map(|w| w.doc_uid).unwrap_or_default();
+    if s.windows().iter().filter(|w| w.doc_uid == doc).count() > 1 {
+        s.close_window(id);
+        return Ok(json!({"closed": true, "document": false}));
+    }
+    let force = bool_param(p, "force").unwrap_or(false);
+    let d = s.documents().iter().find(|d| d.uid == doc).ok_or(crate::EngineError::NoDocument)?;
+    if d.is_dirty() && !force {
+        let title = d.display_title();
+        s.activate_window(id);
+        s.ui_requests.push(crate::UiRequest::Dialog("saveChanges".into(), json!({"title": title})));
+        return Ok(json!({"closed": false, "dirty": true}));
+    }
+    s.close_window(id);
+    Ok(json!({"closed": true, "document": true}))
 }

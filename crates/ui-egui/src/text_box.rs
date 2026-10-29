@@ -45,7 +45,7 @@ impl SheetApp {
             id,
             text: shape.text.clone(),
             uid: d.uid,
-            sheet: d.wb.active_sheet,
+            sheet: d.wb.active_sheet(),
             original: shape.text.clone(),
             request_focus: true,
             rect: None,

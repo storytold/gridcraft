@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use gridcraft_core::{CellRef, col_to_letters, number_to_text};
+use gridcraft_core::{CellRef, number_to_text};
 
 use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 
@@ -19,8 +19,32 @@ fn sheet_prefix(s: &SheetSel) -> String {
     }
 }
 
-fn anchor_a1(a: &Anchor) -> String {
-    format!("{}{}{}{}", if a.col_abs { "$" } else { "" }, col_to_letters(a.col), if a.row_abs { "$" } else { "" }, a.row as u64 + 1)
+fn push_anchor_a1(s: &mut String, a: &Anchor) {
+    if a.col_abs {
+        s.push('$');
+    }
+    push_col(s, a.col);
+    if a.row_abs {
+        s.push('$');
+    }
+    let _ = write!(s, "{}", a.row as u64 + 1);
+}
+
+/// Appends [`gridcraft_core::col_to_letters`]`(col)` without allocating.
+fn push_col(s: &mut String, col: u32) {
+    let mut letters = [0u8; 8];
+    let mut i = letters.len();
+    let mut n = col as u64 + 1;
+    while n > 0 && i > 0 {
+        i -= 1;
+        if let Some(l) = letters.get_mut(i) {
+            *l = b'A' + ((n - 1) % 26) as u8;
+        }
+        n = (n - 1) / 26;
+    }
+    for &l in letters.get(i..).unwrap_or_default() {
+        s.push(char::from(l));
+    }
 }
 
 pub fn reference_a1(r: &Reference) -> String {
@@ -29,15 +53,40 @@ pub fn reference_a1(r: &Reference) -> String {
 
 /// A1 text with `sep` between the two ends of a range (`:` or a trim operator).
 fn range_a1(r: &Reference, sep: &str) -> String {
-    let body = match &r.kind {
-        RefKind::Cell(a) => anchor_a1(a),
-        RefKind::Range(a, b) => format!("{}{sep}{}", anchor_a1(a), anchor_a1(b)),
-        RefKind::Rows(r0, a0, r1, a1) => format!("{}{}{sep}{}{}", if *a0 { "$" } else { "" }, r0 + 1, if *a1 { "$" } else { "" }, r1 + 1),
-        RefKind::Cols(c0, a0, c1, a1) => {
-            format!("{}{}{sep}{}{}", if *a0 { "$" } else { "" }, col_to_letters(*c0), if *a1 { "$" } else { "" }, col_to_letters(*c1))
+    let mut s = String::new();
+    push_range_a1(&mut s, r, sep);
+    s
+}
+
+/// Appends [`range_a1`]`(r, sep)` to `s`.
+fn push_range_a1(s: &mut String, r: &Reference, sep: &str) {
+    match &r.sheet {
+        SheetSel::Current => {}
+        SheetSel::Named(n) => {
+            s.push_str(&quote_sheet(n));
+            s.push('!');
         }
-    };
-    format!("{}{}", sheet_prefix(&r.sheet), body)
+        sheet @ SheetSel::Span(_, _) => s.push_str(&sheet_prefix(sheet)),
+    }
+    let dollar = |abs: bool| if abs { "$" } else { "" };
+    match &r.kind {
+        RefKind::Cell(a) => push_anchor_a1(s, a),
+        RefKind::Range(a, b) => {
+            push_anchor_a1(s, a);
+            s.push_str(sep);
+            push_anchor_a1(s, b);
+        }
+        RefKind::Rows(r0, a0, r1, a1) => {
+            let _ = write!(s, "{}{}{sep}{}{}", dollar(*a0), r0 + 1, dollar(*a1), r1 + 1);
+        }
+        RefKind::Cols(c0, a0, c1, a1) => {
+            s.push_str(dollar(*a0));
+            push_col(s, *c0);
+            s.push_str(sep);
+            s.push_str(dollar(*a1));
+            push_col(s, *c1);
+        }
+    }
 }
 
 fn r1c1_part(letter: char, v: u32, abs: bool, base: u32) -> String {
@@ -207,7 +256,7 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
         }
         Expr::Ref(r) => match r1c1 {
             Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => s.push_str(&reference_a1(r)),
+            None => push_range_a1(s, r, ":"),
         },
         Expr::Name(n) => match sheet_split(n) {
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
@@ -246,7 +295,7 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             UnOp::Trim(mode) => match &**x {
                 Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => match r1c1 {
                     Some(at) => s.push_str(&range_r1c1(r, at, mode.symbol())),
-                    None => s.push_str(&range_a1(r, mode.symbol())),
+                    None => push_range_a1(s, r, mode.symbol()),
                 },
                 Expr::Binary(BinOp::Range, a, b) => {
                     write_expr(s, a, r1c1);
