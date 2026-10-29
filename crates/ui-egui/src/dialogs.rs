@@ -22,7 +22,6 @@ mod data;
 mod find;
 mod format_cells;
 mod insert_function;
-mod macros;
 mod names;
 mod paste;
 mod show;
@@ -187,7 +186,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -946,11 +945,9 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
-            "macros" => {
-                let mut d = Dialog::custom("macros", "Macros", json!({}));
-                d.result = app.session.run("view.macros", json!({})).ok();
-                d
-            }
+            "macros" => crate::macro_ui::open_dialog(app, &params),
+            "recordMacro" => return crate::macro_ui::open_record(app, &params),
+            "macroEditor" => return crate::macro_editor::open(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();

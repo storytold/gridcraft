@@ -10,7 +10,7 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_model::{Color, NumFmt, Sparkline, SparklineKind};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_range, target_sheet};
 
 const CMD: &str = "analysis.addTotal";
 const SPARK: &str = "analysis.addSparklines";

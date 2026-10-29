@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, RangeRef, Result, Series, Session, Sheet, anchor_mode_param, bad, block,
+    bool_param, cell_param_on, edit, f64_param, json, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+};
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     if p.get("range").is_some() {

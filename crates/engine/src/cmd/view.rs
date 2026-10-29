@@ -1,10 +1,13 @@
 //! View tab (sheet view state that's saved with the file) and Page Layout settings.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::RangeRef;
 use gridcraft_model::Orientation;
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param,
+    target_range, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -492,9 +495,6 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(Json::Null)
     })
 }
-
-#[allow(dead_code)]
-fn unused(_: CellRef) {}
 
 #[cfg(test)]
 mod tests {

@@ -1002,6 +1002,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "Record Macro" => "Gravar Macro",
+        "Stop Recording" => "Parar Gravação",
+        "Use Relative References" => "Usar Referências Relativas",
+        "Run\nMacro" => "Executar Macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Gravando",
+        "New Macro" => "Nova Macro",
+        "Show" => "Mostrar",
         _ => return None,
     })
 }

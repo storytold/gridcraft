@@ -1,4 +1,4 @@
-use super::*;
+use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
