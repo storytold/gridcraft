@@ -1,6 +1,6 @@
 use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
 use super::galleries::{paint_table_swatch, table_gallery};
-use super::*;
+use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, vec2};
 
 /// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -22,7 +22,7 @@ This page is the summary. The detail is in:
 | Number | Value | Kind |
 |---|---|---|
 | 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 276 / 292 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -86,7 +86,7 @@ collaboration, mobile, AI).
 | Get & Transform, external data, data model | ~15% | ~10% | 60–100 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Insert objects (pictures, shapes, ink, SmartArt, equations) | ~55% | ~45% | 25–40 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Review, comments, protection, collaboration | ~55% | ~40% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
-| Automation (recorded scripts; no VBA) | ~30% | ~20% | 12–20 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
+| Automation (recorded scripts; typed macros with a recorder, a Macros dialog and a step editor; no VBA) | ~30% | ~20% | 12–20 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 
 ## Languages
 
@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
+| 2026-10-24 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-24 | Status bar: a right-click opens a menu that sets which selection statistics show (Average, Count and Sum by default; Numerical Count, Minimum and Maximum are new), kept with the preferences (`view.statusBar`) |
 | 2026-10-24 | Ctrl+Shift+U (Control+Shift+U on a Mac) expands and collapses the formula bar, on the grid and while editing (`view.expandFormulaBar`); on Windows and Linux it used to underline |
@@ -179,6 +180,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
@@ -243,6 +245,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
+| 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
+| 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |
