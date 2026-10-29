@@ -398,7 +398,8 @@ mod tests {
     #[test]
     fn every_kind_of_change_renders_the_charts_again_exactly_once() {
         let mut h = harness(two_charts());
-        let cases: Vec<(&str, Box<dyn Fn(&mut Harness)>)> = vec![
+        type Case<'a> = (&'a str, Box<dyn Fn(&mut Harness)>);
+        let cases: Vec<Case> = vec![
             ("cell edit", Box::new(|h| exec(h, "cell.set", json!({"cell": "B5", "input": "99"})))),
             ("recalc through a dependency", Box::new(|h| exec(h, "cell.set", json!({"cell": "B2", "input": "7"})))),
             ("calculate now", Box::new(|h| exec(h, "formulas.calculateNow", json!({})))),
