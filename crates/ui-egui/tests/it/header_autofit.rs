@@ -202,6 +202,62 @@ fn a_multi_selection_resize_previews_on_the_dragged_line_and_applies_on_release(
 }
 
 #[test]
+fn escaping_a_resize_drag_keeps_an_earlier_size_edit() {
+    // A resize drag right after another resize shares its undo label; Esc must cancel only the drag.
+    for (rows, selection) in [(false, "B:B"), (true, "2:2"), (false, "A:C"), (true, "1:3")] {
+        let mut h = harness(selection);
+        let key = if rows { ("home.rowHeight", "rows", "2:2", "height") } else { ("home.columnWidth", "cols", "B:B", "width") };
+        h.state_mut().session.execute(key.0, json!({key.1: key.2, key.3: 80})).unwrap();
+        h.run_steps(2);
+        let earlier = sizes(&h, rows);
+        let undo_len = h.state().session.active().unwrap().undo.len();
+        let (start, _) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        assert_ne!(sizes(&h, rows), earlier, "the drag previews");
+        h.input_mut().events.push(Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(sizes(&h, rows), earlier, "Esc cancels only the drag (rows: {rows}, selection {selection})");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo_len, "the earlier edit stays on the undo stack");
+    }
+}
+
+#[test]
+fn a_resize_drag_after_another_resize_is_its_own_undo_step() {
+    for (rows, selection) in [(false, "B:B"), (true, "2:2"), (false, "A:C"), (true, "1:3")] {
+        let mut h = harness(selection);
+        let key = if rows { ("home.rowHeight", "rows", "2:2", "height") } else { ("home.columnWidth", "cols", "B:B", "width") };
+        h.state_mut().session.execute(key.0, json!({key.1: key.2, key.3: 80})).unwrap();
+        h.run_steps(2);
+        let earlier = sizes(&h, rows);
+        let (start, _) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().undo.len(), 2, "selection {selection}: two undo steps");
+        h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&h, rows), earlier, "selection {selection}: one undo reverts only the drag");
+    }
+}
+
+#[test]
 fn table_filter_autofit_works_through_command_and_header_double_click() {
     for zoom in [50, 100, 200] {
         for double_click in [false, true] {

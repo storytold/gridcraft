@@ -300,6 +300,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
     let in_col_header = input.in_column_header;
     if in_col_header {
         if let Some((c, x)) = col_edge(geo, sh, p.x) {
+            app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
             app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z, to: None };
             return;
         }
@@ -335,6 +336,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     let in_row_header = input.in_row_header;
     if in_row_header {
         if let Some((r, y)) = row_edge(geo, sh, p.y) {
+            app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
             app.grid.drag = Drag::ResizeRow { row: r, start: p.y, orig: (y - geo.y(sh, r)) / geo.z, to: None };
             return;
         }
@@ -576,14 +578,16 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
-    // Esc during a header-boundary drag cancels it: undo the preview, ignore the release.
-    if resp.dragged() && input.context.input(|i| i.key_pressed(egui::Key::Escape)) {
-        if let Drag::ResizeCol { to: Some(_), .. } | Drag::ResizeRow { to: Some(_), .. } = app.grid.drag {
-            let _ = app.session.run("edit.undo", json!({}));
+    // Esc during a header-boundary drag cancels it: undo the preview, ignore the release. egui
+    // aborts the drag on Esc, so `resp.dragged()` is already false in this frame.
+    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. }) && input.context.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Undo back to where the drag began, but never past it into an earlier edit.
+        let steps = resize_steps(app);
+        if steps > 0 {
+            let _ = app.session.run("edit.undo", json!({"steps": steps}));
         }
-        if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. }) {
-            app.grid.drag = Drag::None;
-        }
+        app.grid.drag = Drag::None;
+        app.grid.resize_base = None;
     }
     if resp.dragged()
         && let Some(p) = pos
@@ -638,14 +642,14 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
                 // Preview on the dragged column only; the release applies it to the selection.
                 let _ = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()}));
-                coalesce_last_undo(app);
+                coalesce_resize_undo(app);
                 app.grid.drag = Drag::ResizeCol { col, start, orig, to: Some(w) };
             }
             Drag::ResizeRow { row, start, orig, .. } => {
                 let h = nan_safe_size(orig + (p.y - start) / geo.z);
                 app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
                 let _ = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()}));
-                coalesce_last_undo(app);
+                coalesce_resize_undo(app);
                 app.grid.drag = Drag::ResizeRow { row, start, orig, to: Some(h) };
             }
             Drag::Freeze { cols, .. } => {
@@ -741,14 +745,14 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 let cols = resize_targets(&sel.ranges, col, true);
                 if cols != RangeRef::cols(col, col).a1() {
                     let _ = app.session.run("home.columnWidth", json!({"cols": cols, "width": w.round()}));
-                    coalesce_last_undo(app);
+                    coalesce_resize_undo(app);
                 }
             }
             Drag::ResizeRow { row, to: Some(h), .. } => {
                 let rows = resize_targets(&sel.ranges, row, false);
                 if rows != format!("{}:{}", row + 1, row + 1) {
                     let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
-                    coalesce_last_undo(app);
+                    coalesce_resize_undo(app);
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {
@@ -881,6 +885,23 @@ fn coalesce_last_undo(app: &mut SheetApp) {
         if d.undo[n - 1].label == d.undo[n - 2].label {
             d.undo.remove(n - 1);
         }
+    }
+}
+
+/// Undo entries a header resize drag has pushed so far: those from the first one that snapshots
+/// the workbook the drag started from (`resize_base`). A failed command pushes none.
+fn resize_steps(app: &SheetApp) -> usize {
+    let (Some(base), Some(d)) = (&app.grid.resize_base, app.session.active()) else { return 0 };
+    d.undo.iter().position(|e| std::sync::Arc::ptr_eq(&e.wb, base)).map_or(0, |first| d.undo.len() - first)
+}
+
+/// Like [`coalesce_last_undo`] for a resize drag: merges only the drag's own entries, so an
+/// earlier edit with the same label ("Column width") stays a separate undo step.
+fn coalesce_resize_undo(app: &mut SheetApp) {
+    if resize_steps(app) >= 2
+        && let Some(d) = app.session.active_mut()
+    {
+        d.undo.pop();
     }
 }
 

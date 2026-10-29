@@ -180,6 +180,10 @@ impl Trace {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// A header-boundary resize drag: the workbook as it was when the drag began. The drag's own
+    /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
+    /// same label are not the drag's to merge or cancel.
+    pub resize_base: Option<Arc<Workbook>>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
