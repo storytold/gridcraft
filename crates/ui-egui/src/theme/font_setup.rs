@@ -1,5 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::Blob;
 use super::font_fallback::load_fallback;
-use super::*;
+use super::{Arc, Color32, FontData, FontDefinitions, FontFamily, FontId};
 
 /// A font from the optional craft-fonts build input (`CRAFT_FONTS_DIR` at build time; see
 /// <https://github.com/storytold/craft-fonts> and its `docs/integration.md`). The slice is empty
