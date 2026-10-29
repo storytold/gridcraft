@@ -500,6 +500,10 @@ impl Sheet {
         let tables = self.tables.iter().filter(|t| !t.filter.is_empty()).filter_map(|t| t.data_range()).map(|r| (r.start.row, r.end.row));
         sheet.into_iter().chain(tables).collect()
     }
+    /// The rows an applied filter hides, in order. See `is_row_filtered`.
+    pub fn filtered_rows(&self) -> std::collections::BTreeSet<u32> {
+        self.rows.keys().copied().filter(|r| self.is_row_filtered(*r)).collect()
+    }
     pub fn is_col_hidden(&self, col: u32) -> bool {
         self.cols.get(&col).is_some_and(|r| r.hidden)
     }
