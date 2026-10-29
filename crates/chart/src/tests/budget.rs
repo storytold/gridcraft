@@ -125,6 +125,40 @@ fn hairline_columns_are_merged_and_wide_ones_are_not() {
 }
 
 #[test]
+fn clustered_hairline_series_keep_a_visible_strip() {
+    // Four series of similar height, 20,000 categories in 400 px: every pixel column holds a
+    // merged bar of each series, and they must not cover each other.
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let horizontal = kind == ChartKind::BarClustered;
+        let mut c = chart(kind);
+        c.data_labels = false;
+        c.legend = LegendPos::None;
+        let mut d = data_of(4, 20_000);
+        for (s, series) in d.series.iter_mut().enumerate() {
+            for (i, v) in series.values.iter_mut().enumerate() {
+                *v = Some(50.0 + ((i + s) % 3) as f64);
+            }
+        }
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let along = |r: &(f32, f32, f32, f32)| if horizontal { (r.1, r.1 + r.3) } else { (r.0, r.0 + r.2) };
+        let mut strips: Vec<(f32, f32, usize)> = Vec::new();
+        for (s, series) in d.series.iter().enumerate() {
+            strips.extend(series_rects(&prims, series.color).iter().map(|r| (along(r).0, along(r).1, s)));
+        }
+        strips.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert!(strips.len() > 400);
+        // Rectangles of different series never overlap (more than rounding).
+        for w in strips.windows(2) {
+            assert!(w[0].2 == w[1].2 || w[1].0 >= w[0].1 - 1e-3, "series {} and {} overlap", w[0].2, w[1].2);
+        }
+        // And all four series show up in the same pixel column.
+        let col = strips[strips.len() / 2].0.floor();
+        let seen: std::collections::BTreeSet<usize> = strips.iter().filter(|s| s.0.floor() == col).map(|s| s.2).collect();
+        assert_eq!(seen.len(), 4, "series visible in pixel column {col}");
+    }
+}
+
+#[test]
 fn clean_data_is_rendered_without_a_copy() {
     let d = data_of(3, 50);
     assert!(matches!(sanitized(&d), Cow::Borrowed(_)));

@@ -59,24 +59,32 @@ struct BarRun {
     a1: f32,
     lo: f32,
     hi: f32,
+    /// More than one bar was merged.
+    merged: bool,
 }
 
 impl BarRun {
     fn new(pos: f32, lo: f32, hi: f32) -> Self {
-        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi }
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi, merged: false }
     }
     fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.merged = true;
         self.a0 = self.a0.min(pos);
         self.a1 = self.a1.max(pos);
         self.lo = self.lo.min(lo);
         self.hi = self.hi.max(hi);
     }
-    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba) {
-        let along = self.a1 - self.a0 + bw;
+    /// `band` is the part of the pixel column reserved for this series (`start`, `len`): in a
+    /// clustered chart a merged run stays inside it, so the other series keep a visible strip.
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba, band: Option<(f32, f32)>) {
+        let (a0, along) = match band {
+            Some((start, len)) if self.merged => (self.bucket + start, len),
+            _ => (self.a0, self.a1 - self.a0 + bw),
+        };
         if horizontal {
-            ctx.rect(self.lo, self.a0, self.hi - self.lo, along, color, None);
+            ctx.rect(self.lo, a0, self.hi - self.lo, along, color, None);
         } else {
-            ctx.rect(self.a0, self.lo, along, self.hi - self.lo, color, None);
+            ctx.rect(a0, self.lo, along, self.hi - self.lo, color, None);
         }
     }
 }
@@ -105,10 +113,19 @@ impl BarSink {
     fn pos(&self, c: f32) -> f32 {
         if self.horizontal { c + self.nslots * self.bw / 2.0 - (self.k + 1.0) * self.bw } else { c - self.nslots * self.bw / 2.0 + self.k * self.bw }
     }
+    /// This series' strip of a pixel column (offset, length) when the columns hold several
+    /// clustered series, in the direction the slots run.
+    fn band(&self) -> Option<(f32, f32)> {
+        (self.nslots > 1.0).then(|| {
+            let idx = if self.horizontal { self.nslots - 1.0 - self.k } else { self.k };
+            (idx / self.nslots, 1.0 / self.nslots)
+        })
+    }
     /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when
     /// `merge` is set, adds it to the current run.
     fn bar(&mut self, ctx: &mut Ctx, merge: bool, c: f32, lo: f32, len: f32) {
         let pos = self.pos(c);
+        let band = self.band();
         if !merge {
             if self.horizontal {
                 ctx.rect(lo, pos, len, self.bw, self.color, None);
@@ -121,14 +138,15 @@ impl BarSink {
             Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
             run => {
                 if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
-                    m.draw(ctx, self.bw, self.horizontal, self.color);
+                    m.draw(ctx, self.bw, self.horizontal, self.color, band);
                 }
             }
         }
     }
     fn finish(self, ctx: &mut Ctx) {
+        let band = self.band();
         if let Some(m) = self.run {
-            m.draw(ctx, self.bw, self.horizontal, self.color);
+            m.draw(ctx, self.bw, self.horizontal, self.color, band);
         }
     }
 }
