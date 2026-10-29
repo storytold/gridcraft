@@ -287,11 +287,264 @@ pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
     !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
 }
 
+/// Canonical name for an egui Key.
+pub fn key_name(k: Key) -> Option<&'static str> {
+    Some(match k {
+        Key::ArrowLeft => "Left",
+        Key::ArrowRight => "Right",
+        Key::ArrowUp => "Up",
+        Key::ArrowDown => "Down",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
+        Key::Enter => "Enter",
+        Key::Tab => "Tab",
+        Key::Backspace => "Backspace",
+        Key::Delete => "Delete",
+        Key::Escape => "Escape",
+        Key::Space => "Space",
+        Key::Insert => "Insert",
+        Key::Equals | Key::Plus => "=",
+        Key::Minus => "-",
+        Key::Period => ".",
+        Key::Comma => ",",
+        Key::OpenBracket => "[",
+        Key::CloseBracket => "]",
+        Key::Semicolon => ";",
+        Key::Quote => "'",
+        Key::Backtick => "`",
+        Key::Num0 => "0",
+        Key::Num1 => "1",
+        Key::Num2 => "2",
+        Key::Num3 => "3",
+        Key::Num4 => "4",
+        Key::Num5 => "5",
+        Key::Num6 => "6",
+        Key::Num7 => "7",
+        Key::Num8 => "8",
+        Key::Num9 => "9",
+        Key::F1 => "F1",
+        Key::F2 => "F2",
+        Key::F3 => "F3",
+        Key::F4 => "F4",
+        Key::F5 => "F5",
+        Key::F6 => "F6",
+        Key::F7 => "F7",
+        Key::F8 => "F8",
+        Key::F9 => "F9",
+        Key::F10 => "F10",
+        Key::F11 => "F11",
+        Key::F12 => "F12",
+        Key::A => "A",
+        Key::B => "B",
+        Key::C => "C",
+        Key::D => "D",
+        Key::E => "E",
+        Key::F => "F",
+        Key::G => "G",
+        Key::H => "H",
+        Key::I => "I",
+        Key::J => "J",
+        Key::K => "K",
+        Key::L => "L",
+        Key::M => "M",
+        Key::N => "N",
+        Key::O => "O",
+        Key::P => "P",
+        Key::Q => "Q",
+        Key::R => "R",
+        Key::S => "S",
+        Key::T => "T",
+        Key::U => "U",
+        Key::V => "V",
+        Key::W => "W",
+        Key::X => "X",
+        Key::Y => "Y",
+        Key::Z => "Z",
+        _ => return None,
+    })
+}
+
+/// Canonical representation of a key combination, e.g. "Ctrl+Shift+E" or "Cmd+Option+E".
+pub fn canonical_combo(key: Key, m: Modifiers, mac: bool) -> Option<String> {
+    let name = key_name(key)?;
+    let is_function_key =
+        matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12);
+    if !m.ctrl && !m.command && !m.alt && !m.shift && !is_function_key {
+        return None;
+    }
+    let mut s = String::new();
+    if mac {
+        if m.command || m.mac_cmd {
+            s.push_str("Cmd+");
+        }
+        if m.ctrl {
+            s.push_str("Ctrl+");
+        }
+        if m.alt {
+            s.push_str("Option+");
+        }
+        if m.shift {
+            s.push_str("Shift+");
+        }
+    } else {
+        if m.ctrl || m.command {
+            s.push_str("Ctrl+");
+        }
+        if m.alt {
+            s.push_str("Alt+");
+        }
+        if m.shift {
+            s.push_str("Shift+");
+        }
+    }
+    s.push_str(name);
+    Some(s)
+}
+
+fn canonical_key_name(s: &str) -> Option<String> {
+    if s.len() == 1 {
+        let c = s.chars().next()?.to_ascii_uppercase();
+        if c.is_ascii_alphanumeric() || matches!(c, '=' | '-' | '.' | ',' | '[' | ']' | ';' | '\'' | '`') {
+            return Some(c.to_string());
+        }
+        return None;
+    }
+    if let Some(f) = s.strip_prefix(['f', 'F'])
+        && let Ok(n) = f.parse::<u8>()
+        && (1..=12).contains(&n)
+    {
+        return Some(format!("F{n}"));
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "left" | "arrowleft" => Some("Left".into()),
+        "right" | "arrowright" => Some("Right".into()),
+        "up" | "arrowup" => Some("Up".into()),
+        "down" | "arrowdown" => Some("Down".into()),
+        "home" => Some("Home".into()),
+        "end" => Some("End".into()),
+        "pageup" | "pgup" => Some("PageUp".into()),
+        "pagedown" | "pgdn" => Some("PageDown".into()),
+        "enter" | "return" => Some("Enter".into()),
+        "tab" => Some("Tab".into()),
+        "backspace" => Some("Backspace".into()),
+        "delete" | "del" => Some("Delete".into()),
+        "escape" | "esc" => Some("Escape".into()),
+        "space" => Some("Space".into()),
+        "insert" | "ins" => Some("Insert".into()),
+        _ => None,
+    }
+}
+
+/// Normalizes any user-entered shortcut string for the specified platform.
+pub fn normalize_for_platform(s: &str, mac: bool) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut cmd = false;
+    let key_part = parts.last()?;
+    for p in &parts[..parts.len() - 1] {
+        match p.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "alt" | "option" | "opt" => alt = true,
+            "shift" => shift = true,
+            "cmd" | "command" | "mod" => cmd = true,
+            _ => return None,
+        }
+    }
+    let key_name = canonical_key_name(key_part)?;
+    let is_function_key = key_name.starts_with('F') && key_name[1..].parse::<u8>().is_ok();
+    if !ctrl && !alt && !shift && !cmd && !is_function_key {
+        return None;
+    }
+    let mut out = String::new();
+    if mac {
+        if cmd {
+            out.push_str("Cmd+");
+        }
+        if ctrl {
+            out.push_str("Ctrl+");
+        }
+        if alt {
+            out.push_str("Option+");
+        }
+        if shift {
+            out.push_str("Shift+");
+        }
+    } else {
+        if cmd || ctrl {
+            out.push_str("Ctrl+");
+        }
+        if alt {
+            out.push_str("Alt+");
+        }
+        if shift {
+            out.push_str("Shift+");
+        }
+    }
+    out.push_str(&key_name);
+    Some(out)
+}
+
+/// Normalizes any user-entered shortcut string (case-insensitively, e.g. "ctrl+shift+f" -> "Ctrl+Shift+F").
+pub fn normalize(s: &str) -> Option<String> {
+    normalize_for_platform(s, cfg!(target_os = "macos"))
+}
+
+pub(crate) fn dispatch_target(app: &mut SheetApp, ctx: &egui::Context, target: &str) {
+    if target.is_empty() {
+        return;
+    }
+    if let Some(dialog_name) = target.strip_prefix("dialog:") {
+        app.open_dialog(dialog_name, json!({}));
+    } else if matches!(target, "edit.copy" | "edit.cut") {
+        app.copy_to_clipboard(ctx, target);
+    } else if target == "view.zoom" {
+        app.open_dialog("zoom", json!({}));
+    } else {
+        let params = match target {
+            "home.borders" => {
+                let preset = if app.grid.last_border.is_empty() { "all" } else { &app.grid.last_border };
+                json!({"preset": preset})
+            }
+            _ => json!({}),
+        };
+        app.run_or_alert(target, params);
+    }
+    app.grid.ensure_visible = true;
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     if altgr_text(ctx, m, mac) {
         return false;
+    }
+    // Check custom shortcuts before built-in shortcuts
+    if let Some(combo) = canonical_combo(key, m, mac)
+        && let Some(target) =
+            app.ui.shortcuts.get(&combo).or_else(|| normalize_for_platform(&combo, mac).as_ref().and_then(|nc| app.ui.shortcuts.get(nc))).cloned()
+    {
+        // Web emits both a Key event and a browser clipboard event for Cmd/Ctrl+C and Cmd/Ctrl+X.
+        // Skip key dispatch when a clipboard event is also queued so the action does not run twice.
+        let is_clipboard_chord = matches!(key, Key::C | Key::X) && !m.alt && !m.shift;
+        if is_clipboard_chord && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))) {
+            return false;
+        }
+        if target.is_empty() {
+            return true;
+        }
+        dispatch_target(app, ctx, &target);
+        return true;
     }
     let Some(shortcut) = lookup(key, physical, m, mac) else { return false };
     let (active, anchor) = app.session.active().map(|d| (d.selection.active, d.selection.anchor)).unwrap_or_default();
@@ -375,4 +628,36 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
     }
     app.grid.ensure_visible = true;
     app.grid.reveal_moving_end = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_combo_formats_keys() {
+        let mac_cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
+        let ctrl_shift = Modifiers { ctrl: true, shift: true, command: true, ..Modifiers::NONE };
+        assert_eq!(canonical_combo(Key::B, mac_cmd, true), Some("Cmd+B".into()));
+        assert_eq!(canonical_combo(Key::K, ctrl_shift, false), Some("Ctrl+Shift+K".into()));
+        assert_eq!(canonical_combo(Key::F5, Modifiers::NONE, false), Some("F5".into()));
+        assert_eq!(canonical_combo(Key::F, Modifiers::NONE, false), None);
+    }
+
+    #[test]
+    fn normalize_shortcuts() {
+        assert_eq!(normalize_for_platform("ctrl+shift+k", false), Some("Ctrl+Shift+K".into()));
+        assert_eq!(normalize_for_platform("cmd+b", false), Some("Ctrl+B".into()));
+        assert_eq!(normalize_for_platform("cmd+b", true), Some("Cmd+B".into()));
+        assert_eq!(normalize_for_platform("alt+k", true), Some("Option+K".into()));
+        assert_eq!(normalize_for_platform("option+k", false), Some("Alt+K".into()));
+        assert_eq!(normalize_for_platform("mod+shift+m", true), Some("Cmd+Shift+M".into()));
+        assert_eq!(normalize_for_platform("ctrl + alt + f1", false), Some("Ctrl+Alt+F1".into()));
+        assert_eq!(normalize_for_platform("ctrl+pageup", false), Some("Ctrl+PageUp".into()));
+        assert_eq!(normalize_for_platform("ctrl+pagedown", false), Some("Ctrl+PageDown".into()));
+        assert_eq!(normalize_for_platform("ctrl+whatever", false), None);
+        assert_eq!(normalize_for_platform("ctrl+f13", false), None);
+        assert_eq!(normalize_for_platform("f", false), None);
+        assert_eq!(normalize_for_platform("f2", false), Some("F2".into()));
+    }
 }

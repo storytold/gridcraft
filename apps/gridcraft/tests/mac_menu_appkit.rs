@@ -7,6 +7,7 @@
 // unit tests compile here too without a harness to run them).
 #[cfg(target_os = "macos")]
 #[path = "../src/native_menu.rs"]
+#[allow(unused_imports, dead_code)]
 mod native_menu;
 
 #[cfg(target_os = "macos")]

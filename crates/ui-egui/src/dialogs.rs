@@ -18,6 +18,7 @@ mod analysis;
 mod charts;
 mod command_search;
 mod cond_format_rules;
+mod customize_keyboard;
 mod data;
 mod find;
 mod format_cells;
@@ -679,6 +680,16 @@ impl Dialog {
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
+            "customizeKeyboard" => Dialog::custom(
+                "customizeKeyboard",
+                "Customize Keyboard",
+                json!({
+                    "category": "Home",
+                    "command": "home.bold",
+                    "current": "",
+                    "pressed": "",
+                }),
+            ),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -1097,5 +1108,16 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    #[test]
+    fn customize_keyboard_opens_with_default_category_and_command() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let d = Dialog::open(&mut app, "customizeKeyboard", json!({})).unwrap();
+        assert_eq!(d.title, "Customize Keyboard");
+        assert_eq!(d.values["category"], "Home");
+        assert_eq!(d.values["command"], "home.bold");
     }
 }
