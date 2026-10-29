@@ -30,6 +30,8 @@ struct Outcome {
 }
 
 type R<T> = Result<T, String>;
+/// A scenario: its name and the function that runs it.
+type Scenario = (&'static str, fn(&Cfg) -> R<Outcome>);
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -50,7 +52,7 @@ fn run() -> R<()> {
         reps: flag("--reps").and_then(|s| s.parse().ok()).unwrap_or(if quick { 3 } else { 7 }).max(1),
         filter: flag("--filter"),
     };
-    let scenarios: [(&'static str, fn(&Cfg) -> R<Outcome>); 10] = [
+    let scenarios: [Scenario; 10] = [
         ("edit.chain", edit_chain),
         ("edit.fanout", edit_fanout),
         ("edit.sliding", edit_sliding),
