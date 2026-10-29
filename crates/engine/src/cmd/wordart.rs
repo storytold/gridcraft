@@ -2,10 +2,13 @@
 //! the text-box machinery (anchor, move/resize/delete, undo, XLSX shape text body, printing).
 //! The style palette below is original to GridCraft.
 
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, Color, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_param, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok,
+    u32_param,
+};
 
 /// One entry of the style gallery.
 pub struct WordArtStyle {
