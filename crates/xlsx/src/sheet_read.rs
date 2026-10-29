@@ -56,6 +56,16 @@ struct RowState {
     dynamic_checks: u64,
     dropped: u64,
     rows: u64,
+    /// Cells and row properties dropped for repeating an address already read (see `read_row`).
+    misplaced: u64,
+    /// Cells placed out of column order or in another row's element.
+    elsewhere: u64,
+    /// The furthest cell read so far, in row-major order.
+    furthest: Option<CellRef>,
+    /// Elements of rows the reader doesn't read (extension lists, tolerated unknown elements).
+    ignored: u64,
+    /// Cell texts longer than Excel allows, kept whole.
+    long: u64,
 }
 
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
@@ -148,6 +158,11 @@ const SHARED_FORMULA_FREE_COST: u64 = 4096;
 /// file's bytes, and this bounds it to well within a web build's memory.
 pub const MAX_SHARED_FORMULA_BYTES: u64 = 256 << 20;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
+/// What one `row` element may hold, by the schema: one cell (`c`) per column of the grid and one
+/// extension list. The parser drops the rest before the row is handed over, so a crafted part
+/// cannot make one row hold more cells than the grid is wide. Where each cell lands is checked as
+/// it is read (`read_row`).
+const ROW_CHILDREN: &[(&str, usize)] = &[("c", MAX_COLS as usize), ("extLst", 1)];
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
 /// Worst-case cells inside the dynamic ranges the sheet declares. Beyond it further ranges are
@@ -180,28 +195,66 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// Streams the rows of a worksheet part into `sheet`, warning about what was dropped, and returns
+/// the rest of the part's tree.
+fn read_rows(cx: &mut Ctx<'_>, bytes: &[u8], name: &str, sheet: &mut Sheet) -> El {
+    let mut st = RowState::default();
+    let how = xml::Streaming { split: &["row"], children: ROW_CHILDREN };
+    let res = xml::parse_streaming(bytes, how, &mut |row| {
+        read_row(cx, sheet, &mut st, &row);
+        Ok(())
+    });
+    let (root, dropped) = match res {
+        Ok(s) => (s.root, s.dropped),
+        Err(f) => {
+            cx.warn(format!("sheet \"{name}\" is damaged ({}); kept {} rows", f.error, st.rows));
+            (El::default(), f.dropped)
+        }
+    };
+    if dropped > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": dropped {dropped} element(s), counting what they held, that a row may not hold (more than {MAX_COLS} cells, a second extension list, unknown elements, or more elements than a part may hold)"
+        ));
+    }
+    if st.dropped > 0 {
+        cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
+    }
+    settle_python_spills_past_budget(&st, sheet);
+    if st.misplaced > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": dropped {} cell(s), or a row's properties, where a cell or row was already read; the first one read is kept",
+            st.misplaced
+        ));
+    }
+    if st.elsewhere > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell(s) sat out of column order, or in another row's element, and were placed where their addresses say",
+            st.elsewhere
+        ));
+    }
+    if st.ignored > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} row element(s) GridCraft does not read (extension lists or unknown elements) were left out and will not be saved",
+            st.ignored
+        ));
+    }
+    if st.long > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell text(s) longer than Excel's {} characters are saved as they are; Excel may refuse or repair the saved file",
+            st.long,
+            gridcraft_core::MAX_CELL_CHARS
+        ));
+    }
+    root
+}
+
 /// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
 /// model (pass-through keeps the other controls).
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
-    let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
-        Ok(())
-    });
-    let root = match res {
-        Ok(r) => r,
-        Err(e) => {
-            cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
-            El::default()
-        }
-    };
-    if st.dropped > 0 {
-        cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
-    }
-    settle_python_spills_past_budget(&st, &mut sheet);
+    let root = read_rows(cx, &bytes, name, &mut sheet);
     drop(bytes);
 
     let mut fit_to_page = false;
@@ -505,6 +558,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         return;
     }
     st.next_row = r + 1;
+    st.ignored = st.ignored.saturating_add(row.children.iter().filter(|k| k.name != "c").count() as u64);
     let mut info = LineInfo::default();
     if let Some(ht) = row.attr_f64("ht") {
         info.custom = row.flag("customHeight", false);
@@ -521,8 +575,14 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     {
         info.style = Some(cx.style(Some(s)));
     }
+    // A row number read before keeps the properties read for it first, as a cell does its value.
     if info != LineInfo::default() {
-        sheet.rows.insert(r, info);
+        match sheet.rows.entry(r) {
+            std::collections::btree_map::Entry::Occupied(_) => st.misplaced = st.misplaced.saturating_add(1),
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(info);
+            }
+        }
     }
     let mut next_col = 0u32;
     for c in row.kids("c") {
@@ -540,18 +600,52 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
             st.dropped += 1;
             continue;
         }
+        // A cell is placed where its address says, even out of order or in another row's element,
+        // as long as nothing was read there: one that repeats an address already read would replace
+        // that cell, so it is dropped and counted, and the first one read is kept. Every cell read
+        // so far lies at or before the furthest one in row-major order, so only a cell that isn't
+        // past it (never, in a file Excel wrote) needs looking up.
+        let past = st.furthest.is_none_or(|f| pos > f);
+        if !past && sheet.cells.get(pos).is_some() {
+            st.misplaced = st.misplaced.saturating_add(1);
+            // An unaddressed cell after it still takes the next column, as it always has.
+            next_col = pos.col + 1;
+            continue;
+        }
+        if past {
+            st.furthest = Some(pos);
+        }
+        // Out of column order, or naming another row than the one it sits in: placed where its
+        // address says, as it always has been, and said.
+        if pos.row != r || pos.col < next_col {
+            st.elsewhere = st.elsewhere.saturating_add(1);
+        }
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
 }
 
+/// Cell text from the file, kept whole, marked in `long` when it is longer than Excel allows:
+/// cutting it would lose the user's data at the next save. The cell counts it for the warning if
+/// it keeps the text.
+fn noted(long: &mut bool, text: String) -> String {
+    if xml::exceeds_cell_text(&text) {
+        *long = true;
+    }
+    text
+}
+
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
+    let mut long = false;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
-                Some(s) => Value::Text(s.clone()),
+                Some(s) => {
+                    long = !cx.long_strings.is_empty() && cx.long_strings.contains(&i);
+                    Value::Text(s.clone())
+                }
                 None => {
                     cx.warn("some cells refer to missing shared strings");
                     Value::Empty
@@ -559,10 +653,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             },
             None => Value::Empty,
         },
-        "str" => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
-        "inlineStr" => {
-            c.child("is").map(|is| Value::text(xml::rich_text(is))).or_else(|| v.map(|v| Value::text(xml::decode_xstring(v)))).unwrap_or(Value::Empty)
-        }
+        "str" => v.map(|v| Value::text(noted(&mut long, xml::decode_xstring(v)))).unwrap_or(Value::Empty),
+        "inlineStr" => c
+            .child("is")
+            .map(|is| Value::text(noted(&mut long, xml::rich_text(is))))
+            .or_else(|| v.map(|v| Value::text(noted(&mut long, xml::decode_xstring(v)))))
+            .unwrap_or(Value::Empty),
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
         "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {
@@ -631,6 +727,10 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let value = match spilled_from {
         // A Python cell's spilled values are kept: they are its result until it runs again.
         Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
+            // A Python cell's spilled text is kept and saved, so a long one counts.
+            if long && matches!(value, Value::Text(_)) {
+                st.long = st.long.saturating_add(1);
+            }
             if !value.is_empty() {
                 sheet.spill.insert(pos, value);
             }
@@ -645,6 +745,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
+    // Only text the cell keeps is saved, so only that is counted: not a picture's fallback, nor a
+    // value inside another formula's array, nor the cached result of a formula that parses, which
+    // opening the workbook calculates again (one that doesn't parse keeps its cached text).
+    if long && formula.as_ref().is_none_or(|f| f.expr.is_none()) && matches!(value, Value::Text(_)) {
+        st.long = st.long.saturating_add(1);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
