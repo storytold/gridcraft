@@ -279,6 +279,9 @@ fn locale_date_format_reads_as_a_date_and_saves_as_one() {
     let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
     let fmt = |wb: &gridcraft_model::Workbook| wb.styles.get(wb.sheet(0).unwrap().cell(at("A1")).unwrap().style).num_fmt.as_str().to_string();
     assert_eq!(fmt(&wb), "m/d/yyyy");
+    let a1 = wb.sheet(0).unwrap().cell(at("A1")).unwrap();
+    let shown = gridcraft_numfmt::format_value(&a1.value, &gridcraft_numfmt::NumberFormat::parse(&fmt(&wb)), wb.date_system);
+    assert_eq!(shown.text, "10/12/2026");
     let (again, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(fmt(&again), "m/d/yyyy");
 }

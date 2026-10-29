@@ -94,7 +94,8 @@ const LOCALE_FORMATS: [(u32, u32); 42] = [
 ];
 
 /// Format code for a built-in id, reading a locale-specific id as the en-US built-in Excel shows it
-/// as. Saving writes that en-US id ([`builtin_id`]), which Excel shows the same way.
+/// as. Saving writes that en-US id ([`builtin_id`]), which Excel shows the same way; the currency
+/// ids 63–66 read as 5–8, which [`builtin_id`] leaves to custom formats.
 pub fn builtin_format(id: u32) -> Option<&'static str> {
     let id = LOCALE_FORMATS.iter().find(|(l, _)| *l == id).map_or(id, |(_, en)| *en);
     BUILTIN_FORMATS.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
