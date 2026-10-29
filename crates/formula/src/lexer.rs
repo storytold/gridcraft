@@ -240,7 +240,7 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
 fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, i: usize, start: usize, out: &mut Vec<Token>) -> usize {
     let ch = |index| char_at(chars, index);
     let mut j = i;
-    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator()))) {
         j += 1;
     }
     let value: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -249,7 +249,7 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
         j + 1
     } else if ch(j) == Some(':') && sheet_range_end(chars, locale, array_depth, &value, j, out) {
         let mut end = j + 1;
-        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator()))) {
             end += 1;
         }
         let last: String = chars.get(j + 1..end).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -276,7 +276,7 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
 fn sheet_range_end(chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, value: &str, colon: usize, out: &[Token]) -> bool {
     let ch = |index| char_at(chars, index);
     let mut end = colon + 1;
-    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && (c == locale.array_column_separator() || c == locale.array_row_separator()))) {
         end += 1;
     }
     let repeats_sheet = is_range_end(value)
@@ -359,7 +359,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
-            ';' => {
+            c if (array_depth > 0 && c == locale.array_row_separator()) || (array_depth == 0 && c == ';') => {
                 push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
             }
