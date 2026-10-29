@@ -1,6 +1,9 @@
 //! A spatial index over spill areas: which areas cover a cell, and which meet a range, without
 //! looking at every area. Areas are registered in 16 x 16 cell blocks, so a lookup touches one
 //! block (a cell) or the blocks a range covers (a range) rather than every spill on the sheet.
+//! An area that would take more than `BIG_AREA_BLOCKS` blocks (a full-height column spill takes
+//! 65,536) is not registered in blocks but kept in a short list that every lookup tests directly,
+//! so registering costs what the area's size warrants only for small areas.
 
 use crate::recalc::{FxHasher, Key};
 use gridcraft_core::{CellRef, RangeRef};
@@ -10,6 +13,9 @@ type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher
 
 /// Block edge in cells (rows and columns).
 const BLOCK: u32 = 16;
+
+/// Areas spanning more blocks than this are tested directly instead of being registered.
+const BIG_AREA_BLOCKS: u64 = 1024;
 
 /// One indexed area: its rectangle, and whether it covers no cells (an array with no rows or no
 /// columns still meets the ranges its anchor is in, as a 1 x 1 area does for taint tracking).
@@ -23,6 +29,8 @@ struct Entry {
 struct SheetAreas {
     entries: HashMap<CellRef, Entry>,
     blocks: HashMap<(u32, u32), Vec<CellRef>>,
+    /// Anchors of the areas too big to register in blocks.
+    big: Vec<CellRef>,
 }
 
 /// What covers a cell.
@@ -42,16 +50,24 @@ fn block_span(rect: &RangeRef) -> (u32, u32, u32, u32) {
     (rect.start.row / BLOCK, rect.end.row / BLOCK, rect.start.col / BLOCK, rect.end.col / BLOCK)
 }
 
+fn block_count(rect: &RangeRef) -> u64 {
+    let (r0, r1, c0, c1) = block_span(rect);
+    u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1)
+}
+
 /// Whether registering `areas` in blocks costs less than checking each of them against each of
 /// `lookups` cells would: a few block entries cost about one containment check each. A tall or
-/// wide area (a full-height column spill takes 65,536 blocks) is cheaper to test directly.
+/// wide area is not registered at all (see `BIG_AREA_BLOCKS`) and so costs nothing here.
 pub(crate) fn indexing_pays<'a>(areas: impl ExactSizeIterator<Item = &'a RangeRef>, lookups: usize) -> bool {
     const BLOCK_COST: u64 = 16;
     let budget = (lookups as u64).saturating_mul(areas.len() as u64) / BLOCK_COST;
     let mut blocks = 0u64;
     for r in areas {
-        let (r0, r1, c0, c1) = block_span(r);
-        blocks = blocks.saturating_add(u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1));
+        let n = block_count(r);
+        if n > BIG_AREA_BLOCKS {
+            continue;
+        }
+        blocks = blocks.saturating_add(n);
         if blocks > budget {
             return false;
         }
@@ -77,10 +93,14 @@ impl SpillIndex {
     pub(crate) fn insert_rect(&mut self, (sheet, anchor): Key, rect: RangeRef, empty: bool) {
         self.remove((sheet, anchor));
         let areas = self.sheets.entry(sheet).or_default();
-        let (r0, r1, c0, c1) = block_span(&rect);
-        for br in r0..=r1 {
-            for bc in c0..=c1 {
-                areas.blocks.entry((br, bc)).or_default().push(anchor);
+        if block_count(&rect) > BIG_AREA_BLOCKS {
+            areas.big.push(anchor);
+        } else {
+            let (r0, r1, c0, c1) = block_span(&rect);
+            for br in r0..=r1 {
+                for bc in c0..=c1 {
+                    areas.blocks.entry((br, bc)).or_default().push(anchor);
+                }
             }
         }
         areas.entries.insert(anchor, Entry { rect, empty });
@@ -89,6 +109,10 @@ impl SpillIndex {
     pub(crate) fn remove(&mut self, (sheet, anchor): Key) {
         let Some(areas) = self.sheets.get_mut(&sheet) else { return };
         let Some(old) = areas.entries.remove(&anchor) else { return };
+        if block_count(&old.rect) > BIG_AREA_BLOCKS {
+            areas.big.retain(|a| *a != anchor);
+            return;
+        }
         let (r0, r1, c0, c1) = block_span(&old.rect);
         for br in r0..=r1 {
             for bc in c0..=c1 {
@@ -105,9 +129,9 @@ impl SpillIndex {
     /// The areas that cover `c`.
     pub(crate) fn covering(&self, sheet: usize, c: CellRef) -> Cover {
         let Some(areas) = self.sheets.get(&sheet) else { return Cover::None };
-        let Some(list) = areas.blocks.get(&(c.row / BLOCK, c.col / BLOCK)) else { return Cover::None };
+        let in_block = areas.blocks.get(&(c.row / BLOCK, c.col / BLOCK)).map_or(&[][..], |l| l.as_slice());
         let mut found = Cover::None;
-        for a in list {
+        for a in in_block.iter().chain(&areas.big) {
             if let Some(e) = areas.entries.get(a)
                 && !e.empty
                 && e.rect.contains(c)
@@ -139,6 +163,7 @@ impl SpillIndex {
                     }
                 }
             }
+            out.extend(areas.big.iter().copied().filter(|a| areas.entries.get(a).is_some_and(|e| e.rect.intersects(&range))));
         }
         out.sort_unstable();
         out.dedup();
@@ -181,15 +206,81 @@ mod tests {
     }
 
     #[test]
-    fn tall_or_wide_areas_are_not_worth_indexing_for_a_small_paste() {
+    fn tall_or_wide_areas_are_not_registered_in_blocks() {
         let column = RangeRef::new(at(0, 0), at(1_048_575, 0));
-        assert!(!indexing_pays([column].iter(), 17));
-        assert!(!indexing_pays([column].iter(), 1_000));
-        // Many small areas pay back for a paste of a hundred cells.
+        assert!(block_count(&column) > BIG_AREA_BLOCKS);
+        let mut ix = SpillIndex::default();
+        ix.insert_rect((0, at(0, 0)), column, false);
+        assert!(ix.sheets[&0].blocks.is_empty());
+        assert!(matches!(ix.covering(0, at(900_000, 0)), Cover::One(a) if a == at(0, 0)));
+        assert!(matches!(ix.covering(0, at(900_000, 1)), Cover::None));
+        let mut hits = Vec::new();
+        ix.meeting(0, RangeRef::new(at(5, 0), at(6, 3)), &mut hits);
+        assert_eq!(hits, vec![at(0, 0)]);
+        ix.remove((0, at(0, 0)));
+        assert!(matches!(ix.covering(0, at(900_000, 0)), Cover::None) && ix.sheets[&0].big.is_empty());
+        // Registering a big area costs nothing (lookups test it directly), so a small paste still indexes next to many small areas.
+        assert!(indexing_pays([column].iter(), 17));
+        // Many small areas pay back for a paste of a hundred cells, but not for a handful.
         let small: Vec<RangeRef> = (0..1_000).map(|i| RangeRef::new(at(i * 3, 0), at(i * 3 + 2, 0))).collect();
         assert!(indexing_pays(small.iter(), 100));
-        // A big area among many areas is paid for by a big paste.
-        assert!(indexing_pays([column].iter(), 2_000_000));
+        assert!(!indexing_pays(small.iter(), 17));
+    }
+
+    /// The index against the old way: test every area for every lookup. Mixed shapes: small,
+    /// thin and tall, wide, big (kept out of the blocks), empty, on two sheets, replaced and removed.
+    #[test]
+    fn matches_a_scan_of_every_area_on_mixed_shapes() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as u32 % n
+        };
+        let mut ix = SpillIndex::default();
+        let mut model: std::collections::BTreeMap<(usize, CellRef), (RangeRef, bool)> = Default::default();
+        for step in 0..3_000 {
+            let sheet = next(2) as usize;
+            let anchor = at(next(400) * 5, next(40) * 3);
+            if next(4) == 0 {
+                ix.remove((sheet, anchor));
+                model.remove(&(sheet, anchor));
+            } else {
+                let (rows, cols) = match next(8) {
+                    0 => (0, 1 + next(5) as usize),
+                    1 => (1 + next(5) as usize, 0),
+                    2 => (5_000 + next(100_000) as usize, 1),
+                    3 => (1, 1 + next(40_000) as usize),
+                    4 => (200 + next(300) as usize, 40 + next(40) as usize),
+                    _ => (1 + next(60) as usize, 1 + next(40) as usize),
+                };
+                ix.insert((sheet, anchor), rows, cols);
+                let end = at(anchor.row + (rows as u32).saturating_sub(1), anchor.col + (cols as u32).saturating_sub(1));
+                model.insert((sheet, anchor), (RangeRef::new(anchor, end), rows == 0 || cols == 0));
+            }
+            if step % 7 != 0 {
+                continue;
+            }
+            let sheet = next(3) as usize;
+            for _ in 0..20 {
+                let cell = at(next(2_100), next(130));
+                let want: Vec<CellRef> =
+                    model.iter().filter(|((s, _), (r, e))| *s == sheet && !e && r.contains(cell)).map(|((_, a), _)| *a).collect();
+                match ix.covering(sheet, cell) {
+                    Cover::None => assert!(want.is_empty(), "{cell:?}"),
+                    Cover::One(a) => assert_eq!(want, vec![a], "{cell:?}"),
+                    Cover::Many => assert!(want.len() > 1, "{cell:?}"),
+                }
+                let (r0, c0) = (next(2_100), next(130));
+                let (tall, wide) = (if next(5) == 0 { 3_000 } else { 40 }, if next(5) == 0 { 130 } else { 20 });
+                let range = RangeRef::new(at(r0, c0), at(r0 + next(tall), c0 + next(wide)));
+                let want: Vec<CellRef> = model.iter().filter(|((s, _), (r, _))| *s == sheet && r.intersects(&range)).map(|((_, a), _)| *a).collect();
+                let mut got = Vec::new();
+                ix.meeting(sheet, range, &mut got);
+                assert_eq!(got, want, "{range:?}");
+            }
+        }
     }
 
     #[test]

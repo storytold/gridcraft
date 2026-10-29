@@ -2350,3 +2350,24 @@ fn many_spills_are_read_and_blocked_by_a_paste() {
     assert_eq!(t.get("A10"), Value::Error(CellError::Spill));
     assert_eq!(t.num("A12"), 4.0);
 }
+
+#[test]
+fn a_paste_over_small_and_tall_spills_blocks_those_it_touches() {
+    let mut t = T::new();
+    for i in 0..40u32 {
+        t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 2 * i), Cell::formula(Formula::new("=SEQUENCE(3)")));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 200), Cell::formula(Formula::new("=SEQUENCE(1048576)")));
+    t.calc.recalc_all(&mut t.wb);
+    // 20 cells: the middle row of the small arrays in columns 0, 8, 16 ... 72 (columns 80 and up hit
+    // nothing), and one deep inside the tall one.
+    let mut cells: Vec<(u32, u32)> = (0..19u32).map(|i| (1, 8 * i)).collect();
+    cells.push((700_000, 200));
+    paste_into(&mut t, &cells);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("GS1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C1"), 1.0);
+    assert_eq!(t.num("C3"), 3.0);
+    assert_eq!(t.get("I1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E3"), 3.0);
+}
