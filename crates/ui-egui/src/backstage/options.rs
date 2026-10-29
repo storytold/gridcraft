@@ -1,4 +1,4 @@
-use super::*;
+use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
@@ -45,7 +45,7 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             "dark" => "Dark",
             _ => "Light",
         };
-        egui::ComboBox::from_id_salt("backstage_theme")
+        craft_ui::ComboBox::from_id_salt("backstage_theme")
             .width(160.0)
             .selected_text(lang.tr(current))
             .show_ui(ui, |ui| {
@@ -59,7 +59,7 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .labelled_by(label.id);
         ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
-        egui::ComboBox::from_id_salt("backstage_language")
+        craft_ui::ComboBox::from_id_salt("backstage_language")
             .width(160.0)
             .selected_text(lang.name())
             .show_ui(ui, |ui| {

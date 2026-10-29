@@ -2406,8 +2406,7 @@ fn ods_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn ods_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-ods-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = ods_fixture();
@@ -2437,8 +2436,7 @@ fn ods_import_never_reuses_source_as_save_target() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_an_opened_semicolon_csv_keeps_semicolons() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-csv-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("cut list.csv");
@@ -2512,8 +2510,7 @@ fn link_target(path: &std::path::Path) -> String {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let a = std::env::temp_dir().join(format!("gridcraft-links-{}-{nonce}", std::process::id()));
     let b = a.join("b");
     std::fs::create_dir_all(&b).unwrap();
@@ -2541,8 +2538,7 @@ fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_to_an_unknown_extension_is_refused() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-unknown-ext-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let mut s = s();
@@ -2566,8 +2562,7 @@ fn saving_to_an_unknown_extension_is_refused() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn an_xlsx_opened_under_an_unknown_extension_saves_back_as_xlsx() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-dat-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("budget.dat");
@@ -3240,8 +3235,7 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn xlsb_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-xlsb-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = xlsb_fixture();
@@ -4410,8 +4404,7 @@ fn encrypted_workbooks_open_with_their_password() {
 #[cfg(not(target_arch = "wasm32"))]
 fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     const PW: &str = "synthetic-pw-5522";
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-encrypted-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("Secret.xlsx");
@@ -4544,8 +4537,7 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn cell_filename_follows_the_file_the_workbook_lives_in() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-cellname-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let name = "=CELL(\"filename\",A1)";
@@ -5093,6 +5085,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod macros;
 mod seams;
 
 #[test]
@@ -5116,4 +5109,11 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     saved.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
+}
+
+/// A per-test unique suffix for temp dir names.
+#[cfg(not(target_arch = "wasm32"))]
+fn unique_nonce() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

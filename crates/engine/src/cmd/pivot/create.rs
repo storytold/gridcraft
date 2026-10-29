@@ -1,6 +1,9 @@
-use super::fields::{add_to_area, in_axes};
+use super::fields::{AreaPlacement, add_to_area, in_axes};
 use super::params::{func_name, func_param, group_name, group_param, layout_name, show_as_name, sort_name};
-use super::*;
+use super::{
+    Arc, Cell, CellRef, Ctx, EngineError, Json, NumFmt, PivotDateGroup, PivotTable, RangeRef, Result, Session, Sheet, StyleId, Workbook, bad,
+    bool_param, cell_param, current_region, edit, find_pivot, json, other, pv, str_param, with,
+};
 
 // ---------------------------------------------------------------- insert
 
@@ -115,7 +118,9 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         let add = |pt: &mut PivotTable, list: &[Json], area: &str| -> Result<()> {
             for f in list {
                 match f {
-                    Json::String(n) => add_to_area("insert.pivotTable", pt, &src, n, area, None, None, None)?,
+                    Json::String(n) => {
+                        add_to_area(pt, &src, AreaPlacement { cmd: "insert.pivotTable", field: n, area, func: None, name: None, position: None })?
+                    }
                     Json::Object(_) => {
                         let n = str_param(f, "field").ok_or_else(|| bad("insert.pivotTable", "a field object needs `field`"))?;
                         let func = match str_param(f, "func") {
@@ -124,7 +129,11 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
                             }
                             None => None,
                         };
-                        add_to_area("insert.pivotTable", pt, &src, n, area, func, str_param(f, "name"), None)?;
+                        add_to_area(
+                            pt,
+                            &src,
+                            AreaPlacement { cmd: "insert.pivotTable", field: n, area, func, name: str_param(f, "name"), position: None },
+                        )?;
                         let by = group_param(str_param(f, "group"));
                         if let Some(by) = by.filter(|b| *b != PivotDateGroup::None)
                             && matches!(area, "rows" | "columns")

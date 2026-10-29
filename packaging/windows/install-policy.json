@@ -1,0 +1,150 @@
+{
+  "id": "gridcraft",
+  "name": "GridCraft",
+  "upgradeCode": "5511327B-F305-41BE-92D0-EB84944E7C4D",
+  "sources": [
+    "gridcraft.wxs"
+  ],
+  "icon": "assets/app-icon/gridcraft.ico",
+  "localization": [],
+  "extensions": [],
+  "payloads": [
+    "gridcraft-cli.exe",
+    "gridcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\gridcraft.exe",
+      "",
+      "[#GridcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.Workbook",
+      "",
+      "GridCraft Workbook"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.Workbook\\DefaultIcon",
+      "",
+      "\"[#GridcraftExe]\",0"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.Workbook\\shell\\open\\command",
+      "",
+      "\"[#GridcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.TextData",
+      "",
+      "GridCraft Text Data"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.TextData\\DefaultIcon",
+      "",
+      "\"[#GridcraftExe]\",0"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\GridCraft.TextData\\shell\\open\\command",
+      "",
+      "\"[#GridcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.xlsx\\OpenWithProgids",
+      "GridCraft.Workbook",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.xlsm\\OpenWithProgids",
+      "GridCraft.Workbook",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.xlsb\\OpenWithProgids",
+      "GridCraft.Workbook",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.ods\\OpenWithProgids",
+      "GridCraft.Workbook",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.csv\\OpenWithProgids",
+      "GridCraft.TextData",
+      "GridCraft.TextData"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.tsv\\OpenWithProgids",
+      "GridCraft.TextData",
+      "GridCraft.TextData"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities",
+      "ApplicationName",
+      "GridCraft"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities",
+      "ApplicationDescription",
+      "Open-source spreadsheet for .xlsx, CSV and TSV files"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      ".xlsx",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      ".xlsm",
+      "GridCraft.Workbook"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      ".csv",
+      "GridCraft.TextData"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      ".tsv",
+      "GridCraft.TextData"
+    ],
+    [
+      "-1",
+      "Software\\RegisteredApplications",
+      "GridCraft",
+      "Software\\GridCraft\\Capabilities"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Installer",
+      "DesktopShortcut",
+      "[DESKTOPSHORTCUT]"
+    ],
+    [
+      "-1",
+      "Software\\GridCraft\\Installer",
+      "DesktopShortcutComponent",
+      "#1"
+    ]
+  ],
+  "mode": "dualScope"
+}

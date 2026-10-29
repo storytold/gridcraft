@@ -15,6 +15,7 @@ pub mod control;
 mod craft_fonts_policy;
 pub mod credits;
 pub mod dialogs;
+pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
 pub mod editor;
@@ -27,6 +28,8 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod macro_editor;
+pub mod macro_ui;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -266,6 +269,8 @@ pub struct SheetApp {
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
+    /// Automate › Macros: relative recording, recent macros, a macro's question.
+    pub macros: macro_ui::MacroUi,
     pub started: f64,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.

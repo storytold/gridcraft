@@ -325,6 +325,17 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
 /// Escapes text content.
 pub fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
+    push_esc(&mut o, s);
+    o
+}
+
+/// Appends [`esc`]`(s)` to `o`.
+pub fn push_esc(o: &mut String, s: &str) {
+    if s.bytes().all(|b| matches!(b, b'\t' | b'\n' | 0x20..=0x7E) && !matches!(b, b'&' | b'<' | b'>')) {
+        o.push_str(s);
+        return;
+    }
+    o.reserve(s.len());
     for c in s.chars() {
         match c {
             '&' => o.push_str("&amp;"),
@@ -335,7 +346,43 @@ pub fn esc(s: &str) -> String {
             _ => {}
         }
     }
-    o
+}
+
+/// Appends `n` in decimal.
+pub fn push_u64(o: &mut String, mut n: u64) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        if let Some(d) = buf.get_mut(i) {
+            *d = b'0' + (n % 10) as u8;
+        }
+        n /= 10;
+        if n == 0 || i == 0 {
+            break;
+        }
+    }
+    for &d in buf.get(i..).unwrap_or_default() {
+        o.push(char::from(d));
+    }
+}
+
+/// Appends the `A1`-style text of `c` ([`gridcraft_core::CellRef::a1`]).
+pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
+    let mut letters = [0u8; 8];
+    let mut i = letters.len();
+    let mut n = u64::from(c.col) + 1;
+    while n > 0 && i > 0 {
+        i -= 1;
+        if let Some(l) = letters.get_mut(i) {
+            *l = b'A' + ((n - 1) % 26) as u8;
+        }
+        n = (n - 1) / 26;
+    }
+    for &l in letters.get(i..).unwrap_or_default() {
+        o.push(char::from(l));
+    }
+    push_u64(o, u64::from(c.row) + 1);
 }
 
 /// Escapes an attribute value (double-quoted).
@@ -475,13 +522,30 @@ pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
 
 /// Formats a number for an XML attribute/value (shortest round-trip form).
 pub fn num(n: f64) -> String {
+    let mut s = String::new();
+    push_num(&mut s, n);
+    s
+}
+
+/// Appends [`num`]`(n)` to `o`.
+pub fn push_num(o: &mut String, n: f64) {
     if !n.is_finite() {
-        return "0".into();
+        o.push('0');
+        return;
     }
     if n == n.trunc() && n.abs() < 1e15 {
-        return format!("{}", n as i64);
+        let i = n as i64;
+        if i < 0 {
+            o.push('-');
+        }
+        push_u64(o, i.unsigned_abs());
+        return;
     }
-    format!("{n:?}").replace('e', "E")
+    let start = o.len();
+    let _ = write!(o, "{n:?}");
+    if let Some(e) = o.get(start..).and_then(|t| t.find('e')) {
+        o.replace_range(start + e..start + e + 1, "E");
+    }
 }
 
 #[cfg(test)]
@@ -616,6 +680,62 @@ mod tests {
     fn text_escaping_preserves_carriage_returns() {
         assert_eq!(esc("a\rb"), "a&#13;b");
         assert_eq!(esc_attr("a\rb"), "a&#13;b");
+    }
+
+    /// The appending helpers the sheet writer uses write exactly what the allocating spellings
+    /// (`CellRef::a1`, `to_string`, the `num` formula and the `esc` character loop) write.
+    #[test]
+    fn appending_helpers_match_the_allocating_spellings() {
+        use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
+        for c in [
+            CellRef::new(0, 0),
+            CellRef::new(9, 25),
+            CellRef::new(99, 26),
+            CellRef::new(0, 701),
+            CellRef::new(0, 702),
+            CellRef::new(MAX_ROWS - 1, MAX_COLS - 1),
+            CellRef::new(u32::MAX, u32::MAX),
+        ] {
+            let mut s = String::from("x");
+            push_a1(&mut s, c);
+            assert_eq!(s, format!("x{}", c.a1()));
+        }
+        for n in [0, 9, 10, 99, 1_048_576, u64::MAX] {
+            let mut s = String::from("x");
+            push_u64(&mut s, n);
+            assert_eq!(s, format!("x{n}"));
+        }
+        for n in
+            [0.0, -0.0, 1.0, -3.0, 0.1, -2.5, 1e-7, 1.5e20, 1e15, -1e15, 999_999_999_999_999.0, f64::NAN, f64::INFINITY, f64::MIN_POSITIVE, f64::MAX]
+        {
+            let reference = if !n.is_finite() {
+                "0".to_string()
+            } else if n == n.trunc() && n.abs() < 1e15 {
+                format!("{}", n as i64)
+            } else {
+                format!("{n:?}").replace('e', "E")
+            };
+            let mut s = String::from("x");
+            push_num(&mut s, n);
+            assert_eq!(s, format!("x{reference}"), "{n}");
+            assert_eq!(num(n), reference);
+        }
+        for t in ["plain", "", "a & <b> > c \"q\"", "tab\tnew\nline\rcr", "\u{1}\u{8}ctl", "日本語 ü", "\u{FFFE}\u{FFFF}x", "~\u{7F}"] {
+            let mut reference = String::new();
+            for c in t.chars() {
+                match c {
+                    '&' => reference.push_str("&amp;"),
+                    '<' => reference.push_str("&lt;"),
+                    '>' => reference.push_str("&gt;"),
+                    '\r' => reference.push_str("&#13;"),
+                    c if is_xml_char(c) => reference.push(c),
+                    _ => {}
+                }
+            }
+            let mut s = String::from("x");
+            push_esc(&mut s, t);
+            assert_eq!(s, format!("x{reference}"), "{t:?}");
+        }
     }
 
     #[test]
