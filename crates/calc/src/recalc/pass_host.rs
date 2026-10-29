@@ -15,6 +15,22 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// Criteria ranges remembered as asked for once in a pass; an index is built only on a second
+/// request, and the oldest is forgotten past this.
+const MAX_CRITERIA_RECENT: usize = 1_024;
+
+/// Text criteria indexes (including ranges found ineligible) kept in one pass.
+const MAX_CRITERIA_INDEXES: usize = 1_024;
+
+/// Cells one pass may inspect to build text criteria indexes.
+const MAX_CRITERIA_CELLS: u64 = 1_000_000;
+
+/// Folded text bytes all of a pass's text criteria indexes may retain.
+const MAX_CRITERIA_BYTES: usize = 8_000_000;
+
+/// Distinct groups all of a pass's text criteria indexes may retain.
+const MAX_CRITERIA_GROUPS: usize = 100_000;
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -450,7 +466,7 @@ impl Host for PassHost<'_> {
             return index.clone();
         }
         if !self.criteria_seen.contains(&key) {
-            if self.criteria_recent.len() >= 1_024
+            if self.criteria_recent.len() >= MAX_CRITERIA_RECENT
                 && let Some(old) = self.criteria_recent.pop_front()
             {
                 self.criteria_seen.remove(&old);
@@ -463,7 +479,7 @@ impl Host for PassHost<'_> {
         // and group allowances also bound retained keys and per-group/map overhead. Reaching
         // any allowance changes no results: the ordinary evaluator remains the fallback.
         let cells = u64::from(range.range.height()) * u64::from(range.range.width());
-        if self.text_criteria.len() >= 1_024 || self.criteria_cells.saturating_add(cells) > 1_000_000 {
+        if self.text_criteria.len() >= MAX_CRITERIA_INDEXES || self.criteria_cells.saturating_add(cells) > MAX_CRITERIA_CELLS {
             return None;
         }
         self.criteria_cells += cells;
@@ -486,8 +502,8 @@ impl Host for PassHost<'_> {
             });
             gridcraft_functions::TextCriteriaIndex::new(
                 cells,
-                8_000_000usize.saturating_sub(self.criteria_bytes),
-                100_000usize.saturating_sub(self.criteria_groups),
+                MAX_CRITERIA_BYTES.saturating_sub(self.criteria_bytes),
+                MAX_CRITERIA_GROUPS.saturating_sub(self.criteria_groups),
             )
             .map(std::sync::Arc::new)
         } else {
@@ -697,7 +713,7 @@ mod criteria_tests {
         }
         assert_eq!(host.criteria_cells, 1_500);
         assert_eq!(host.text_criteria.len(), 1);
-        assert!(host.criteria_seen.len() <= 1_024);
+        assert!(host.criteria_seen.len() <= MAX_CRITERIA_RECENT);
     }
 
     #[test]
