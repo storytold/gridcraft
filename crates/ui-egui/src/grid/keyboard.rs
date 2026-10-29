@@ -24,6 +24,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
     {
+        // The grid gives up the input method; taking it back starts a new context.
+        app.grid.ime.observe(ctx.viewport_id(), None);
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -33,6 +35,26 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    // The input method is on at the active cell, so typing Vietnamese (or Chinese, Japanese…)
+    // straight into a cell composes there, its candidate window at the cell, rather than in a box
+    // of the input method's own.
+    // The grid has no committed text of its own, so the surrounding text is unavailable.
+    if let Some(d) = app.session.active() {
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        let r = geo.screen_cell_rect(sh, at);
+        let viewport = ctx.viewport_id();
+        let observation = egui::ime_context::ImeObservation::new(
+            ctx.cumulative_frame_nr_for(viewport),
+            ctx.cumulative_pass_nr_for(viewport),
+            egui::ime_context::ImeTarget::new(resp.id, 0),
+        );
+        if let Some(u) = app.grid.ime.observe(viewport, Some(observation)) {
+            let mut ime = egui::output::IMEOutput::new(u.owner, u.context_generation, u.purpose, r, r);
+            ime.surrounding_text = u.surrounding_text;
+            ime.change_cause = u.change_cause;
+            ctx.output_mut(|o| o.ime = Some(ime));
+        }
+    }
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -43,7 +65,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
-    for ev in events {
+    let mut events = events.into_iter();
+    while let Some(ev) = events.next() {
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -66,6 +89,26 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 if let Some(ed) = app.editor.as_mut() {
                     ed.caret = ed.text.chars().count();
                 }
+                return;
+            }
+            // A word an input method finished without composing it goes in as typed text; what
+            // the input method sent after it follows it into the editor.
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
+                app.begin_edit(Some(text), false);
+                if let Some(ed) = app.editor.as_mut() {
+                    ed.caret = ed.text.chars().count();
+                }
+                hand_over_to_the_editor(app, ctx, Vec::new(), events);
+                return;
+            }
+            // The first word being composed opens the cell's editor, empty, and is handed to it
+            // once it has the focus (the frame after next), with what followed it: from then on
+            // the editor shows the composition in the cell, in the cell's font, as it does for the
+            // rest of the word.
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) if !text.is_empty() && text.chars().all(|c| !c.is_control()) => {
+                app.begin_edit(Some(String::new()), false);
+                let first = egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars });
+                hand_over_to_the_editor(app, ctx, vec![first], events);
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
@@ -153,6 +196,49 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Hands `first` and the typing in the rest of this frame's `events` to the cell's editor the
+/// grid just opened, in their original order, once it has the focus ([`ImeHandoff`]); what the
+/// input method sends meanwhile follows them. The editor opens in this pass, so the typing is
+/// taken out of the pass's input as well: it would otherwise reach the editor twice.
+fn hand_over_to_the_editor(app: &mut SheetApp, ctx: &egui::Context, first: Vec<egui::Event>, events: impl Iterator<Item = egui::Event>) {
+    let mut held = first;
+    held.extend(events.filter(ImeHandoff::holds));
+    ctx.input_mut(|i| i.events.retain(|e| !ImeHandoff::holds(e)));
+    app.grid.ime_handoff = Some(ImeHandoff { events: held, frames: 2 });
+    keep_composition_through_focus_move(ctx);
+    ctx.request_repaint();
+}
+
+/// Keeps the input method's composition through the focus move to the cell's editor: egui
+/// interrupts the input method on every `request_focus` (egui-winit turns it off and on again),
+/// and fcitx5 then drops the letters it is composing, so "không" typed into a cell came out
+/// "hong". The interrupt is taken back in this frame's output and the next one, where the editor
+/// takes the focus.
+fn keep_composition_through_focus_move(ctx: &egui::Context) {
+    ctx.plugin_or_default::<KeepComposition>().lock().frames = 2;
+}
+
+/// Takes back egui's input method interrupt for a few frames ([`keep_composition_through_focus_move`]).
+#[derive(Debug, Default)]
+struct KeepComposition {
+    frames: u8,
+}
+
+impl egui::Plugin for KeepComposition {
+    fn debug_name(&self) -> &'static str {
+        "gridcraft.keep_composition"
+    }
+
+    fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
+        if self.frames > 0 {
+            self.frames -= 1;
+            if let Some(ime) = output.platform_output.ime.as_mut() {
+                ime.should_interrupt_composition = false;
+            }
         }
     }
 }

@@ -10,6 +10,13 @@ impl SheetApp {
         let geometry = control::CaptureGeometry::from_raw_input(raw, ctx);
         control::note_capture_geometry(self, geometry);
         self.capture_geometry_from_raw = true;
+        self.grid.hand_typing_to_the_editor(ctx, raw);
+        // Synthetic typing (`ui.text`, `ui.key`) waits until the editor an input method opened
+        // has the focus and the typing held for it is handed over: it would be lost, or come
+        // before that typing.
+        if self.grid.ime_handoff.is_some() {
+            return;
+        }
         // One unapplied gesture step at a time. eframe retains an unconsumed `RawInput` for the
         // next pass and for a hidden logic-only tick, so the batch is offered once and survives
         // until a `ui` pass applies it (which pops it). Press and release stay distinct batches.

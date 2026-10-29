@@ -266,6 +266,10 @@ impl SheetApp {
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
         }
+        // Typing handed to the editor an input method opened reaches the root viewport only too.
+        if ctx.viewport_id() == egui::ViewportId::ROOT {
+            self.grid.end_typing_handoff();
+        }
     }
 
     /// Current selection's top-left cell text as A1 (for the Name Box).
@@ -392,6 +396,42 @@ mod lifecycle_tests {
         app.synthetic_pending = false;
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         assert!(!app.fonts_ready, "without pending input the language rebuild proceeds");
+    }
+
+    #[test]
+    /// A language-driven font rebuild also waits while typing is held for the cell's editor an
+    /// input method opened: the gated pass would drop the typing handed over in it.
+    fn an_input_method_handoff_delays_a_font_change() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.fonts_ready = true;
+        app.fonts_han = Some(theme::HanOrder::Chinese);
+        app.ui.language = i18n::Language::Ja;
+        app.grid.ime_handoff = Some(Default::default());
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(app.fonts_ready, "the font rebuild waits for the typing to be handed over");
+        app.grid.ime_handoff = None;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!app.fonts_ready, "once it is handed over the language rebuild proceeds");
+    }
+
+    #[test]
+    /// The frame that hands the last of that typing over still holds a font change back: its
+    /// `logic` runs after `raw_input_hook` and before the `ui` pass that takes the typing.
+    fn the_frame_that_hands_the_typing_over_delays_a_font_change() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.fonts_ready = true;
+        app.fonts_han = Some(theme::HanOrder::Chinese);
+        app.ui.language = i18n::Language::Ja;
+        app.grid.ime_handoff = Some(crate::grid::ImeHandoff::last_frame(vec![egui::Event::Text("x".into())]));
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        assert_eq!(raw.events.len(), 1, "the typing is handed over in this frame");
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(app.fonts_ready, "the font rebuild waits for the pass that takes the typing");
+        app.grid.end_typing_handoff();
+        assert!(app.grid.ime_handoff.is_none(), "a completed pass ends the handoff");
     }
 
     #[test]

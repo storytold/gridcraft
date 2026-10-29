@@ -54,8 +54,10 @@ impl SheetApp {
     pub(super) fn apply_font_state(&mut self, ctx: &egui::Context) {
         // A pending synthetic step owns the next real `ui` pass: `ui` returns at the font gate
         // before it handles input, so a font change requested now would consume the step without
-        // applying it. Delay the change one frame; the hidden-paint request keeps it coming.
-        let defer_font_change = self.synthetic_pending || !self.synthetic.is_empty();
+        // applying it. Delay the change one frame; the hidden-paint request keeps it coming. So
+        // does typing held for the cell's editor an input method opened: the frame that hands it
+        // over must reach input handling.
+        let defer_font_change = self.synthetic_pending || !self.synthetic.is_empty() || self.grid.ime_handoff.is_some();
         if !defer_font_change && self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;

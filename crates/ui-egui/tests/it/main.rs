@@ -51,6 +51,7 @@ mod header_autofit;
 mod header_column_drag;
 mod host_chrome;
 mod hyperlink_ctrl_click;
+mod ime_typing;
 mod in_cell_editor_size;
 mod in_cell_editor_wrap;
 mod insert_copied_cells;
