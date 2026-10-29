@@ -143,7 +143,7 @@ pub fn ask(app: &mut SheetApp, title: &str, id: &str, params: &Json, e: &str) ->
             // The engine's hint for programs ("run again with onConflict …") becomes the buttons.
             let what = q.split_once(" Overwrite them").map(|(a, _)| a).unwrap_or(&q).trim_end_matches(['.', ' ']);
             (
-                format!("{what}. Overwrite them, or move the data out of the way?"),
+                app.ui.language.tr_with("{what}. Overwrite them, or move the data out of the way?", &[("what", what)]),
                 vec![
                     ("Overwrite".to_string(), json!({"onConflict": "overwrite"})),
                     ("Shift Down".to_string(), json!({"onConflict": "shiftDown"})),
