@@ -84,6 +84,51 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // Shift (horizontal) or Alt (vertical) holds the scroll to one axis: egui turns it from the
+    // modifiers the wheel events carry, and the grid below turns a vertical scroll horizontal
+    // under Shift where egui didn't, so with either modifier held the scroll passes the rail as
+    // it is, and those paths behave as they did. Ctrl (Cmd on the Mac) turns the gesture into
+    // zoom: egui adds none of its movement to the scroll, so there's nothing of it to steer.
+    let holds = ui.ctx().options(|o| {
+        let (h, v, zoom) = (o.input_options.horizontal_scroll_modifier, o.input_options.vertical_scroll_modifier, o.input_options.zoom_modifier);
+        move |m: egui::Modifiers| m.matches_any(h) || m.matches_any(v) || m.matches_any(zoom)
+    });
+    // The trackpad ending a gesture, or starting one, in the order they came, since a slow frame
+    // can hold a whole gesture (a start can come in a frame with no movement yet), and a modifier
+    // on one of its events, whatever the unit: egui takes a gesture's modifiers from every wheel
+    // event while it lasts, on every frame, whether or not the grid scrolls from it (the pointer
+    // may be off the grid, or the event may carry no movement). First the pause that ends a
+    // gesture for egui, as egui checks it before the frame's events.
+    ui.input(|i| {
+        app.grid.scroll_rail.expire(i.time);
+        for e in &i.events {
+            if let egui::Event::MouseWheel { source, .. } = e {
+                app.grid.scroll_rail.heard(i.time, *source == egui::MouseWheelSource::Trackpad);
+            }
+            match e {
+                egui::Event::MouseWheel { phase: egui::TouchPhase::Start, modifiers: m, .. } => app.grid.scroll_rail.begin(holds(*m)),
+                egui::Event::MouseWheel { phase: egui::TouchPhase::Move, modifiers: m, .. } if holds(*m) => app.grid.scroll_rail.hold(),
+                egui::Event::MouseWheel { phase: egui::TouchPhase::End | egui::TouchPhase::Cancel, .. } => app.grid.scroll_rail.end(),
+                _ => {}
+            }
+        }
+    });
+    // What the gesture's own events moved this frame, in the order they came (points, as a
+    // trackpad reports; a mouse wheel's lines or pages are not the gesture's). A gesture starting
+    // mid-frame (a slow frame can hold the end of one and the start of the next) counts only the
+    // events after its start. They reach the rail even when the frame's scroll is zero: a wheel
+    // notch can cancel the gesture's movement in egui's sum, and the notch is still to scroll
+    // when the rail holds the gesture's movement back.
+    let moves = ui.input(|i| {
+        i.events.iter().fold(Vec::new(), |mut moves, e| {
+            match e {
+                egui::Event::MouseWheel { phase: egui::TouchPhase::Start, .. } => moves.clear(),
+                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, .. } => moves.push(*delta),
+                _ => {}
+            }
+            moves
+        })
+    });
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -114,9 +159,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 zooming.glide = Some((z, sh.zoom));
             }
             app.grid.wheel_zoom = Some(zooming);
-        } else if scroll_delta != egui::Vec2::ZERO {
+        } else if scroll_delta != egui::Vec2::ZERO || !moves.is_empty() {
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-            let mut d = scroll_delta;
+            let mut d = app.grid.scroll_rail.steer(scroll_delta, &moves);
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {
