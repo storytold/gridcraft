@@ -58,6 +58,8 @@ mod interaction;
 mod interface_scale;
 mod keyboard_shortcuts;
 mod keytips_generated;
+mod macro_editor;
+mod macros_ui;
 mod menu_hover;
 mod merged_cells;
 mod more_colors;

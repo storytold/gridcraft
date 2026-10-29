@@ -1,5 +1,5 @@
 use super::output::Output;
-use super::*;
+use super::{CellRef, Chart, PivotLookup, Series, Workbook, quote_sheet};
 
 // ---------------------------------------------------------------- PivotCharts
 
