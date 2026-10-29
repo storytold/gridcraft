@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
+    f64_param, json, split_sheet, str_param, u32_param,
+};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
