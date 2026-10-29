@@ -685,3 +685,44 @@ fn mac_control_q_toggles_quick_analysis_and_command_q_does_not() {
     assert!(h.state().grid.quick_analysis.open.is_none());
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "no alert for a single cell");
 }
+
+#[test]
+fn custom_shortcut_triggers_command_and_dialog() {
+    let mut h = harness(book("A1:B2"));
+    let mac = h.ctx.os() == egui::os::OperatingSystem::Mac;
+    let combo = if mac { "Cmd+Shift+K" } else { "Ctrl+Shift+K" };
+    let mods = if mac { Modifiers { mac_cmd: true, command: true, shift: true, ..Modifiers::NONE } } else { CTRL_SHIFT };
+    h.state_mut().ui.shortcuts.insert(combo.into(), "dialog:customizeKeyboard".into());
+    key(&mut h, Key::K, mods);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("customizeKeyboard"));
+    h.state_mut().dialog = None;
+
+    // Configurable commands like home.borders receive default parameters
+    let border_combo = if mac { "Cmd+Shift+B" } else { "Ctrl+Shift+B" };
+    h.state_mut().ui.shortcuts.insert(border_combo.into(), "home.borders".into());
+    key(&mut h, Key::B, mods);
+    assert!(style(&h, "B2").borders.bottom.style != BorderStyle::None);
+
+    // view.zoom opens the zoom dialog without error
+    let zoom_combo = if mac { "Cmd+Shift+Z" } else { "Ctrl+Shift+Z" };
+    h.state_mut().ui.shortcuts.insert(zoom_combo.into(), "view.zoom".into());
+    key(&mut h, Key::Z, mods);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("zoom"));
+    h.state_mut().dialog = None;
+
+    // Native copy event checks custom shortcuts before clipboard fallback
+    let copy_combo = if mac { "Cmd+C" } else { "Ctrl+C" };
+    h.state_mut().ui.shortcuts.insert(copy_combo.into(), "dialog:customizeKeyboard".into());
+    h.input_mut().events.push(Event::Copy);
+    h.run_steps(1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("customizeKeyboard"));
+
+    // Disabled copy shortcut consumes event without alert or clipboard copy
+    h.state_mut().dialog = None;
+    h.state_mut().ui.shortcuts.insert(copy_combo.into(), "".into());
+    h.input_mut().events.push(Event::Copy);
+    h.run_steps(1);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none());
+}
+}
