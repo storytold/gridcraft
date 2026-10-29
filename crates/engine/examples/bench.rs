@@ -48,8 +48,8 @@ fn run() -> R<()> {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let quick = args.iter().any(|a| a == "--quick");
     let cfg = Cfg {
-        rows: flag("--rows").and_then(|s| s.parse().ok()).unwrap_or(if quick { 10_000 } else { 100_000 }).max(200),
-        reps: flag("--reps").and_then(|s| s.parse().ok()).unwrap_or(if quick { 3 } else { 7 }).max(1),
+        rows: count(flag("--rows"), "--rows")?.unwrap_or(if quick { 10_000 } else { 100_000 }).max(200),
+        reps: count(flag("--reps"), "--reps")?.unwrap_or(if quick { 3 } else { 7 }).max(1),
         filter: flag("--filter"),
     };
     let scenarios: [Scenario; 10] = [
@@ -116,6 +116,11 @@ fn ms(v: f64) -> String {
 
 fn exec(s: &mut Session, cmd: &str, p: Json) -> R<Json> {
     s.execute(cmd, p).map_err(|e| format!("{cmd}: {e}"))
+}
+
+/// A count flag's value; one that isn't a number is an error, not the default.
+fn count(v: Option<String>, name: &str) -> R<Option<usize>> {
+    v.map(|s| s.parse().map_err(|_| format!("{name}: `{s}` is not a count"))).transpose()
 }
 
 fn session() -> R<Session> {
@@ -311,8 +316,20 @@ fn model(n: usize) -> R<Session> {
 fn recalc_full(cfg: &Cfg) -> R<Outcome> {
     let n = cfg.rows;
     let mut s = model(n)?;
-    let last = ((n - 1) % 97) as f64 * 6.0;
-    let (times, cells) = time(cfg, &mut s, |s, _| exec(s, "formulas.calculateNow", json!({})).map(drop), |s, _| expect(s, &format!("D{n}"), last))?;
+    // Manual calculation, and A[n] changed (untimed) before each run, so D[n] is stale until
+    // Calculate Now recalculates: a Calculate Now that did nothing fails the check.
+    exec(&mut s, "formulas.calculationOptions", json!({"mode": "manual"}))?;
+    let mut rep = 0;
+    let (times, cells) = time_prepared(
+        cfg,
+        &mut s,
+        |s| {
+            rep += 1;
+            exec(s, "cell.set", json!({"cell": format!("A{n}"), "input": (100 + rep).to_string()})).map(drop)
+        },
+        |s, _| exec(s, "formulas.calculateNow", json!({})).map(drop),
+        |s, r| expect(s, &format!("D{n}"), (101 + r) as f64 * 6.0),
+    )?;
     Ok(Outcome { name: "recalc.full", what: format!("Calculate Now, {} formulas (3 per row)", 3 * n), times, cells })
 }
 
