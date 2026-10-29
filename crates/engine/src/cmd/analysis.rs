@@ -14,7 +14,7 @@ use gridcraft_model::{Cell, NumFmt, Sheet};
 use serde_json::{Value as Json, json};
 
 use super::whatif::parse_range;
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, cmd, edit, has_doc, str_param};
 
 const CMD: &str = "data.analysisToolPak";
 /// Most input cells a tool reads.

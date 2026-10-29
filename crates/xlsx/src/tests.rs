@@ -23,6 +23,7 @@ mod richdata_tests;
 mod roundtrip;
 mod shape_text_rtl;
 mod shared_media;
+mod sheet_data_pin;
 mod sheet_names;
 mod smooth_roundtrip;
 mod trendline_roundtrip;

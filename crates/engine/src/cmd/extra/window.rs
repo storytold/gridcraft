@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, EngineError, Json, Result, Session, SheetViewMode, VIEWS_NAME, WATCH_NAME, Workbook, bad, bool_param, edit, json, ok, split_sheet,
+    stash_get, stash_map, stash_set, str_param, target_sheet, u32_param,
+};
 
 /// Switches a sheet's view. Like zoom, the view is saved with the file but is not an edit: it
 /// neither records an undo step nor marks a clean workbook as changed.

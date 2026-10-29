@@ -6,10 +6,27 @@ use gridcraft_model::Formula;
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
-    match f.expr() {
-        Some(e) => expr_to_file(e),
+    match f.expr_arc() {
+        // Most formulas have nothing the file spells differently: print them without copying.
+        Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
+        Some(e) => expr_to_file(Expr::clone(&e)),
         None => f.text.clone(),
     }
+}
+
+/// Whether [`expr_to_file`] would change anything in `e`: a LET or LAMBDA (parameter prefixes),
+/// a function with a file prefix, a spill, `@` or trim operator, or a structured reference.
+fn needs_file_spelling(e: &Expr) -> bool {
+    let mut found = false;
+    e.walk(&mut |x| {
+        found |= match x {
+            Expr::Call(name, _) => name == "LET" || name == "LAMBDA" || crate::tables::file_function_name(name).is_some(),
+            Expr::Unary(gridcraft_formula::UnOp::Spill | gridcraft_formula::UnOp::At | gridcraft_formula::UnOp::Trim(_), _) => true,
+            Expr::Struct(_) => true,
+            _ => false,
+        }
+    });
+    found
 }
 
 /// Arbitrary formula text (names, CF, validation) for a file. Unparseable text is kept.
@@ -135,6 +152,68 @@ pub fn from_file(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Formulas without a file spelling skip the rewrite; the text must be what it would give.
+    #[test]
+    fn plain_formulas_print_as_the_rewrite_would() {
+        for text in [
+            "SUM(A1:B2)*2",
+            "A1&\"x\"\"y\"",
+            "Sheet2!$A$1+'My Sheet'!C:C-$3:4",
+            "IF(A1>0,{1,2;3,4},-B$2%)",
+            "Sheet1:Sheet3!A1",
+            "INDEX(A:A,1):B5",
+            "Total*2",
+            "XLOOKUP(1,A:A,B:B)",
+            "LET(x,1,x)",
+            "LAMBDA(a,a)(1)",
+            "A1#",
+            "@A1:A2",
+            "SUM(A1:.B3)",
+            "T[@C]",
+        ] {
+            let f = Formula::new(text);
+            assert_eq!(to_file(&f), expr_to_file(f.expr().unwrap()), "{text}");
+        }
+    }
+
+    /// The fast path in [`to_file`] skips the rewrite on a list of what triggers it. Run both paths
+    /// over every registered function, alone, nested and next to every operator, so a function or
+    /// rewrite added later without updating [`needs_file_spelling`] fails here.
+    #[test]
+    fn every_registered_function_prints_as_the_rewrite_would() {
+        let shapes = [
+            "{}",
+            "1+{}",
+            "-{}%",
+            "SUM({},A1:B2)",
+            "IF(A1,{},Sheet2!$C$3)",
+            "LET(x,{},x)",
+            "LAMBDA(a,{})(1)",
+            "@{}",
+            "{}&A1#",
+            "{}+SUM(A1:.B3)",
+            "{}+T[@C]",
+            "{}+T[[#All],[C]]",
+            "({})*{{1,2;3,4}}",
+            "{}:B5 C1:D2",
+            "{}+My Sheet!A:A+Total",
+        ];
+        let mut checked = 0;
+        for spec in gridcraft_functions::all() {
+            let n = spec.min_args.max(1).min(spec.max_args).min(4);
+            let args = ["A1", "B2:C3", "1", "\"x\""].get(..n).unwrap_or_default().join(",");
+            let call = format!("{}({args})", spec.name);
+            for shape in shapes {
+                let text = shape.replace("{}", &call).replace("{{", "{").replace("}}", "}");
+                let f = Formula::new(&text);
+                let Some(e) = f.expr() else { continue };
+                assert_eq!(to_file(&f), expr_to_file(e), "{text}");
+                checked += 1;
+            }
+        }
+        assert!(checked > gridcraft_functions::all().len() * 10, "only {checked} formulas parsed");
+    }
 
     #[test]
     fn spill_references() {

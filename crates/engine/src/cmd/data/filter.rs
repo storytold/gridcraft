@@ -1,5 +1,12 @@
+use std::collections::BTreeSet;
+
+use gridcraft_model::{DateGroupItem, DateGrouping};
+
 use super::sort::sort_key;
-use super::*;
+use super::{
+    AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
+    current_region, data_target, edit, json,
+};
 
 // ---------------------------------------------------------------- filter
 
@@ -131,6 +138,75 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
     Ok(json!({"hiddenRows": hidden}))
+}
+
+/// One `dates` entry of `data.filterBy`: `{year: 2026, month: 3}` is March 2026; the deepest
+/// field given is the grouping.
+fn date_item_param(j: &Json) -> Result<DateGroupItem> {
+    let err = || bad("data.filterBy", "a `dates` entry needs a year and valid month, day, hour, minute and second");
+    // A misspelt key (`months`) would otherwise widen the group without a word.
+    const KEYS: [&str; 6] = ["year", "month", "day", "hour", "minute", "second"];
+    match j.as_object() {
+        Some(o) if o.keys().all(|k| KEYS.contains(&k.as_str())) => {}
+        _ => return Err(err()),
+    }
+    // Months and days start at 1; hours, minutes and seconds at 0.
+    let field = |name: &str, min: u64, max: u64| -> Result<Option<u32>> {
+        match j.get(name) {
+            None => Ok(None),
+            Some(v) => v.as_u64().filter(|n| (min..=max).contains(n)).map(|n| Some(n as u32)).ok_or_else(err),
+        }
+    };
+    let year = field("year", 0, 9999)?.ok_or_else(err)?;
+    let fields = [field("month", 1, 12)?, field("day", 1, 31)?, field("hour", 0, 23)?, field("minute", 0, 59)?, field("second", 0, 59)?];
+    // Each field needs the ones above it (a day without a month means nothing).
+    let depth = fields.iter().take_while(|f| f.is_some()).count();
+    if fields.iter().skip(depth).any(Option::is_some) {
+        return Err(err());
+    }
+    let get = |i: usize| fields.get(i).copied().flatten().unwrap_or(0);
+    Ok(DateGroupItem {
+        grouping: DateGrouping::ALL.get(depth).copied().unwrap_or(DateGrouping::Second),
+        year: year as i32,
+        month: get(0),
+        day: get(1),
+        hour: get(2),
+        minute: get(3),
+        second: get(4),
+    })
+}
+
+/// The date and time a cell shows, when it is a number in a format that shows a calendar date.
+/// Times and durations (`h:mm`, `[h]:mm`) stay in the plain value list, as in Excel, and so do
+/// serials below 1 in the 1900 system (serial 0 is the fictitious 1900-01-00); the 1904 system's
+/// serial 0 is the real 1904-01-01. The serial is rounded to the second the cell shows, so a
+/// value a hair before midnight is filed under the day it displays.
+pub fn cell_date(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<gridcraft_core::date::DateTime> {
+    let n = sh.value(c).as_f64()?;
+    let first = match wb.date_system {
+        gridcraft_core::DateSystem::D1900 => 1.0,
+        gridcraft_core::DateSystem::D1904 => 0.0,
+    };
+    // `kind` reads the first section, the one a positive number uses: `0.00;yyyy-mm-dd` is no date.
+    let fmt = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+    if !n.is_finite() || n < first || fmt.kind() != gridcraft_numfmt::FormatKind::Date {
+        return None;
+    }
+    gridcraft_core::date::datetime_from_serial(wb.date_system, (n * 86_400.0).round() / 86_400.0)
+}
+
+/// A criterion's date groups, looked up by each level of a cell's date: at most six lookups per
+/// cell however many groups a file lists.
+pub(super) struct DateSet(std::collections::HashSet<DateGroupItem>);
+
+impl DateSet {
+    pub(super) fn new(items: &[DateGroupItem]) -> DateSet {
+        DateSet(items.iter().map(DateGroupItem::normalized).collect())
+    }
+
+    pub(super) fn contains(&self, dt: &gridcraft_core::date::DateTime) -> bool {
+        DateGrouping::ALL.iter().any(|g| self.0.contains(&DateGroupItem::of(dt, *g)))
+    }
 }
 
 /// A value-list criterion, prepared once per filter instead of once per row.

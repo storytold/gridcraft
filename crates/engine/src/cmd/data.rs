@@ -1,14 +1,19 @@
 //! Data tab: sort, filter, remove duplicates, text to columns, data validation, outline.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, AnchorMode, AutoFilter, Cell, CfOperator, Comment, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Sheet, Validation,
+    ValidationKind, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param, cell_param_on, cmd, edit, has_doc, ok, parse_lines, split_sheet,
+    str_param, target_range, target_ranges, target_sheet,
+};
 use crate::outline;
 use crate::selection::current_region;
 
@@ -23,6 +28,8 @@ use filter::DateSet;
 pub use filter::{DateNode, FilterList, cell_date, checked_date_items, filter_list};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
+#[cfg(test)]
+use gridcraft_model::{DateGroupItem, DateGrouping};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 use sort::{quick_sort, sort};
 #[cfg(test)]

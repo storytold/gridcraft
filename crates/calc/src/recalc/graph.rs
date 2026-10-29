@@ -1,4 +1,8 @@
-use super::*;
+use super::RangeRef;
+use crate::eval::Area;
+use gridcraft_core::CellRef;
+use std::collections::BTreeSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
 #[derive(Default, Clone, Copy)]
@@ -179,6 +183,9 @@ pub struct Graph {
     unsettled_wide: HashSet<usize>,
 }
 
+/// A formula's precedents split by shape: single cells, column intervals and wide ranges.
+type Entries = (Vec<Key>, Vec<(usize, u32, u32, u32)>, Vec<(usize, RangeRef)>);
+
 impl Graph {
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -189,7 +196,7 @@ impl Graph {
 
     /// Index entries of a formula's precedents, without duplicates: single cells, column
     /// intervals and wide ranges.
-    fn entries(areas: &[Area]) -> (Vec<Key>, Vec<(usize, u32, u32, u32)>, Vec<(usize, RangeRef)>) {
+    fn entries(areas: &[Area]) -> Entries {
         let (mut cells, mut cols, mut wide) = (Vec::new(), Vec::new(), Vec::new());
         for a in areas {
             if a.range.is_single() {

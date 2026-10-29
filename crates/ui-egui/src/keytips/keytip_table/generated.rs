@@ -342,8 +342,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WJ", Entry::Finish(Action::Control("view.zoom"))),            // Excel: Zoom To 100%; runs the 100% zoom handler (percent param)
     ("WL", Entry::Finish(Action::Command("view.normal"))),          // Excel: Normal View; containment(Normal)
     ("WM", Entry::Continue),                                        // Excel: Macros Menu; group level: containment(Macros)
-    ("WMR", Entry::Finish(Action::Command("view.macros"))),         // Excel: Record Macro; Record Macro (macros menu)
-    ("WMV", Entry::Finish(Action::Command("view.macros"))),         // Excel: View Macros; containment(Macros)
+    ("WMR", Entry::Finish(Action::Dialog("recordMacro"))),          // Excel: Record Macro; Record Macro dialog (stops recording while recording)
+    ("WMV", Entry::Finish(Action::Dialog("macros"))),               // Excel: View Macros; containment(Macros): the Macros dialog
     ("WN", Entry::Finish(Action::Command("view.newWindow"))),       // Excel: New Window
     ("WP", Entry::Finish(Action::Command("view.pageLayout"))),      // Excel: Page Layout View
     ("WQ", Entry::Finish(Action::Dialog("zoom"))),                  // Excel: Zoom; opens the Zoom dialog

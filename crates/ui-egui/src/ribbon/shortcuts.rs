@@ -1,4 +1,4 @@
-use super::*;
+use super::{Key, Modifiers, SheetApp, json};
 
 /// Command-key shortcuts when the grid has focus.
 pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
