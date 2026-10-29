@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Color32, Dialog, Icon, Json, Sense, SheetApp, Stroke, StrokeKind, icons, json, vec2};
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.
 const ALL_CHARTS: [(&str, &str, &str); 21] = [

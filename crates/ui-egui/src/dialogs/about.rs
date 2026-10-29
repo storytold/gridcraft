@@ -1,4 +1,4 @@
-use super::*;
+use super::Dialog;
 
 /// Help ▸ About GridCraft: the app, its contributors and the AI models that helped. The credits
 /// are compiled in (`crate::credits`, docs/contributors.md).
