@@ -1,5 +1,6 @@
 //! Dutch translations for the interface strings in i18n.rs.
 
+/// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Plakken",
@@ -206,6 +207,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Pagina-einde-\nweergave",
         "Page\nLayout" => "Pagina-\nindeling",
         "Formula Bar" => "Formulebalk",
+        "Name Box" => "Naamvak",
+        "Cell Editor" => "Celeditor",
+        "Font Size" => "Tekengrootte",
         "Gridlines" => "Celrasterlijnen",
         "Headings" => "Kopteksten",
         "Zoom" => "Zoomen",
@@ -302,6 +306,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Meer\nfuncties",
         "Sheet Options|View" => "Weergeven",
         "Print" => "Afdrukken",
+        "Print What" => "Wat afdrukken",
         "Click to add data" => "Klik om gegevens toe te voegen",
         "Add header" => "Koptekst toevoegen",
         "Add footer" => "Voettekst toevoegen",
@@ -522,6 +527,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom In" => "Inzoomen",
         "Zoom Out" => "Uitzoomen",
         "Dismiss" => "Negeren",
+        "Record Macro" => "Macro opnemen",
+        "Stop Recording" => "Opname stoppen",
+        "Use Relative References" => "Relatieve verwijzingen gebruiken",
+        "Run\nMacro" => "Macro uitvoeren",
+        "Macros…" => "Macro's…",
+        "Recording" => "Opnemen",
+        "Stop" => "Stoppen",
+        "New Macro" => "Nieuwe macro",
+        "Show" => "Weergeven",
         _ => return None,
     })
 }

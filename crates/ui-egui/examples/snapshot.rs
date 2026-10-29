@@ -122,7 +122,7 @@ fn main() {
                     app.open_dialog(name, p);
                 }
                 // Page Layout view: edit the first page's centre header (or footer) section.
-                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet, s)));
+                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet(), s)));
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);

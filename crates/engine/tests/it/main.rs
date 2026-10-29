@@ -11,6 +11,7 @@ mod custom_filter_blanks;
 mod custom_view_freeze;
 mod dynamicmetadata;
 mod extreme_selection_moves;
+mod font_scheme_minor;
 mod format_as_table_restyle;
 mod hidden_sheet_navigation;
 mod ink_roundtrip;

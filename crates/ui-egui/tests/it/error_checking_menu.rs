@@ -10,9 +10,11 @@ use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
-/// The submenu item, with the arrow egui puts after a submenu's label.
-const CIRCULAR: &str = "Circular References ⏵";
+/// The submenu item's accessible name. egui 0.37 draws the submenu arrow as decoration and no
+/// longer folds it into the label, so screen readers (and kittest) see the purpose without it.
+const CIRCULAR: &str = "Circular References";
 
+/// Builds the Formulas-tab harness, optionally adding cross-sheet and same-sheet circular references and selecting H20.
 fn harness(loops: bool) -> Harness {
     let mut s = Session::new();
     s.new_workbook();
@@ -26,12 +28,12 @@ fn harness(loops: bool) -> Harness {
         s.execute("cell.set", json!({"cell": "C2", "input": "=C2+1"})).unwrap();
     }
     s.execute("selection.set", json!({"range": "H20"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1400.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h.state_mut().ui.ribbon_tab = "Formulas".into();
@@ -110,7 +112,7 @@ fn circular_references_lists_the_loops_and_selects_the_cell_picked() {
     h.run_steps(4);
     let app = h.state();
     let d = app.session.active().unwrap();
-    assert_eq!(d.wb.active_sheet, 1, "picking a cell on Q1 Data goes to Q1 Data");
+    assert_eq!(d.wb.active_sheet(), 1, "picking a cell on Q1 Data goes to Q1 Data");
     assert_eq!(format!("'Q1 Data'!{}", d.selection.active.a1()), other);
 }
 
@@ -130,6 +132,7 @@ fn circular_references_scrolls_to_the_cell_picked() {
 }
 
 #[test]
+/// Wheel scrolling brings A100 into view, and clicking it selects A100.
 fn circular_references_scrolls_a_list_taller_than_the_window() {
     let mut h = harness(false);
     for row in 1..=100 {
@@ -145,6 +148,7 @@ fn circular_references_scrolls_a_list_taller_than_the_window() {
     for _ in 0..20 {
         h.input_mut().events.push(Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Unknown,
             delta: vec2(0.0, -10.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,

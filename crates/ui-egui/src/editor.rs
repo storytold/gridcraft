@@ -8,6 +8,11 @@ pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
+    /// The workbook (`DocState::uid`) the draft belongs to: it is drawn and committed only there.
+    pub doc: u64,
+    /// The window it was typed in: switching to another window, even on the same workbook,
+    /// commits it there first (`None` until the app sets it).
+    pub window: Option<u64>,
     pub sheet: usize,
     /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
     pub locale: gridcraft_engine::formula::FormulaLocale,
@@ -39,12 +44,18 @@ pub struct EditState {
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
+    /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
+    pub original: Option<String>,
 }
 
 impl EditState {
-    pub fn new(sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool) -> EditState {
+    pub fn new(doc: u64, sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool) -> EditState {
         let caret = text.chars().count();
+        let original = (!enter_mode).then(|| text.clone());
         EditState {
+            doc,
+            window: None,
             sheet,
             locale: Default::default(),
             cell,
@@ -63,6 +74,7 @@ impl EditState {
             keep_selection: false,
             caret_to_end: true,
             completion: None,
+            original,
         }
     }
 
@@ -384,7 +396,7 @@ mod tests {
 
     #[test]
     fn point_mode() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
         assert!(e.can_point());
         e.insert_ref("A1");
         assert_eq!(e.text, "=SUM(A1");
@@ -394,13 +406,13 @@ mod tests {
         e.caret += 1;
         e.point = None;
         assert!(e.can_point());
-        let e2 = EditState::new(0, CellRef::new(0, 0), "hello".into(), true, false);
+        let e2 = EditState::new(1, 0, CellRef::new(0, 0), "hello".into(), true, false);
         assert!(!e2.can_point());
     }
 
     #[test]
     fn a_pasted_name_replaces_the_selected_text() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
         e.sync_caret = false;
         (e.anchor, e.caret) = (8, 1);
         e.autocomplete = vec!["SUM".into()];
@@ -416,12 +428,12 @@ mod tests {
     #[test]
     fn autocomplete_and_hints() {
         let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=su".into(), true, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=su".into(), true, false);
         e.update_autocomplete(&names);
         assert_eq!(e.autocomplete.len(), 3);
         assert!(e.accept_autocomplete());
         assert_eq!(e.text, "=SUM(");
-        let e = EditState::new(0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
+        let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
     }
 
@@ -457,7 +469,7 @@ mod tests {
 
     #[test]
     fn inserting_a_union_keeps_each_reference_separately_pointed() {
-        let mut edit = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        let mut edit = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
         edit.insert_ref("C:C");
         edit.append_ref("E:E");
         assert_eq!(edit.text, "=SUM(C:C,E:E");

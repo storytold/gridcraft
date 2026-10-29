@@ -527,9 +527,9 @@ fn ordinal_suffix(n: i64, suffix: &str) -> String {
 /// `Item 007` → ("Item ", 7, "", 3); `3rd` style leading numbers → ("", 3, "rd", 1).
 fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     let chars: Vec<char> = t.chars().collect();
-    let end = chars.iter().rposition(|c| c.is_ascii_digit())?;
+    let end = chars.iter().rposition(char::is_ascii_digit)?;
     let mut start = end;
-    while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_ascii_digit()) {
+    while start > 0 && chars.get(start - 1).is_some_and(char::is_ascii_digit) {
         start -= 1;
     }
     let digits: String = chars.get(start..=end)?.iter().collect();
@@ -540,8 +540,19 @@ fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     Some((prefix, n, suffix, width))
 }
 
+/// Options for filling a numeric or date series.
+pub struct SeriesOptions<'a> {
+    pub range: RangeRef,
+    pub rows: bool,
+    pub kind: &'a str,
+    pub step: f64,
+    pub stop: Option<f64>,
+    pub unit: &'a str,
+}
+
 /// Home › Fill › Series.
-pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, step: f64, stop: Option<f64>, unit: &str) -> Result<()> {
+pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<()> {
+    let SeriesOptions { range: r, rows, kind, step, stop, unit } = options;
     let sys = cx.wb.date_system;
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let lanes: Vec<u32> = if rows { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };

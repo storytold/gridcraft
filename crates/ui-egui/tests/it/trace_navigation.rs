@@ -9,16 +9,7 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn active(h: &Harness) -> String {
@@ -107,11 +98,11 @@ fn cross_sheet_precedents_jump_to_the_other_sheet() {
     s.execute("cell.set", json!({"cell": "A1", "input": "=Src!B2*2"})).unwrap();
     // Back on the first sheet, Ctrl+[ from A1 jumps to Src!B2.
     let d = s.active().unwrap();
-    let first = d.wb.active_sheet;
+    let first = d.wb.active_sheet();
     s.execute("selection.set", json!({"range": "A1"})).unwrap();
     let mut h = harness(s);
     key(&mut h, Key::OpenBracket, Modifiers::CTRL);
     let d = h.state().session.active().unwrap();
-    assert_ne!(d.wb.active_sheet, first, "selection jumped to the precedent's sheet");
+    assert_ne!(d.wb.active_sheet(), first, "selection jumped to the precedent's sheet");
     assert_eq!(d.selection.active, CellRef { row: 1, col: 1 }, "B2 on the Src sheet");
 }

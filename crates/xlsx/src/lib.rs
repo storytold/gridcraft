@@ -110,7 +110,7 @@ pub enum XlsxKind {
 impl XlsxKind {
     /// The kind a file name's extension asks for; anything else is a plain workbook.
     pub fn from_path(path: &str) -> XlsxKind {
-        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_ascii_lowercase();
         match ext.as_str() {
             "xlsm" => XlsxKind::MacroWorkbook,
             "xltx" => XlsxKind::Template,
