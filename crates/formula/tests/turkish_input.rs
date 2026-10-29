@@ -67,8 +67,10 @@ fn turkish_aliases_and_argument_separators() {
 #[test]
 fn turkish_input_preserves_reference_and_array_syntax() {
     for (src, expected) in [
-        ("TOPLA({1\\2;3\\4};5)", "SUM({1,2;3,4},5)"),
-        ("{DOĞRU\\YANLIŞ;TRUE\\FALSE}", "{TRUE,FALSE;TRUE,FALSE}"),
+        ("TOPLA({1;2\\3;4};5)", "SUM({1,2;3,4},5)"),
+        ("{DOĞRU;YANLIŞ\\TRUE;FALSE}", "{TRUE,FALSE;TRUE,FALSE}"),
+        ("SATIRSAY({1;2;3})", "ROWS({1,2,3})"),
+        ("SATIRSAY({1\\2\\3})", "ROWS({1;2;3})"),
         ("SUM((A1:A3;C1:C3))", "SUM((A1:A3,C1:C3))"),
         ("\"TOPLA;YANLIŞ\"&\"a\"\"b\"", "\"TOPLA;YANLIŞ\"&\"a\"\"b\""),
         ("'TOPLA;YANLIŞ'!A1+TOPLA!B2+TOPLA!YANLIŞ", "'TOPLA;YANLIŞ'!A1+TOPLA!B2+TOPLA!YANLIŞ"),
@@ -76,7 +78,7 @@ fn turkish_input_preserves_reference_and_array_syntax() {
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
-    for bad in [r"TOPLA({1;2\3})", "{TOPLA(A1)}", "{YANLIŞ;}"] {
+    for bad in [r"TOPLA({1\2;3})", "{TOPLA(A1)}", "{YANLIŞ;}"] {
         assert!(parse_input(bad, FormulaLocale::Tr, |_| false).is_err(), "{bad}");
     }
     assert_eq!(print(&parse("TOPLA(1,2)+YANLIŞ").unwrap()), "TOPLA(1,2)+YANLIŞ");
@@ -150,7 +152,7 @@ fn turkish_display_round_trips_text_containing_separators() {
     let tr = FormulaLocale::Tr;
     let expr = parse(r#"IF(A1="a,b;c",CONCAT("1.5",",",";"),SUM(0.25,A1:A3 B2))"#).unwrap();
     let shown = print_input(&expr, tr, |_| false).unwrap();
-    assert_eq!(shown, r#"EĞER(A1="a,b;c";METİNBİRLEŞTİR("1.5";",";";");TOPLA(0,25;A1:A3 B2))"#);
+    assert_eq!(shown, r#"EĞER(A1="a,b;c";ARALIKBİRLEŞTİR("1.5";",";";");TOPLA(0,25;A1:A3 B2))"#);
     assert_eq!(print(&parse_input(&shown, tr, |_| false).unwrap()), print(&expr));
 }
 
