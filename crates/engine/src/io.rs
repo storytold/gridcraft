@@ -118,8 +118,14 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted.
+/// Parses bytes that aren't encrypted, then takes the workbook's macros out of their hidden names.
 fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
+    warnings.extend(crate::macros::load(&mut wb));
+    Ok((wb, warnings))
+}
+
+fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -160,7 +166,10 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
+                // The file's macros are read after this (`macros::load`), so they come along.
+                let macros = std::mem::take(&mut wb.macros_read);
                 wb = Workbook::new();
+                wb.macros_read = macros;
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
@@ -238,9 +247,12 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
+        // Macros travel in hidden names.
         FileKind::Xlsx => {
+            let named = crate::macros::with_names(wb)?;
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-            gridcraft_xlsx::write_xlsx_named(wb, gridcraft_xlsx::XlsxKind::from_path(path), book).map_err(|e| EngineError::Other(e.to_string()))
+            gridcraft_xlsx::write_xlsx_named(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book)
+                .map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
@@ -250,7 +262,7 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
-        FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
 }
@@ -599,7 +611,7 @@ impl Drop for ScriptSandbox {
 /// thread is being torn down).
 fn script_sandbox_check(path: &str) -> Result<()> {
     if SCRIPT_SANDBOX.try_with(|c| c.get() > 0).unwrap_or(true) {
-        return Err(EngineError::Other(format!("{path}: scripts can't read or write files")));
+        return Err(EngineError::Other(format!("{path}: scripts, and macro steps without the permission, can't read or write files")));
     }
     Ok(())
 }

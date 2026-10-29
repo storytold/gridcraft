@@ -135,6 +135,25 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// A macro: a script page with a run arrow.
+    Macro,
+    /// Record Macro: a ring around the recording dot.
+    Record,
+    /// Use Relative References: a cell and an arrow to a cell offset from it.
+    Relative,
+    /// A reference box's button: shrink the window to the box (Collapse) or restore it (Expand).
+    Collapse,
+    Expand,
+    /// The macro debugger's Run: a play triangle.
+    Play,
+    /// Step: an arrow down onto a line.
+    Step,
+    /// Continue: a bar and a play triangle.
+    Continue,
+    /// Run to Here: an arrow to a marked line.
+    RunTo,
+    /// Stop: a square.
+    StopSquare,
 }
 
 struct G<'a> {
@@ -194,11 +213,12 @@ impl G<'_> {
 struct Palette {
     paper: Color32,
     cat: [Color32; 8],
+    recording: Color32,
 }
 
 impl Palette {
     fn of(t: &Tokens) -> Palette {
-        Palette { paper: t.paper, cat: t.cat }
+        Palette { paper: t.paper, cat: t.cat, recording: t.recording }
     }
 
     fn cat(&self, c: Cat) -> Color32 {
@@ -731,6 +751,50 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
         }
+        Icon::Macro => {
+            g.rect(2.5, 1.5, 9.0, 12.0, Some(paper), Some(c));
+            for y in [4.5, 7.0, 9.5] {
+                g.stroke(&[(4.5, y), (9.5, y)], light);
+            }
+            g.poly(&[(9.5, 8.5), (15.0, 11.75), (9.5, 15.0)], green);
+        }
+        Icon::Record => {
+            g.circle(8.0, 8.0, 6.0, None, Some(c));
+            g.circle(8.0, 8.0, 3.5, Some(pal.recording), None);
+        }
+        Icon::Relative => {
+            g.rect(1.5, 1.5, 5.5, 5.0, Some(paper), Some(c));
+            g.rect(9.0, 9.5, 5.5, 5.0, None, Some(c));
+            g.line(&[(5.0, 7.5), (5.0, 12.0), (8.0, 12.0)], c, 1.1);
+            g.poly(&[(7.5, 10.2), (9.6, 12.0), (7.5, 13.8)], c);
+        }
+        Icon::Collapse | Icon::Expand => {
+            // A small sheet with a selected block and an arrow pointing up (collapse) or down.
+            g.rect(2.0, 6.5, 12.0, 7.5, None, Some(c));
+            g.rect(4.0, 9.0, 4.0, 3.0, Some(c), None);
+            if icon == Icon::Collapse {
+                g.poly(&[(8.0, 1.0), (11.5, 4.5), (4.5, 4.5)], c);
+            } else {
+                g.poly(&[(8.0, 5.5), (11.5, 2.0), (4.5, 2.0)], c);
+            }
+        }
+        Icon::Play => g.poly(&[(4.0, 2.5), (13.0, 8.0), (4.0, 13.5)], green),
+        Icon::Step => {
+            g.line(&[(8.0, 1.5), (8.0, 9.0)], c, 1.3);
+            g.poly(&[(4.8, 7.0), (11.2, 7.0), (8.0, 10.8)], c);
+            g.line(&[(3.0, 13.5), (13.0, 13.5)], c, 1.3);
+        }
+        Icon::Continue => {
+            g.rect(2.5, 2.5, 2.2, 11.0, Some(c), None);
+            g.poly(&[(6.5, 2.5), (14.0, 8.0), (6.5, 13.5)], green);
+        }
+        Icon::RunTo => {
+            g.line(&[(2.0, 5.0), (9.0, 5.0)], c, 1.3);
+            g.poly(&[(8.0, 2.0), (12.0, 5.0), (8.0, 8.0)], c);
+            g.line(&[(2.0, 11.5), (14.0, 11.5)], c, 1.6);
+            g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
+        }
+        Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
     }
 }
 

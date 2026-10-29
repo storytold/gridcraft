@@ -282,6 +282,13 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => {
+            // The macro step editor's draft, overlays and debug run go with its own close.
+            if app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
+                return match crate::macro_editor::close_now(app) {
+                    Ok(()) => ok(Json::Null),
+                    Err(e) => err(e),
+                };
+            }
             app.dialog = None;
             ok(Json::Null)
         }

@@ -199,7 +199,7 @@ fn phase_one(tableau: &mut Tableau, normalized: &[(Vec<f64>, Sense, f64)], budge
         return Err(Outcome::Infeasible);
     }
     for i in 0..tableau.rows.len() {
-        if !tableau.basis.get(i).is_some_and(|basic| *basic >= tableau.decision_cols + tableau.slack_cols) {
+        if tableau.basis.get(i).is_none_or(|basic| *basic < tableau.decision_cols + tableau.slack_cols) {
             continue;
         }
         let pivot_col = tableau
