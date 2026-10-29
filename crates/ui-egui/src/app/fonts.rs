@@ -1,4 +1,4 @@
-use super::*;
+use super::{SheetApp, theme};
 use crate::fonts;
 
 impl SheetApp {

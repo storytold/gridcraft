@@ -7,7 +7,6 @@ use gridcraft_numfmt::text_function;
 
 /// (format, value, Excel's result).
 // The last row's 3.14159 is the workbook's value, not an approximation of pi.
-#[allow(clippy::approx_constant)]
 const CASES: &[(&str, f64, &str)] = &[
     (r"|#,e-#|", 123456.789, r"|1e5|"),
     (r"|#e-#,|", 123456.789, r"|1e5|"),
@@ -256,7 +255,7 @@ const CASES: &[(&str, f64, &str)] = &[
     (r"|#.#|e+|???|", 1.2345678e-142, r"|1.2|e|-142|"),
     (r"|#.#|e+|????|", 1.2345678e-142, r"|1.2|e|- 142|"),
     (r"|#.#|e+|?????|", 1.2345678e-142, r"|1.2|e|-  142|"),
-    (r"#,##0.00e+00", 3.14159, r"3.14e+00"),
+    (r"#,##0.00e+00", 314_159.0 / 100_000.0, r"3.14e+00"),
 ];
 
 #[test]

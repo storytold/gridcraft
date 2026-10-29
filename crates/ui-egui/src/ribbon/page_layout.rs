@@ -1,5 +1,5 @@
 use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, keytip, menu_items, sep};
-use super::*;
+use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, vec2};
 
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);

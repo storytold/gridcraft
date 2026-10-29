@@ -67,6 +67,198 @@ fn starts_range_end(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '$')
 }
 
+fn byte_pos(src: &str, chars: &[(usize, char)], index: usize) -> usize {
+    chars.get(index).map(|c| c.0).unwrap_or(src.len())
+}
+
+fn char_at(chars: &[(usize, char)], index: usize) -> Option<char> {
+    chars.get(index).map(|c| c.1)
+}
+
+fn emit(src: &str, chars: &[(usize, char)], out: &mut Vec<Token>, tok: Tok, start: usize, end_index: usize) {
+    out.push(Token { tok, start, end: byte_pos(src, chars, end_index) });
+}
+
+fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+    let quote = char_at(chars, i).unwrap_or_default();
+    let mut value = String::new();
+    let mut j = i + 1;
+    loop {
+        match char_at(chars, j) {
+            None => {
+                let msg = if quote == '"' { "unterminated text" } else { "unterminated sheet name" };
+                return Err(LexError { msg: msg.into(), pos: start });
+            }
+            Some(c) if c == quote && char_at(chars, j + 1) == Some(quote) => {
+                value.push(quote);
+                j += 2;
+            }
+            Some(c) if c == quote => {
+                j += 1;
+                break;
+            }
+            Some(c) => {
+                value.push(c);
+                j += 1;
+            }
+        }
+    }
+    if quote == '"' {
+        emit(src, chars, out, Tok::Text(value), start, j);
+        return Ok(j);
+    }
+    if char_at(chars, j) != Some('!') {
+        return Err(LexError { msg: "expected ! after sheet name".into(), pos: byte_pos(src, chars, j) });
+    }
+    let (first, last) = match value.split_once(':') {
+        Some((first, last)) => (first.to_string(), Some(last.to_string())),
+        None => (value, None),
+    };
+    emit(src, chars, out, Tok::Sheet(first, last), start, j + 1);
+    Ok(j + 1)
+}
+
+fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+    let rest = src.get(start..).unwrap_or("");
+    let error = CellError::ALL
+        .iter()
+        .copied()
+        .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
+        .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
+    let end = i + error.as_str().chars().count();
+    emit(src, chars, out, Tok::Error(error), start, end);
+    Ok(end)
+}
+
+fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+    let mut depth = 0;
+    let mut j = i;
+    loop {
+        match char_at(chars, j) {
+            None => return Err(LexError { msg: "unbalanced [".into(), pos: start }),
+            Some('\'') => j += 2,
+            Some('[') => {
+                depth += 1;
+                j += 1;
+            }
+            Some(']') => {
+                depth -= 1;
+                j += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Some(_) => j += 1,
+        }
+    }
+    let inner = src.get(byte_pos(src, chars, i + 1)..byte_pos(src, chars, j.saturating_sub(1))).unwrap_or("").to_string();
+    emit(src, chars, out, Tok::Struct(inner), start, j);
+    Ok(j)
+}
+
+fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+    let ch = |index| char_at(chars, index);
+    let mut j = i;
+    while ch(j).is_some_and(|c| c.is_ascii_digit()) {
+        j += 1;
+    }
+    let is_row_ref = {
+        let mut k = j;
+        if ch(k) == Some('.') && ch(k + 1) == Some(':') {
+            k += 1;
+        }
+        ch(k) == Some(':') && {
+            k += 1;
+            if ch(k) == Some('.') {
+                k += 1;
+            }
+            if ch(k) == Some('$') {
+                k += 1;
+            }
+            ch(k).is_some_and(|c| c.is_ascii_digit())
+        }
+    };
+    if is_row_ref {
+        let word = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
+        emit(src, chars, out, Tok::Word(word), start, j);
+        return Ok(j);
+    }
+    if ch(j) == Some(locale.decimal_separator()) {
+        j += 1;
+        while ch(j).is_some_and(|c| c.is_ascii_digit()) {
+            j += 1;
+        }
+    }
+    if matches!(ch(j), Some('e' | 'E')) {
+        let mut exponent = j + 1;
+        if matches!(ch(exponent), Some('+' | '-')) {
+            exponent += 1;
+        }
+        if ch(exponent).is_some_and(|c| c.is_ascii_digit()) {
+            while ch(exponent).is_some_and(|c| c.is_ascii_digit()) {
+                exponent += 1;
+            }
+            j = exponent;
+        }
+    }
+    let text = src.get(start..byte_pos(src, chars, j)).unwrap_or("");
+    let value: f64 =
+        text.replace(locale.decimal_separator(), ".").parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
+    if !value.is_finite() {
+        return Err(LexError { msg: format!("number too large `{text}`"), pos: start });
+    }
+    emit(src, chars, out, Tok::Number(value), start, j);
+    Ok(j)
+}
+
+fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, i: usize, start: usize, out: &mut Vec<Token>) -> usize {
+    let ch = |index| char_at(chars, index);
+    let mut j = i;
+    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+        j += 1;
+    }
+    let value: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
+    if ch(j) == Some('!') {
+        emit(src, chars, out, Tok::Sheet(value, None), start, j + 1);
+        j + 1
+    } else if ch(j) == Some(':') && sheet_range_end(chars, locale, array_depth, &value, j, out) {
+        let mut end = j + 1;
+        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+            end += 1;
+        }
+        let last: String = chars.get(j + 1..end).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
+        emit(src, chars, out, Tok::Sheet(value, Some(last)), start, end + 1);
+        end + 1
+    } else if ch(j) == Some('(') {
+        emit(src, chars, out, Tok::Func(value), start, j + 1);
+        j + 1
+    } else if value.eq_ignore_ascii_case("TRUE") && ch(j) != Some('[') {
+        emit(src, chars, out, Tok::Bool(true), start, j);
+        j
+    } else if value.eq_ignore_ascii_case("FALSE") && ch(j) != Some('[') {
+        emit(src, chars, out, Tok::Bool(false), start, j);
+        j
+    } else if value.len() > 1 && value.ends_with('.') && ch(j) == Some(':') && is_range_end(value.get(..value.len() - 1).unwrap_or("")) {
+        emit(src, chars, out, Tok::Word(value[..value.len() - 1].to_string()), start, j - 1);
+        j - 1
+    } else {
+        emit(src, chars, out, Tok::Word(value), start, j);
+        j
+    }
+}
+
+fn sheet_range_end(chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, value: &str, colon: usize, out: &[Token]) -> bool {
+    let ch = |index| char_at(chars, index);
+    let mut end = colon + 1;
+    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+        end += 1;
+    }
+    let repeats_sheet = is_range_end(value)
+        && matches!(out.last(), Some(Token { tok: Tok::Sheet(previous, None), .. })
+            if chars.get(colon + 1..end).is_some_and(|s| crate::same_name(&s.iter().map(|c| c.1).collect::<String>(), previous)));
+    end > colon + 1 && ch(end) == Some('!') && !repeats_sheet
+}
+
 /// Tokenizes formula text (without the leading `=`).
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     tokenize_locale(src, crate::FormulaLocale::En)
@@ -94,107 +286,17 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Space, j);
                 i = j;
             }
-            '"' => {
-                let mut s = String::new();
-                let mut j = i + 1;
-                loop {
-                    match ch(j) {
-                        None => return Err(LexError { msg: "unterminated text".into(), pos: start }),
-                        Some('"') if ch(j + 1) == Some('"') => {
-                            s.push('"');
-                            j += 2;
-                        }
-                        Some('"') => {
-                            j += 1;
-                            break;
-                        }
-                        Some(x) => {
-                            s.push(x);
-                            j += 1;
-                        }
-                    }
-                }
-                push(&mut out, Tok::Text(s), j);
-                i = j;
-            }
-            '\'' => {
-                // Quoted sheet name: 'My Sheet'!  or 'A:B'!
-                let mut s = String::new();
-                let mut j = i + 1;
-                loop {
-                    match ch(j) {
-                        None => return Err(LexError { msg: "unterminated sheet name".into(), pos: start }),
-                        Some('\'') if ch(j + 1) == Some('\'') => {
-                            s.push('\'');
-                            j += 2;
-                        }
-                        Some('\'') => {
-                            j += 1;
-                            break;
-                        }
-                        Some(x) => {
-                            s.push(x);
-                            j += 1;
-                        }
-                    }
-                }
-                if ch(j) != Some('!') {
-                    return Err(LexError { msg: "expected ! after sheet name".into(), pos: pos_of(j) });
-                }
-                let (a, b) = match s.split_once(':') {
-                    Some((a, b)) => (a.to_string(), Some(b.to_string())),
-                    None => (s, None),
-                };
-                push(&mut out, Tok::Sheet(a, b), j + 1);
-                i = j + 1;
-            }
+            '"' | '\'' => i = quoted(src, &chars, i, start, &mut out)?,
             '#' if out.last().is_some_and(|t: &Token| t.end == start && matches!(t.tok, Tok::Word(_))) => {
                 // Spill range operator right after a reference: `A1#`.
                 push(&mut out, Tok::Op("#"), i + 1);
                 i += 1;
             }
             '#' => {
-                // Error literal, or #-prefixed struct specifier (only inside [] which we lex as Struct).
-                let rest = src.get(start..).unwrap_or("");
-                let mut found = None;
-                for e in CellError::ALL {
-                    let t = e.as_str();
-                    if rest.len() >= t.len() && rest.get(..t.len()).is_some_and(|p| p.eq_ignore_ascii_case(t)) {
-                        found = Some(e);
-                        break;
-                    }
-                }
-                let Some(e) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
-                let len = e.as_str().chars().count();
-                // `#REF!A1` style is not valid; `#REF!` is an error literal.
-                push(&mut out, Tok::Error(e), i + len);
-                i += len;
+                i = error_literal(src, &chars, i, start, &mut out)?;
             }
             '[' => {
-                // Structured reference body: balanced brackets.
-                let mut depth = 0;
-                let mut j = i;
-                loop {
-                    match ch(j) {
-                        None => return Err(LexError { msg: "unbalanced [".into(), pos: start }),
-                        Some('\'') => j += 2, // escape char inside struct refs
-                        Some('[') => {
-                            depth += 1;
-                            j += 1;
-                        }
-                        Some(']') => {
-                            depth -= 1;
-                            j += 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        Some(_) => j += 1,
-                    }
-                }
-                let inner = src.get(pos_of(i + 1)..pos_of(j.saturating_sub(1))).unwrap_or("").to_string();
-                push(&mut out, Tok::Struct(inner), j);
-                i = j;
+                i = structured_ref(src, &chars, i, start, &mut out)?;
             }
             '.' if ch(i + 1) == Some(':') => {
                 // Trim reference `A1.:E10` / `A1.:.E10` (the word before stopped at the dot).
@@ -207,64 +309,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 }
             }
             c if c.is_ascii_digit() || (c == locale.decimal_separator() && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
-                // Number, unless it is a row range like 1:3 (handled by parser via Word) — numbers
-                // followed by ':' and digits are row refs: lex as Word.
-                let mut j = i;
-                while ch(j).is_some_and(|d| d.is_ascii_digit()) {
-                    j += 1;
-                }
-                // Row ranges `1:3`, and the trim forms `1.:3`, `1:.3`, `1.:.3`.
-                let is_row_ref = {
-                    let mut k = j;
-                    if ch(k) == Some('.') && ch(k + 1) == Some(':') {
-                        k += 1;
-                    }
-                    ch(k) == Some(':') && {
-                        k += 1;
-                        if ch(k) == Some('.') {
-                            k += 1;
-                        }
-                        if ch(k) == Some('$') {
-                            k += 1;
-                        }
-                        ch(k).is_some_and(|d| d.is_ascii_digit())
-                    }
-                };
-                // A word like "1A" can't happen in valid formulas; numbers then.
-                if is_row_ref {
-                    let w: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
-                    push(&mut out, Tok::Word(w), j);
-                    i = j;
-                    continue;
-                }
-                if ch(j) == Some(locale.decimal_separator()) {
-                    j += 1;
-                    while ch(j).is_some_and(|d| d.is_ascii_digit()) {
-                        j += 1;
-                    }
-                }
-                if matches!(ch(j), Some('e' | 'E')) {
-                    let mut k = j + 1;
-                    if matches!(ch(k), Some('+' | '-')) {
-                        k += 1;
-                    }
-                    if ch(k).is_some_and(|d| d.is_ascii_digit()) {
-                        while ch(k).is_some_and(|d| d.is_ascii_digit()) {
-                            k += 1;
-                        }
-                        j = k;
-                    }
-                }
-                let text = src.get(start..pos_of(j)).unwrap_or("");
-                let v: f64 = text
-                    .replace(locale.decimal_separator(), ".")
-                    .parse()
-                    .map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
-                if !v.is_finite() {
-                    return Err(LexError { msg: format!("number too large `{text}`"), pos: start });
-                }
-                push(&mut out, Tok::Number(v), j);
-                i = j;
+                i = number(src, &chars, locale, i, start, &mut out)?;
             }
             '(' => {
                 push(&mut out, Tok::LParen, i + 1);
@@ -328,53 +373,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Op(op), i + len);
                 i += len;
             }
-            c if is_word_char(c) => {
-                let mut j = i;
-                while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
-                    j += 1;
-                }
-                let w: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
-                if ch(j) == Some('!') {
-                    push(&mut out, Tok::Sheet(w, None), j + 1);
-                    i = j + 1;
-                } else if ch(j) == Some(':') && {
-                    // Sheet1:Sheet3!A1 — look ahead for word then '!'.
-                    let mut k = j + 1;
-                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
-                        k += 1;
-                    }
-                    // `Sheet1!A1:Sheet1!B2` is a range whose second end repeats the sheet, not a span.
-                    let repeats_sheet = is_range_end(&w)
-                        && matches!(out.last(), Some(Token { tok: Tok::Sheet(p, None), .. })
-                            if chars.get(j + 1..k).is_some_and(|s| crate::same_name(&s.iter().map(|c| c.1).collect::<String>(), p)));
-                    k > j + 1 && ch(k) == Some('!') && !repeats_sheet
-                } {
-                    let mut k = j + 1;
-                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
-                        k += 1;
-                    }
-                    let w2: String = chars.get(j + 1..k).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
-                    push(&mut out, Tok::Sheet(w, Some(w2)), k + 1);
-                    i = k + 1;
-                } else if ch(j) == Some('(') {
-                    push(&mut out, Tok::Func(w), j + 1);
-                    i = j + 1;
-                } else if w.eq_ignore_ascii_case("TRUE") && ch(j) != Some('[') {
-                    push(&mut out, Tok::Bool(true), j);
-                    i = j;
-                } else if w.eq_ignore_ascii_case("FALSE") && ch(j) != Some('[') {
-                    push(&mut out, Tok::Bool(false), j);
-                    i = j;
-                } else if w.len() > 1 && w.ends_with('.') && ch(j) == Some(':') && is_range_end(w.get(..w.len() - 1).unwrap_or("")) {
-                    // `A1.:E10`: the dot belongs to the trim operator, lexed next.
-                    let w = w.get(..w.len() - 1).unwrap_or("").to_string();
-                    push(&mut out, Tok::Word(w), j - 1);
-                    i = j - 1;
-                } else {
-                    push(&mut out, Tok::Word(w), j);
-                    i = j;
-                }
-            }
+            c if is_word_char(c) => i = word(src, &chars, locale, array_depth, i, start, &mut out),
             other => return Err(LexError { msg: format!("unexpected character `{other}`"), pos: start }),
         }
     }
