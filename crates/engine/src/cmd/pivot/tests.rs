@@ -1185,3 +1185,31 @@ fn detail_cells_are_the_cells_show_details_takes() {
     let pt = &d.wb.active().unwrap().pivots[0];
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
 }
+
+/// Measurement, not a check: `perf stat -e instructions:u` of this test with `PIVOT_BENCH_EDITS=0`
+/// and `=20` (and `PIVOT_BENCH_REOPEN=0/1`) gives the cost of edits on the report's sheet and of
+/// opening a saved workbook, with the setup subtracted. `PIVOT_BENCH_ROWS` is the source size.
+#[test]
+#[ignore = "measurement only"]
+fn bench_edit_on_sheet_with_large_report() {
+    let env = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (n, edits) = (env("PIVOT_BENCH_ROWS", 100_000), env("PIVOT_BENCH_EDITS", 0));
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut rows = vec![json!(["Id", "Product", "Sales"])];
+    rows.extend((0..n).map(|i| {
+        let (id, product) = (format!("id{i:07}"), ["Apples", "Pears", "Plums"][i % 3]);
+        json!([id, product, i])
+    }));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Id"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    for i in 0..edits {
+        s.execute("cell.set", json!({"cell": "K1", "input": i.to_string()})).unwrap();
+    }
+    if env("PIVOT_BENCH_REOPEN", 0) == 1 {
+        let wb = (*s.doc().unwrap().wb).clone();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    }
+}
