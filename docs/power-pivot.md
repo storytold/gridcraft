@@ -215,9 +215,9 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Undo/Redo, Find, AutoSum | Find works (`dataModel.find`); undo/redo and AutoSum are missing; edits commit immediately |
 | Calculation Options Manual mode | Window state only; commands still commit immediately |
 | Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
-| Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml` and keeps them on save; the field-list pane is missing, and **Excel currently refuses to open a package with our cache definition** (the same package with an Excel-written cache opens — open defect) |
+| Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml`, keeps them on save, and the result **opens, refreshes and survives save/reopen in Excel** (verified: the grid it returns is what `TableRange2.Value2` shows). The pivot field-list pane is still missing |
 | Pivot Preview | Not present: the window has no separate preview surface |
-| Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook. A workbook read on this branch also drops an existing `xl/model/item.data` on save (keeping that part is #2499's scope), so a pivot cache written here has no model database to refresh from |
+| Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache, so Excel evaluates them on refresh. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
 
 DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
 [DAX functions](dax-functions.md) for the per-category breakdown.
