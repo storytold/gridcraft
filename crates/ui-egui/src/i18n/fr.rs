@@ -669,7 +669,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Double Accounting" => "Double comptabilité",
         "Doughnut" => "Anneau",
         "Down" => "En bas",
-        "Drag to fill cells. Drag from inside a cell to select a range." => "Faites glisser pour remplir les cellules. Faites glisser depuis l'intérieur d'une cellule pour sélectionner une plage.",
+        "Drag to fill cells. Drag from inside a cell to select a range." => {
+            "Faites glisser pour remplir les cellules. Faites glisser depuis l'intérieur d'une cellule pour sélectionner une plage."
+        }
         "Duplicate Values…" => "Valeurs en double…",
         "Edit Name" => "Modifier le nom",
         "Edit chart title" => "Modifier le titre du graphique",
@@ -710,7 +712,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer:" => "Pied de page :",
         "Forecast Sheet" => "Feuille de prévision",
         "Forecast end (date or number; blank: a third of the history):" => "Fin de la prévision (date ou nombre ; vide : un tiers de l'historique) :",
-        "Forecast start (a date or number in the history; blank: after the last point):" => "Début de la prévision (date ou nombre de l'historique ; vide : après le dernier point) :",
+        "Forecast start (a date or number in the history; blank: after the last point):" => {
+            "Début de la prévision (date ou nombre de l'historique ; vide : après le dernier point) :"
+        }
         "Format Cells" => "Format de cellules",
         "Format Cells|Fill" => "Remplissage",
         "Format Chart Area…" => "Mettre en forme la zone de graphique…",
@@ -745,7 +749,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Group by Years" => "Grouper par années",
         "Grouped By:" => "Groupé par :",
         "Growth" => "Géométrique",
-        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => "En-tête (&L gauche, &C centre, &R droite ; &P page, &N pages, &D date, &A feuille) :",
+        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => {
+            "En-tête (&L gauche, &C centre, &R droite ; &P page, &N pages, &D date, &A feuille) :"
+        }
         "Header (in):" => "En-tête (po) :",
         "Heading 1" => "Titre 1",
         "Heading 2" => "Titre 2",
@@ -870,7 +876,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No Fill" => "Aucun remplissage",
         "No names defined" => "Aucun nom défini",
         "No picture selected" => "Aucune image sélectionnée",
-        "No printers found. Configure a system printer or export a PDF." => "Aucune imprimante trouvée. Configurez une imprimante système ou exportez un PDF.",
+        "No printers found. Configure a system printer or export a PDF." => {
+            "Aucune imprimante trouvée. Configurez une imprimante système ou exportez un PDF."
+        }
         "No ranges yet." => "Aucune plage pour le moment.",
         "None" => "Aucun",
         "Borders|None" => "Aucune",
@@ -946,7 +954,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect Sheet" => "Protéger la feuille",
         "Protect Structure and Windows" => "Protéger la structure et les fenêtres",
         "Protect Workbook structure" => "Protéger la structure du classeur",
-        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => "Protéger le classeur pour : Structure (les feuilles ne peuvent pas être ajoutées, déplacées, renommées, masquées ou supprimées).",
+        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => {
+            "Protéger le classeur pour : Structure (les feuilles ne peuvent pas être ajoutées, déplacées, renommées, masquées ou supprimées)."
+        }
         "Protect\nSheet" => "Protéger la\nfeuille",
         "Protection" => "Protection",
         "Purple" => "Violet",
@@ -1089,7 +1099,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text length" => "Longueur du texte",
         "Text that Contains…" => "Texte qui contient…",
         "Text to Columns" => "Convertir le texte en colonnes",
-        "The output range already holds data. Replace it with the report?" => "La plage de sortie contient déjà des données. La remplacer par le rapport ?",
+        "The output range already holds data. Replace it with the report?" => {
+            "La plage de sortie contient déjà des données. La remplacer par le rapport ?"
+        }
         "The spelling check is complete for the entire sheet." => "La vérification orthographique est terminée pour toute la feuille.",
         "Theme Colors" => "Couleurs du thème",
         "Themed Cell Styles" => "Styles de cellules avec thème",

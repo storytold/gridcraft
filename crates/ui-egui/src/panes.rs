@@ -245,7 +245,11 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     ui.collapsing(lang.tr("Series"), |ui| {
         let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &chart));
         for (i, s) in chart.series.iter().enumerate() {
-            let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| lang.tr("Series {n}").replace("{n}", &(i + 1).to_string()));
+            let name = data
+                .as_ref()
+                .and_then(|d| d.series.get(i))
+                .map(|x| x.name.clone())
+                .unwrap_or_else(|| lang.tr("Series {n}").replace("{n}", &(i + 1).to_string()));
             let col =
                 data.as_ref().and_then(|d| d.series.get(i)).map(|x| Color32::from_rgb(x.color[0], x.color[1], x.color[2])).unwrap_or(Color32::GRAY);
             ui.horizontal(|ui| {

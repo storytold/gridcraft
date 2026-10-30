@@ -60,7 +60,15 @@ fn french_shows_the_dialog_translated_and_none_as_the_operation() {
     let mut h = harness();
     h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
     h.run_steps(3);
-    for label in ["Formules (F)", "Commentaires et notes (C)", "Valeurs et formats de nombre", "Aucune", "Ignorer les cellules vides", "Transposer (E)", "Coller avec liaison"] {
+    for label in [
+        "Formules (F)",
+        "Commentaires et notes (C)",
+        "Valeurs et formats de nombre",
+        "Aucune",
+        "Ignorer les cellules vides",
+        "Transposer (E)",
+        "Coller avec liaison",
+    ] {
         assert!(h.query_by_label(label).is_some(), "no {label}");
     }
     // Undo is "Annuler" too, and Cancel's label is padded: look for it inside the dialog.
