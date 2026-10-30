@@ -1438,6 +1438,152 @@ fn recalc_all_after_load() {
     assert_eq!(t.num("A3"), 12.0);
 }
 
+/// Saved numbers, errors and formula metadata survive missing-only recalculation.
+#[test]
+fn recalc_missing_preserves_cached_results_and_formula_metadata() {
+    let mut t = T::new();
+    let cached = [
+        ("A1", "=UNSUPPORTED_UDF()", Value::Number(17.0)),
+        ("A2", "=1+1", Value::Number(99.0)),
+        ("A3", "=RAND()", Value::Number(12345.0)),
+        ("A4", "=1", Value::Number(0.0)),
+        ("A5", "=TRUE()", Value::Bool(false)),
+        ("A6", "=1", Value::from("")),
+        ("A7", "=1", Value::from("saved text")),
+        ("A8", "=1+", Value::Number(8.0)),
+        ("A9", "=1", Value::from(gridcraft_core::Array::scalar(Value::Number(9.0)))),
+    ];
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula, value) in &cached {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = value.clone();
+        s.cells.set(c(at), cell);
+    }
+    for (i, error) in CellError::ALL.into_iter().chain([CellError::Circ]).enumerate() {
+        let mut cell = Cell::formula(Formula::new("=1"));
+        cell.value = Value::Error(error);
+        s.cells.set(gridcraft_core::CellRef::new(i as u32, 2), cell);
+    }
+    for (at, formula) in [("B1", "=A1*2"), ("B2", "=A2+1"), ("B3", "=ISFORMULA(A1)"), ("B4", "=FORMULATEXT(A1)"), ("B5", "=C1")] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    let before: Vec<_> = s.cells.iter().filter(|(_, cell)| !cell.value.is_empty()).map(|(at, cell)| (at, cell.clone())).collect();
+    t.calc.recalc_missing(&mut t.wb);
+    for (at, cell) in before {
+        assert_eq!(t.wb.sheet(0).unwrap().cell(at), Some(&cell), "{at:?}");
+    }
+    assert_eq!((t.num("B1"), t.num("B2")), (34.0, 100.0));
+    assert_eq!(t.get("B3"), Value::Bool(true));
+    assert_eq!(t.get("B4"), Value::from("=UNSUPPORTED_UDF()"));
+    assert_eq!(t.get("B5"), Value::Error(CellError::Null));
+}
+
+/// Missing chains propagate formula errors and remove obsolete spill results.
+#[test]
+fn recalc_missing_evaluates_chains_and_missing_formula_errors() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula) in [
+        ("A1", "=B1+1"),
+        ("B1", "=C1+1"),
+        ("C1", "=2"),
+        ("D1", "=SUM(A1:C1)"),
+        ("A2", "=UNSUPPORTED_UDF()"),
+        ("B2", "=1+"),
+        ("C2", "=B2+1"),
+        ("D2", "=ISFORMULA(C1)"),
+        ("E2", "=FORMULATEXT(C1)"),
+        ("F2", "=ROWS(B2#)"),
+        ("F3", "=B3+1"),
+    ] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    s.spill_ranges.insert(c("B2"), gridcraft_core::RangeRef::new(c("B2"), c("B3")));
+    s.spill.insert(c("B3"), Value::Number(20.0));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("B1"), t.num("C1"), t.num("D1")), (4.0, 3.0, 2.0, 9.0));
+    for at in ["A2", "B2", "C2"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Name));
+    }
+    assert_eq!(t.get("D2"), Value::Bool(true));
+    assert_eq!(t.get("E2"), Value::from("=2"));
+    assert_eq!(t.get("F2"), Value::Error(CellError::Ref));
+    assert_eq!(t.num("F3"), 1.0);
+    let s = t.wb.sheet(0).unwrap();
+    assert!(!s.spill_ranges.contains_key(&c("B2")));
+    assert!(!s.spill.contains_key(&c("B3")));
+}
+
+/// Cached dynamic arrays and their dependents remain intact across recalculation rounds.
+#[test]
+fn recalc_missing_preserves_cached_spills_and_dependents_across_rounds() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula, value) in [("D1", "=UNSUPPORTED_UDF()", 10.0), ("B2", "=SUM(H1#)", 999.0), ("B3", "=INDIRECT(\"H3\")", 888.0)] {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = Value::Number(value);
+        s.cells.set(c(at), cell);
+    }
+    let saved_range = gridcraft_core::RangeRef::new(c("D1"), c("D2"));
+    s.spill_ranges.insert(c("D1"), saved_range);
+    s.spill.insert(c("D2"), Value::Number(20.0));
+    for (at, formula) in [
+        ("A1", "=SUM(D1#)"),
+        ("A2", "=ROWS(D1#)"),
+        ("A3", "=D2+1"),
+        ("A4", "=SUM(H1#)"),
+        ("B1", "=H3+1"),
+        ("C2", "=SEQUENCE(1,2)"),
+        ("H1", "=SEQUENCE(3)"),
+    ] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (30.0, 2.0, 21.0));
+    assert_eq!((t.num("A4"), t.num("B1"), t.num("H3")), (6.0, 4.0, 3.0));
+    assert_eq!((t.num("B2"), t.num("B3"), t.num("D1"), t.num("D2")), (999.0, 888.0, 10.0, 20.0));
+    assert_eq!(t.get("C2"), Value::Error(CellError::Spill));
+    let s = t.wb.sheet(0).unwrap();
+    assert_eq!(s.spill_ranges.get(&c("D1")), Some(&saved_range));
+    assert_eq!(s.spill.get(&c("D2")), Some(&Value::Number(20.0)));
+    assert_eq!(s.spill_ranges.get(&c("H1")), Some(&gridcraft_core::RangeRef::new(c("H1"), c("H3"))));
+}
+
+/// Repeated missing-only recalculations keep the dependency graph live for later input edits.
+#[test]
+fn recalc_missing_is_repeatable_and_restores_incremental_editing() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    s.cells.set(c("A1"), Cell::value(Value::Number(2.0)));
+    let mut cached = Cell::formula(Formula::new("=A1*2"));
+    cached.value = Value::Number(99.0);
+    s.cells.set(c("B1"), cached);
+    s.cells.set(c("C1"), Cell::formula(Formula::new("=B1+1")));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (99.0, 100.0));
+    assert_eq!(t.calc.last_recalc_cells, 1);
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (99.0, 100.0));
+    assert_eq!(t.calc.last_recalc_cells, 0);
+    t.set("A1", "3");
+    assert_eq!((t.num("B1"), t.num("C1")), (6.0, 7.0));
+}
+
+/// Dynamic dependency cycles remain detected after rebuilding the cached workbook graph.
+#[test]
+fn recalc_missing_retains_detected_dynamic_cycles_after_rebuilding() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    s.cells.set(c("A1"), Cell::formula(Formula::new("=B1")));
+    s.cells.set(c("B1"), Cell::formula(Formula::new("=INDIRECT(\"A1\")")));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("B1")), (Value::Error(CellError::Circ), Value::Error(CellError::Circ)));
+    assert_eq!(t.calc.circular, [(0, c("A1"))]);
+    t.set("B1", "5");
+    assert_eq!(t.num("A1"), 5.0);
+    assert!(t.calc.circular.is_empty());
+}
+
 #[test]
 fn sumif_sum_range_takes_the_criteria_size() {
     // Excel adds up the range that starts at sum_range's top-left cell with the criteria range's
@@ -2273,4 +2419,97 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// Failed missing anchors preserve imported array followers and range-dependent calculations.
+#[test]
+fn recalc_missing_keeps_followers_when_array_anchor_fails() {
+    for dynamic in [false, true] {
+        for (text, error) in [("=SYNTHETIC_UNSUPPORTED_ARRAY()", CellError::Name), ("=1+", CellError::Name), ("=1/0", CellError::Div0)] {
+            let mut t = T::new();
+            let area = gridcraft_core::RangeRef::new(c("A1"), c("A3"));
+            let mut f = Formula::new(text);
+            f.dynamic = dynamic;
+            f.array = (!dynamic).then_some(area);
+            let sh = t.wb.sheet_mut(0).unwrap();
+            sh.set_cell(c("A1"), Cell::formula(f));
+            sh.spill_ranges.insert(c("A1"), area);
+            sh.spill.insert(c("A2"), Value::Number(31.0));
+            sh.spill.insert(c("A3"), Value::Number(42.0));
+            sh.set_cell(c("C1"), Cell::formula(Formula::new("=A2+1")));
+            sh.set_cell(c("C2"), Cell::formula(Formula::new("=ROWS(A1#)")));
+            t.calc.recalc_missing(&mut t.wb);
+            assert_eq!(t.get("A1"), Value::Error(error));
+            assert_eq!((t.num("A2"), t.num("A3")), (31.0, 42.0), "dynamic={dynamic}: {text}");
+            assert_eq!((t.num("C1"), t.num("C2")), (32.0, 3.0));
+            assert_eq!(t.wb.sheet(0).unwrap().spill_ranges.get(&c("A1")), Some(&area));
+            t.calc.recalc_missing(&mut t.wb);
+            assert_eq!((t.num("A2"), t.num("A3")), (31.0, 42.0));
+            // A later explicit content edit resumes the normal spill-cleanup policy.
+            t.set("A1", "=7");
+            assert_eq!((t.get("A2"), t.get("A3")), (Value::Empty, Value::Empty));
+            assert_eq!(t.num("C1"), 1.0);
+            assert_eq!(t.get("C2"), Value::Error(CellError::Ref));
+        }
+    }
+}
+
+/// Only a successful replacement array supersedes imported cached followers during cached open.
+#[test]
+fn recalc_missing_replaces_cached_followers_only_with_an_array() {
+    for (text, blocked) in [("=SEQUENCE(2)", false), ("=7", false), ("=SEQUENCE(3)", true)] {
+        let mut t = T::new();
+        let area = gridcraft_core::RangeRef::new(c("A1"), c("A3"));
+        let mut f = Formula::new(text);
+        f.dynamic = true;
+        let sh = t.wb.sheet_mut(0).unwrap();
+        sh.set_cell(c("A1"), Cell::formula(f));
+        sh.spill_ranges.insert(c("A1"), area);
+        sh.spill.insert(c("A2"), Value::Number(31.0));
+        sh.spill.insert(c("A3"), Value::Number(42.0));
+        if blocked {
+            sh.set_value(c("A2"), Value::Number(99.0));
+        }
+        sh.set_cell(c("C1"), Cell::formula(Formula::new("=A3+1")));
+        sh.set_cell(c("C2"), Cell::formula(Formula::new("=ROWS(A1#)")));
+        t.calc.recalc_missing(&mut t.wb);
+        if text == "=SEQUENCE(2)" {
+            assert_eq!((t.num("A1"), t.num("A2")), (1.0, 2.0));
+            assert_eq!(t.get("A3"), Value::Empty);
+            assert_eq!((t.num("C1"), t.num("C2")), (1.0, 2.0));
+            assert_eq!(t.wb.sheet(0).unwrap().spill_ranges.get(&c("A1")), Some(&gridcraft_core::RangeRef::new(c("A1"), c("A2"))));
+        } else {
+            assert_eq!(t.get("A1"), if blocked { Value::Error(CellError::Spill) } else { Value::Number(7.0) });
+            assert_eq!(t.num("A3"), 42.0);
+            assert_eq!((t.num("C1"), t.num("C2")), (43.0, 3.0));
+            assert_eq!(t.wb.sheet(0).unwrap().spill_ranges.get(&c("A1")), Some(&area));
+            t.calc.recalc_all(&mut t.wb);
+            assert_eq!(t.get("A3"), Value::Empty, "explicit full recalculation retains its cleanup contract");
+        }
+    }
+}
+
+/// A late collision with another retained array must not erase either array's saved followers.
+#[test]
+fn recalc_missing_keeps_both_caches_when_a_replacement_is_blocked_at_writeback() {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for (anchor, tail, text) in [("B1", "B3", "=SYNTHETIC_UNSUPPORTED_ARRAY()"), ("A2", "A4", "=SEQUENCE(1,2)")] {
+        let mut f = Formula::new(text);
+        f.dynamic = true;
+        sh.set_cell(c(anchor), Cell::formula(f));
+        sh.spill_ranges.insert(c(anchor), gridcraft_core::RangeRef::new(c(anchor), c(tail)));
+    }
+    for (at, n) in [("B2", 31.0), ("B3", 42.0), ("A3", 8.0), ("A4", 9.0)] {
+        sh.spill.insert(c(at), Value::Number(n));
+    }
+    sh.set_cell(c("D3"), Cell::formula(Formula::new("=B2+1")));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::Error(CellError::Name));
+    assert_eq!(t.get("A2"), Value::Error(CellError::Spill));
+    assert_eq!((t.num("B2"), t.num("B3"), t.num("A3"), t.num("A4")), (31.0, 42.0, 8.0, 9.0));
+    assert_eq!(t.num("D3"), 32.0, "a dependent must see the retained cache after the rejected spill");
+    let sh = t.wb.sheet(0).unwrap();
+    assert_eq!(sh.spill_ranges.get(&c("B1")), Some(&gridcraft_core::RangeRef::new(c("B1"), c("B3"))));
+    assert_eq!(sh.spill_ranges.get(&c("A2")), Some(&gridcraft_core::RangeRef::new(c("A2"), c("A4"))));
 }

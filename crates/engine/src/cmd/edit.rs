@@ -218,6 +218,52 @@ fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collectio
     sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
 }
 
+/// Cover an array with the union of selected areas, examining boundaries rather than cells.
+fn clear_covers_array(array: RangeRef, selected: &[RangeRef]) -> bool {
+    if selected.iter().any(|r| r.contains_range(&array)) {
+        return true;
+    }
+    let areas: Vec<_> = selected.iter().filter_map(|r| r.intersection(&array)).collect();
+    let mut rows = vec![array.start.row];
+    for r in &areas {
+        rows.push(r.start.row);
+        if r.end.row < array.end.row {
+            rows.push(r.end.row + 1);
+        }
+    }
+    rows.sort_unstable();
+    rows.dedup();
+    rows.into_iter().all(|row| {
+        let mut cols: Vec<_> = areas.iter().filter(|r| r.start.row <= row && row <= r.end.row).map(|r| (r.start.col, r.end.col)).collect();
+        cols.sort_unstable();
+        let mut next = array.start.col;
+        for (start, end) in cols {
+            if start > next {
+                return false;
+            }
+            if end >= array.end.col {
+                return true;
+            }
+            next = next.max(end + 1);
+        }
+        false
+    })
+}
+
+/// Clear must validate the selected footprint even when followers have no ordinary cells.
+fn check_array_clear(sh: &gridcraft_model::Sheet, selected: &[RangeRef]) -> Result<()> {
+    for &anchor in sh.spill_ranges.keys() {
+        let Some(array) = sh.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).filter(|a| a.start == anchor) else { continue };
+        let skip = filtered_rows(sh, array);
+        let touches =
+            selected.iter().filter_map(|r| r.intersection(&array)).any(|r| r.height() as usize > skip.range(r.start.row..=r.end.row).count());
+        if touches && (!skip.is_empty() || !clear_covers_array(array, selected)) {
+            return Err(EngineError::Other("You can't change part of an array.".into()));
+        }
+    }
+    Ok(())
+}
+
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
 /// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
@@ -239,6 +285,11 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         })
     };
     edit(s, |cx| {
+        if matches!(what, "all" | "contents")
+            && let Some(sh) = cx.wb.sheet(sheet)
+        {
+            check_array_clear(sh, &ranges)?;
+        }
         for r in &ranges {
             let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
                 Some(u) => match r.intersection(&u) {

@@ -37,8 +37,8 @@ struct Shared {
 struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
-    /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
-    /// the anchor) are not stored, so the formula can fill them again.
+    /// Dynamic-array and legacy array ranges: follower caches belong in `Sheet::spill`,
+    /// not ordinary cells that would block the formula on a later full recalculation.
     dynamic: Vec<RangeRef>,
     /// Cells inside the ranges above, for a cap before a pathological sheet proves it itself.
     dynamic_cells: u64,
@@ -48,8 +48,8 @@ struct RowState {
     rows: u64,
 }
 
-/// Whether `pos` lies in a known dynamic range that isn't its anchor: the cell's cached value
-/// gives way to the formula that will fill it. Charges every scanned range against one work
+/// Whether `pos` lies in a known array range and isn't its anchor: store its cached value as
+/// a spill rather than a normal cell, so cached open and later recalculation both work. Charges every scanned range against one work
 /// budget, then gives up consulting the ranges at all: the worst kind of file may then import
 /// a few cached spill values, but it never stalls the whole import.
 fn in_dynamic(st: &mut RowState, pos: CellRef) -> bool {
@@ -62,8 +62,8 @@ fn in_dynamic(st: &mut RowState, pos: CellRef) -> bool {
     hit
 }
 
-/// Records a dynamic-array range, so its cells outside the anchor import as empty and the
-/// formula fills them again. Repeated identical anchors (a damaged or hostile sheet may repeat
+/// Records an array range, so follower caches are kept separately from ordinary cells and
+/// the formula can fill them again on recalculation. Repeated identical anchors (a damaged or hostile sheet may repeat
 /// the same record) are recorded once, and count and area are capped: every later cell inside
 /// known range territory pays a scan proportional to what is recorded here.
 fn push_dynamic(st: &mut RowState, range: RangeRef) {
@@ -83,7 +83,7 @@ const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
-/// Most dynamic-array and legacy-array ranges of one sheet.
+/// Multi-cell membership ranges and single-cell metadata admissions have separate caps.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
 /// Worst-case cells inside the dynamic ranges the sheet declares. Beyond it further ranges are
 /// dropped: they would cost their storage in every membership lookup that follows.
@@ -524,7 +524,26 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    // Retain only bounded, accepted array ranges anchored at this cell. A single-cell array
+    // needs metadata too, but adds no follower-membership scans.
+    if formula.is_some()
+        && let Some(f) = c.child("f").filter(|f| f.attr("t") == Some("array"))
+    {
+        let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
+        if range.start == pos
+            && ((range.is_single() && sheet.spill_ranges.len() < MAX_DYNAMIC_RANGES) || (!range.is_single() && st.dynamic.last() == Some(&range)))
+        {
+            sheet.spill_ranges.insert(pos, range);
+        }
+    }
+    let value = if formula.is_none() && in_dynamic(st, pos) {
+        if !value.is_empty() {
+            sheet.spill.insert(pos, value);
+        }
+        Value::Empty
+    } else {
+        value
+    };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 

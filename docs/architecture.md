@@ -1,6 +1,8 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
+> **Imported formula results update:** 2026-10-30 · Cache-preserving open, missing-result calculation and explicit recalculation build on #2308 by @mrzv. Saved results can be stale; structural edits still perform full recalculation. Readiness estimates unchanged.
+>
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -44,10 +46,54 @@ including tests, 2026-10-10.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.
+   Read-only consumers can explicitly call `Calc::recalc_missing`: only formula cells with
+   `Value::Empty` results are calculated, with nonempty cached results (including errors, empty
+   strings, volatile functions and unknown UDFs) treated as fixed inputs. Formula metadata and
+   cached anchors' existing spill values/ranges are retained. Missing formulas use the existing
+   evaluator, including its function support and bounded spill/dynamic follow-up rounds;
+   unparseable missing formulas return `#NAME?`. This neither validates saved results nor
+   reconstructs missing spill data for cached anchors. The full dependency graph is restored
+   before return, so later edits recalculate normally rather than continuing to trust caches.
+   Cycles detected while evaluating missing formulas remain reported even when dynamic references
+   make them invisible to the restored static graph.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+
+### Imported formula results
+
+`file.open` now uses `DocState::from_cached`: saved nonempty results are kept, missing
+formula results are calculated with `Calc::recalc_missing`, and the full dependency graph
+remains available for edits. The open response and import message warn that saved results
+may be stale. For XLSX input, `file.open` deliberately retains saved nonempty results even
+when `calcPr` requests `fullCalcOnLoad`; that file flag does not override this open policy.
+Callers requiring a full recalculation on open must explicitly pass `recalculate: true`.
+Calculate Now also performs the
+existing full recalculation. Neither option makes unsupported functions calculable.
+Unresolved function calls retain their explicit argument dependencies but are not made
+volatile merely because the function is absent. Workbook-defined calls and supported
+dynamic references still recalculate normally. Structural edits still use a full recalc.
+XLSX import now retains the file's stored legacy/dynamic array follower values in
+`Sheet::spill`, with bounded declared ranges in `spill_ranges`. They remain separate from
+ordinary cells, so a later full recalculation can spill without colliding with imported caches.
+Export walks stored spill rows and matching cached entries rather than expanding the
+declared area, so sparse results beyond a million positions survive. Legacy-array edit
+protection checks declared ranges even when a follower has no cached value. Formatting
+and replacement of the entire array remain allowed. Clear Contents and Clear All validate
+the selected footprint before editing, even when the cache has no ordinary follower cells.
+A union of selected areas may cover the whole array; filtered-out rows are not cleared and
+therefore cannot contribute to full coverage. Only stored values are retained;
+absent values are not invented or reconstructed. Missing anchors with explicit legacy/dynamic
+array metadata keep their saved followers when evaluation fails, yields no array or a new
+array is blocked. A successful replacement array still removes obsolete followers; normal
+full/incremental calculation retains its existing cleanup policy. The same retained range is
+available to missing dependents during the calculation pass. A follower-only cache also
+triggers the generic freshness notice. Accepted multi-cell ranges use their existing scan
+count/area/work budgets independently of single-cell metadata saturation; the metadata map
+can therefore contain at most twice the 65,536-range cap, with at most 65,536 multi-cell
+ranges participating in follower membership checks.
+This does not establish cache freshness or reconstruct absent cached spill data. Saved filename-dependent results, including `CELL("filename")`, can also retain a previous file name or an earlier cached error until explicit recalculation.
 
 ## UI building blocks
 
@@ -159,8 +205,16 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Keep stored array followers when a missing anchor cannot produce a replacement; retain accepted multi-cell range metadata after single-cell metadata saturation; include follower-only caches in the freshness notice. |
+| 2026-10-30 | minor | Reject partial Clear Contents/Clear All selections inside legacy arrays using declared ranges, including missing cached followers; allow whole-array selection unions and respect filter-hidden rows. |
+| 2026-10-30 | minor | Export sparse array caches by stored entries without the million-cell cutoff; protect missing legacy-array followers using declared ranges, including when no follower cache exists. |
+| 2026-10-30 | minor | Preserve XLSX legacy/dynamic array follower caches in spill storage and retain bounded ranges, so cached open and save/reopen do not lose stored array results; explicit full recalculation remains supported. |
+| 2026-10-30 | trivial | Clarify that XLSX fullCalcOnLoad does not override cached open; explicit recalculate: true is required for full recalculation on open. |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
+| 2026-10-25 | minor | Retain freshly detected dynamic cycles when cache-preserving calculation restores the full dependency graph |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
+| 2026-10-22 | minor | Add the opt-in `Calc::recalc_missing` API for cache-preserving read-only calculation; retain normal incremental editing afterward |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

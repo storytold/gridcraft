@@ -65,7 +65,10 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             dynamic = true
         }
         Expr::Name(_) | Expr::Struct(_) => dynamic = true,
-        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
+        // A workbook-defined function may read cells through its definition. An unresolved
+        // function cannot do so: its explicit arguments already contribute static references.
+        // Marking it dynamic would discard an imported saved result on every unrelated edit.
+        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) && wb.name(n, sheet).is_some() => dynamic = true,
         // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
         // the references inside it, not only those references.
         Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {

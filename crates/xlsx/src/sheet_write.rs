@@ -82,14 +82,21 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
-    // Values inside spills and legacy array ranges.
+    // Walk stored rows and their matching cache entries, not the declared array's area.
+    // Sparse followers past a million positions must survive without expanding empty cells.
+    let spill_rows: BTreeSet<u32> = sheet.spill.keys().map(|c| c.row).collect();
     for (a, r) in sheet.spill_ranges.iter().filter(|(_, r)| !r.is_single()) {
-        for c in r.iter().take(1_000_000) {
-            if c != *a
-                && let Some(v) = sheet.spill.get(&c)
-                && sheet.cells.get(c).is_none_or(|x| x.formula.is_none() && x.value.is_empty())
-            {
-                extra.insert(c, v.clone());
+        // Ordered-map ranges require valid bounds, including for malformed model metadata.
+        if r.start.row > r.end.row || r.start.col > r.end.col {
+            continue;
+        }
+        for &row in spill_rows.range(r.start.row..=r.end.row) {
+            let first = CellRef::new(row, r.start.col);
+            let last = CellRef::new(row, r.end.col);
+            for (&c, v) in sheet.spill.range(first..=last) {
+                if c != *a && sheet.cells.get(c).is_none_or(|x| x.formula.is_none() && x.value.is_empty()) {
+                    extra.insert(c, v.clone());
+                }
             }
         }
     }

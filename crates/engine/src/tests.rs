@@ -3393,7 +3393,9 @@ fn xls_import_keeps_formulas_and_never_saves_back_to_xls() {
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xls);
     let mut s = s();
     let r = s.execute("file.open", json!({"name": "legacy.xls", "base64": crate::io::base64_encode(&bytes)})).unwrap();
-    assert!(r["warnings"][0].as_str().unwrap().contains("97-2003"));
+    let warnings = r["warnings"].as_array().unwrap();
+    assert!(warnings[0].as_str().unwrap().contains("may be out of date"), "cache notice stays visible first");
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("97-2003"))), "retain the legacy-format warning");
     assert_eq!(r["sheets"], json!(["Old"]));
     let d = s.doc().unwrap();
     assert!(d.path.is_none());
@@ -4621,9 +4623,9 @@ fn cell_filename_follows_the_file_the_workbook_lives_in() {
     assert_eq!(v(&fresh, "A1"), Value::from(dir.join(format!("[book one.xlsx]{sheet}")).to_string_lossy().into_owned().as_str()));
     assert_eq!(v(&fresh, "A2"), Value::from(sheet.as_str()));
 
-    // Opened from that path in another session: the same answer, from the file alone.
+    // Full recalculation on open refreshes file-dependent results; cached open may retain old results.
     let mut opened = s();
-    opened.execute("file.open", json!({"path": first})).unwrap();
+    opened.execute("file.open", json!({"path": first, "recalculate": true})).unwrap();
     opened.take_ui_requests();
     assert_eq!(v(&opened, "A2"), Value::from(sheet.as_str()));
 
@@ -4638,7 +4640,7 @@ fn cell_filename_follows_the_file_the_workbook_lives_in() {
     // Opened from bytes there is no folder, only a name — still splittable on the `]`.
     let saved = opened.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let mut from_bytes = s();
-    from_bytes.execute("file.open", json!({"name": "from bytes.xlsx", "base64": saved["base64"]})).unwrap();
+    from_bytes.execute("file.open", json!({"name": "from bytes.xlsx", "base64": saved["base64"], "recalculate": true})).unwrap();
     from_bytes.take_ui_requests();
     assert_eq!(v(&from_bytes, "A1"), Value::from(format!("[from bytes.xlsx]{sheet}").as_str()));
     assert_eq!(v(&from_bytes, "A2"), Value::from(sheet.as_str()));

@@ -482,7 +482,7 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
 /// column edits aren't edits of their content, so structural commits aren't checked.
 fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
     for sh in &old.sheets {
-        if sh.spill.is_empty() {
+        if sh.spill_ranges.is_empty() {
             continue;
         }
         let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
@@ -491,7 +491,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
         }
         for c in sh.cells.diff(&after.cells) {
             let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
-            if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
+            if !filled || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
             let in_array = sh.spill_ranges.keys().any(|&anchor| {

@@ -295,6 +295,14 @@ impl DocState {
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
+    /// Opens a workbook using its saved formula results, calculating only results that are
+    /// absent. The full dependency graph is retained for subsequent edits. Saved results are
+    /// not validated for freshness; use [`Self::new`] for an explicit full recalculation.
+    pub fn from_cached(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let mut calc = Calc::new();
+        calc.recalc_missing(&mut wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
     /// A workbook as its file saved it: the dependency graph is built but nothing is
     /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
     /// is as for [`DocState::new`].
