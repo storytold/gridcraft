@@ -557,7 +557,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "Text to Columns|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },
