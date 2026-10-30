@@ -44,11 +44,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
 - **Missing:** axis scaling, label options, error bars, per-point formatting.
-- **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn and written back.
-  (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
-  can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read,
-  written, drawn) landed.
+- **Evidence:** `Chart` and `Series` (`crates/model/src/features.rs`) have one data-label flag, one gridline flag, no axis bounds and limited per-series formatting, including colour, smoothing and trendlines. All 2-D kinds survive XLSX round trip (#158, #161, both merged). Smooth lines (#62), Switch Row/Column (#116), trendlines (six types, read, written, drawn) and multi-level category axes are in; charts resize from their corner handle.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
@@ -94,9 +90,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 9. Keyboard-first users: key tips, shortcuts, context menus (U)
 - Next/previous sheet navigation now skips Hidden and VeryHidden worksheets without activating a
   hidden sheet at the workbook boundary. Other keyboard gaps below remain.
-- **Evidence:** #33, #49 (key tips: initial Home-tab support landed in #43 on 10-10, the rest of the ribbon not yet), #110, #28 (selection),
-  59 command shortcuts vs Excel's 200+.
-- **Estimate:** 12–20 h. [ui-parity.md](ui-parity.md)
+- **Evidence:** key tips cover every ribbon tab, with pending sequences for features not built yet (#33, #49; #43 was the first step); #110 audits shortcuts against Microsoft's lists (not all 200+ documented shortcuts are bound); #28 (selection).
+- **Estimate:** 10–17 h (ui-parity's remaining key tips, shortcut and context-menu work). [ui-parity.md](ui-parity.md)
 
 ### 10. Crashes and freezes reported from the field (S)
 - **Evidence:** #120 (Intel UHD crash on Windows), #117 (error on close, macOS), #166 (freeze opening
@@ -134,9 +129,6 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 15. Remaining functions and an oracle suite (F)
 - 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
@@ -154,8 +146,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [ui-parity.md](ui-parity.md#accessibility)
 
 ### 19. XLSB/ODS beyond values; minor formats (FF)
-- XLSB and ODS import values only, no write; no `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003; CSV
-  writes raw instead of displayed values; templates saved with the workbook content type.
+- XLSB and ODS import values only, no write; no `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003;
+  `.xltx`/`.xltm` save with their template content types, but "new from template" is missing.
   **Estimate:** 15–23 h.
 
 ### 20. Multiple windows; pen pressure (H)
@@ -184,6 +176,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
+| 2026-10-24 | trivial | Docs: review fixes: §4 says per-series formatting covers colour, smoothing and trendlines |
+| 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
