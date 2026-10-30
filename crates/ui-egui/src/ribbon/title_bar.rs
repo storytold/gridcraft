@@ -161,13 +161,48 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
         });
     });
-    // macOS: AppKit may move (and on a double-click, zoom) the window only from the empty area.
+}
+
+/// The `movable` flag this window's pass gives the app's windows, or `None` when it leaves them
+/// alone because the pointer is in another window (or in none).
+///
+/// craft-window keeps one movable value for all the windows, and `sync_movable` sets the flag on
+/// every app window. Each workbook window draws its title bar in the same frame, and one the
+/// pointer isn't over says "movable": were it to set the flag after the window whose Undo is
+/// under the pointer, that window could move and zoom again (#2546). Only the window the pointer
+/// is in decides; it reads the value its own title bar has just left.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn movable_to_sync(ctx: &egui::Context) -> Option<bool> {
+    ctx.pointer_hover_pos().is_some().then(|| craft_window::title_bar::window_movable(ctx))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn wanted_id() -> egui::Id {
+    egui::Id::unique("gridcraft_title_bar_wanted_movable")
+}
+
+/// The `movable` flag the last `sync_window_movable` asked for, on every desktop platform (only macOS
+/// sets it on the window). `None` before the pointer has been in a window.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wanted_movable(ctx: &egui::Context) -> Option<bool> {
+    ctx.data(|d| d.get_temp::<bool>(wanted_id()))
+}
+
+/// macOS: AppKit may move (and on a double-click, zoom) the window only from the title bar's empty
+/// area. Call once per frame, after the window's UI has run, whether or not it drew a title bar: a
+/// host that hides the bar while the pointer is on a control must not leave the window unmovable.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn sync_window_movable(ctx: &egui::Context) {
+    let Some(movable) = movable_to_sync(ctx) else {
+        return;
+    };
+    ctx.data_mut(|d| d.insert_temp(wanted_id(), movable));
     #[cfg(target_os = "macos")]
     {
         let id = egui::Id::unique("gridcraft_title_bar_movable");
-        let mut applied = ui.ctx().data(|d| d.get_temp::<Option<bool>>(id)).flatten();
-        craft_window::title_bar::sync_movable(ui.ctx(), &mut applied);
-        ui.ctx().data_mut(|d| d.insert_temp(id, applied));
+        let mut applied = ctx.data(|d| d.get_temp::<Option<bool>>(id)).flatten();
+        craft_window::title_bar::sync_movable(ctx, &mut applied);
+        ctx.data_mut(|d| d.insert_temp(id, applied));
     }
 }
 
@@ -270,6 +305,110 @@ mod title_bar_tests {
         assert!(dot_w > 0.0, "the unsaved marker is laid out");
         assert!(text.ends_with('…'));
         assert!(w + dot_w <= 200.0, "title and marker fit together: {}", w + dot_w);
+    }
+
+    /// A window's UI: a 400×28 title bar with a button at x 10..60 on it, then the sync, as
+    /// `SheetApp::ui` ends. Returns the `movable` flag the window's pass asked for.
+    fn window_ui(ui: &mut Ui) -> Option<bool> {
+        craft_window::title_bar::empty_area(ui, egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 28.0)));
+        let _ = ui.put(egui::Rect::from_min_max(pos2(10.0, 4.0), pos2(60.0, 24.0)), egui::Button::new("Undo"));
+        let wanted = movable_to_sync(ui.ctx());
+        sync_window_movable(ui.ctx());
+        wanted
+    }
+
+    fn window_input(viewport: egui::ViewportId, time: f64, events: Vec<egui::Event>) -> egui::RawInput {
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 300.0))),
+            time: Some(time),
+            events,
+            ..egui::RawInput::default()
+        };
+        input.viewports.entry(viewport).or_default();
+        input
+    }
+
+    /// Two workbook windows drawn as `doc_windows` draws them: the root window's UI, then the
+    /// second window as an immediate viewport in the same frame, through a renderer standing in
+    /// for eframe's.
+    struct TwoWindows {
+        ctx: egui::Context,
+        time: std::rc::Rc<std::cell::Cell<f64>>,
+        second_events: std::rc::Rc<std::cell::RefCell<Vec<egui::Event>>>,
+        second_wanted: std::rc::Rc<std::cell::Cell<Option<bool>>>,
+    }
+
+    const SECOND: &str = "second workbook";
+
+    impl TwoWindows {
+        fn new() -> Self {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+            let second_events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let (t, ev) = (std::rc::Rc::clone(&time), std::rc::Rc::clone(&second_events));
+            egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+                let input = window_input(viewport.ids.this, t.get(), ev.take());
+                let mut out = ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui));
+                out.textures_delta.clear();
+            });
+            Self { ctx, time, second_events, second_wanted: std::rc::Rc::default() }
+        }
+
+        /// One frame with each window's events; returns what each window's pass asked for and
+        /// the flag the frame ends with.
+        fn frame(&mut self, first: Vec<egui::Event>, second: Vec<egui::Event>) -> (Option<bool>, Option<bool>, Option<bool>) {
+            self.time.set(self.time.get() + 1.0 / 60.0);
+            *self.second_events.borrow_mut() = second;
+            let mut first_wanted = None;
+            let second_wanted = std::rc::Rc::clone(&self.second_wanted);
+            let mut out = self.ctx.run_ui(window_input(egui::ViewportId::ROOT, self.time.get(), first), |ui| {
+                first_wanted = window_ui(ui);
+                let id = egui::ViewportId::from_hash_of(SECOND);
+                ui.ctx().show_viewport_immediate(id, egui::ViewportBuilder::default(), |ui, _| second_wanted.set(window_ui(ui)));
+            });
+            out.textures_delta.clear();
+            (first_wanted, self.second_wanted.get(), wanted_movable(&self.ctx))
+        }
+    }
+
+    /// #2546 with several workbook windows: they share one context and draw their title bars in
+    /// the same frame, and one the pointer isn't over must not make the windows movable again
+    /// after the window whose Undo is under the pointer made them unmovable.
+    #[test]
+    fn only_the_window_with_the_pointer_sets_movable() {
+        let mut w = TwoWindows::new();
+        let (undo, empty) = (pos2(30.0, 14.0), pos2(300.0, 14.0));
+        for _ in 0..3 {
+            w.frame(vec![egui::Event::PointerMoved(undo)], vec![]);
+        }
+        // The window under the pointer draws first, the other last: the order that went wrong.
+        let (on_undo, other, wanted) = w.frame(vec![], vec![]);
+        assert_eq!(on_undo, Some(false), "the pointer on Undo: its window must not move");
+        assert_eq!(other, None, "the window without the pointer leaves the flag alone");
+        assert_eq!(wanted, Some(false), "and the frame ends unmovable");
+        for _ in 0..3 {
+            w.frame(vec![egui::Event::PointerMoved(empty)], vec![]);
+        }
+        assert_eq!(w.frame(vec![], vec![]).2, Some(true), "the empty bar moves the window again");
+        // The pointer leaves for the second window, onto its Undo: that window decides now.
+        w.frame(vec![egui::Event::PointerGone], vec![egui::Event::PointerMoved(undo)]);
+        for _ in 0..3 {
+            w.frame(vec![], vec![]);
+        }
+        assert_eq!(w.frame(vec![], vec![]), (None, Some(false), Some(false)), "the second window's Undo keeps the windows unmovable");
+        w.frame(vec![], vec![egui::Event::PointerMoved(empty)]);
+        w.frame(vec![], vec![]);
+        assert_eq!(w.frame(vec![], vec![]), (None, Some(true), Some(true)), "and its empty bar moves them");
+    }
+
+    #[test]
+    fn a_window_the_pointer_never_entered_sets_nothing() {
+        let mut w = TwoWindows::new();
+        for _ in 0..3 {
+            assert_eq!(w.frame(vec![], vec![]), (None, None, None));
+        }
     }
 
     #[test]

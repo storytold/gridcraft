@@ -36,8 +36,12 @@ use insert::{draw, insert};
 use page_layout::page_layout;
 use review::review;
 pub use shortcuts::shortcut;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use title_bar::sync_window_movable;
 pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
+#[cfg(not(target_arch = "wasm32"))]
+pub use title_bar::{movable_to_sync, wanted_movable};
 use view::view;
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
