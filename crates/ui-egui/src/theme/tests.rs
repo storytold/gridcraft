@@ -249,11 +249,15 @@ fn cells_draw_the_currency_signs_the_interface_draws() {
     // The app scans the installed fonts in the background; wait for the catalog here.
     let _ = crate::fonts::catalog();
     let installed = crate::fonts::installed_among(&["Arial".to_string()]);
+    let fonts = font_definitions_with(Language::En, &installed);
     let ctx = egui::Context::default();
-    ctx.set_fonts(font_definitions_with(Language::En, &installed));
+    ctx.set_fonts(fonts.clone());
     let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
     out.textures_delta.clear(); // nothing consumes the atlas in a headless test
-    let signs: String = CURRENCY_SIGNS.chars().filter(|&c| without_glyph(&ctx, FontFamily::Name(UI.into()), &c.to_string()).is_empty()).collect();
+    // The signs the interface fonts themselves have (regular and bold), not a later face of their
+    // chains: a craft face such as Noto Sans Georgian (₾) is no interface font.
+    let interface_has = |role: &str, c: char| first_face_with(&fonts, role, c).is_some_and(|k| k.starts_with("sys-ui"));
+    let signs: String = CURRENCY_SIGNS.chars().filter(|&c| interface_has(UI, c) && interface_has(UI_BOLD, c)).collect();
     if signs.is_empty() {
         eprintln!("skipped: the interface font has none of {CURRENCY_SIGNS:?}");
         return;
@@ -265,7 +269,6 @@ fn cells_draw_the_currency_signs_the_interface_draws() {
     for family in &installed {
         families.extend([(false, false), (true, false), (false, true), (true, true)].map(|(b, i)| crate::fonts::role_key(family, b, i)));
     }
-    let fonts = font_definitions_with(Language::En, &installed);
     let ui_key = format!("sys-{UI}");
     for family in families {
         let missing = without_glyph(&ctx, FontFamily::Name(family.as_str().into()), &signs);
