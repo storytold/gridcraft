@@ -141,8 +141,10 @@ pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
     (0..zip.len().min(MAX_ENTRIES)).find_map(|i| {
         let f = zip.by_index_raw(i).ok()?;
-        // The raw name, so an undecodable one still reports its size instead of being skipped.
-        (f.size() > MAX_PART).then(|| (String::from_utf8_lossy(f.name_raw()).into_owned(), f.size()))
+        // Decoded (UTF-8, or CP437 when not flagged UTF-8); the raw bytes made lossy only when the
+        // name doesn't decode, so such an entry still reports its size instead of being skipped.
+        let name = || f.name().map(|n| n.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned());
+        (f.size() > MAX_PART).then(|| (name(), f.size()))
     })
 }
 
