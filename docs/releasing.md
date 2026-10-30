@@ -49,7 +49,13 @@ The pipeline references crates that don't exist yet; the first release run fails
    cargo xtask version set 0.2.0       # or 0.2.0-rc.1; updates Cargo.toml and Cargo.lock
    ```
 
-   Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
+   Refresh the About credits in the same commit, so the release lists everyone who worked on it:
+   `python3 ../../craftrules/scripts/contributors.py .` (`storytold/craftrules`, checked out next to the
+   app repos, see AGENTS.md) rewrites `contributors/contributors.json`
+   (see [contributors.md](contributors.md)). `cargo xtask version set` warns, and
+   `cargo xtask contributors` fails, when the snapshot is more than 100 commits behind HEAD.
+
+   Commit the change (`Cargo.toml` + `Cargo.lock` + `contributors/contributors.json`) through the normal review flow.
 2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
 3. **Wait for the draft.** Notarization and the FreeBSD VM are the slow parts. The Releases
    page then has a draft `GridCraft v0.2.0`, tagged `v0.2.0` on the pushed commit, with every

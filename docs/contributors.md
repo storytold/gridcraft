@@ -53,4 +53,5 @@ python3 ../../craftrules/scripts/contributors.py .           # regenerate + veri
 python3 ../../craftrules/scripts/contributors.py --check .   # verify people.toml only
 ```
 
-Commit the updated `contributors/contributors.json`. Git author names and emails are never recorded.
+Commit the updated `contributors/contributors.json`. Do this in every release's version-bump commit
+([releasing.md](releasing.md)); `cargo xtask contributors` fails when the snapshot is over 100 commits behind HEAD. Git author names and emails are never recorded.

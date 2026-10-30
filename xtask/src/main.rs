@@ -6,6 +6,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod assets;
+mod contributors;
 mod i18n_report;
 mod ico;
 mod keytips;
@@ -26,6 +27,8 @@ commands:
                   parity --check, keytips --check (stops at the first failure; the parity check runs
                   only if docs/parity-checklist.md exists)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
+  contributors [--max N]
+                  fail when contributors/contributors.json is more than N (default 100) commits behind HEAD
   assets          check that every icon/image/font/sample file is attributed in ATTRIBUTION.md
   i18n-report     list the interface strings each language doesn't translate yet (always passes)
   layers          enforce the crate dependency layering (AGENTS.md \"Layering\")
@@ -46,6 +49,7 @@ fn main() -> ExitCode {
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
         Some("assets") => assets::run(&root()),
+        Some("contributors") => contributors::run(&root(), &rest),
         Some("i18n-report") => i18n_report::run(&root()),
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
