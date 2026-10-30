@@ -29,8 +29,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || fold(lang.tr(c.label)).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q))
-        .map(|c| (c.id.to_string(), lang.tr(c.label).to_string(), c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
+        .map(|c| {
+            let shown = shown_label(lang, c.label, &c.menu);
+            (c, shown)
+        })
+        .filter(|(c, shown)| q.is_empty() || fold(shown).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q))
+        .map(|(c, shown)| (c.id.to_string(), shown, c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
         .take(40)
         .collect();
 
@@ -91,6 +95,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 }
 
+/// A command's label as the interface shows it: the ribbon keys some labels by their tab
+/// ("Page Layout|Orientation"), so that translation wins over the bare label's.
+fn shown_label(lang: crate::i18n::Language, label: &str, menu: &[&str]) -> String {
+    menu.iter().map(|m| lang.tr(&format!("{m}|{label}")).to_string()).find(|t| t != label).unwrap_or_else(|| lang.tr(label).to_string())
+}
+
 /// Lowercases `s` and strips accents from Latin letters ("Insérer" → "inserer"), so a query
 /// matches whether or not it is typed with its accents. Combining marks are dropped too.
 fn fold(s: &str) -> String {
@@ -130,7 +140,8 @@ fn fold(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::fold;
+    use super::{fold, shown_label};
+    use crate::i18n::Language;
 
     #[test]
     fn fold_ignores_case_and_accents() {
@@ -138,5 +149,16 @@ mod tests {
         assert_eq!(fold("Œuvre Ærø Straße"), "oeuvre aero strasse");
         assert_eq!(fold("Ștergere Łódź"), "stergere lodz");
         assert_eq!(fold("e\u{301}cart"), "ecart");
+        // Turkish İ lowercases to i plus a combining dot, which is dropped.
+        assert_eq!(fold("İtalik"), "italik");
+    }
+
+    #[test]
+    fn shown_label_prefers_the_ribbon_context_key() {
+        let menu = ["Page Layout", "Page Setup"];
+        assert_eq!(shown_label(Language::Ja, "Orientation", &menu), Language::Ja.tr("Page Layout|Orientation"));
+        assert_ne!(Language::Ja.tr("Page Layout|Orientation"), Language::Ja.tr("Orientation"));
+        assert_eq!(shown_label(Language::Fr, "Bold", &["Home", "Font"]), "Gras");
+        assert_eq!(shown_label(Language::En, "Orientation", &menu), "Orientation");
     }
 }
