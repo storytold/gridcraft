@@ -286,6 +286,39 @@ fn cut_paste_that_overflows_the_grid_moves_nothing() {
 }
 
 #[test]
+fn transposed_paste_turns_the_formula_with_the_cell_that_carries_it() {
+    // #2450: the values moved but the formula kept the offset it had in the source column,
+    // so it read the cell above instead of the cell to its left.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A3", "input": "2025-10-31"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "=A3+1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A3:A4"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "C3"})).unwrap();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    let date = get(&mut s, "C3")["value"].as_f64().expect("the date pastes as its serial");
+    assert_eq!(date, get(&mut s, "A3")["value"].as_f64().unwrap());
+    assert_eq!(get(&mut s, "D3")["formula"], "=C3+1", "the formula reads the cell to its left, as Excel's does");
+    assert_eq!(get(&mut s, "D3")["value"].as_f64().unwrap(), date + 1.0, "and shows the day after it");
+}
+
+#[test]
+fn transposed_paste_turns_every_kind_of_reference_the_way_excel_does() {
+    // Observed from Excel 16: relative parts turn a quarter turn, a reference pinned with $
+    // is left standing, and a whole column comes back as a range open to the sheet's edge.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["=B1+1"], ["=$B$1"], ["=SUM(B1:C3)"], ["=SUM(B:D)"]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A4"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "C10"})).unwrap();
+    let formula = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["formula"].clone();
+    assert_eq!(formula(&mut s, "C10"), "=C11+1");
+    assert_eq!(formula(&mut s, "D10"), "=$B$1");
+    assert_eq!(formula(&mut s, "E10"), "=SUM(C11:E12)");
+    assert_eq!(formula(&mut s, "F10"), "=SUM($C11:$XFD13)");
+}
+
+#[test]
 fn replace_case_insensitive() {
     assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
 }
