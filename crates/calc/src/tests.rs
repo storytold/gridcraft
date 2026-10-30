@@ -2274,3 +2274,21 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn rtd_without_a_server_is_na_and_can_be_handled_by_formulas() {
+    let mut t = T::new();
+    for formula in ["=RTD(\"GridCraft.NoSuchServer\",,\"x\")", "=RTD(\"\",,\"x\")", "=RTD(\"server\",\"host\",\"topic\",\"price\")"] {
+        t.set("A1", formula);
+        assert_eq!(t.get("A1"), Value::Error(CellError::NA), "{formula}");
+        t.set("B1", "=ISNA(A1)");
+        assert_eq!(t.get("B1"), Value::Bool(true));
+        t.set("B2", "=IFNA(A1,42)");
+        assert_eq!(t.num("B2"), 42.0);
+        t.set("B3", "=ERROR.TYPE(A1)");
+        assert_eq!(t.num("B3"), 7.0);
+    }
+    t.set("A1", "=NOT_A_FUNCTION(1)");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Name));
+    assert_eq!(t.get("B1"), Value::Bool(false));
+}

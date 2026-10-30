@@ -428,6 +428,17 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             "Creates a link; the cell shows the friendly name, or the link itself.",
             hyperlink
         ),
+        // No COM servers are loaded: match Excel when an RTD server is unavailable (#2777).
+        f!(
+            "RTD",
+            3,
+            255,
+            Lookup,
+            A,
+            "RTD(progID, server, topic1, [topic2], ...)",
+            "Real-time data is unavailable (no COM servers; returns #N/A).",
+            na
+        ),
         f!("ENCODEURL", 1, 1, Web, S, "ENCODEURL(text)", "Percent-encodes text for use in a URL.", encodeurl),
         f!("WEBSERVICE", 1, 1, Web, S, "WEBSERVICE(url)", "Fetches data from a web service (not available; returns #VALUE!).", value_err),
         f!("FILTERXML", 2, 2, Web, S, "FILTERXML(xml, xpath)", "Extracts data from XML with an XPath (not available; returns #VALUE!).", value_err),
@@ -601,6 +612,21 @@ mod tests {
         is_err(ev("CHOOSE", vec![n(0.0), t("a")]), CellError::Value);
         let r = ev("CHOOSE", vec![av(row(&[1.0, 2.0])), av(row(&[10.0, 20.0])), av(row(&[30.0, 40.0]))]);
         assert_eq!(rows_of(&r), vec![vec![nv(10.0), nv(40.0)]]);
+    }
+
+    #[test]
+    fn rtd_has_documented_arity_and_returns_unavailable() {
+        let spec = crate::lookup("RTD").unwrap();
+        assert!(!spec.accepts(2));
+        assert!(spec.accepts(3));
+        assert!(spec.accepts(255));
+        assert!(!spec.accepts(256));
+        is_err(ev("RTD", vec![t("GridCraft.NoSuchServer"), t(""), t("topic")]), CellError::NA);
+        is_err(ev("RTD", vec![t(""), t(""), t("topic")]), CellError::NA);
+        is_err(ev("RTD", vec![t("server"), t(""), t("topic"), t("price")]), CellError::NA);
+        is_err(ev("RTD", vec![t("server"), t("")]), CellError::Value);
+        is_err(ev("RTD", vec![t("x"); 255]), CellError::NA);
+        is_err(ev("RTD", vec![t("x"); 256]), CellError::Value);
     }
 
     #[test]
