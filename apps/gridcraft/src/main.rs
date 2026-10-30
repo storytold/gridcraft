@@ -166,40 +166,145 @@ fn services() -> Services {
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
         pick_open: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
-                .add_filter("Excel Workbook", &["xlsx", "xlsm"])
-                .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
-                .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
-                .add_filter("OpenDocument Spreadsheet (data import)", &["ods"])
-                .add_filter("CSV", &["csv"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+            let mut dialog = rfd::FileDialog::new();
+            for (label, exts) in OPEN_TYPES {
+                dialog = dialog.add_filter(label, exts);
+            }
+            dialog.pick_file().and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_picture: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+            rfd::FileDialog::new().add_filter(PICTURE_TYPES.0, PICTURE_TYPES.1).pick_file().and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_save: Some(Box::new(|suggested: &str| {
-            let path = std::path::Path::new(suggested);
-            let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-            // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
-            let ext = ext.unwrap_or_else(|| "xlsx".to_string());
-            let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
-                dialog = dialog.add_filter(*label, &[*x]);
+            let (name, types) = save_types(suggested);
+            let mut dialog = rfd::FileDialog::new().set_file_name(name);
+            for (label, x) in types {
+                dialog = dialog.add_filter(label, &[x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
         })),
+        #[cfg(target_os = "macos")]
+        pick_async: Some(Box::new(sheets::pick_path)),
+        #[cfg(target_os = "macos")]
+        pick_picture_async: Some(Box::new(sheets::pick_picture)),
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         ..Default::default()
+    }
+}
+
+/// File › Open's file types.
+const OPEN_TYPES: [(&str, &[&str]); 6] = [
+    ("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"]),
+    ("Excel Workbook", &["xlsx", "xlsm"]),
+    ("Excel 97-2003 Workbook (import)", &["xls"]),
+    ("Excel Binary Workbook (data import)", &["xlsb"]),
+    ("OpenDocument Spreadsheet (data import)", &["ods"]),
+    ("CSV", &["csv"]),
+];
+
+/// Insert › Pictures' file types.
+const PICTURE_TYPES: (&str, &[&str]) = ("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]);
+
+/// The save picker's file name and types for `suggested`. The suggested name's type (an export
+/// asks for .pdf, .csv or .html) comes first.
+fn save_types(suggested: &str) -> (String, Vec<(&'static str, &'static str)>) {
+    const TYPES: [(&str, &str); 4] =
+        [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+    let path = std::path::Path::new(suggested);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
+    let ext = ext.unwrap_or_else(|| "xlsx".to_string());
+    let types = TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)).copied().collect();
+    (format!("{stem}.{ext}"), types)
+}
+
+/// macOS file pickers shown as sheets on the window (#1911, #2042, #2906).
+///
+/// A blocking picker runs AppKit's modal loop inside winit's event handler. An event delivered
+/// in that loop (a Finder drag, a trackpad gesture, resizing the panel) re-enters winit, whose guard panics
+/// in a callback that can't unwind, and the process aborts. A sheet is begun with a completion
+/// handler instead, so the frame loop keeps running and nothing re-enters. The panel is built on
+/// the main thread, during the frame, as AppKit requires; a worker thread only waits for it.
+#[cfg(target_os = "macos")]
+mod sheets {
+    use std::future::Future;
+    use std::io::Read;
+    use std::pin::Pin;
+    use std::sync::mpsc::Sender;
+    use std::sync::{Arc, PoisonError};
+    use std::task::{Context, Poll, Wake};
+
+    use gridcraft_ui_egui::{Inbox, PathPick};
+
+    type Sheet = Pin<Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>>;
+
+    /// Largest picture read; the Insert Picture dialog refuses anything over 16 MB, and one byte
+    /// more is enough for it to tell.
+    const PICTURE_LIMIT: u64 = 16 * 1024 * 1024 + 1;
+
+    pub fn pick_path(pick: PathPick, answer: Sender<Option<String>>) {
+        let sheet: Sheet = match pick {
+            PathPick::Open => {
+                let mut dialog = rfd::AsyncFileDialog::new();
+                for (label, exts) in super::OPEN_TYPES {
+                    dialog = dialog.add_filter(label, exts);
+                }
+                Box::pin(dialog.pick_file())
+            }
+            PathPick::Save(suggested) => {
+                let (name, types) = super::save_types(&suggested);
+                let mut dialog = rfd::AsyncFileDialog::new().set_file_name(name);
+                for (label, x) in types {
+                    dialog = dialog.add_filter(label, &[x]);
+                }
+                Box::pin(dialog.save_file())
+            }
+        };
+        wait(sheet, move |file| {
+            // The window may have closed meanwhile: then nobody is listening.
+            let _ = answer.send(file.and_then(|f| f.path().to_str().map(str::to_string)));
+        });
+    }
+
+    pub fn pick_picture(inbox: Inbox) {
+        let sheet: Sheet = Box::pin(rfd::AsyncFileDialog::new().add_filter(super::PICTURE_TYPES.0, super::PICTURE_TYPES.1).pick_file());
+        wait(sheet, move |file| {
+            let Some(file) = file else { return };
+            let mut bytes = Vec::new();
+            match std::fs::File::open(file.path()).and_then(|f| f.take(PICTURE_LIMIT).read_to_end(&mut bytes)) {
+                Ok(_) => inbox.lock().unwrap_or_else(PoisonError::into_inner).push((file.file_name(), bytes)),
+                Err(e) => log::warn!("picture {}: {e}", file.path().display()),
+            }
+        });
+    }
+
+    /// Waits for the sheet on a worker thread and hands its answer to `then` there.
+    fn wait(sheet: Sheet, then: impl FnOnce(Option<rfd::FileHandle>) + Send + 'static) {
+        let spawned = std::thread::Builder::new().name("gridcraft-file-sheet".into()).spawn(move || then(block_on(sheet)));
+        // Without the thread the answer is dropped, which the UI reads as "no answer coming".
+        if let Err(e) = spawned {
+            log::warn!("file picker: no thread to wait for it: {e}");
+        }
+    }
+
+    /// Runs a future to completion on the current thread, parking between polls.
+    fn block_on<T>(mut future: Pin<Box<dyn Future<Output = T> + Send>>) -> T {
+        struct Unpark(std::thread::Thread);
+        impl Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Arc::new(Unpark(std::thread::current())).into();
+        let mut cx = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
+                return value;
+            }
+            std::thread::park();
+        }
     }
 }
 

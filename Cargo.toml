@@ -91,6 +91,9 @@ debug = 0
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]
+# macOS Save panel's Format popup (PolyMeilex/rfd#328, merged 2026-07-17, not in a release yet;
+# #1386). Back to the crates.io release once one includes it.
+rfd = { git = "https://github.com/PolyMeilex/rfd.git", rev = "66e966fbc1bd856fbb987ef5631505e02b09fca2" }
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }

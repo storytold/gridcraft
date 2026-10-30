@@ -209,6 +209,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     let arrived = d.picture_inbox.as_ref().and_then(|inbox| {
                         inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop()
                     });
+                    // Nothing wakes the frame loop when the picker answers, so keep looking.
+                    if arrived.is_none() && d.picture_inbox.is_some() {
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                    }
                     if let Some((name, bytes)) = arrived {
                         d.picture_inbox = None;
                         if bytes.len() > 16 * 1024 * 1024 {
@@ -288,21 +292,22 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         // A bare name has no folder: written as typed it would land in the
                         // process's working directory (`/` from the Finder, the install folder on
                         // Windows), never where the user looks. The picker chooses the folder.
-                        let pick = app.services.pick_save.as_ref();
-                        let target = if path.is_empty() {
-                            pick.and_then(|f| f(&format!("Copy.{fmt}")))
-                        } else if let Some(f) = pick.filter(|_| std::path::Path::new(&path).is_relative()) {
-                            f(&if path.ends_with(&format!(".{fmt}")) { path } else { format!("{path}.{fmt}") })
+                        let has_picker = app.services.pick_save.is_some();
+                        let suggested = if path.is_empty() {
+                            has_picker.then(|| format!("Copy.{fmt}"))
+                        } else if has_picker && std::path::Path::new(&path).is_relative() {
+                            Some(if path.ends_with(&format!(".{fmt}")) { path.clone() } else { format!("{path}.{fmt}") })
                         } else {
-                            Some(path)
+                            None
                         };
-                        if let Some(t) = target {
-                            let id = match fmt.as_str() {
-                                "csv" => "file.exportCsv",
-                                "html" => "file.exportHtml",
-                                _ => "file.saveAs",
-                            };
-                            app.run_or_alert(id, json!({"path": t}));
+                        match suggested {
+                            Some(s) => {
+                                app.pick_path(crate::PathPick::Save(s), crate::app::AfterPick::SaveCopy(fmt));
+                            }
+                            None if !path.is_empty() => {
+                                app.after_pick(crate::app::AfterPick::SaveCopy(fmt), Some(path));
+                            }
+                            None => {}
                         }
                     }
                 }

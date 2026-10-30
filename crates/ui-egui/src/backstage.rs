@@ -699,7 +699,9 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             app.open_dialog("saveAs", json!({}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
+            // An asynchronous picker (macOS) answers later: the Backstage closes now, as it would
+            // once a blocking one had saved.
+            if after != before || app.services.pick_save.is_none() || app.picking() {
                 out.close = true;
             }
         } else if export_as(app, fmt) {
@@ -743,17 +745,9 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
     let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-    if let Some(pick) = &app.services.pick_save {
-        let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
-        // The picker may suggest a workbook extension; the export writes the chosen format.
-        let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
-        return match app.run(id, json!({"path": path})) {
-            Ok(_) => true,
-            Err(e) => {
-                app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
-                false
-            }
-        };
+    if app.services.pick_save.is_some() {
+        // An asynchronous picker (macOS) has taken the request over: the Backstage can close.
+        return app.pick_path(crate::PathPick::Save(format!("{stem}.{fmt}")), crate::app::AfterPick::Export(id, fmt.to_string())).unwrap_or(true);
     }
     if app.services.download.is_none() {
         app.message = Some(("GridCraft".into(), "Exporting needs a file picker, which this window doesn't have.".into()));
