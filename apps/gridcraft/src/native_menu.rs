@@ -25,8 +25,8 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Save", "file.save", Some("CMD+S")),
                 ("Save As…", "file.saveAs", Some("CMD+SHIFT+S")),
                 ("Export as PDF…", "file.exportPdf", None),
-                ("Export as CSV…", "dialog:saveCopy:csv", None),
-                ("Save as Web Page…", "dialog:saveCopy:html", None),
+                ("Export as CSV…", "file.exportCsv", None),
+                ("Save as Web Page…", "file.exportHtml", None),
                 ("-", "", None),
                 ("Page Setup…", "dialog:pageSetup", None),
                 ("Print…", "file.print", Some("CMD+P")),
@@ -360,7 +360,6 @@ impl NativeMenu {
             } else if let Some(rest) = id.strip_prefix("dialog:") {
                 let (name, arg) = rest.split_once(':').unwrap_or((rest, ""));
                 let params: Value = match (name, arg) {
-                    ("saveCopy", fmt) => json!({"format": fmt}),
                     ("find", "replace") => json!({"replace": true}),
                     ("note", _) => json!({"threaded": false}),
                     ("comment", _) => json!({"threaded": true}),
@@ -399,6 +398,17 @@ mod tests {
         let item = file.iter().find(|e| e.0 == "Export as PDF…").expect("Export as PDF… in the File menu");
         assert_eq!(item.1, "file.exportPdf");
         assert!(gridcraft_engine::find_command("file.exportPdf").is_some());
+    }
+
+    #[test]
+    fn file_menu_csv_and_web_page_exports_use_the_commands_of_the_in_app_menu() {
+        let tree = tree();
+        let (_, file) = tree.iter().find(|(title, _)| *title == "File").expect("File menu");
+        for (label, command) in [("Export as CSV…", "file.exportCsv"), ("Save as Web Page…", "file.exportHtml")] {
+            let item = file.iter().find(|e| e.0 == label).expect("export entry in the File menu");
+            assert_eq!(item.1, command);
+            assert!(gridcraft_engine::find_command(command).is_some());
+        }
     }
 
     #[test]

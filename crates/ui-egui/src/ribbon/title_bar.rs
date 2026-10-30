@@ -135,7 +135,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                         [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
                     {
                         if ui.button(label).clicked() {
-                            app.open_dialog("saveCopy", json!({"format": fmt}));
+                            match fmt {
+                                "csv" => app.run_or_alert("file.exportCsv", json!({})),
+                                "html" => app.run_or_alert("file.exportHtml", json!({})),
+                                _ => app.open_dialog("saveCopy", json!({"format": fmt})),
+                            }
                         }
                     }
                 });

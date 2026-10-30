@@ -92,6 +92,17 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
+        // Menu-style Export as CSV / Web Page with no file named: the same save picker as the File
+        // tab's Save a Copy page, so the native menu bar and the in-app menu behave alike.
+        let export_fmt = match id {
+            "file.exportCsv" => Some("csv"),
+            "file.exportHtml" => Some("html"),
+            _ => None,
+        };
+        if let Some(fmt) = export_fmt.filter(|_| params.get("path").and_then(Json::as_str).is_none_or(str::is_empty)) {
+            backstage::export_as(self, fmt);
+            return;
+        }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
