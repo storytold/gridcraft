@@ -36,7 +36,7 @@ pub const CT_PIVOT_TABLE: &str = "application/vnd.openxmlformats-officedocument.
 pub const CT_PIVOT_CACHE_DEF: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
 pub const CT_PIVOT_CACHE_REC: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
 
-/// Largest source block scanned for a cache (cells); bigger sources are not written.
+/// Largest source block scanned for a cache (cells); bigger sources fail XLSX serialization.
 const MAX_SOURCE_CELLS: u64 = 10_000_000;
 /// Largest records snapshot written (cells); bigger caches are written without records.
 const MAX_RECORD_CELLS: u64 = 2_000_000;

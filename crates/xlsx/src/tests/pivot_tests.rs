@@ -12,17 +12,206 @@ use super::minimal;
 use crate::xml;
 use crate::{read_xlsx, write_xlsx};
 
+/// Parses a known-valid A1 cell address used to construct or inspect a generated fixture.
 fn at(a: &str) -> CellRef {
     CellRef::parse(a).unwrap()
 }
+/// Parses a known-valid A1 range for fixture tables and PivotTable layout bounds.
 fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+/// Two saves preserve whole-axis extents while the cache contains only the eight source records.
+#[test]
+fn whole_axis_pivot_sources_survive_xlsx_with_bounded_cache_records() {
+    for (source, reference, expected) in [
+        ("Data!$A:$F", "A1:F1048576", "Data!$A:$F"),
+        ("Data!$A$1:$F$1048576", "A1:F1048576", "Data!$A:$F"),
+        ("Data!$1:$9", "A1:XFD9", "Data!$1:$9"),
+        ("LocalColumns", "A1:F1048576", "Data!$A:$F"),
+        ("LocalRows", "A1:XFD9", "Data!$1:$9"),
+    ] {
+        let mut wb = workbook();
+        for (name, formula) in [("LocalColumns", "Data!$A:$F"), ("LocalRows", "Data!$1:$9")] {
+            wb.names.push(DefinedName { name: name.into(), scope: Some(1), formula: formula.into(), comment: String::new(), hidden: false });
+        }
+        let report = wb.sheet_mut(1).unwrap();
+        report.pivots.truncate(1);
+        report.pivots[0].source = source.into();
+        for _ in 0..2 {
+            let bytes = write_xlsx(&wb).unwrap();
+            let parts = unzip(&bytes);
+            let cache = std::str::from_utf8(&parts["xl/pivotCache/pivotCacheDefinition1.xml"]).unwrap();
+            assert!(cache.contains(&format!("<worksheetSource ref=\"{reference}\" sheet=\"Data\"/>")), "{source}: {cache}");
+            assert!(cache.contains("recordCount=\"8\""), "{source}: cache scans only existing data");
+            let records = xml::parse(&parts["xl/pivotCache/pivotCacheRecords1.xml"]).unwrap();
+            assert_eq!(records.children.len(), 8, "{source}");
+            wb = read_xlsx(&bytes).unwrap().0;
+            assert_eq!(wb.sheet(1).unwrap().pivots[0].source, expected, "{source}");
+        }
+    }
+}
+
+/// Build a fictional sparse source whose leading empty cells still belong to the declared range.
+fn sparse_pivot_source(source: &str, cells: &[(&str, Value)], row_field: &str, value_field: &str) -> Workbook {
+    let mut wb = Workbook::new();
+    let data = wb.sheet_mut(0).unwrap();
+    data.name = "Data".into();
+    for (address, value) in cells {
+        data.cells.set(at(address), Cell::value(value.clone()));
+    }
+    let mut report = Sheet::new("Report");
+    report.pivots.push(PivotTable {
+        id: 1,
+        name: "Sparse".into(),
+        source: source.into(),
+        anchor: at("A3"),
+        rows: vec![field(row_field)],
+        values: vec![PivotValue { source_col: value_field.into(), name: "Total".into(), ..PivotValue::default() }],
+        ..PivotTable::default()
+    });
+    wb.sheets.push(Arc::new(report));
+    for (name, formula) in [("LocalRows", "Data!$1:$9"), ("LocalColumns", "Data!$A:$F")] {
+        wb.names.push(DefinedName { name: name.into(), scope: Some(1), formula: formula.into(), comment: String::new(), hidden: false });
+    }
+    for (name, formula) in [("GlobalRows", "Data!$1:$9"), ("GlobalColumns", "Data!$A:$F")] {
+        wb.names.push(DefinedName { name: name.into(), scope: None, formula: formula.into(), comment: String::new(), hidden: false });
+    }
+    wb
+}
+
+/// Check field identities and decoded records across two saves, including named-source resolution.
+fn assert_sparse_cache(mut wb: Workbook, names: &[&str], records: &[Vec<&str>], row_index: usize, value_index: usize) {
+    for _ in 0..2 {
+        let bytes = write_xlsx(&wb).unwrap();
+        let parts = unzip(&bytes);
+        let cache = xml::parse(&parts["xl/pivotCache/pivotCacheDefinition1.xml"]).unwrap();
+        let fields: Vec<_> = cache.child("cacheFields").unwrap().kids("cacheField").collect();
+        assert_eq!(fields.iter().map(|f| f.attr("name").unwrap()).collect::<Vec<_>>(), names);
+        assert_eq!(cache.attr_u32("recordCount"), Some(records.len() as u32));
+        let rows = xml::parse(&parts["xl/pivotCache/pivotCacheRecords1.xml"]).unwrap();
+        let values: Vec<Vec<_>> = rows
+            .kids("r")
+            .map(|row| {
+                assert_eq!(row.children.len(), names.len(), "each record has the declared field offsets");
+                row.children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        if v.name == "x" {
+                            let item = &fields[i].child("sharedItems").unwrap().children[v.attr_u32("v").unwrap() as usize];
+                            item.attr("v").unwrap_or("").to_string()
+                        } else {
+                            v.attr("v").unwrap_or("").to_string()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(values, records);
+        let table = xml::parse(&parts["xl/pivotTables/pivotTable1.xml"]).unwrap();
+        assert_eq!(table.child("rowFields").unwrap().child("field").unwrap().attr_u32("x"), Some(row_index as u32));
+        assert_eq!(table.child("dataFields").unwrap().child("dataField").unwrap().attr_u32("fld"), Some(value_index as u32));
+        wb = read_xlsx(&bytes).unwrap().0;
+        assert_eq!(wb.sheet(1).unwrap().pivots[0].rows[0].source_col, names[row_index]);
+        assert_eq!(wb.sheet(1).unwrap().pivots[0].values[0].source_col, names[value_index]);
+    }
+}
+
+/// Whole-row sources retain blank leading fields and the requested header row, even through names.
+#[test]
+fn whole_rows_pivot_cache_keeps_declared_column_origin() {
+    let cells = [("C1", Value::text("Month")), ("D1", Value::text("Amount")), ("C2", Value::text("Jan")), ("D2", Value::Number(17.0))];
+    for source in ["Data!$1:$9", "LocalRows", "GlobalRows"] {
+        let wb = sparse_pivot_source(source, &cells, "Month", "Amount");
+        assert_sparse_cache(wb, &["Column1", "Column2", "Month", "Amount"], &[vec!["", "", "Jan", "17"]], 2, 3);
+    }
+    // A source beginning on row 5 must not take a different header from the sheet's row 1.
+    let cells = [
+        ("C1", Value::text("Outside")),
+        ("D1", Value::text("Not a field")),
+        ("C5", Value::text("Month")),
+        ("D5", Value::text("Amount")),
+        ("C7", Value::text("Jan")),
+        ("D7", Value::Number(17.0)),
+    ];
+    let wb = sparse_pivot_source("Data!$5:$9", &cells, "Month", "Amount");
+    assert_sparse_cache(wb, &["Column1", "Column2", "Month", "Amount"], &[vec!["", "", "Jan", "17"]], 2, 3);
+}
+
+/// Whole-column sources retain their own header and both leading/trailing column offsets.
+#[test]
+fn whole_columns_pivot_cache_keeps_declared_header_row_and_field_origins() {
+    // No headers in the declared row 1: the writer's existing ColumnN defaults must stay
+    // anchored there. C5/D5 are data, not a replacement header chosen from the used range.
+    let cells = [("C5", Value::text("Month")), ("D5", Value::text("Amount")), ("C6", Value::text("Jan")), ("D6", Value::Number(17.0))];
+    for source in ["Data!$A:$F", "LocalColumns", "GlobalColumns"] {
+        let wb = sparse_pivot_source(source, &cells, "Column3", "Column4");
+        assert_sparse_cache(
+            wb,
+            &["Column1", "Column2", "Column3", "Column4", "Column5", "Column6"],
+            &[vec!["", "", "Month", "Amount", "", ""], vec!["", "", "Jan", "17", "", ""]],
+            2,
+            3,
+        );
+    }
+    // Offsets belong to the declared column C, not to A or the first used column E.
+    let cells = [("E5", Value::text("Month")), ("F5", Value::text("Amount")), ("E6", Value::text("Jan")), ("F6", Value::Number(17.0))];
+    let wb = sparse_pivot_source("Data!$C:$F", &cells, "Column3", "Column4");
+    assert_sparse_cache(wb, &["Column1", "Column2", "Column3", "Column4"], &[vec!["", "", "Month", "Amount"], vec!["", "", "Jan", "17"]], 2, 3);
+}
+
+/// A fixed rectangle uses its own header and does not acquire whole-axis padding.
+#[test]
+fn bounded_pivot_cache_keeps_its_own_header_and_column_origin() {
+    let cells = [("C5", Value::text("Month")), ("D5", Value::text("Amount")), ("C6", Value::text("Jan")), ("D6", Value::Number(17.0))];
+    let wb = sparse_pivot_source("Data!$C$5:$D$6", &cells, "Month", "Amount");
+    assert_sparse_cache(wb, &["Month", "Amount"], &[vec!["Jan", "17"]], 0, 1);
+}
+
+/// A source-work overflow fails the save rather than silently dropping the PivotTable.
+#[test]
+fn whole_axis_pivot_cache_padding_over_source_limit_rejects_save() {
+    // Two sparse cells have a narrow used range, but padding fields back to A makes
+    // 2,000 x 16,384 potential source reads. Refuse before building fields or reading records.
+    let cells = [("XFD1", Value::text("Last")), ("XFD2000", Value::Number(17.0))];
+    let wb = sparse_pivot_source("Data!$A:$XFD", &cells, "Column1", "Last");
+    let result = write_xlsx(&wb);
+    assert!(result.is_err(), "a resolved over-budget PivotTable must not be silently omitted");
+    let error = result.unwrap_err();
+    assert!(matches!(error, crate::IoError::TooLarge(_)));
+    assert!(error.to_string().contains("PivotTable"));
+    assert!(error.to_string().contains("10000000"));
+}
+
+/// Under the source-work limit, a large snapshot is omitted while its PivotTable is preserved.
+#[test]
+fn whole_axis_pivot_cache_padding_over_record_limit_keeps_definition() {
+    // Under the source limit, 1,000 nonempty records with 2,001 padded fields still exceed
+    // the existing two-million-cell snapshot limit: retain the definition without records.
+    let mut wb = sparse_pivot_source("Data!$1:$1001", &[], "Column1", "Last");
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(CellRef::new(0, 2000), Cell::value(Value::text("Last")));
+    for row in 1..=1000 {
+        sh.cells.set(CellRef::new(row, 2000), Cell::value(Value::Number(17.0)));
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let cache = xml::parse(&parts["xl/pivotCache/pivotCacheDefinition1.xml"]).unwrap();
+    assert_eq!(cache.attr("saveData"), Some("0"));
+    assert_eq!(cache.child("cacheFields").unwrap().children.len(), 2001);
+    assert!(!parts.contains_key("xl/pivotCache/pivotCacheRecords1.xml"));
+    assert!(parts.contains_key("xl/pivotTables/pivotTable1.xml"));
+    let reopened = read_xlsx(&bytes).unwrap().0;
+    assert_eq!(reopened.sheet(1).unwrap().pivots[0].source, "Data!$1:$1001");
+}
+
+/// Converts a known-valid fixture date into the workbook's 1900-system serial value.
 fn date(y: i64, m: i64, d: i64) -> f64 {
     serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d).unwrap()
 }
 
+/// Builds an axis field linked to the given source header, retaining default grouping and sorting.
 fn field(name: &str) -> PivotField {
     PivotField { source_col: name.into(), ..PivotField::default() }
 }
@@ -201,6 +390,7 @@ fn workbook() -> Workbook {
     wb
 }
 
+/// Extracts generated XLSX package parts so tests can inspect the written cache and table XML.
 fn unzip(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut m = HashMap::new();
