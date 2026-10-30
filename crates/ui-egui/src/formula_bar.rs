@@ -453,17 +453,19 @@ fn editor_shortcuts(
     if !has_focus || !mine || app.message.is_some() || app.dialog.is_some() {
         return outcome;
     }
-    let (action, cancel) = editor_confirm_keys(ui, ed);
+    let (action, cancel, sideways_enter) = editor_confirm_keys(ui, ed, app.session.prefs.enter_step());
     outcome.action = action;
     outcome.cancel = cancel;
     let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
     outcome.action = action;
-    outcome.arrow = arrow;
+    outcome.arrow = arrow || sideways_enter;
     editor_other_shortcuts(app, ui, id, ed);
     outcome
 }
 
-fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> (Option<EditorAction>, bool) {
+/// `enter_step` is where Enter moves after entering the cell (File › Options); Shift+Enter goes back.
+/// The last value is true for Enter set to move sideways, which commits like an arrow, not like Tab.
+fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState, enter_step: (i64, i64)) -> (Option<EditorAction>, bool, bool) {
     let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
         let m = i.modifiers;
         let alt_enter = i.consume_key(egui::Modifiers::ALT, Key::Enter) || i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, Key::Enter);
@@ -486,7 +488,8 @@ fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> 
         ed.accept_autocomplete();
         None
     } else if enter {
-        Some((if shift { -1 } else { 1 }, 0, false, false))
+        let (dr, dc) = enter_step;
+        Some(if shift { (-dr, -dc, false, false) } else { (dr, dc, false, false) })
     } else if tab {
         Some((0, if shift { -1 } else { 1 }, false, false))
     } else {
@@ -509,7 +512,8 @@ fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> 
     } else {
         true
     };
-    (action, cancel)
+    let sideways_enter = enter && !cmd_enter && !ctrl_shift_enter && enter_step.0 == 0 && enter_step.1 != 0;
+    (action, cancel, sideways_enter)
 }
 
 fn editor_arrow_keys(

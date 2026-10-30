@@ -25,6 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             options
         ),
+        cmd!(
+            query "options.enterDirection",
+            "After pressing Enter, move selection",
+            [],
+            None,
+            "{move?: bool, direction?: down|right|up|left} → {move, direction} (where Enter moves after entering a cell; a preference, not saved in the workbook; Shift+Enter goes the other way)",
+            always,
+            enter_direction
+        ),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
         cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
         cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{window, doc, index, title, dirty, active, hidden}]", always, |s, _| Ok(s.window_list())),
@@ -217,6 +226,31 @@ fn properties(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(serde_json::to_value(&cx.wb.props).unwrap_or_default())
     })
+}
+
+/// File › Options › Advanced › "After pressing Enter, move selection" and its Direction. Turning the
+/// move off keeps the selection on the entered cell; turning it back on without a direction moves
+/// down, Excel's default.
+fn enter_direction(s: &mut Session, p: &Json) -> Result<Json> {
+    let direction = str_param(p, "direction");
+    if let Some(d) = direction {
+        if !matches!(d, "down" | "right" | "up" | "left") {
+            return Err(bad("options.enterDirection", "`direction` must be down, right, up or left"));
+        }
+        s.prefs.enter_direction = d.into();
+    }
+    match bool_param(p, "move") {
+        Some(false) => s.prefs.enter_direction = "none".into(),
+        Some(true) if direction.is_none() && s.prefs.enter_step() == (0, 0) => s.prefs.enter_direction = "down".into(),
+        _ => {}
+    }
+    let direction = match s.prefs.enter_step() {
+        (0, 1) => "right",
+        (-1, 0) => "up",
+        (0, -1) => "left",
+        _ => "down",
+    };
+    Ok(json!({"move": s.prefs.enter_step() != (0, 0), "direction": direction}))
 }
 
 /// File › Options: reports the workbook-level settings and asks the interface to show its Options
