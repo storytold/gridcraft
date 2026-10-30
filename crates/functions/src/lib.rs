@@ -77,6 +77,7 @@ pub(crate) mod special;
 pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
+pub(crate) mod xpath;
 
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};

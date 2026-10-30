@@ -430,7 +430,16 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         ),
         f!("ENCODEURL", 1, 1, Web, S, "ENCODEURL(text)", "Percent-encodes text for use in a URL.", encodeurl),
         f!("WEBSERVICE", 1, 1, Web, S, "WEBSERVICE(url)", "Fetches data from a web service (not available; returns #VALUE!).", value_err),
-        f!("FILTERXML", 2, 2, Web, S, "FILTERXML(xml, xpath)", "Extracts data from XML with an XPath (not available; returns #VALUE!).", value_err),
+        f!(
+            "FILTERXML",
+            2,
+            2,
+            Web,
+            &[true, true],
+            "FILTERXML(xml, xpath)",
+            "Selects values from XML with a bounded XPath subset.",
+            crate::xpath::filterxml
+        ),
         f!(
             "CUBEKPIMEMBER",
             3,
@@ -610,7 +619,6 @@ mod tests {
         close(ev("HYPERLINK", vec![t("http://x.com"), n(5.0)]), 5.0);
         is_text(ev("ENCODEURL", vec![t("a b&c/é")]), "a%20b%26c%2F%C3%A9");
         is_err(ev("WEBSERVICE", vec![t("http://x")]), CellError::Value);
-        is_err(ev("FILTERXML", vec![t("<a/>"), t("//a")]), CellError::Value);
         is_err(ev("CUBEVALUE", vec![t("conn")]), CellError::NA);
         is_err(ev("CUBESETCOUNT", vec![t("set")]), CellError::NA);
     }

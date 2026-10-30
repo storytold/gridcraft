@@ -15,7 +15,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
 | Ribbon and menu catalog | **276 / 292 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
-| Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
+| Worksheet functions that do real work | **505 / 523 (96.6%)** | measured: excludes 8 stubs (7 CUBE functions, WEBSERVICE); FILTERXML works offline with a bounded XPath subset |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
 | **Mainstream practitioner** | **~50%** | estimated; [method](#mainstream-practitioner) (69.5 depth × 0.90 × 0.92 × 0.88 = 50.6) |
 | **Essentials user** | **~63%** | estimated; [method](#essentials-user) (80.2 depth × 0.92 × 0.95 × 0.90 = 63.1) |

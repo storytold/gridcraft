@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-25 · **Change:** minor (the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (FILTERXML supports offline paths, attributes and predicates through a bounded XPath subset; de-DE number parsing is not covered) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -23,13 +23,13 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 - **Not on Microsoft's list:** USDOLLAR, a legacy function Excel still evaluates (like DOLLAR),
   is in our library as a Compatibility function for files that use it. It is not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
-  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
-  WEBSERVICE and FILTERXML; Excel for Windows has them.
+  cube connections) and WEBSERVICE (`#VALUE!`). Excel for Mac also lacks WEBSERVICE and
+  FILTERXML; Excel for Windows has them.
 - The measurement is **presence**. Depth (edge cases matching Excel) is estimated below.
 
 ## Coverage
 
-**Measured: 513 / 523 by name (98.1%); 504 / 523 working (96.4%).**
+**Measured: 513 / 523 by name (98.1%); 505 / 523 working (96.6%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
@@ -45,10 +45,10 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Logical | 19 | 19 | 19 | 100% | — |
 | Database | 12 | 12 | 12 | 100% | — |
 | Cube | 7 | 7 | 0 | 0% | (all 7 are `#N/A` stubs) |
-| Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
+| Web | 3 | 3 | 2 | 67% | (WEBSERVICE is a stub; ENCODEURL and FILTERXML work) |
 | Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **505** | **496** | **94.8%** | 18 missing, 9 stubs |
+| **Total** | **523** | **505** | **497** | **95.0%** | 18 missing, 8 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 346 / 360, 2010
 56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
@@ -68,7 +68,7 @@ This improves series preparation; it does not change the model-fitting or season
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
 | GETPIVOTDATA | yes | 2–3 h | Needs the pivot engine's result cache; also the "Generate GetPivotData" option |
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
-| CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
+| CUBE* (7), WEBSERVICE | partly | 4–8 h | FILTERXML is implemented offline with paths, `//`, attributes, `*`, `[n]` and `[@a='x']`; functions such as `count()` and `text()` are unsupported, and nested element results return `#VALUE!`. Results use GridCraft's en-US typed-input parser, so de-DE number/date parsing is not covered. CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
 | CALL, REGISTER.ID, RTD | no | — | Native DLL/COM calls; not portable or safe |
 
@@ -123,6 +123,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | FILTERXML reads XML offline with a bounded XPath subset (paths, `//`, attributes, `*`, `[n]`, `[@a='x']`); results use current en-US typed-input parsing, with de-DE locale cases deferred |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |
