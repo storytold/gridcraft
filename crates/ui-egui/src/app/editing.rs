@@ -168,8 +168,9 @@ impl SheetApp {
         }
     }
 
-    /// Commits the edit with an arrow key. The arrow is an ordinary move, so it ends a run of Tabs
-    /// instead of continuing it (Right) or going back to its column like Enter (Down), as in Excel.
+    /// Commits the edit with an arrow key, or with Enter set to move sideways. Either is an ordinary
+    /// move, so it ends a run of Tabs instead of continuing it (Right) or going back to its column
+    /// like Enter (Down), as in Excel.
     pub fn commit_edit_arrow(&mut self, dr: i64, dc: i64) -> bool {
         let run = self.tab_run.take();
         let ok = self.commit_edit(dr, dc, false, false);
@@ -180,6 +181,15 @@ impl SheetApp {
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
+    }
+
+    /// Enter on the grid, in the File › Options direction. Set to move sideways it is not a Tab: it
+    /// ends a run of Tabs instead of starting one, so a later Enter down stays in its column.
+    pub fn move_after_enter_key(&mut self, dr: i64, dc: i64) {
+        self.move_after_enter(dr, dc);
+        if dr == 0 {
+            self.tab_run = None;
+        }
     }
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.

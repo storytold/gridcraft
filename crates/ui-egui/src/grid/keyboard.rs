@@ -121,7 +121,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         } else {
                             // File › Options › "After pressing Enter, move selection" and its Direction.
                             let (dr, dc) = app.session.prefs.enter_step();
-                            if shift { app.move_after_enter(-dr, -dc) } else { app.move_after_enter(dr, dc) }
+                            if shift { app.move_after_enter_key(-dr, -dc) } else { app.move_after_enter_key(dr, dc) }
                         }
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
