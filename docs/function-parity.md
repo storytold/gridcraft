@@ -1,5 +1,6 @@
 # Function parity: worksheet functions and formulas
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-30 · **Change:** minor (BESSELI and BESSELK order 0 and 1 use Excel's 8-digit approximations; higher-order BESSELI retains its prior series; earlier: ECMA.CEILING and IMSQRT parity notes; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-27 · **Change:** minor (ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals, and the other IM* differences from Excel are listed; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
@@ -116,6 +117,19 @@ inputs, so large finite middle values do not become `#NUM!` merely because their
 Sorting, argument coercion and error propagation are unchanged; this is a numerical correction
 under the documented median rule, not an extreme-value comparison against desktop Excel.
 
+**Bessel functions.** Excel's results are not the true values: it uses 7 to 9 digit
+approximations (BESSELI(1,1) = 0.56515909758, true 0.56515910399; BESSELK(2,2) = 0.25375976
+exactly). Measured in Excel 365 over several arguments at orders 0 and 1 per function.
+BESSELI and BESSELK match Excel at orders 0 and 1 using Abramowitz & Stegun 9.8.1 to 9.8.8;
+higher-order BESSELI retains its existing series and does not yet match Excel. The test table in
+`engineering.rs` holds Excel's values for orders 0 and 1 (relative difference below 1e-12).
+BESSELJ and BESSELY still return the true value, so they differ from Excel by up to about 5e-7
+(BESSELJ(1.9,2) Excel 0.3299258287, GridCraft 0.3299257277; Excel's BESSELJ(0,0) is
+1.00000000283141). Excel's n = 0 and 1 values come from rational approximations that are not the
+A&S polynomials, and its higher orders are upward recurrence from them (Y; J when x is above n)
+or a downward recurrence otherwise; the constants cannot be recovered from measurements and the
+published sources are not free to reuse, so these two stay exact.
+
 Work to close (16–26 h in total): the in-scope missing functions (10–16 h with the table above),
 an oracle corpus of Excel-computed results per function (owner runs Excel on generated
 workbooks; results checked in as data, not Excel files) and fixing what it finds (6–10 h).
@@ -124,6 +138,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | BESSELI and BESSELK order 0 and 1 return Excel's values (A&S polynomials, tested against a table measured in Excel); higher-order BESSELI retains its existing series; BESSELJ and BESSELY still differ in the 7th to 9th digit, see Depth |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |

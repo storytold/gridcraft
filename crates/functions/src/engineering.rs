@@ -578,21 +578,56 @@ mod tests {
         cx(ev("IMSUM", vec![t("1.5e1+2E-1j")]), 15.0, 0.2);
     }
 
+    /// Excel's orders 0 and 1 use the Abramowitz & Stegun approximations.
+    #[test]
+    #[allow(clippy::excessive_precision)] // Excel's values as it prints them (17 digits)
+    fn bessel_i_k_order_zero_and_one_match_excel() {
+        let table: &[(&str, f64, f64, f64)] = &[
+            ("BESSELI", 0.05, 0.0, 1.0006250972908861),
+            ("BESSELI", 1.0, 0.0, 1.2660658480342601),
+            ("BESSELI", 3.75, 0.0, 9.118945993790991),
+            ("BESSELI", 10.0, 0.0, 2815.7166648041534),
+            ("BESSELI", -2.5, 0.0, 3.2898391723912908),
+            ("BESSELI", 0.05, 1.0, 0.02500781331109611),
+            ("BESSELI", 1.0, 1.0, 0.5651590975819435),
+            ("BESSELI", 3.75, 1.0, 7.78001515135595),
+            ("BESSELI", 10.0, 1.0, 2670.988320559247),
+            ("BESSELI", -2.5, 1.0, -2.516716242025361),
+            ("BESSELK", 0.05, 0.0, 3.11423403291686),
+            ("BESSELK", 1.0, 0.0, 0.421024421083418),
+            ("BESSELK", 2.0, 0.0, 0.11389388),
+            ("BESSELK", 10.0, 0.0, 1.7780061933126626e-05),
+            ("BESSELK", 0.05, 1.0, 19.90967432725877),
+            ("BESSELK", 1.0, 1.0, 0.6019072316669057),
+            ("BESSELK", 2.0, 1.0, 0.13986588),
+            ("BESSELK", 10.0, 1.0, 1.8648773946849075e-05),
+        ];
+        for &(function, x, order, expected) in table {
+            match ev(function, vec![n(x), n(order)]) {
+                Value::Number(got) => {
+                    let tol = 1e-12 * expected.abs();
+                    assert!((got - expected).abs() <= tol, "{function}({x},{order}) = {got}, Excel {expected}");
+                }
+                other => panic!("{function}({x},{order}): {other:?}"),
+            }
+        }
+        assert!(matches!(ev("BESSELI", vec![n(710.0), n(0.0)]), Value::Number(v) if v.is_finite()));
+        is_err(ev("BESSELI", vec![n(720.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELI", vec![n(800.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELI", vec![n(1.0), n(-1.0)]), CellError::Num);
+        is_err(ev("BESSELK", vec![n(0.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELK", vec![n(-1.0), n(0.0)]), CellError::Num);
+    }
+
     #[test]
     fn bessel() {
         close_tol(ev("BESSELJ", vec![n(1.9), n(2.0)]), 0.329_925_829, 1e-6);
         close_tol(ev("BESSELY", vec![n(2.5), n(1.0)]), 0.145_918_138, 1e-6);
-        close_tol(ev("BESSELI", vec![n(1.5), n(1.0)]), 0.981_666_428, 1e-6);
-        close_tol(ev("BESSELK", vec![n(1.5), n(1.0)]), 0.277_387_804, 1e-6);
         close_tol(ev("BESSELJ", vec![n(1.0), n(0.0)]), 0.765_197_686_557_966_6, 1e-12);
         close_tol(ev("BESSELJ", vec![n(1.0), n(1.0)]), 0.440_050_585_744_933_5, 1e-12);
         close_tol(ev("BESSELJ", vec![n(-1.0), n(1.0)]), -0.440_050_585_744_933_5, 1e-12);
         close_tol(ev("BESSELY", vec![n(1.0), n(0.0)]), 0.088_256_964_215_676_96, 1e-11);
         close_tol(ev("BESSELY", vec![n(1.0), n(1.0)]), -0.781_212_821_300_288_7, 1e-11);
-        close_tol(ev("BESSELI", vec![n(1.0), n(0.0)]), 1.266_065_877_752_008_4, 1e-12);
-        close_tol(ev("BESSELI", vec![n(1.0), n(1.0)]), 0.565_159_103_992_485_1, 1e-12);
-        close_tol(ev("BESSELK", vec![n(1.0), n(0.0)]), 0.421_024_438_240_708_3, 1e-11);
-        close_tol(ev("BESSELK", vec![n(1.0), n(1.0)]), 0.601_907_230_197_234_6, 1e-11);
         is_err(ev("BESSELJ", vec![n(1.0), n(-1.0)]), CellError::Num);
         is_err(ev("BESSELY", vec![n(0.0), n(1.0)]), CellError::Num);
         is_err(ev("BESSELK", vec![n(-1.0), n(1.0)]), CellError::Num);
