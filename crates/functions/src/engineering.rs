@@ -591,6 +591,15 @@ mod tests {
         close_tol(ev("BESSELY", vec![n(1.0), n(1.0)]), -0.781_212_821_300_288_7, 1e-11);
         close_tol(ev("BESSELI", vec![n(1.0), n(0.0)]), 1.266_065_877_752_008_4, 1e-12);
         close_tol(ev("BESSELI", vec![n(1.0), n(1.0)]), 0.565_159_103_992_485_1, 1e-12);
+        assert!(matches!(
+            ev("BESSELI", vec![n(1000.0), n(1500.0)]),
+            Value::Number(v) if v.is_finite() && v > 0.0
+        ));
+        assert!(matches!(
+            ev("BESSELI", vec![n(1e-153), n(2.0)]),
+            Value::Number(v) if v.is_finite() && v > 0.0
+        ));
+        close_tol(ev("BESSELI", vec![n(1.0), n(100_000.0)]), 0.0, 0.0);
         close_tol(ev("BESSELK", vec![n(1.0), n(0.0)]), 0.421_024_438_240_708_3, 1e-11);
         close_tol(ev("BESSELK", vec![n(1.0), n(1.0)]), 0.601_907_230_197_234_6, 1e-11);
         is_err(ev("BESSELJ", vec![n(1.0), n(-1.0)]), CellError::Num);
