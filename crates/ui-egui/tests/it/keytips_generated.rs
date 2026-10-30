@@ -2067,10 +2067,7 @@ fn keytip_apn_() {
 fn keytip_apnd_() {
     let mut h = harness(blank());
     sequence(&mut h, "APND", false);
-    assert!(h.state().dialog.is_none(), "APND must not open a dialog");
-    assert!(h.state().message.is_none(), "APND must not open a message box");
-    assert!(h.state().toast.is_none(), "APND must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "APND must not journal");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.fromDatabase"), "APND must journal data.fromDatabase");
 }
 
 #[test]
@@ -2202,7 +2199,7 @@ fn keytip_aro_() {
 fn keytip_arr_() {
     let mut h = harness(blank());
     sequence(&mut h, "ARR", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "ARR must invoke pivot.refresh and surface its missing-params error");
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "ARR must invoke data.refresh and surface its missing-params error");
 }
 
 #[test]

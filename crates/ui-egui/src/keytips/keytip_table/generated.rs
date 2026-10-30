@@ -282,7 +282,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AO", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Queries & Connections
     ("AP1", Entry::Finish(Action::Command("file.properties"))), // Excel: Properties
     ("APN", Entry::Continue),                                 // Excel: Get Data (Power Query) Menu; group level: Power Query variants = GAP
-    ("APND", Entry::Finish(Action::Pending("data.fromDatabase"))), // pending; Excel: From Database (Microsoft Query); gap #12; reserved until the command lands
+    ("APND", Entry::Finish(Action::Command("data.fromDatabase"))), // Excel: From Database (Microsoft Query); PostgreSQL, MySQL/MariaDB, SQLite and ODBC through the host's data source
     ("APNE", Entry::Finish(Action::Pending("data.powerQueryEditor"))), // pending; Excel: Launch Power Query Editor; gap #12; reserved until the command lands
     ("APNG", Entry::Finish(Action::Command("data.getData"))),          // Excel: Get Data (Power Query); containment(Get Data)
     ("APNH", Entry::Finish(Action::Pending("data.fromHtml"))),         // pending; Excel: From HTML; gap #12; reserved until the command lands
@@ -297,7 +297,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("ARA", Entry::Finish(Action::Command("data.refreshAll"))),      // Excel: Refresh All
     ("ARC", Entry::Finish(Action::Pending("data.cancelRefresh"))),   // pending; Excel: Cancel Refresh; gap #12; reserved until the command lands
     ("ARO", Entry::Finish(Action::Pending("data.connectionProperties"))), // pending; Excel: Connection Properties; gap #12; reserved until the command lands
-    ("ARR", Entry::Finish(Action::Command("pivot.refresh"))),             // Excel: Refresh
+    ("ARR", Entry::Finish(Action::Command("data.refresh"))),              // Excel: Refresh; the database table at the selection, or the PivotTable
     ("ARS", Entry::Finish(Action::Pending("data.refreshStatus"))),        // pending; Excel: Refresh Status; gap #12; reserved until the command lands
     ("ASA", Entry::Finish(Action::Command("data.sortAscending"))),        // Excel: Sort A to Z
     ("ASD", Entry::Finish(Action::Command("data.sortDescending"))),       // Excel: Sort Z to A

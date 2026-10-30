@@ -362,6 +362,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         wb_rels.add("vbaProject", "vbaProject.bin");
         out.part("xl/vbaProject.bin", Some(CT_VBA), data.to_vec());
     }
+    crate::db_queries::write(wb, &mut wb_rels, &mut out);
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
     // Document properties.

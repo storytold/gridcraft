@@ -11,6 +11,7 @@ pub mod cf;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
+pub mod datasource;
 pub mod display;
 pub mod fill;
 pub mod io;
@@ -390,6 +391,8 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Saved connections of Data › From Database (no passwords).
+    pub db_connections: Vec<datasource::ConnectionProfile>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -424,6 +427,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            db_connections: vec![],
         }
     }
 }
@@ -519,6 +523,12 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Host-provided database access for `data.fromDatabase` (desktop app, CLI); `None` on the
+    /// web and in hosts without drivers.
+    pub data_source: Option<datasource::DataSource>,
+    /// Database passwords given this session, by driver, connection and user, so Refresh doesn't
+    /// ask again. Never saved or journaled.
+    pub db_passwords: std::collections::HashMap<String, String>,
 }
 
 impl Session {
@@ -1083,13 +1093,17 @@ impl Session {
     pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
         let r = self.execute(id, params);
         let requests = self.take_ui_requests();
-        let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
+        let asked_for_file = requests
+            .iter()
+            .any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs" || name == "fromDatabase" || name == "dbTrust"));
         // A call that only opened a dialog is not recorded (see `execute`), so the recording
         // has no step to take back here.
         if r.is_ok() && asked_for_file {
             let what = match id {
                 "file.open" => "`path` or `base64`",
                 "data.getData" | "data.fromTextCsv" => "`path` or `text`",
+                "data.fromDatabase" => "`driver`, `connection` and `query`",
+                "data.refresh" | "data.refreshAll" => "`trust: true` (the workbook's database queries come from the file)",
                 _ => "`path`",
             };
             let msg = format!("missing {what}: programmatic calls never open dialogs");
