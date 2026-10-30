@@ -2076,6 +2076,11 @@ dependencies = [
 [[package]]
 name = "gridcraft-pdf"
 version = "0.13.0"
+dependencies = [
+ "epaint_default_fonts",
+ "harfrust",
+ "read-fonts",
+]
 
 [[package]]
 name = "gridcraft-ui-egui"

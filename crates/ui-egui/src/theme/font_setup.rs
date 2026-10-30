@@ -202,6 +202,13 @@ pub fn craft_fonts_loaded() -> bool {
     !craft_fonts::CRAFT_FONTS.is_empty()
 }
 
+/// The embedded craft-fonts face for Thai (`Regular`, or `Bold` when `bold`), for the app to
+/// hand to PDF export ([`gridcraft_engine::io::register_pdf_font`]). `None` without one.
+pub fn craft_thai_font(bold: bool) -> Option<&'static [u8]> {
+    let style = if bold { "Bold" } else { "Regular" };
+    craft_font_faces().into_iter().find(|(_, f)| f.style == style && f.scripts.contains(&"Thai")).map(|(_, f)| f.bytes)
+}
+
 /// Whether the native-only Simplified Chinese craft face (LXGW WenKai Lite) was embedded. A web
 /// build or an older craft-fonts checkout without `fonts/simplified-chinese-manifest.txt` has none.
 pub fn chinese_font_loaded() -> bool {
