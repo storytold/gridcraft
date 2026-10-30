@@ -701,9 +701,9 @@ pub fn register_pdf_font(bytes: Vec<u8>, bold: bool) -> Result<String> {
     gridcraft_pdf::register_fallback_font(bytes, bold).map_err(|e| EngineError::Other(e.to_string()))
 }
 
-/// Whether PDF export has a fallback font.
-pub fn has_pdf_font() -> bool {
-    gridcraft_pdf::has_fallback_font()
+/// Whether PDF export has a fallback face of its own for regular or bold text.
+pub fn has_pdf_font_face(bold: bool) -> bool {
+    gridcraft_pdf::has_fallback_face(bold)
 }
 
 /// Registers the PDF fallback fonts named by [`PDF_FONT_ENV`] and [`PDF_BOLD_FONT_ENV`], once at

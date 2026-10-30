@@ -1,6 +1,8 @@
 # gridcraft-pdf
 
-A small, dependency-free PDF 1.7 writer for vector drawing and RGBA images.
+A small PDF 1.7 writer for text, vector drawing and RGBA images. Its only dependencies are
+`read-fonts` and `harfrust`, to parse and shape the optional embedded fallback font (Thai and other
+scripts the 14 standard PDF fonts lack); without a registered font it uses neither.
 
 ## API migration
 

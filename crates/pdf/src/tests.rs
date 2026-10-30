@@ -336,8 +336,35 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
 /// The fallback font is process-wide: tests that register one take turns.
 static FALLBACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn fallback_lock() -> std::sync::MutexGuard<'static, ()> {
-    FALLBACK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+/// Holds the turn; the registration is cleared when it is taken and when it is dropped, so a
+/// test that fails half-way leaves no font behind for the next one.
+struct FallbackGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for FallbackGuard {
+    fn drop(&mut self) {
+        clear_fallback_fonts();
+    }
+}
+
+fn fallback_lock() -> FallbackGuard {
+    let lock = FALLBACK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    clear_fallback_fonts();
+    FallbackGuard { _lock: lock }
+}
+
+/// `font` with the tag of its table `from` replaced by `to` (the table directory is walked by hand).
+fn with_table_renamed(font: &[u8], from: &[u8; 4], to: &[u8; 4]) -> Vec<u8> {
+    let mut out = font.to_vec();
+    let tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+    for i in 0..tables {
+        let rec = 12 + i * 16;
+        if &font[rec..rec + 4] == from {
+            out[rec..rec + 4].copy_from_slice(to);
+        }
+    }
+    out
 }
 
 /// `font` with its `OS/2.fsType` set to `fs_type` (the table directory is walked by hand).
@@ -362,7 +389,19 @@ fn fallback_font_refuses_bad_and_restricted_files() {
     assert_eq!(register_fallback_font(vec![0; MAX_FONT_BYTES + 1], false), Err(FontError::TooLarge));
     let restricted = with_fs_type(epaint_default_fonts::UBUNTU_LIGHT, 0x0002);
     assert_eq!(register_fallback_font(restricted, false), Err(FontError::EmbeddingNotAllowed));
+    // No glyf table (a CFF font): FontFile2 can't hold its outlines.
+    let no_glyf = with_table_renamed(epaint_default_fonts::UBUNTU_LIGHT, b"glyf", b"xxxx");
+    assert!(matches!(register_fallback_font(no_glyf, false), Err(FontError::Malformed(_))));
     assert!(!has_fallback_font(), "a refused font is not registered");
+}
+
+#[test]
+fn text_is_shaped_one_script_at_a_time() {
+    assert_eq!(embedded::script_runs("Invoice ใบแจ้งหนี้ 2026"), vec![(0, "Invoice "), (8, "ใบแจ้งหนี้ 2026")]);
+    assert_eq!(embedded::script_runs("No. 42 Привет"), vec![(0, "No. 42 "), (7, "Привет")]);
+    assert_eq!(embedded::script_runs("น้ำ"), vec![(0, "น้ำ")]);
+    assert_eq!(embedded::script_runs("café 001"), vec![(0, "café 001")]);
+    assert_eq!(embedded::script_runs(""), vec![(0, "")]);
 }
 
 #[test]
@@ -391,8 +430,9 @@ fn fallback_font_is_embedded_shaped_and_searchable() -> Result<(), Box<dyn Error
     // Latin stays in the standard font; CJK, which the font lacks, still uses the CID font.
     assert!(find(&pdf, b"(No. ) Tj").is_some());
     assert!(find(&pdf, b"<7B7E> Tj").is_some());
-    // Bold text without a bold face is the regular face stroked.
+    // Bold text without a bold face is the regular face stroked, embedded once for both.
     assert!(find(&pdf, b"2 Tr").is_some());
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /CIDFontType2").count(), 1);
     // Measured from the font, not as full-width CID glyphs.
     assert!(width > 10.0 && width < 60.0, "width {width}");
     Ok(())
@@ -446,6 +486,13 @@ fn thai_text_with_a_thai_font() -> Result<(), Box<dyn Error>> {
     let Some(path) = std::env::var_os("GRIDCRAFT_PDF_THAI_FONT") else { return Ok(()) };
     let _guard = fallback_lock();
     register_fallback_font(std::fs::read(path)?, false)?;
+    // Latin first must not make the Thai part lose its Thai shaping. Fonts that keep their Thai
+    // lookups under the `thai` script only (Tahoma) show the difference; TH Sarabun shapes alike.
+    let (face, _) = embedded::face(false).ok_or_else(|| io::Error::other("font not registered"))?;
+    let gids = |g: Vec<embedded::Glyph>| g.iter().map(|g| (g.gid, g.x_offset, g.y_offset)).collect::<Vec<_>>();
+    let mixed = gids(face.shape("Invoice ใบแจ้งหนี้ น้ำ"));
+    let thai = gids(face.shape("ใบแจ้งหนี้ น้ำ"));
+    assert_eq!(mixed.get(mixed.len() - thai.len()..), Some(thai.as_slice()), "the Thai part is shaped as Thai");
     let text = "สวัสดี น้ำ ญี่ปุ่น ฐาน ปั้น";
     let mut doc = PdfDoc::new();
     let p = doc.add_page(400.0, 120.0);

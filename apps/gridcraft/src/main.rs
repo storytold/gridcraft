@@ -240,7 +240,9 @@ fn load_pdf_fonts() {
     for warning in gridcraft_engine::io::load_pdf_fonts_from_env() {
         log::warn!("{warning}");
     }
-    if gridcraft_engine::io::has_pdf_font() {
+    // A face named in the environment (regular or bold) keeps its slot, and craft-fonts fills in
+    // only when none was named: regular and bold never come from two different families.
+    if gridcraft_engine::io::has_pdf_font_face(false) || gridcraft_engine::io::has_pdf_font_face(true) {
         return;
     }
     for bold in [false, true] {

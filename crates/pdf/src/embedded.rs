@@ -78,6 +78,10 @@ impl Face {
         let hhea = font.hhea().map_err(bad)?;
         font.hmtx().map_err(bad)?;
         font.cmap().map_err(bad)?;
+        // The font is written as CIDFontType2 / FontFile2, which holds TrueType outlines only.
+        if font.glyf().is_err() || font.loca(None).is_err() {
+            return Err(FontError::Malformed("only TrueType outlines can be embedded; this font has CFF outlines or none".into()));
+        }
         let fs_type = font.os2().map(|o| o.fs_type()).unwrap_or(0);
         if fs_type & (FS_RESTRICTED | FS_BITMAP_ONLY) != 0 {
             return Err(FontError::EmbeddingNotAllowed);
@@ -124,30 +128,30 @@ impl Face {
         (units.saturating_mul(1000) + upem / 2 * units.signum()) / upem
     }
 
-    /// Shapes `text` (direction, script and language guessed from the text). An empty result
-    /// means the font could not be read.
+    /// Shapes `text`, one script run at a time (direction, script and language guessed for each).
+    /// An empty result means the font could not be read.
     pub fn shape(&self, text: &str) -> Vec<Glyph> {
         let Some(font) = self.font() else { return Vec::new() };
         let text = cut(text, MAX_SHAPE_BYTES);
         let shaper = self.data.shaper(&font).build();
-        let mut buffer = UnicodeBuffer::new();
-        buffer.push_str(text);
-        buffer.guess_segment_properties();
-        // One cluster per character, not per syllable, so each Thai vowel and tone mark glyph
-        // maps back to its own character in the ToUnicode CMap.
-        buffer.set_cluster_level(BufferClusterLevel::Characters);
-        let out = shaper.shape(buffer, ShapeOptions::new());
-        out.glyph_infos()
-            .iter()
-            .zip(out.glyph_positions())
-            .map(|(i, p)| Glyph {
+        let mut glyphs = Vec::new();
+        for (offset, part) in script_runs(text) {
+            let mut buffer = UnicodeBuffer::new();
+            buffer.push_str(part);
+            buffer.guess_segment_properties();
+            // One cluster per character, not per syllable, so each Thai vowel and tone mark glyph
+            // maps back to its own character in the ToUnicode CMap.
+            buffer.set_cluster_level(BufferClusterLevel::Characters);
+            let out = shaper.shape(buffer, ShapeOptions::new());
+            glyphs.extend(out.glyph_infos().iter().zip(out.glyph_positions()).map(|(i, p)| Glyph {
                 gid: u16::try_from(i.glyph_id).unwrap_or(0),
-                cluster: i.cluster as usize,
+                cluster: (i.cluster as usize).saturating_add(offset),
                 x_advance: p.x_advance,
                 x_offset: p.x_offset,
                 y_offset: p.y_offset,
-            })
-            .collect()
+            }));
+        }
+        glyphs
     }
 
     /// Width of shaped `text` in 1/1000 em.
@@ -174,6 +178,35 @@ fn cut(text: &str, max: usize) -> &str {
     }
     let end = (0..=max).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
     text.get(..end).unwrap_or_default()
+}
+
+/// `text` cut where the script changes, as (byte offset, part): harfrust shapes a buffer in one
+/// script, guessed from its first letter, so "Invoice ใบแจ้งหนี้" shaped whole would set its Thai
+/// as Latin, with no mark positioning. Characters with no script of their own (spaces, digits,
+/// punctuation, tone marks) stay in the part they are in.
+// shortcut: scripts are told apart by Unicode block, not the Script property; enough to keep
+// Thai, Lao and Latin apart, upgrade to a Script table for fonts covering scripts that share a block.
+pub(crate) fn script_runs(text: &str) -> Vec<(usize, &str)> {
+    let script = |c: char| {
+        let u = c as u32;
+        match u {
+            _ if !c.is_alphabetic() || (0x0300..=0x036F).contains(&u) => None,
+            0..0x0250 => Some(0),
+            _ => Some(u >> 7),
+        }
+    };
+    let mut parts = Vec::new();
+    let (mut start, mut current) = (0, None);
+    for (i, c) in text.char_indices() {
+        let Some(s) = script(c) else { continue };
+        if current.is_some_and(|cur| cur != s) {
+            parts.push((start, text.get(start..i).unwrap_or_default()));
+            start = i;
+        }
+        current = Some(s);
+    }
+    parts.push((start, text.get(start..).unwrap_or_default()));
+    parts
 }
 
 /// The font's PostScript name (name ID 6), reduced to characters a PDF name may hold.
@@ -249,6 +282,16 @@ pub fn clear_fallback_fonts() {
 /// Whether a fallback font is registered.
 pub fn has_fallback_font() -> bool {
     face(false).is_some()
+}
+
+/// Whether a face of its own is registered for regular or bold text (a bold slot filled in by
+/// the regular face does not count).
+pub fn has_fallback_face(bold: bool) -> bool {
+    let faces = match FACES.read() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    faces.get(usize::from(bold)).is_some_and(Option::is_some)
 }
 
 /// The face for regular or bold text, and whether bold must be drawn by stroking the regular one.

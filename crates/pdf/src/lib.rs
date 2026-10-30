@@ -22,7 +22,7 @@ mod metrics;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-pub use embedded::{FontError, MAX_FONT_BYTES, clear_fallback_fonts, has_fallback_font, register_fallback_font};
+pub use embedded::{FontError, MAX_FONT_BYTES, clear_fallback_fonts, has_fallback_face, has_fallback_font, register_fallback_font};
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
@@ -687,11 +687,13 @@ impl Page {
         // the CID font. Each `Tj`/`TJ` advances the text position, so the runs follow each other
         // on the baseline.
         let fallback = embedded::face(font.is_bold());
+        // Synthetic bold strokes the regular face, so it shares the regular slot (embedded once).
+        let bold_face = fallback.as_ref().is_some_and(|(_, synthetic)| font.is_bold() && !synthetic);
         for (class, run) in runs(text, fallback.as_ref().map(|(f, _)| f.as_ref()), font.is_fallback()) {
             let slot = match class {
                 Run::Standard => fi,
                 Run::Cid => CID_FONT,
-                Run::Embedded => EMBEDDED_FONT + usize::from(font.is_bold()),
+                Run::Embedded => EMBEDDED_FONT + usize::from(bold_face),
             };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
