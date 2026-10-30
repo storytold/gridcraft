@@ -18,14 +18,19 @@ thread_local! {
     static INFOS: RefCell<egui::ViewportIdMap<ViewportInfo>> = RefCell::new(egui::ViewportIdMap::default());
     /// The viewport commands the app sent this frame.
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
-    /// Input events for the root window's next frame (a key pressed in it).
-    static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
     /// Each viewport's builder as last drawn (how its native window is created).
     static BUILT: RefCell<egui::ViewportIdMap<egui::ViewportBuilder>> = RefCell::new(egui::ViewportIdMap::default());
+    /// Each viewport's input events for the next frame (pointer events, a key pressed in it).
+    static EVENTS: RefCell<egui::ViewportIdMap<Vec<egui::Event>>> = RefCell::new(egui::ViewportIdMap::default());
+    /// Each viewport's accessibility tree as last drawn, to find a widget to click.
+    static TREES: RefCell<egui::ViewportIdMap<egui::accesskit::TreeUpdate>> = RefCell::new(egui::ViewportIdMap::default());
 }
 
-fn record(mut out: egui::FullOutput) {
+fn record(id: ViewportId, mut out: egui::FullOutput) {
     out.textures_delta.clear(); // not painted
+    if let Some(tree) = out.platform_output.accesskit_update.take() {
+        TREES.with(|t| t.borrow_mut().insert(id, tree));
+    }
     SENT.with(|s| {
         let mut s = s.borrow_mut();
         for (id, v) in &out.viewport_output {
@@ -50,15 +55,19 @@ impl Desk {
     fn with_window_controls(quit_with_last_window: bool, controls: Option<gridcraft_ui_egui::window_controls::Layout>) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
         BUILT.with(|b| b.borrow_mut().clear());
+        EVENTS.with(|e| e.borrow_mut().clear());
+        TREES.with(|t| t.borrow_mut().clear());
         let ctx = Context::default();
+        ctx.enable_accesskit();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
             let id = viewport.ids.this;
             let mut input = RawInput { viewport_id: id, ..RawInput::default() };
             input.viewports = INFOS.with(|i| i.borrow().clone());
             input.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
+            input.events = EVENTS.with(|e| e.borrow_mut().remove(&id).unwrap_or_default());
             let mut cb = viewport.viewport_ui_cb;
-            record(ctx.run_ui(input, |ui| cb(ui)));
+            record(id, ctx.run_ui(input, |ui| cb(ui)));
         });
         let mut session = Session::new();
         session.new_workbook();
@@ -77,7 +86,7 @@ impl Desk {
         let mut input = RawInput { viewport_id: ViewportId::ROOT, ..RawInput::default() };
         input.viewports = INFOS.with(|i| i.borrow().clone());
         input.viewports.entry(ViewportId::ROOT).or_default();
-        input.events = EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()));
+        input.events = EVENTS.with(|e| e.borrow_mut().remove(&ViewportId::ROOT).unwrap_or_default());
         let Desk { ctx, app, windows } = self;
         let mut act = Some(act);
         let out = ctx.clone().run_ui(input, |ui| {
@@ -89,7 +98,7 @@ impl Desk {
             windows.logic(app, &ctx);
             windows.show(app, ui);
         });
-        record(out);
+        record(ViewportId::ROOT, out);
         // Close buttons are one-shot events.
         INFOS.with(|i| i.borrow_mut().values_mut().for_each(|v| v.events.clear()));
         SENT.with(|s| s.borrow().clone())
@@ -109,6 +118,26 @@ impl Desk {
         INFOS.with(|i| i.borrow_mut().entry(vp).or_default().events.push(ViewportEvent::Close));
         let mut sent = self.frame_with(|_, _| {});
         sent.extend(self.frames(2));
+        sent
+    }
+
+    /// The user clicks the button labelled `label` in window `window`, as drawn in its last frame.
+    fn click(&mut self, window: u64, label: &str) -> Vec<(ViewportId, ViewportCommand)> {
+        use egui::accesskit::Role;
+        let vp = self.viewport(window);
+        let bounds = TREES.with(|t| {
+            let t = t.borrow();
+            let tree = t.get(&vp).unwrap_or_else(|| panic!("window {window} drew no accessibility tree"));
+            tree.nodes.iter().find(|(_, n)| n.role() == Role::Button && n.label() == Some(label)).and_then(|(_, n)| n.bounds())
+        });
+        let b = bounds.unwrap_or_else(|| panic!("window {window} has no {label} button"));
+        let pos = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut sent = vec![];
+        for event in [egui::Event::PointerMoved(pos), button(true), button(false)] {
+            EVENTS.with(|e| e.borrow_mut().entry(vp).or_default().push(event));
+            sent.extend(self.frame_with(|_, _| {}));
+        }
         sent
     }
 
@@ -132,7 +161,13 @@ impl Desk {
     /// The user presses `key` in the root window.
     fn key(&mut self, key: egui::Key) -> Vec<(ViewportId, ViewportCommand)> {
         EVENTS.with(|e| {
-            e.borrow_mut().push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+            e.borrow_mut().entry(ViewportId::ROOT).or_default().push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
         });
         let mut sent = self.frame_with(|_, _| {});
         sent.extend(self.frames(2));
@@ -613,4 +648,33 @@ fn every_window_follows_the_app_drawn_frame_and_use_system_title_bar() {
     assert_eq!(decorated(third), Some(false), "a new window is built as at launch");
     assert!(sent_to(&sent, third, &ViewportCommand::Decorations(true)), "and then given its frame");
     assert!(!sent_to(&sent, second, &ViewportCommand::Decorations(true)), "the others are asked only once");
+}
+
+/// GNOME on Wayland: the Close button GridCraft draws in a second window's title bar closes that
+/// window as the desktop's close button would. Its unsaved workbook is asked about in that window
+/// and the app keeps running.
+#[test]
+fn the_drawn_close_button_closes_its_own_window_and_asks_first() {
+    let mut desk = Desk::with_window_controls(true, Some(gridcraft_ui_egui::window_controls::Layout::default()));
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    assert_eq!(desk.windows.root_window(), Some(w1));
+
+    let sent = desk.click(w2, "Close");
+    assert!(sent_to(&sent, desk.viewport(w2), &ViewportCommand::Close), "the button asks its own window to close: {sent:?}");
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    // egui-winit turns a window's Close command into that window's close event, as the desktop's
+    // close button does (`process_viewport_command`).
+    let sent = desk.close(w2);
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "Book2 is unsaved: it asks");
+    assert_eq!(desk.app.session.active_window(), Some(w2), "in Book2's window");
+    assert_eq!(desk.app.session.documents().len(), 2);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+
+    let sent = desk.answer(SaveAnswer::DontSave);
+    assert_eq!(desk.app.session.documents().len(), 1, "Book2 closes");
+    assert_eq!(desk.windows.shown_windows(), [w1], "and its window with it");
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "the app keeps running: {sent:?}");
 }
