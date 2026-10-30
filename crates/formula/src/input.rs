@@ -8,7 +8,11 @@ use crate::{Expr, ParseError, parser};
 pub enum FormulaLocale {
     #[default]
     En,
+    /// Spanish function names, `;` between arguments, decimal comma, `\` between array columns.
     Es,
+    /// English function names with the separators of a decimal-comma region (Ukrainian Excel):
+    /// `;` between arguments, decimal comma, `\` between array columns.
+    Semicolon,
 }
 
 const SPANISH: &[(&str, &str)] = &[
@@ -32,13 +36,13 @@ const SPANISH: &[(&str, &str)] = &[
 
 impl FormulaLocale {
     pub fn list_separator(self) -> char {
-        if self == Self::Es { ';' } else { ',' }
+        if self == Self::En { ',' } else { ';' }
     }
     pub fn decimal_separator(self) -> char {
-        if self == Self::Es { ',' } else { '.' }
+        if self == Self::En { '.' } else { ',' }
     }
     pub fn array_column_separator(self) -> char {
-        if self == Self::Es { '\\' } else { ',' }
+        if self == Self::En { ',' } else { '\\' }
     }
     pub fn function_name(self, canonical: &str) -> &str {
         if self == Self::Es {
@@ -95,9 +99,13 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     if locale == FormulaLocale::En {
         return Ok(crate::print(expr));
     }
-    let mut expr = expr.clone();
-    normalize(&mut expr, &known_name, &mut Vec::new(), 0, true)?;
-    let canonical = crate::print(&expr);
+    let canonical = if locale == FormulaLocale::Es {
+        let mut expr = expr.clone();
+        normalize(&mut expr, &known_name, &mut Vec::new(), 0, true)?;
+        crate::print(&expr)
+    } else {
+        crate::print(expr)
+    };
     let tokens = crate::lexer::tokenize(&canonical).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let mut out = String::new();
     let mut array_depth = 0usize;

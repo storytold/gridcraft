@@ -102,7 +102,8 @@ impl SheetApp {
             }
             return true;
         }
-        let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
+        let region = self.ui.language.region();
+        let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, region, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
                 self.message = Some(("GridCraft".into(), error.to_string()));

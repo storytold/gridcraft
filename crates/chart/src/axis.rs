@@ -1,7 +1,7 @@
 //! Value-axis scaling ("nice numbers") and label formatting.
 
 use gridcraft_core::{DateSystem, Value, number_to_text};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::{NumberFormat, display_region, format_value_in, localize_general};
 
 /// Largest magnitude we plot; bigger values are clamped so ranges stay finite.
 pub(crate) const MAX_ABS: f64 = 1e300;
@@ -133,10 +133,11 @@ impl Fmt {
         {
             v = 0.0;
         }
+        // Labels follow the display region (`1.234,5 €`, `31/12/2026`), like the cells.
         if self.general {
-            return general_text(v, step);
+            return localize_general(general_text(v, step), display_region());
         }
-        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900).text;
+        let mut t = format_value_in(&Value::Number(v), &self.fmt, DateSystem::D1900, display_region()).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }

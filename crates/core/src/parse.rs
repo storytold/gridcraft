@@ -5,6 +5,7 @@
 //! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
+use crate::region::Region;
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -17,6 +18,16 @@ pub struct Parsed {
 /// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
 /// stays text. A leading apostrophe forces text.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_value(s, sys, true)
+}
+
+/// Like [`parse_input`] for values read from a file such as CSV, which stays en-US: the euro
+/// and hryvnia forms only typed entry reads (`€5`, `12,50 €`, `250 грн`) remain text.
+pub fn parse_file_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_value(s, sys, false)
+}
+
+fn parse_value(s: &str, sys: DateSystem, entry: bool) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -33,7 +44,7 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys) {
+    if let Some((n, f)) = parse_numeric(t, sys, entry) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
@@ -46,7 +57,8 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    // Arithmetic reads only the `$` Excel en-US reads; `12 €` and `250 грн` are typed-entry forms.
+    parse_numeric(s.trim(), sys, false).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
@@ -56,30 +68,31 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
-        Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
-        Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        Some(inner) if signed_inside(&inner, true) => None,
+        Some(inner) => parse_plain(&inner, true).map(|(n, _)| -n),
+        None => parse_plain(t, true).map(|(n, _)| n),
     }
 }
 
-fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+/// `entry`: typed cell input, which also reads the euro and hryvnia forms (`€5`, `12,50 €`, `250 грн`).
+fn parse_numeric(t: &str, sys: DateSystem, entry: bool) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
-        if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
+        if signed_inside(&inner, entry) {
             return None;
         }
-        let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
+        let r = parse_plain(&inner, entry).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
         return r.map(|(n, f)| (-n, f));
     }
-    parse_unparenthesised(t, sys)
+    parse_unparenthesised(t, sys, entry)
 }
 
-fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_unparenthesised(t: &str, sys: DateSystem, entry: bool) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
-    if let Some(r) = parse_plain(t) {
+    if let Some(r) = parse_plain(t, entry) {
         return Some(r);
     }
     if let Some(r) = parse_fraction(t) {
@@ -89,6 +102,13 @@ fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'stat
         return Some(r);
     }
     None
+}
+
+/// Whether the text inside accounting parentheses carries a sign or more parentheses, after a
+/// leading currency symbol: `-5`, `$-5`, `(5)`, and for typed entry `€-5`. Excel reads none of them.
+fn signed_inside(inner: &str, entry: bool) -> bool {
+    let symbols: &[char] = if entry { &['$', '€'] } else { &['$'] };
+    inner.strip_prefix(symbols).map_or(inner, str::trim_start).starts_with(['-', '+', '('])
 }
 
 /// The number inside accounting parentheses, as plain text: `(5)` gives `5`. A dollar sign may
@@ -107,11 +127,20 @@ fn parenthesized(t: &str) -> Option<String> {
     Some(format!("{currency}{}{percent}", body.trim()))
 }
 
+/// Currency symbols typed after the amount (`12.50 €`), with the format each gives.
+const SUFFIX_CURRENCIES: [(&str, &str, &str); 4] = [
+    ("€", "#,##0.00 \"€\"", "#,##0 \"€\""),
+    ("₴", "#,##0.00 \"₴\"", "#,##0 \"₴\""),
+    ("грн.", "#,##0.00 \"грн.\"", "#,##0 \"грн.\""),
+    ("грн", "#,##0.00 \"грн\"", "#,##0 \"грн\""),
+];
+
 /// Signs, currency, thousands separators, percent, exponent.
-fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
+fn parse_plain(t: &str, entry: bool) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
-    let mut currency = false;
+    // The formats for an amount with and without decimals, when a currency symbol was typed.
+    let mut currency: Option<(&'static str, &'static str)> = None;
     let mut percent = false;
     if let Some(r) = s.strip_prefix('-') {
         neg = true;
@@ -119,12 +148,29 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     } else if let Some(r) = s.strip_prefix('+') {
         s = r.trim_start();
     }
-    if let Some(r) = s.strip_prefix('$') {
-        currency = true;
-        s = r.trim_start();
-        if !neg && let Some(r2) = s.strip_prefix('-') {
-            neg = true;
-            s = r2;
+    let prefixes: &[(&str, &str, &str)] = if entry {
+        &[("$", "\"$\"#,##0.00", "\"$\"#,##0"), ("€", "\"€\"#,##0.00", "\"€\"#,##0")]
+    } else {
+        &[("$", "\"$\"#,##0.00", "\"$\"#,##0")]
+    };
+    for &(symbol, decimals, whole) in prefixes {
+        if let Some(r) = s.strip_prefix(symbol) {
+            currency = Some((decimals, whole));
+            s = r.trim_start();
+            if !neg && let Some(r2) = s.strip_prefix('-') {
+                neg = true;
+                s = r2;
+            }
+            break;
+        }
+    }
+    if entry && currency.is_none() {
+        for (symbol, decimals, whole) in SUFFIX_CURRENCIES {
+            if let Some(r) = s.strip_suffix(symbol) {
+                currency = Some((decimals, whole));
+                s = r.trim_end();
+                break;
+            }
         }
     }
     if let Some(r) = s.strip_suffix('%') {
@@ -132,7 +178,7 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
         s = r.trim_end();
     }
     // Excel reads `$5` and `5%` but not `$5%`.
-    if s.is_empty() || currency && percent {
+    if s.is_empty() || currency.is_some() && percent {
         return None;
     }
     let has_sep = s.contains(',');
@@ -171,8 +217,8 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     if neg {
         n = -n;
     }
-    let fmt = if currency {
-        Some(if digits.contains('.') { "\"$\"#,##0.00" } else { "\"$\"#,##0" })
+    let fmt = if let Some((decimals, whole)) = currency {
+        Some(if digits.contains('.') { decimals } else { whole })
     } else if percent {
         Some(if digits.contains('.') { "0.00%" } else { "0%" })
     } else if sci {
@@ -385,6 +431,133 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         }
     }
     None
+}
+
+/// A constant number's input text (`1234.5`, as stored) with `region`'s decimal separator, for
+/// editing (`1234,5` in Spain). Anything else comes back unchanged.
+pub fn localize_number(raw: &str, region: Region) -> String {
+    let d = region.decimal();
+    if d == '.' || !raw.contains('.') {
+        return raw.to_string();
+    }
+    let body = raw.strip_prefix('-').unwrap_or(raw);
+    if body.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-')) && raw.parse::<f64>().is_ok_and(f64::is_finite) {
+        raw.replace('.', &d.to_string())
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Typed input written the `region`'s way, rewritten as en-US input that [`parse_input`] reads as
+/// the same number or date: `1.234,50 €` becomes `1,234.50 €` and `5/11/2026` (5 November)
+/// becomes `11/5/2026` in Spain. `None` when the text needs no rewriting or is not a number or
+/// date in the region (it is then taken as typed). en-US input never needs it.
+pub fn delocalize_input(s: &str, region: Region) -> Option<String> {
+    if region == Region::EnUs {
+        return None;
+    }
+    let t = s.trim();
+    if t.is_empty() || t.starts_with(['=', '\'']) {
+        return None;
+    }
+    // Booleans as the Spanish and Ukrainian interfaces write them, in any case (`істина`).
+    let booleans = match region {
+        Region::EsEs => Some(("VERDADERO", "FALSO")),
+        Region::UkUa => Some(("ІСТИНА", "ХИБНІСТЬ")),
+        Region::EnUs => None,
+    };
+    if let Some((yes, no)) = booleans {
+        let upper = t.to_uppercase();
+        if upper == yes {
+            return Some("TRUE".into());
+        }
+        if upper == no {
+            return Some("FALSE".into());
+        }
+    }
+    if let Some(n) = delocalize_number(t, region) {
+        return Some(n);
+    }
+    delocalize_date(t, region)
+}
+
+/// `[-+][currency] digits[group digits…][,decimals][E±n][%][ currency]` in the region's
+/// separators, as en-US text with the same signs, symbols and grouping.
+fn delocalize_number(t: &str, region: Region) -> Option<String> {
+    let (d, g) = (region.decimal(), region.group());
+    // Where the digits start and end: everything around them (signs, symbols, %, parentheses)
+    // is kept as typed.
+    let is_body = |c: char| c.is_ascii_digit() || c == d || c == g || (region == Region::UkUa && c == ' ');
+    let start = t.find(|c: char| c.is_ascii_digit() || c == d)?;
+    let rest = t.get(start..)?;
+    let end = rest.find(|c: char| !is_body(c)).unwrap_or(rest.len());
+    let (body, after) = rest.split_at(end);
+    // A group separator or space right before a suffix (`12,50 €`) belongs to the suffix.
+    let trimmed = body.trim_end_matches([g, ' ']);
+    let after = format!("{}{after}", body.get(trimmed.len()..).unwrap_or(""));
+    let body = trimmed;
+    let before = t.get(..start)?;
+    // A separator the region does not use right after the digits (`1 234.5` in Ukraine) makes
+    // the entry no number here, rather than a decimal read the en-US way.
+    if body.is_empty() || after.starts_with(['.', ',']) {
+        return None;
+    }
+    let (int, frac) = match body.split_once(d) {
+        Some((i, f)) => (i, Some(f)),
+        None => (body, None),
+    };
+    if frac.is_some_and(|f| f.contains([d, g, ' ']) || f.is_empty() && int.is_empty()) {
+        return None;
+    }
+    let groups: Vec<&str> = int.split([g, ' ']).collect();
+    let grouped = groups.len() > 1;
+    if grouped && (groups.first().is_none_or(|f| f.is_empty() || f.len() > 3) || groups.iter().skip(1).any(|x| x.len() != 3)) {
+        return None;
+    }
+    let mut en = String::from(before);
+    en.push_str(&groups.join(","));
+    if let Some(f) = frac {
+        en.push('.');
+        en.push_str(f);
+    }
+    en.push_str(&after);
+    // Only a rewrite the en-US reader takes as a number counts (`1.5` in Spain is not one).
+    if !grouped && frac.is_none() {
+        return None;
+    }
+    parse_numeric(en.trim(), DateSystem::D1900, true).map(|_| en)
+}
+
+/// `d/m/y`, `d.m.y`, `d-m-y` and `d/m` (with a time after a space) as en-US `m/d/y`.
+fn delocalize_date(t: &str, region: Region) -> Option<String> {
+    if !region.day_first() {
+        return None;
+    }
+    let (date, time) = match t.split_once(' ') {
+        Some((a, b)) => (a, Some(b.trim())),
+        None => (t, None),
+    };
+    let sep = date.chars().find(|c| matches!(c, '/' | '.' | '-'))?;
+    let parts: Vec<&str> = date.split(sep).collect();
+    let numeric = |p: &str| !p.is_empty() && p.len() <= 4 && p.bytes().all(|b| b.is_ascii_digit());
+    if !parts.iter().all(|p| numeric(p)) {
+        return None;
+    }
+    let en = match parts.as_slice() {
+        // A four-digit first part is already year first (ISO).
+        [a, ..] if a.len() == 4 => return None,
+        [day, month, year] if day.len() <= 2 && month.len() <= 2 => format!("{month}/{day}/{year}"),
+        // `1.5` is a decimal number written the en-US way, not a date.
+        [day, month] if sep != '.' && day.len() <= 2 && month.len() <= 2 => format!("{month}/{day}"),
+        _ => return None,
+    };
+    let en = match time {
+        Some(time) => format!("{en} {time}"),
+        None => en,
+    };
+    // A date-shaped entry that is no date here (`12/31/2026` in Spain) stays text, rather than
+    // being read month first.
+    Some(if parse_datetime(&en, DateSystem::D1900).is_some() { en } else { format!("'{t}") })
 }
 
 #[cfg(test)]

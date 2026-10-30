@@ -326,3 +326,14 @@ fn parser_stops_collecting_fields_at_max_cols() {
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
 }
+
+#[test]
+fn csv_values_stay_en_us_without_the_typed_euro_and_hryvnia_forms() {
+    // Typed entry reads `12,50 €` and `250 грн` in a region; a CSV file is read as en-US text.
+    let src = "€5,12.50 €,250 грн,$5";
+    let wb = read_csv(src.as_bytes(), &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 0, 0), Value::text("€5"));
+    assert_eq!(v(&wb, 0, 1), Value::text("12.50 €"));
+    assert_eq!(v(&wb, 0, 2), Value::text("250 грн"));
+    assert_eq!(v(&wb, 0, 3), Value::Number(5.0));
+}

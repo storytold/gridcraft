@@ -6,6 +6,7 @@ use gridcraft_engine::model::Workbook;
 pub(crate) fn canonical(
     text: &str,
     locale: FormulaLocale,
+    region: gridcraft_engine::core::Region,
     wb: &Workbook,
     sheet: usize,
     cell: gridcraft_engine::core::CellRef,
@@ -18,7 +19,7 @@ pub(crate) fn canonical(
     {
         return Ok(stored);
     }
-    if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
+    if wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
     // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
@@ -26,18 +27,17 @@ pub(crate) fn canonical(
     if body.starts_with('=')
         || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
     {
+        if locale == FormulaLocale::En {
+            return Ok(text.to_string());
+        }
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
-    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
-    let normalized = body.trim().replace(locale.decimal_separator(), ".");
-    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
-    if number.parse::<f64>().is_ok_and(f64::is_finite) {
-        return Ok(normalized);
-    }
-    Ok(text.to_string())
+    // Numbers and dates typed the region's way (`1.234,5`, `31/12/2026`, `12,50 €`) reach the
+    // engine en-US; anything else is kept as typed.
+    Ok(gridcraft_engine::core::parse::delocalize_input(text, region).unwrap_or_else(|| text.to_string()))
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {

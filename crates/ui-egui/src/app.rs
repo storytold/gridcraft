@@ -102,6 +102,13 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Values show in the interface language's region (`1.234,5` and `31/12/2026` in Spanish).
+        // The region is per thread: each frame sets this app's and puts the previous one back,
+        // so apps sharing a thread never show values in each other's region.
+        gridcraft_engine::display::in_region(self.ui.language.region(), || self.logic_in_region(ctx));
+    }
+
+    fn logic_in_region(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
@@ -181,8 +188,12 @@ impl SheetApp {
         ctx.request_repaint();
     }
 
-    /// Lays out the whole window.
+    /// Lays out the whole window, with values in this app's region (see [`Self::logic`]).
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        gridcraft_engine::display::in_region(self.ui.language.region(), || self.ui_in_region(ui));
+    }
+
+    fn ui_in_region(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
