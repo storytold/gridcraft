@@ -77,6 +77,8 @@ fn chart_names_are_written_qualified() {
         data_labels: false,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

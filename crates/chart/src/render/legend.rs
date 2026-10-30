@@ -42,6 +42,8 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         return vec![];
     }
     match chart.kind {
+        // Pie, doughnut (Excel's default `varyColors=1`, so every ring repeats the category colours
+        // and the legend names categories rather than series), treemap and sunburst.
         ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
             let n = first_len(data).min(MAX_CATS);
             (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()

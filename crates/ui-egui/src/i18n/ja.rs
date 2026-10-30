@@ -253,6 +253,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Legend: Bottom", "凡例: 下"),
     ("Legend: Top", "凡例: 上"),
     ("Legend: Right", "凡例: 右"),
+    ("First slice angle", "最初の扇形の角度"),
+    ("Doughnut hole size", "ドーナツの穴のサイズ"),
     ("Gridlines: None", "目盛線: なし"),
     ("Gridlines: Show", "目盛線: 表示"),
     ("Chart\nTitle", "グラフ タイトル"),

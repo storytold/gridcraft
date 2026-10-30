@@ -18,7 +18,7 @@ mod trend;
 
 use cartesian::{cartesian, scatter};
 use frame::{Bx, axis_titles, chart_title};
-use kinds::{box_whisker, funnel, histogram, pie, radar, stock, treemap, waterfall};
+use kinds::{box_whisker, doughnut, funnel, histogram, pie, radar, stock, treemap, waterfall};
 use legend::draw_legend;
 pub use legend::{Swatch, legend_entries};
 pub use trend::supports_trendline;
@@ -43,6 +43,11 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
+/// bound their product: 255 series of 20,000 categories would be millions of wedges. Every drawable
+/// ring shares this budget, so the innermost ring keeps its largest slices and the outer rings are
+/// capped instead of the chart dropping rings wholesale.
+pub(crate) const MAX_WEDGES: usize = 2_048;
 
 struct Ctx<'a> {
     out: Vec<Prim>,
@@ -152,7 +157,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     use ChartKind::*;
     match chart.kind {
         Pie => pie(ctx, chart, data, area, 0.0, false),
-        Doughnut => pie(ctx, chart, data, area, 0.5, false),
+        Doughnut => doughnut(ctx, chart, data, area),
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
         Funnel => funnel(ctx, chart, data, area),
