@@ -270,3 +270,33 @@ fn picture_metadata_limits_and_relationship_read_errors_do_not_block_workbooks()
         assert!(report.warnings.iter().any(|w| w.contains("cell-picture data could not be read")), "{:?}", report.warnings);
     }
 }
+
+/// A repeated row element that replaces a picture cell with a scalar keeps the scalar: the
+/// picture side map must not outlive the cell it hung on, or saving writes the old picture back
+/// over the replacement (#2531).
+#[test]
+fn a_repeated_row_element_replaces_a_picture_with_its_scalar() {
+    let mut parts = independent_parts(false);
+    replace(
+        &mut parts,
+        "sheets/data.xml",
+        "<row r=\"1\"><c r=\"A1\" t=\"e\" vm=\"2\"><v>#VALUE!</v></c>",
+        "<row r=\"1\"><c r=\"A1\" t=\"e\" vm=\"2\"><v>#VALUE!</v></c></row><row r=\"1\"><c r=\"A1\"><v>42</v></c>",
+    );
+    assert!(
+        std::str::from_utf8(&parts.iter().find(|(n, _)| n == "sheets/data.xml").unwrap().1).unwrap().contains("<v>42</v>"),
+        "the fixture must carry the second row element"
+    );
+
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    assert_eq!(sheet.value(at("A1")), Value::Number(42.0), "the replacement value wins");
+    assert!(!sheet.cell_pictures.contains_key(&at("A1")), "the picture the repeat replaced must not outlive it");
+    assert!(report.warnings.iter().any(|w| w.contains("dropped or replaced")), "{:?}", report.warnings);
+
+    // Saving keeps the replacement instead of restoring the picture it replaced.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let sheet = back.sheet(0).unwrap();
+    assert_eq!(sheet.value(at("A1")), Value::Number(42.0));
+    assert!(!sheet.cell_pictures.contains_key(&at("A1")));
+}
