@@ -507,3 +507,82 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+fn finds(item: &str, typed: &str) -> bool {
+    search_matches(&search_fold(item), &search_term(typed))
+}
+
+#[test]
+fn list_search_matches_from_a_word_start() {
+    let la = "Los Angeles - United States of America";
+    for ok in ["Los an", " Los an", "Ange", "United St", "united st", "of America", "- United", "", "L"] {
+        assert!(finds(la, ok), "{ok:?} should match");
+    }
+    for bad in ["United Amer", "geles", "os", "States America", "Los Angeles  -"] {
+        assert!(!finds(la, bad), "{bad:?} should not match");
+    }
+    // A word start can hide behind an earlier, overlapping occurrence.
+    assert!(finds("xa-a-a", "a-a"));
+    assert!(finds("(USA)", "usa"));
+    assert!(finds("2024 report", "202"));
+}
+
+#[test]
+fn list_search_ignores_case_and_accents() {
+    assert!(finds("États-Unis", "etats"));
+    assert!(finds("États-Unis", "UNIS"));
+    assert!(finds("Etats-Unis", "États"));
+    assert!(finds("Straße", "strasse"));
+    assert!(finds("Œuvre", "oe"));
+    assert!(finds("Łódź", "lodz"));
+    // Decomposed accents (e + combining acute) fold the same and don't start a word.
+    assert!(finds("Cafe\u{301} noir", "café n"));
+    assert!(!finds("Cafe\u{301}s", "s"));
+    assert!(finds("東京", "東"));
+    // Vietnamese (Latin Extended Additional, with ơ/ư from Latin Extended-B), any case.
+    assert!(finds("Hà Nội - Vietnam", "ha noi"));
+    assert!(finds("Đà Nẵng", "da nang"));
+    assert!(finds("Thừa Thiên Huế", "thua thien hue"));
+    assert!(finds("HỒ CHÍ MINH", "ho chi"));
+    assert!(finds("Hồ Chí Minh", "HỒ CHÍ"));
+    assert!(finds("Phường Bến Nghé", "phuong ben"));
+    // Pinyin tone marks, transliterations with dots below.
+    assert!(finds("Běijīng", "beijing"));
+    assert!(finds("Lǜ", "lu"));
+    assert!(finds("Ḥaifa", "haifa"));
+    assert_eq!(search_fold("ỆỢỰẠẞ"), "eouass");
+}
+
+#[test]
+fn filter_list_items_keeps_order_and_cap() {
+    let items: Vec<String> = ["Dubai - United Arab Emirates", "Paris - France", "London - United Kingdom", "Boston - United States"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(filter_list_items(&items, "United", 100), [0, 2, 3]);
+    assert_eq!(filter_list_items(&items, "United St", 100), [3]);
+    assert_eq!(filter_list_items(&items, "United", 2), [0, 2]);
+    assert!(filter_list_items(&items, "zzz", 100).is_empty());
+}
+
+#[test]
+fn validation_list_command_returns_filtered_items() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "E1", "values": [["Paris - France"], ["Dubai - United Arab Emirates"], ["New York - United States"]]}),
+    )
+    .unwrap();
+    s.execute("data.validation", json!({"range": "B2:B5", "type": "list", "formula1": "=$E$1:$E$3"})).unwrap();
+    let all = s.execute("data.validationList", json!({"cell": "B3"})).unwrap();
+    assert_eq!(all["items"].as_array().map(Vec::len), Some(3));
+    assert_eq!(all["truncated"], json!(false));
+    let some = s.execute("data.validationList", json!({"cell": "B3", "search": "united s"})).unwrap();
+    assert_eq!(some["items"], json!(["New York - United States"]));
+    assert!(s.execute("data.validationList", json!({"cell": "A1"})).is_err(), "no list validation on A1");
+    s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "\"Été,Hiver\""})).unwrap();
+    let lit = s.execute("data.validationList", json!({"cell": "C1", "search": "ete"})).unwrap();
+    assert_eq!(lit["items"], json!(["Été"]));
+}
+

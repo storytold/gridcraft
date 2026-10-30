@@ -37,9 +37,19 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar);
         ed.window = self.session.active_window();
         ed.locale = locale;
-        if replace && self.ui.autocomplete && !ed.is_formula() {
+        // A list validation with an in-cell dropdown is searched as the user types; its list
+        // replaces column AutoComplete.
+        let list = sh
+            .validations
+            .iter()
+            .find(|v| v.kind == gridcraft_engine::model::ValidationKind::List && v.in_cell_dropdown && v.ranges.iter().any(|r| r.contains(at)));
+        if let Some(dv) = list {
+            ed.set_list_items(gridcraft_engine::cmd::data::list_items(&d.wb, d.wb.active_sheet(), dv), replace);
+        } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
+        // Typing over an open dropdown list hands over to the searched list the edit shows.
+        self.grid.list_picker = None;
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
@@ -89,10 +99,14 @@ impl SheetApp {
     }
 
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
-        let Some(ed) = self.editor.take() else { return true };
+        let Some(mut ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
-        let text = match &ed.completion {
-            Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+        // Only an explicit acceptance takes the list's entry; a failed commit asks again.
+        let accepted = std::mem::take(&mut ed.list_accept);
+        let text = match (ed.list_choice().filter(|_| accepted), &ed.completion) {
+            // The searched validation list's highlighted entry, as the list spells it.
+            (Some(choice), _) => choice.to_string(),
+            (None, Some(full)) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
