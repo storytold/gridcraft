@@ -21,17 +21,15 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     // Matches the label as shown in the interface language as well as the English label and id,
-    // so "gras" finds Bold in French and "bold" still does.
+    // so "gras" finds Bold in French and "bold" still does; case and accents are ignored.
     let lang = app.ui.language;
-    let q = d.search.to_lowercase();
+    let q = fold(&d.search);
     let cmds: Vec<(String, String, String)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| {
-            q.is_empty() || lang.tr(c.label).to_lowercase().contains(&q) || c.label.to_lowercase().contains(&q) || c.id.to_lowercase().contains(&q)
-        })
+        .filter(|c| q.is_empty() || fold(lang.tr(c.label)).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q))
         .map(|c| (c.id.to_string(), lang.tr(c.label).to_string(), c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
         .take(40)
         .collect();
@@ -90,5 +88,55 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+/// Lowercases `s` and strips accents from Latin letters ("Insérer" → "inserer"), so a query
+/// matches whether or not it is typed with its accents. Combining marks are dropped too.
+fn fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars().flat_map(char::to_lowercase) {
+        match c {
+            '\u{300}'..='\u{36f}' => {}
+            'œ' => out.push_str("oe"),
+            'æ' => out.push_str("ae"),
+            'ß' => out.push_str("ss"),
+            c => out.push(match c {
+                'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
+                'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+                'ď' | 'đ' => 'd',
+                'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+                'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+                'ĥ' | 'ħ' => 'h',
+                'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => 'i',
+                'ĵ' => 'j',
+                'ķ' => 'k',
+                'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
+                'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
+                'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
+                'ŕ' | 'ŗ' | 'ř' => 'r',
+                'ś' | 'ŝ' | 'ş' | 'š' | 'ș' => 's',
+                'ţ' | 'ť' | 'ŧ' | 'ț' => 't',
+                'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
+                'ŵ' => 'w',
+                'ý' | 'ÿ' | 'ŷ' => 'y',
+                'ź' | 'ż' | 'ž' => 'z',
+                c => c,
+            }),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fold;
+
+    #[test]
+    fn fold_ignores_case_and_accents() {
+        assert_eq!(fold("Insérer un GRAPHIQUE"), "inserer un graphique");
+        assert_eq!(fold("Œuvre Ærø Straße"), "oeuvre aero strasse");
+        assert_eq!(fold("Ștergere Łódź"), "stergere lodz");
+        assert_eq!(fold("e\u{301}cart"), "ecart");
     }
 }

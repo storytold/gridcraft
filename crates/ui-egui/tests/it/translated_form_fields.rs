@@ -101,8 +101,10 @@ fn custom_dialogs_are_translated() {
 
 #[test]
 fn command_search_matches_translated_and_english_labels() {
-    // (typed, a result that must show): French labels, accents included, and English still work.
-    for (typed, shown) in [("gras", "Gras"), ("figer", "Figer les volets"), ("graphique", "graphique"), ("bold", "Gras")] {
+    // (typed, a result that must show): French labels, typed without case or accents, and English.
+    for (typed, shown) in
+        [("gras", "Gras"), ("figer", "Figer les volets"), ("graphique", "graphique"), ("bold", "Gras"), ("INSERER UN GRAPH", "Insérer un graphique")]
+    {
         let mut h = harness();
         h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
         h.state_mut().open_dialog("commandSearch", json!({}));
