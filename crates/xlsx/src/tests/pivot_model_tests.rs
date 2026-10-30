@@ -811,3 +811,139 @@ fn a_zero_cache_id_is_clamped_to_one() {
     let table = text(&parts, "xl/pivotTables/pivotTable1.xml");
     assert!(table.contains("cacheId=\"1\""), "{table}");
 }
+
+// ---------------------------------------------------------------- re-applying a pivot
+
+/// A spec whose fields differ from [`spec`]'s, so an update in place is visible in what is read.
+fn spec_with_fields(table: &str, column: &str) -> ModelPivotSpec {
+    let mut s = spec();
+    s.row_fields = vec![field(table, column)];
+    s.row_members.clear();
+    s.column_fields.clear();
+    s.column_members.clear();
+    s
+}
+
+/// Drops a part the workbook keeps, as a damaged package would have it missing.
+fn remove_kept_part(wb: &mut Workbook, name: &str) {
+    let p = Arc::make_mut(wb.preserved.as_mut().expect("the workbook keeps content"));
+    p.parts.retain(|q| !q.name.eq_ignore_ascii_case(name));
+}
+
+/// Every internal relationship target exists in the package and every `<pivotCaches>` entry names
+/// a workbook relationship: the integrity a kept package must not lose.
+fn assert_package_is_consistent(bytes: &[u8]) {
+    let parts = entries(bytes);
+    for (name, data) in &parts {
+        if !name.ends_with(".rels") {
+            continue;
+        }
+        let src = name.replace("_rels/", "");
+        let src = src.trim_end_matches(".rels").to_string();
+        let dir = crate::package::split_dir(&src).0;
+        let root = crate::xml::parse(data).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for r in root.kids("Relationship") {
+            if r.attr("TargetMode") == Some("External") {
+                continue;
+            }
+            let target = crate::package::resolve(dir, r.attr("Target").unwrap_or(""));
+            assert!(parts.contains_key(&target), "{name}: dangling {target}");
+        }
+    }
+    let wb_xml = crate::xml::parse(parts.get("xl/workbook.xml").expect("no workbook part")).expect("workbook XML");
+    if let Some(caches) = wb_xml.child("pivotCaches") {
+        let rels = text(&parts, "xl/_rels/workbook.xml.rels");
+        for c in caches.kids("pivotCache") {
+            let id = c.attr("id").unwrap_or("");
+            assert!(!id.is_empty(), "a <pivotCaches> entry has no r:id");
+            assert!(rels.contains(&format!("Id=\"{id}\"")), "the <pivotCaches> entry {id} names no workbook relationship");
+        }
+    }
+}
+
+fn pivot_parts(parts: &HashMap<String, Vec<u8>>, dir: &str, stem: &str) -> Vec<String> {
+    let mut out: Vec<String> = parts.keys().filter(|n| n.starts_with(&format!("{dir}/{stem}")) && n.ends_with(".xml")).cloned().collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn applying_the_same_pivot_twice_updates_it_in_place() {
+    let mut wb = workbook();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec_with_fields("Sales", "Product"), &report(), None).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = entries(&bytes);
+    assert_eq!(pivot_parts(&parts, "xl/pivotTables", "pivotTable"), vec!["xl/pivotTables/pivotTable1.xml"]);
+    assert_eq!(pivot_parts(&parts, "xl/pivotCache", "pivotCacheDefinition"), vec!["xl/pivotCache/pivotCacheDefinition1.xml"]);
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert_eq!(wb_xml.matches("<pivotCache ").count(), 1, "{wb_xml}");
+    let sheet_rels = text(&parts, "xl/worksheets/_rels/sheet2.xml.rels");
+    assert_eq!(sheet_rels.matches("relationships/pivotTable").count(), 1, "{sheet_rels}");
+    // The second apply's fields are the ones the package carries.
+    let (pivots, report) = read_model_pivots(&bytes).unwrap();
+    assert_eq!(pivots.len(), 1, "{:?}", report.warnings);
+    assert_eq!(pivots[0].spec.name, "ModelPivot");
+    assert_eq!(pivots[0].spec.row_fields, vec![field("Sales", "Product")]);
+    assert!(pivots[0].spec.column_fields.is_empty());
+    assert_eq!(pivots[0].spec.filters.len(), 1, "the unchanged filter stays");
+    assert_package_is_consistent(&bytes);
+}
+
+#[test]
+fn pivots_with_different_names_stay_separate() {
+    let mut wb = workbook();
+    let mut second = spec();
+    second.name = "ModelPivot2".into();
+    second.cache_id = 2;
+    second.connection_id = 2;
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    attach_model_pivot(&mut wb, "Pivot", at("A12"), &second, &report(), None).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = entries(&bytes);
+    assert_eq!(pivot_parts(&parts, "xl/pivotTables", "pivotTable").len(), 2);
+    assert_eq!(pivot_parts(&parts, "xl/pivotCache", "pivotCacheDefinition").len(), 2);
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert_eq!(wb_xml.matches("<pivotCache ").count(), 2, "{wb_xml}");
+    let sheet_rels = text(&parts, "xl/worksheets/_rels/sheet2.xml.rels");
+    assert_eq!(sheet_rels.matches("relationships/pivotTable").count(), 2, "{sheet_rels}");
+    let (pivots, report) = read_model_pivots(&bytes).unwrap();
+    assert_eq!(pivots.len(), 2, "{:?}", report.warnings);
+    assert_eq!(pivots[0].spec.name, "ModelPivot");
+    assert_eq!(pivots[1].spec.name, "ModelPivot2");
+    assert_package_is_consistent(&bytes);
+}
+
+#[test]
+fn a_stale_pivot_part_is_replaced_without_leaving_dangling_relationships() {
+    let mut wb = workbook();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    // The name matches but the cache behind it is gone: the part cannot be updated in place.
+    remove_kept_part(&mut wb, "xl/pivotCache/pivotCacheDefinition1.xml");
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec_with_fields("Sales", "Product"), &report(), None).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = entries(&bytes);
+    assert_eq!(pivot_parts(&parts, "xl/pivotTables", "pivotTable").len(), 1);
+    assert_eq!(pivot_parts(&parts, "xl/pivotCache", "pivotCacheDefinition").len(), 1);
+    assert_eq!(text(&parts, "xl/workbook.xml").matches("<pivotCache ").count(), 1);
+    assert_package_is_consistent(&bytes);
+    let (pivots, report) = read_model_pivots(&bytes).unwrap();
+    assert_eq!(pivots.len(), 1, "{:?}", report.warnings);
+    assert_eq!(pivots[0].spec.row_fields, vec![field("Sales", "Product")]);
+}
+
+#[test]
+fn a_save_after_two_applies_is_deterministic() {
+    let mut wb = workbook();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec_with_fields("Sales", "Product"), &report(), None).unwrap();
+    let a_parts = entries(&write_xlsx(&wb).unwrap());
+    let b_parts = entries(&write_xlsx(&wb).unwrap());
+    let (mut a, mut b): (Vec<&String>, Vec<&String>) = (a_parts.keys().collect(), b_parts.keys().collect());
+    a.sort();
+    b.sort();
+    assert_eq!(a, b);
+    for name in a {
+        assert_eq!(a_parts.get(name), b_parts.get(name), "{name} differs between two writes");
+    }
+}

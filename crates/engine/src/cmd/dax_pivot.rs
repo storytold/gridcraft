@@ -24,6 +24,14 @@
 //! Filters are written as page fields: two rows per filter (the field caption and the selected
 //! item) above the report body, which is what `pivotTableDefinition`'s `rowPageCount` describes.
 //! The report grid itself starts below them.
+//!
+//! # The field list
+//!
+//! `dataModel.pivotFields` is the read side of the same data: the model's tables, columns, measures
+//! and relationships, every model PivotTable the workbook carries, and the settings of the one the
+//! pane is showing. The PivotTables are not kept in the session — they live in the workbook's kept
+//! pivot parts — so the command writes the workbook to a package in memory and reads the parts
+//! back with [`gridcraft_xlsx::read_model_pivots`], exactly the way a save would.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -34,8 +42,8 @@ use gridcraft_dax::pivot_table::{PivotFilter, PivotLayout, PivotTable};
 use gridcraft_dax::{DataModel, Scalar, pivot_fields};
 use gridcraft_model::{Cell, NumFmt, StyleId, Workbook};
 use gridcraft_xlsx::{
-    ModelPivotColumn, ModelPivotDataType, ModelPivotFieldRef, ModelPivotFilter, ModelPivotLayout, ModelPivotMeasure, ModelPivotRelationship,
-    ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue,
+    ModelPivotColumn, ModelPivotDataType, ModelPivotFieldRef, ModelPivotFilter, ModelPivotLayout, ModelPivotMeasure, ModelPivotPartInfo,
+    ModelPivotRelationship, ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue,
 };
 use serde_json::{Value as Json, json};
 
@@ -43,9 +51,13 @@ use super::{CommandSpec, EngineError, Result, Session, bad, cmd, edit};
 
 /// The command that creates the PivotTable; also the id error messages name.
 const CMD: &str = "dataModel.createPivot";
+/// The field list query, and the id its parameter errors name.
+const CMD_FIELDS: &str = "dataModel.pivotFields";
 
 /// Most fields accepted on one axis, and most page filters.
 const MAX_AXIS_FIELDS: usize = 64;
+/// Most measures accepted in one values area.
+const MAX_VALUE_FIELDS: usize = 64;
 /// Most page filters in one PivotTable.
 const MAX_FILTERS: usize = 32;
 /// Most cells the written report may occupy (the render budget is separate).
@@ -58,11 +70,21 @@ const PAGE_ROWS: usize = 2;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
+            query
+            "dataModel.pivotFields",
+            "PivotTable Fields",
+            ["Data", "Data Model"],
+            None,
+            "{name?} → {pivots: [{name, sheet, at}], model: {tables: [{name, columns: [{name, type}]}], measures: [{name, table, format}], relationships: [{from_table, from_column, to_table, to_column}]}, selected: {name, sheet, at, row_fields, column_fields, filters: [{field, allowed}], values, layout, row_subtotals, column_subtotals, grand_totals} | null} lists the data model's fields and the model PivotTables the workbook carries; `selected` is the named PivotTable's settings (null when `name` is absent or names no model PivotTable); `at` is the report body's top-left cell, below any page fields",
+            has_model,
+            field_list_cmd
+        ),
+        cmd!(
             "dataModel.createPivot",
             "Create PivotTable",
             ["Data", "Data Model"],
             None,
-            "{measure, row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed: [value, ..], include_blank?}], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: its report cells plus the pivot cache and PivotTable definitions → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
+            "{measure, values?: [measure, ..], row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed: [value, ..], include_blank?}], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: `measure` groups the rows, `values` (default `[measure]`) fills the values area with one measure column each, and the reply's report cells plus the pivot cache and PivotTable definitions carry it; `replace` overwrites the report area — clearing the cells the previous report of `name` occupied — and re-applies that kept PivotTable → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
             has_model,
             create_pivot
         ),
@@ -71,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "PivotTable from Data Model",
             ["Insert", "Tables"],
             None,
-            "{measure, row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?} (same as dataModel.createPivot)",
+            "{measure, values?, row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?} (same as dataModel.createPivot)",
             has_model,
             create_pivot
         ),
@@ -118,10 +140,16 @@ fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<
     let replace = optional_bool(p, "replace")?.unwrap_or(false);
     let requested_name = optional_str(p, "name")?;
     let (sheet, at) = destination(s, p)?;
+    // A named `replace` re-applies the pivot the workbook keeps under that name: find what its
+    // previous report occupied so the edit can clear it before writing a report of another shape.
+    let previous = match (replace, requested_name.map(str::trim).filter(|name| !name.is_empty())) {
+        (true, Some(name)) => previous_report(s, name)?,
+        _ => None,
+    };
 
     let (reply, package) = edit(s, |cx| {
         let sheet_index = cx.wb.sheet_index(&sheet).ok_or_else(|| bad(CMD, format!("no sheet named `{sheet}`")))?;
-        let name = pivot_name(&cx.wb, requested_name)?;
+        let name = pivot_name(&cx.wb, requested_name, replace)?;
         let body = CellRef::new(at.row.saturating_add((spec.filters.len() * PAGE_ROWS) as u32), at.col);
         let end = CellRef::new(
             body.row.saturating_add((report.len().saturating_sub(1)) as u32),
@@ -143,6 +171,22 @@ fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<
         }
         let pages = page_rows(&spec);
         let ids = intern_formats(&mut cx.wb, &formats);
+        // `replace` re-applies the pivot: its previous report is cleared first, cell and style
+        // alike (the way `edit.clearAll` leaves a cell), so a smaller second report leaves nothing
+        // behind for Excel to trip over on refresh. Its page rows go too, then are rewritten below.
+        if let Some((old_sheet, old_area)) = previous
+            && let Some(index) = cx.wb.sheet_index(&old_sheet)
+        {
+            let cleared: Vec<CellRef> =
+                cx.wb.sheet(index).map(|sh| sh.cells.iter_range(old_area).map(|(cell, _)| cell).collect()).unwrap_or_default();
+            for cell in &cleared {
+                cx.touch(index, *cell);
+            }
+            let sh = cx.sheet_mut(index)?;
+            for cell in cleared {
+                sh.remove_cell(cell);
+            }
+        }
         {
             let sh = cx.sheet_mut(sheet_index)?;
             for (i, row) in pages.iter().enumerate() {
@@ -181,6 +225,189 @@ fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<
         Ok((reply, bytes))
     })?;
     Ok((reply, package))
+}
+
+// ---------------------------------------------------------------- field list
+
+/// The field-list pane's data: the model's tables, columns, measures and relationships, every model
+/// PivotTable the workbook carries, and — for the one `name` selects — what it is built from (axes,
+/// filters, values, layout, totals), so the pane can show those checked.
+fn field_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
+    let Some(model) = s.dax_model.as_ref() else {
+        return Err(bad(CMD_FIELDS, "no data model loaded"));
+    };
+    // An empty `name` is no name: the pane asks for a pivot by the name the command reported.
+    let name = match p.get("name") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(name)) => Some(name.trim()).filter(|name| !name.is_empty()),
+        Some(_) => return Err(bad(CMD_FIELDS, "`name` must be a string")),
+    };
+    let model = model_json(model);
+    let parts = read_pivots(s)?;
+    let pivots: Vec<Json> = parts.iter().map(|part| json!({"name": part.spec.name, "sheet": part.sheet, "at": part.location.a1()})).collect();
+    // Names are unique case-insensitively (the command refuses a duplicate), so the first match is
+    // the one asked for; a name that is not there is `null`, not an error: the pane polls.
+    let selected = name.and_then(|name| parts.iter().find(|part| part.spec.name.eq_ignore_ascii_case(name))).map(selected_json);
+    Ok(json!({"pivots": pivots, "model": model, "selected": selected}))
+}
+
+/// Every model PivotTable the workbook carries, read back from the package its content writes.
+///
+/// The pivot parts live in the workbook's kept (pass-through) content, so the only way to see them
+/// is the way a save does: serialize the workbook and read the parts back. No open document carries
+/// none; a package that cannot be written or read is an engine error, so a broken workbook is
+/// reported instead of the pane silently showing an empty list.
+fn read_pivots(s: &Session) -> Result<Vec<ModelPivotPartInfo>> {
+    let Ok(d) = s.doc() else { return Ok(Vec::new()) };
+    let package =
+        gridcraft_xlsx::write_xlsx(&d.wb).map_err(|error| other(format!("the workbook could not be written to read its PivotTables: {error}")))?;
+    let (parts, _report) = gridcraft_xlsx::read_model_pivots(&package)
+        .map_err(|error| other(format!("the workbook's PivotTable definitions could not be read: {error}")))?;
+    Ok(parts)
+}
+
+/// The rectangle the named model PivotTable's previous report occupies — its page-field rows
+/// included — and the sheet it is on. A named `replace` clears it before writing the new report: a
+/// second report of a different shape would otherwise leave cells behind, and Excel's refresh of the
+/// PivotTable then fails with `#SPILL!` at its anchor.
+///
+/// The body comes from the kept definition's `<location ref>` (the reader only reports the body's
+/// top-left); the page fields above it take two rows each, as the writer lays them out.
+fn previous_report(s: &Session, name: &str) -> Result<Option<(String, RangeRef)>> {
+    let Some(part) = read_pivots(s)?.into_iter().find(|part| part.spec.name.eq_ignore_ascii_case(name)) else {
+        return Ok(None);
+    };
+    let body = kept_location_ref(s, &part.spec.name).unwrap_or_else(|| RangeRef::cell(part.location));
+    let page_rows = u32::try_from(part.spec.filters.len().saturating_mul(PAGE_ROWS)).unwrap_or(u32::MAX);
+    let area = RangeRef::new(CellRef::new(body.start.row.saturating_sub(page_rows), body.start.col), body.end);
+    let rows = u64::from(area.end.row.saturating_sub(area.start.row)).saturating_add(1);
+    let cols = u64::from(area.end.col.saturating_sub(area.start.col)).saturating_add(1);
+    // A rectangle outside the sheet, or bigger than the report budget, is not one this command
+    // wrote: leave it alone rather than wiping an arbitrary part of the sheet.
+    if area.end.row >= gridcraft_core::MAX_ROWS || area.end.col >= gridcraft_core::MAX_COLS || rows.saturating_mul(cols) > MAX_REPORT_CELLS as u64 {
+        return Ok(None);
+    }
+    Ok(Some((part.sheet, area)))
+}
+
+/// The `<location ref>` of the kept PivotTable definition called `name` (case-insensitively): the
+/// report's body, which the writer records as a range.
+fn kept_location_ref(s: &Session, name: &str) -> Option<RangeRef> {
+    let d = s.doc().ok()?;
+    for part in &d.wb.preserved.as_deref()?.parts {
+        if part_number(&part.name, "xl/pivottables/pivottable", ".xml").is_none() {
+            continue;
+        }
+        let Ok(xml) = std::str::from_utf8(&part.data) else { continue };
+        // The root element's `name` comes before any child's, so the first match is the definition's.
+        let Some(defined) = attribute_value(xml, "name=\"") else { continue };
+        if !defined.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        return attribute_value(xml, "location ref=\"").and_then(|reference| RangeRef::parse(&reference));
+    }
+    None
+}
+
+/// The value of the first `key="value"` pair in `xml`, where `key` ends at its opening quote.
+fn attribute_value(xml: &str, key: &str) -> Option<String> {
+    let rest = xml.get(xml.find(key)?.saturating_add(key.len())..)?;
+    rest.get(..rest.find('"')?).map(str::to_string)
+}
+
+/// The model as the field list shows it: tables with their columns and data types, the measures with
+/// their home table and number format, and the relationships.
+fn model_json(model: &DataModel) -> Json {
+    json!({
+        "tables": model
+            .tables
+            .iter()
+            .map(|table| {
+                json!({
+                    "name": table.name,
+                    "columns": table
+                        .columns
+                        .iter()
+                        .map(|column| json!({"name": column.name, "type": column.data_type}))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "measures": model
+            .measures
+            .iter()
+            .map(|measure| json!({"name": measure.name, "table": measure.table, "format": measure.format}))
+            .collect::<Vec<_>>(),
+        "relationships": model
+            .relationships
+            .iter()
+            .map(|relationship| {
+                json!({
+                    "from_table": relationship.from_table,
+                    "from_column": relationship.from_column,
+                    "to_table": relationship.to_table,
+                    "to_column": relationship.to_column,
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// One model PivotTable's settings as the pane shows them: the axes as `Table[Column]` references,
+/// the filters with their allowed values (a blank as JSON `null`), the value measures, the layout
+/// and the three totals flags.
+fn selected_json(part: &ModelPivotPartInfo) -> Json {
+    let spec = &part.spec;
+    json!({
+        "name": spec.name,
+        "sheet": part.sheet,
+        "at": part.location.a1(),
+        "row_fields": spec.row_fields.iter().map(field_text).collect::<Vec<_>>(),
+        "column_fields": spec.column_fields.iter().map(field_text).collect::<Vec<_>>(),
+        "filters": spec
+            .filters
+            .iter()
+            .map(|filter| {
+                let mut allowed: Vec<Json> = filter.allowed.iter().map(pivot_scalar_json).collect();
+                // The reader reports blank as a flag on the filter; the pane lists it as a member
+                // like any other, which is the shape `createPivot` accepts back.
+                if filter.include_blank {
+                    allowed.push(Json::Null);
+                }
+                json!({"field": field_text(&filter.field), "allowed": allowed})
+            })
+            .collect::<Vec<_>>(),
+        "values": spec.values.iter().map(|value| value.measure.clone()).collect::<Vec<_>>(),
+        "layout": layout_name(spec.layout),
+        "row_subtotals": spec.row_subtotals,
+        "column_subtotals": spec.column_subtotals,
+        "grand_totals": spec.grand_totals,
+    })
+}
+
+/// A field reference as the model's `Table[Column]` text.
+fn field_text(field: &ModelPivotFieldRef) -> String {
+    format!("{}[{}]", field.table, field.column)
+}
+
+/// A layout as the command's own `compact|outline|tabular` spelling.
+fn layout_name(layout: ModelPivotLayout) -> &'static str {
+    match layout {
+        ModelPivotLayout::Compact => "compact",
+        ModelPivotLayout::Outline => "outline",
+        ModelPivotLayout::Tabular => "tabular",
+    }
+}
+
+/// A cache scalar as JSON: numbers as numbers, text as text, blank as `null`. A non-finite number
+/// has no JSON form and reads as `null`.
+fn pivot_scalar_json(value: &ModelPivotScalar) -> Json {
+    match value {
+        ModelPivotScalar::Blank => Json::Null,
+        ModelPivotScalar::Number(number) => serde_json::Number::from_f64(*number).map(Json::Number).unwrap_or(Json::Null),
+        ModelPivotScalar::Text(text) => Json::String(text.clone()),
+        ModelPivotScalar::Boolean(flag) => Json::Bool(*flag),
+    }
 }
 
 // ---------------------------------------------------------------- parameters
@@ -232,6 +459,22 @@ fn field_list(p: &Json, key: &str) -> Result<Vec<String>> {
             items.iter().map(|item| item.as_str().map(str::to_string).ok_or_else(|| wrong_type(key, "a list of field names"))).collect()
         }
         Some(_) => Err(wrong_type(key, "a list of field names")),
+    }
+}
+
+/// The optional `values` area: the measures, in column order (a single string is accepted too).
+/// Absent, `null` or empty keeps the single measure the pivot is built around.
+fn values_param(p: &Json) -> Result<Vec<String>> {
+    match p.get("values") {
+        None | Some(Json::Null) => Ok(Vec::new()),
+        Some(Json::String(measure)) => Ok(vec![measure.clone()]),
+        Some(Json::Array(items)) => {
+            if items.len() > MAX_VALUE_FIELDS {
+                return Err(bad(CMD, format!("`values` accepts at most {MAX_VALUE_FIELDS} measures")));
+            }
+            items.iter().map(|item| item.as_str().map(str::to_string).ok_or_else(|| wrong_type("values", "a list of measure names"))).collect()
+        }
+        Some(_) => Err(wrong_type("values", "a list of measure names")),
     }
 }
 
@@ -303,15 +546,22 @@ fn layout_param(p: &Json) -> Result<PivotLayout> {
     })
 }
 
+/// A measure name resolved to the model's own spelling; an unknown name is a parameter error.
+fn resolve_measure(model: &DataModel, name: &str) -> Result<String> {
+    model
+        .measure_index(name)
+        .and_then(|index| model.measures.get(index))
+        .map(|measure| measure.name.clone())
+        .ok_or_else(|| bad(CMD, format!("no measure named `{name}` in the data model")))
+}
+
 /// The pivot the parameters describe, with every name resolved against the model so an unknown
 /// measure, table or field is an error before anything is rendered.
 fn pivot_param(model: &DataModel, p: &Json) -> Result<PivotTable> {
-    let measure = required_str(p, "measure")?;
-    let measure = model
-        .measure_index(measure)
-        .and_then(|index| model.measures.get(index))
-        .map(|measure| measure.name.clone())
-        .ok_or_else(|| bad(CMD, format!("no measure named `{measure}` in the data model")))?;
+    let measure = resolve_measure(model, required_str(p, "measure")?)?;
+    // The values area: every measure checked against the model, so an unknown one is a parameter
+    // error; empty means `[measure]`, the single-measure pivot.
+    let values = values_param(p)?.iter().map(|name| resolve_measure(model, name)).collect::<Result<Vec<_>>>()?;
     let row_fields = field_list(p, "row_fields")?;
     let column_fields = field_list(p, "column_fields")?;
     // Resolving now reports an unknown field as a parameter error, and proves every field belongs
@@ -321,6 +571,7 @@ fn pivot_param(model: &DataModel, p: &Json) -> Result<PivotTable> {
     }
     let filters = filters_param(p)?;
     let mut pivot = PivotTable::new(optional_str(p, "name")?.unwrap_or_default(), measure);
+    pivot.values = values;
     pivot.row_fields = row_fields;
     pivot.column_fields = column_fields;
     pivot.filters = filters;
@@ -394,15 +645,17 @@ fn model_data(s: &Session) -> Result<Option<Arc<[u8]>>> {
 
 /// The PivotTable's name: the `name` parameter (checked against every PivotTable the workbook
 /// already has) or the first free `ModelPivotN`.
-fn pivot_name(wb: &Workbook, requested: Option<&str>) -> Result<String> {
+///
+/// `replace` re-applies a PivotTable the workbook keeps under that name — the field-list pane's
+/// Apply — and [`gridcraft_xlsx::attach_model_pivot`] updates that pivot in place. A PivotTable the
+/// writer cannot rewrite (a worksheet pivot) keeps its name reserved either way.
+fn pivot_name(wb: &Workbook, requested: Option<&str>, replace: bool) -> Result<String> {
     let kept = kept_pivot_names(wb);
-    let taken = |name: &str| {
-        wb.sheets.iter().any(|sheet| sheet.pivots.iter().any(|pivot| pivot.name.eq_ignore_ascii_case(name)))
-            || kept.iter().any(|kept| kept.eq_ignore_ascii_case(name))
-    };
+    let kept_name = |name: &str| kept.iter().any(|kept| kept.eq_ignore_ascii_case(name));
+    let taken = |name: &str| wb.sheets.iter().any(|sheet| sheet.pivots.iter().any(|pivot| pivot.name.eq_ignore_ascii_case(name))) || kept_name(name);
     match requested.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => {
-            if taken(name) {
+            if taken(name) && !(replace && kept_name(name)) {
                 return Err(other("A PivotTable with that name already exists."));
             }
             Ok(name.to_string())
@@ -420,10 +673,7 @@ fn kept_pivot_names(wb: &Workbook) -> Vec<String> {
         .iter()
         .filter(|part| part_number(&part.name, "xl/pivottables/pivottable", ".xml").is_some())
         .filter_map(|part| std::str::from_utf8(&part.data).ok())
-        .filter_map(|xml| {
-            let rest = xml.get(xml.find("name=\"")?.saturating_add("name=\"".len())..)?;
-            rest.get(..rest.find('"')?).map(str::to_string)
-        })
+        .filter_map(|xml| attribute_value(xml, "name=\""))
         .collect()
 }
 

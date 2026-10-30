@@ -24,6 +24,13 @@
 //!   connection relationships, the owning sheet's PivotTable relationship, and (when supplied)
 //!   `xl/model/item.data`.
 //!
+//! Applying the same pivot again (the field-list pane does, once per Apply) updates the pivot the
+//! workbook already has under that name: its definition part and cache part are overwritten with
+//! the new bytes and its cache id and relationships are kept, so a workbook never collects two
+//! pivots with the same name, a second cache with the same id or a second `<pivotCaches>` entry.
+//! When the existing part's cache is gone or its relationships no longer point at one, the old
+//! part is removed (with every relationship that named it) and a fresh pivot is created instead.
+//!
 //! Seams with other work on the same files: the `<pivotCaches>` element is kept under the
 //! `pivotCaches` slot ([`SLOT_PIVOT_CACHES`]) — PR #2499's per-cache `pivotCache` slot supersedes
 //! that representation and only [`add_pivot_cache`] has to change; the `x15:dataModel` extension
@@ -1168,6 +1175,131 @@ fn attach_sheet_rel(wb: &mut Workbook, sheet_index: usize, table_part: &str) -> 
     Ok(())
 }
 
+/// A PivotTable the workbook already keeps under the name a new spec wants to use.
+enum ExistingPivot {
+    /// Its definition part, cache part and cache id can be written over in place.
+    Usable { table_part: String, cache_part: String, cache_id: u32 },
+    /// A part with the name exists, but its cache part is missing or its relationships no longer
+    /// name one: it cannot be updated faithfully, so it is removed and the pivot is recreated.
+    Stale { table_part: String },
+}
+
+/// The definition part under `xl/pivotTables/` whose `name` is `name`, if the workbook keeps one.
+fn pivot_part_named<'a>(p: &'a Preserved, name: &str) -> Option<&'a PreservedPart> {
+    p.parts.iter().find(|part| {
+        let lower = part.name.to_ascii_lowercase();
+        if !lower.starts_with("xl/pivottables/") || !lower.ends_with(".xml") {
+            return false;
+        }
+        crate::xml::parse(&part.data)
+            .is_ok_and(|root| root.name == "pivotTableDefinition" && root.attr("name").is_some_and(|n| n.eq_ignore_ascii_case(name)))
+    })
+}
+
+/// The PivotTable definition part named `name` and the cache it uses, recovered from the part's
+/// own `pivotCacheDefinition` relationship.
+fn existing_pivot(p: &Preserved, name: &str) -> Option<ExistingPivot> {
+    let part = pivot_part_named(p, name)?;
+    let usable = (|| {
+        let root = crate::xml::parse(&part.data).ok()?;
+        let cache_id = root.attr_u32("cacheId").filter(|id| *id > 0)?;
+        let rel = part.rels.iter().find(|r| !r.external && r.rel_type == rel_uri(REL_PIVOT_CACHE))?;
+        let cache = p.parts.iter().find(|q| q.name.eq_ignore_ascii_case(&rel.target))?;
+        Some((cache.name.clone(), cache_id))
+    })();
+    match usable {
+        Some((cache_part, cache_id)) => Some(ExistingPivot::Usable { table_part: part.name.clone(), cache_part, cache_id }),
+        None => Some(ExistingPivot::Stale { table_part: part.name.clone() }),
+    }
+}
+
+/// Drops a PivotTable definition part that cannot be updated in place, together with its cache and
+/// every relationship or `<pivotCaches>` entry that named either of them, so the recreated pivot
+/// leaves neither a duplicate name nor a dangling relationship behind.
+fn drop_stale_pivot(wb: &mut Workbook, table_part: &str) {
+    let cache_part = wb
+        .preserved
+        .as_deref()
+        .and_then(|p| p.parts.iter().find(|q| q.name.eq_ignore_ascii_case(table_part)))
+        .and_then(|part| part.rels.iter().find(|r| !r.external && r.rel_type == rel_uri(REL_PIVOT_CACHE)))
+        .map(|r| r.target.clone());
+    if let (Some(p), Some(cache)) = (wb.preserved.as_mut().map(Arc::make_mut), cache_part.as_deref()) {
+        // The cache part goes only when nothing else uses it; its workbook relationships and
+        // `<pivotCaches>` entries always go, whether or not the part still exists.
+        let shared = p
+            .parts
+            .iter()
+            .any(|q| !q.name.eq_ignore_ascii_case(table_part) && q.rels.iter().any(|r| !r.external && r.target.eq_ignore_ascii_case(cache)));
+        let ty = rel_uri(REL_PIVOT_CACHE);
+        let mut ids: Vec<String> = vec![];
+        p.rels.retain(|r| {
+            let drop = r.rel_type == ty && r.target.eq_ignore_ascii_case(cache);
+            if drop {
+                ids.push(r.id.clone());
+            }
+            !drop
+        });
+        drop_pivot_cache_entries(p, &ids);
+        if !shared {
+            p.parts.retain(|q| !q.name.eq_ignore_ascii_case(cache));
+        }
+    }
+    let ty = rel_uri(REL_PIVOT_TABLE);
+    let targets_part = |r: &PreservedRel| r.rel_type == ty && r.target.eq_ignore_ascii_case(table_part);
+    if let Some(p) = wb.preserved.as_mut().map(Arc::make_mut) {
+        p.parts.retain(|q| !q.name.eq_ignore_ascii_case(table_part));
+        p.rels.retain(|r| !targets_part(r));
+    }
+    for i in 0..wb.sheets.len() {
+        let Some(sheet) = wb.sheet_mut(i) else { continue };
+        if let Some(preserved) = sheet.preserved.as_mut().map(Arc::make_mut) {
+            preserved.rels.retain(|r| !targets_part(r));
+        }
+    }
+}
+
+/// Removes the `<pivotCache>` entries of the kept `<pivotCaches>` element whose `r:id` is in `ids`;
+/// the element itself goes when no entry is left (adding a cache recreates it).
+fn drop_pivot_cache_entries(p: &mut Preserved, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let Some(element) = p.elements.iter_mut().find(|e| e.slot == SLOT_PIVOT_CACHES) else { return };
+    let wanted: Vec<String> = ids.iter().map(|id| format!("r:id=\"{}\"", esc_attr(id))).collect();
+    let mut out = String::with_capacity(element.xml.len());
+    let mut rest = element.xml.as_str();
+    while let Some(at) = rest.find("<pivotCache ") {
+        out.push_str(rest.get(..at).unwrap_or_default());
+        let tail = rest.get(at..).unwrap_or_default();
+        let end = tail.find("/>").map(|i| i.saturating_add(2)).unwrap_or(tail.len());
+        let tag = tail.get(..end).unwrap_or_default();
+        if !wanted.iter().any(|id| tag.contains(id.as_str())) {
+            out.push_str(tag);
+        }
+        rest = tail.get(end..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    element.xml = out;
+    if !element.xml.contains("<pivotCache ") {
+        p.elements.retain(|e| e.slot != SLOT_PIVOT_CACHES);
+    }
+}
+
+/// Drops the `pivotTable` relationship of every sheet other than `keep` that points at
+/// `table_part`: an updated PivotTable lives on the sheet it was applied to, once.
+fn remove_other_sheet_rels(wb: &mut Workbook, table_part: &str, keep: usize) {
+    let ty = rel_uri(REL_PIVOT_TABLE);
+    for i in 0..wb.sheets.len() {
+        if i == keep {
+            continue;
+        }
+        let Some(sheet) = wb.sheet_mut(i) else { continue };
+        if let Some(p) = sheet.preserved.as_mut().map(Arc::make_mut) {
+            p.rels.retain(|r| !(r.rel_type == ty && r.target.eq_ignore_ascii_case(table_part)));
+        }
+    }
+}
+
 /// Writes a data-model PivotTable into `wb` so that every later save keeps it.
 ///
 /// The report cells go on `sheet` starting at `location`; the package parts the PivotTable needs
@@ -1176,6 +1308,11 @@ fn attach_sheet_rel(wb: &mut Workbook, sheet_index: usize, table_part: &str) -> 
 /// workbook's `<pivotCaches>` element, the cache/connection relationships, the sheet's
 /// relationship to the PivotTable part and the `x15:dataModel` extension. Nothing is serialized
 /// here — the next [`crate::write_xlsx`] of `wb` produces the package.
+///
+/// When the workbook already keeps a PivotTable named `spec.name`, that pivot is updated: its
+/// definition part, its cache part and their relationship ids stay, so the workbook never holds
+/// two pivots of the same name. A kept part whose name matches but whose cache part is missing or
+/// unrelated is dropped (with the relationships that named it) and the pivot is created fresh.
 ///
 /// # Errors
 /// A missing sheet, an invalid location or report (outside the sheet), a duplicate cache id, a
@@ -1210,25 +1347,67 @@ pub fn attach_model_pivot(
         return Err(IoError::TooLarge("the data model part is larger than 512 MB".into()));
     }
     write_report(wb, sheet_index, location, report)?;
-    let table_xml = build_table_xml(spec, location, rows.max(1), cols.max(1));
+
+    // A field-list pane re-applies one pivot as its fields change, so update the pivot the workbook
+    // already keeps under this name instead of accumulating a second definition and cache.
+    let existing = wb.preserved.as_deref().and_then(|p| existing_pivot(p, &spec.name));
+    if let Some(ExistingPivot::Stale { table_part }) = &existing {
+        drop_stale_pivot(wb, table_part);
+    }
+    let reused = match existing {
+        Some(ExistingPivot::Usable { table_part, cache_part, cache_id }) => Some((table_part, cache_part, cache_id)),
+        _ => None,
+    };
+    let updating = reused.is_some();
+    // The definition carries the id the file already uses, so it keeps matching its
+    // `<pivotCaches>` entry.
+    let mut built = spec.clone();
+    if let Some((_, _, cache_id)) = &reused {
+        built.cache_id = *cache_id;
+    }
+    let built = &built;
+    let table_xml = build_table_xml(built, location, rows.max(1), cols.max(1));
 
     let p = preserved(wb);
-    let connection_id = ensure_connections(p, spec.connection_id);
-    let cache_xml = build_cache_xml(spec, connection_id)?;
-    let cache_part = fresh_part_name(p, "xl/pivotCache", "pivotCacheDefinition", ".xml", spec.cache_id);
-    let table_part = fresh_part_name(p, "xl/pivotTables", "pivotTable", ".xml", spec.cache_id);
-    p.parts.push(PreservedPart {
-        name: cache_part.clone(),
-        content_type: CT_PIVOT_CACHE_DEF.to_string(),
-        data: Arc::from(cache_xml.into_bytes()),
-        ..Default::default()
-    });
-    p.parts.push(PreservedPart {
-        name: table_part.clone(),
-        content_type: CT_PIVOT_TABLE.to_string(),
-        data: Arc::from(table_xml.into_bytes()),
-        rels: vec![PreservedRel { id: "rId1".to_string(), rel_type: rel_uri(REL_PIVOT_CACHE), target: cache_part.clone(), external: false }],
-    });
+    let connection_id = ensure_connections(p, built.connection_id);
+    let cache_xml = build_cache_xml(built, connection_id)?;
+    let (cache_part, table_part) = match reused {
+        Some((table_part, cache_part, _)) => (cache_part, table_part),
+        None => (
+            fresh_part_name(p, "xl/pivotCache", "pivotCacheDefinition", ".xml", built.cache_id),
+            fresh_part_name(p, "xl/pivotTables", "pivotTable", ".xml", built.cache_id),
+        ),
+    };
+    match p.parts.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&cache_part)) {
+        Some(part) => {
+            part.content_type = CT_PIVOT_CACHE_DEF.to_string();
+            part.data = Arc::from(cache_xml.into_bytes());
+        }
+        None => p.parts.push(PreservedPart {
+            name: cache_part.clone(),
+            content_type: CT_PIVOT_CACHE_DEF.to_string(),
+            data: Arc::from(cache_xml.into_bytes()),
+            ..Default::default()
+        }),
+    }
+    let cache_rel = PreservedRel { id: "rId1".to_string(), rel_type: rel_uri(REL_PIVOT_CACHE), target: cache_part.clone(), external: false };
+    match p.parts.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&table_part)) {
+        Some(part) => {
+            part.content_type = CT_PIVOT_TABLE.to_string();
+            part.data = Arc::from(table_xml.into_bytes());
+            // The part's own relationship ids are kept: its bytes never name them.
+            match part.rels.iter_mut().find(|r| !r.external && r.rel_type == cache_rel.rel_type) {
+                Some(rel) => rel.target = cache_part.clone(),
+                None => part.rels.push(cache_rel),
+            }
+        }
+        None => p.parts.push(PreservedPart {
+            name: table_part.clone(),
+            content_type: CT_PIVOT_TABLE.to_string(),
+            data: Arc::from(table_xml.into_bytes()),
+            rels: vec![cache_rel],
+        }),
+    }
     if let Some(data) = model_data {
         match p.parts.iter_mut().find(|q| q.name.eq_ignore_ascii_case(MODEL_DATA_PART)) {
             // A kept part holds the model as read; the caller's bytes carry the session's measures,
@@ -1249,9 +1428,13 @@ pub fn attach_model_pivot(
     if p.parts.iter().any(|q| q.name.eq_ignore_ascii_case("xl/model/item.data")) {
         let _ = ensure_rel(p, REL_MODEL, "xl/model/item.data");
     }
-    add_pivot_cache(p, spec.cache_id, &cache_rid)?;
-    let resolved = resolve_connections(p, spec);
+    add_pivot_cache(p, built.cache_id, &cache_rid)?;
+    let resolved = resolve_connections(p, built);
     set_data_model_ext(p, &resolved);
+    if updating {
+        // One PivotTable part is related from one sheet only.
+        remove_other_sheet_rels(wb, &table_part, sheet_index);
+    }
     attach_sheet_rel(wb, sheet_index, &table_part)
 }
 

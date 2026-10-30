@@ -160,7 +160,8 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.markDateTable` | `{table, column}` | status (the column must be contiguous, unique dates) |
 | `dataModel.unmarkDateTable` | `{table}` | status |
 | `dataModel.validate` | `{}` | `{tables, rows, relationships, findings}` — referential integrity, cardinality, blank keys, cycles |
-| `dataModel.createPivot` | `{measure, row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?}` | `{name, sheet, at, rows, columns, values, cached}` |
+| `dataModel.createPivot` | `{measure, values?, row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?}` | `{name, sheet, at, rows, columns, values, cached}`; `replace` clears the previous report of that name and re-applies the kept PivotTable |
+| `dataModel.pivotFields` | `{name?}` | `{pivots: [{name, sheet, at}], model: {tables, measures, relationships}, selected}` — what the field-list pane reads |
 | `insert.modelPivotTable` | same as `dataModel.createPivot` | same (Insert › Tables entry point) |
 
 `status` is:
@@ -215,7 +216,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Undo/Redo, Find, AutoSum | Find works (`dataModel.find`); undo/redo and AutoSum are missing; edits commit immediately |
 | Calculation Options Manual mode | Window state only; commands still commit immediately |
 | Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
-| Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml`, keeps them on save, and the result **opens, refreshes and survives save/reopen in Excel** (verified: the grid it returns is what `TableRange2.Value2` shows). The pivot field-list pane is still missing |
+| Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml`, keeps them on save, and the result **opens, refreshes and survives save/reopen in Excel**. The **PivotTable Fields pane** now exists for model pivots (`dataModel.pivotFields`): tables/columns/measures with tick boxes, Rows/Columns/Filters/Values areas, layout and grand totals, and Apply updates the pivot in place. It is not yet Excel's drag-and-drop tree with search |
 | Pivot Preview | Not present: the window has no separate preview surface |
 | Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache, so Excel evaluates them on refresh. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
 
