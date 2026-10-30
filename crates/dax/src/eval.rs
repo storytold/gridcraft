@@ -5,6 +5,28 @@
 //! logical/table/relationship/date/text/math/information functions, and basic pivot grouping.
 //! Functions outside this subset return [`EvalError::not_implemented`]; the parser and catalog
 //! still accept them.
+//!
+//! # Columnar evaluation substrate
+//!
+//! [`Evaluator::new`] materializes the model once into [`ModelStorage`]: typed columns with null
+//! bitmaps and dictionaries plus [`RelationshipIndex`] key indexes. Evaluation then reads those
+//! columns instead of rescanning [`crate::model::ModelTable::rows`]:
+//!
+//! * column filters are applied with [`TableStorage::filter_rows`] and intersected, and row sets
+//!   stay row ids until a function actually needs row slices;
+//! * filters propagate across relationships through [`RelationshipIndex::rows_from`] /
+//!   [`RelationshipIndex::rows_to`], so key columns are never rescanned;
+//! * `SUM`/`AVERAGE`/`PRODUCT`/`MIN`/`MAX`, `COUNT`/`COUNTA`/`COUNTBLANK`, `DISTINCTCOUNT` and the
+//!   `*X` iterators whose expression is a plain column are answered from columns;
+//! * `VALUES`/`DISTINCT` dedupe through column storage (and the string dictionary);
+//! * `COUNTROWS`, `RELATED`, `RELATEDTABLE` and pivot grouping use row ids and the indexes.
+//!
+//! The substitution is only made when [`ModelStorage::is_faithful`] holds, i.e. the columnar copy
+//! is lossless and rectangular. Models with ragged rows or promoted columns (mixed numeric
+//! families, booleans mixed with other values, NaNs) keep the row-scan path, and so do the
+//! functions that evaluate an expression per row (`FILTER`, `ADDCOLUMNS`, `TOPN`, measure
+//! iterators) because they need a row context. [`Evaluator::storage_stats`] reports which path
+//! served a call.
 
 mod aggregation;
 mod date_time;
@@ -25,10 +47,12 @@ mod visual;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
+use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
 use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
 
 use support::*;
@@ -90,10 +114,93 @@ impl RowFrame {
     }
 }
 
-/// An evaluator with pre-bound measures.
+/// Instrumentation counters for the columnar evaluation substrate.
+///
+/// Every counter counts *calls served by* [`ModelStorage`], not bytes or timing, so a test can
+/// assert that a formula really took the storage path. [`Evaluator::storage_stats`] snapshots
+/// them. They are atomic, so an [`Evaluator`] stays `Sync` and can be shared; an evaluation itself
+/// never reads them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StorageStats {
+    /// Column aggregate fast paths (`SUM`, `AVERAGE`, `PRODUCT`, `MIN`, `MAX`, `COUNT`, `COUNTA`,
+    /// `COUNTBLANK`, `DISTINCTCOUNT`, `APPROXIMATEDISTINCTCOUNT`).
+    pub aggregates: u64,
+    /// `*X` iterators answered from a column instead of a per-row frame.
+    pub iterators: u64,
+    /// `COUNTROWS` answered from a filtered row-id set.
+    pub count_rows: u64,
+    /// `RELATED` resolved through a [`RelationshipIndex`](crate::storage::RelationshipIndex).
+    pub related: u64,
+    /// `RELATEDTABLE` answered through a relationship index.
+    pub related_table: u64,
+    /// `VALUES`/`DISTINCT` served from column storage (string columns via the dictionary).
+    pub distinct_values: u64,
+    /// Pivot rows grouped from columns.
+    pub pivot_group_rows: u64,
+    /// Column filter scans executed by [`TableStorage::filter_rows`].
+    pub filter_scans: u64,
+    /// Relationship index probes (`rows_from`/`rows_to`).
+    pub relationship_lookups: u64,
+    /// Model rows served from columns instead of materialized model row vectors.
+    pub rows_from_storage: u64,
+    /// Calls that had to fall back to a model row scan because the storage is absent, not
+    /// faithful, or cannot answer the call.
+    pub row_scan_fallbacks: u64,
+}
+
+#[derive(Debug, Default)]
+struct StorageCounters {
+    aggregates: AtomicU64,
+    iterators: AtomicU64,
+    count_rows: AtomicU64,
+    related: AtomicU64,
+    related_table: AtomicU64,
+    distinct_values: AtomicU64,
+    pivot_group_rows: AtomicU64,
+    filter_scans: AtomicU64,
+    relationship_lookups: AtomicU64,
+    rows_from_storage: AtomicU64,
+    row_scan_fallbacks: AtomicU64,
+}
+
+impl StorageCounters {
+    fn bump(&self, counter: fn(&StorageCounters) -> &AtomicU64) {
+        counter(self).fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    fn add(&self, counter: fn(&StorageCounters) -> &AtomicU64, amount: usize) {
+        let amount = u64::try_from(amount).unwrap_or(u64::MAX);
+        counter(self).fetch_add(amount, AtomicOrdering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StorageStats {
+        StorageStats {
+            aggregates: self.aggregates.load(AtomicOrdering::Relaxed),
+            iterators: self.iterators.load(AtomicOrdering::Relaxed),
+            count_rows: self.count_rows.load(AtomicOrdering::Relaxed),
+            related: self.related.load(AtomicOrdering::Relaxed),
+            related_table: self.related_table.load(AtomicOrdering::Relaxed),
+            distinct_values: self.distinct_values.load(AtomicOrdering::Relaxed),
+            pivot_group_rows: self.pivot_group_rows.load(AtomicOrdering::Relaxed),
+            filter_scans: self.filter_scans.load(AtomicOrdering::Relaxed),
+            relationship_lookups: self.relationship_lookups.load(AtomicOrdering::Relaxed),
+            rows_from_storage: self.rows_from_storage.load(AtomicOrdering::Relaxed),
+            row_scan_fallbacks: self.row_scan_fallbacks.load(AtomicOrdering::Relaxed),
+        }
+    }
+}
+
+/// An evaluator with pre-bound measures and one columnar copy of the model.
 pub struct Evaluator<'a> {
     model: &'a DataModel,
     measures: Vec<BoundExpr>,
+    /// The columnar substrate, when [`ModelStorage::from_model`] succeeded.
+    storage: Option<ModelStorage>,
+    /// Why no substrate exists. Kept instead of failing evaluation: a model with duplicate table
+    /// names or a relationship naming a missing table still evaluates through the row scan, which
+    /// is the behaviour this evaluator had before storage existed.
+    storage_error: Option<StorageError>,
+    counters: StorageCounters,
 }
 
 impl<'a> Evaluator<'a> {
@@ -109,7 +216,59 @@ impl<'a> Evaluator<'a> {
             };
             measures.push(binder.bind_expression(expr)?);
         }
-        Ok(Evaluator { model, measures })
+        // One columnar copy for the evaluator's lifetime. A model that cannot be materialized is
+        // not an evaluation error: the row-scan path stays available and the reason is reported by
+        // `storage_error`.
+        let (storage, storage_error) = match ModelStorage::from_model(model) {
+            Ok(storage) => (Some(storage), None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(Evaluator { model, measures, storage, storage_error, counters: StorageCounters::default() })
+    }
+
+    /// The columnar substrate, when the model could be materialized.
+    pub fn storage(&self) -> Option<&ModelStorage> {
+        self.storage.as_ref()
+    }
+
+    /// Why the columnar substrate is absent, when it is.
+    ///
+    /// Absent storage is deliberately not a construction error: a model with duplicate table or
+    /// column names, or a relationship naming a missing endpoint, used to evaluate through the row
+    /// scan and still does. The evaluator reports the reason here (and counts every fallback in
+    /// [`StorageStats::row_scan_fallbacks`]) instead of failing every formula in such a model.
+    pub fn storage_error(&self) -> Option<&StorageError> {
+        self.storage_error.as_ref()
+    }
+
+    /// A snapshot of the storage instrumentation counters.
+    pub fn storage_stats(&self) -> StorageStats {
+        self.counters.snapshot()
+    }
+
+    /// The substrate when it is a transparent substitute for the model rows.
+    ///
+    /// Every caller that asks and does not get one takes the row-scan path, which is exactly the
+    /// `row_scan_fallbacks` counter.
+    fn substrate(&self) -> Option<&ModelStorage> {
+        let storage = self.storage.as_ref().filter(|storage| storage.is_faithful());
+        if storage.is_none() {
+            self.bump(|counters| &counters.row_scan_fallbacks);
+        }
+        storage
+    }
+
+    fn bump(&self, counter: fn(&StorageCounters) -> &AtomicU64) {
+        self.counters.bump(counter);
+    }
+
+    fn note_rows(&self, rows: usize) {
+        self.counters.add(|counters| &counters.rows_from_storage, rows);
+    }
+
+    /// Records that pivot grouping read `rows` source rows from columns.
+    pub(crate) fn note_pivot_rows(&self, rows: usize) {
+        self.counters.add(|counters| &counters.pivot_group_rows, rows);
     }
 
     pub fn model(&self) -> &'a DataModel {
@@ -229,6 +388,103 @@ impl<'a> Evaluator<'a> {
         Err(EvalError::new(format!("column `[{name}]` is ambiguous or out of row context")))
     }
 
+    /// Rows of `table` that survive `filters`, in ascending row order, computed from storage.
+    ///
+    /// Column filters are applied with [`TableStorage::filter_rows`] and intersected; filters on
+    /// related tables propagate through [`RelationshipIndex`](crate::storage::RelationshipIndex)
+    /// key indexes instead of rescanning key columns. `None` means the row scan must answer
+    /// instead: no substrate, a model that is not faithfully materialized, or a filter or
+    /// relationship the storage cannot resolve.
+    pub(crate) fn filtered_row_ids(&self, table: usize, filters: &FilterContext) -> Option<Vec<usize>> {
+        let rows = self.filtered_row_ids_inner(table, filters, &mut BTreeSet::new());
+        if rows.is_none() {
+            self.bump(|counters| &counters.row_scan_fallbacks);
+        }
+        rows
+    }
+
+    /// [`Self::filtered_row_ids`] with the relationship propagation path.
+    ///
+    /// `visited` mirrors the recursion of the row-based filter: a chain that leads back to a table
+    /// already being filtered contributes no rows, exactly like the scan path.
+    fn filtered_row_ids_inner(&self, table: usize, filters: &FilterContext, visited: &mut BTreeSet<usize>) -> Option<Vec<usize>> {
+        let storage = self.substrate()?;
+        let table_storage = storage.table(table)?;
+        if !visited.insert(table) {
+            return Some(Vec::new());
+        }
+        let rows = self.collect_filtered_rows(storage, table_storage, table, filters, visited);
+        visited.remove(&table);
+        rows
+    }
+
+    /// Applies direct filters and relationship propagation to `table`. Split out of
+    /// [`Self::filtered_row_ids_inner`] so the `visited` bookkeeping happens on every exit.
+    fn collect_filtered_rows(
+        &self,
+        storage: &ModelStorage,
+        table_storage: &TableStorage,
+        table: usize,
+        filters: &FilterContext,
+        visited: &mut BTreeSet<usize>,
+    ) -> Option<Vec<usize>> {
+        let column_count = self.model.tables.get(table).map_or(0, |model_table| model_table.columns.len());
+        let mut rows: Option<Vec<usize>> = None;
+        for ((filter_table, column), keys) in &filters.filters {
+            if *filter_table != table {
+                continue;
+            }
+            // The scan path ignores a filter on a column the table does not have; storage cannot
+            // express that, so hand the call back.
+            if *column >= column_count {
+                return None;
+            }
+            let wanted: Vec<ScalarKey> = keys.iter().cloned().collect();
+            let matched = match table_storage.filter_rows(*column, &wanted) {
+                Ok(matched) => matched,
+                Err(_) => return None,
+            };
+            self.bump(|counters| &counters.filter_scans);
+            rows = Some(match rows {
+                None => matched,
+                Some(current) => intersect_rows(current, &matched),
+            });
+        }
+        let mut rows = rows.unwrap_or_else(|| (0..table_storage.row_count()).collect());
+
+        for (index, relationship) in storage.relationships().iter().enumerate() {
+            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            if !active {
+                continue;
+            }
+            let (other, self_column, other_column) = if relationship.from_table == table {
+                (relationship.to_table, relationship.from_column, relationship.to_column)
+            } else if bidirectional && relationship.to_table == table {
+                (relationship.from_table, relationship.to_column, relationship.from_column)
+            } else {
+                continue;
+            };
+            let mut probe = visited.clone();
+            if visited.contains(&other) || !self.table_has_filter(other, filters, &mut probe) {
+                continue;
+            }
+            let other_rows = self.filtered_row_ids_inner(other, filters, visited)?;
+            self.bump(|counters| &counters.relationship_lookups);
+            let keys: BTreeSet<ScalarKey> =
+                other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| ScalarKey::from(&value)).collect();
+            let mut retained = Vec::with_capacity(rows.len());
+            for row in rows {
+                if let Some(value) = storage.value(table, self_column, row)
+                    && keys.contains(&ScalarKey::from(&value))
+                {
+                    retained.push(row);
+                }
+            }
+            rows = retained;
+        }
+        Some(rows)
+    }
+
     pub(crate) fn table(&self, table: usize, filters: &FilterContext) -> TableValue {
         self.table_inner(table, filters, &mut BTreeSet::new())
     }
@@ -237,6 +493,19 @@ impl<'a> Evaluator<'a> {
         let Some(model_table) = self.model.tables.get(table) else {
             return TableValue::new(Vec::new(), Vec::new());
         };
+        // Row ids keep the filtered set in storage hands; rows are only materialized here because
+        // this method's contract is a row slice.
+        if let Some(storage) = self.substrate()
+            && let Some(ids) = self.filtered_row_ids_inner(table, filters, visited)
+        {
+            let rows: Vec<Vec<Scalar>> = ids
+                .iter()
+                .map(|row| (0..model_table.columns.len()).map(|column| storage.value(table, column, *row).unwrap_or(Scalar::Blank)).collect())
+                .collect();
+            self.note_rows(ids.len());
+            return TableValue::new(model_table.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect(), rows)
+                .with_lineage(table);
+        }
         // A relationship chain can lead back to a table already being filtered (bidirectional
         // pairs, or a cycle of single-direction relationships). Stop at the cycle: the direct
         // filters on the other table still apply to it, but re-entering here adds nothing.
@@ -357,7 +626,11 @@ impl<'a> Evaluator<'a> {
             "BLANK" => return Ok(Scalar::Blank),
             "IF" => {
                 let condition = self.eval(args.first().ok_or_else(|| EvalError::new("IF needs a condition"))?, ctx)?;
-                let branch = if condition.to_bool().unwrap_or(false) { args.get(1) } else { args.get(2) };
+                // Excel's DAX engine rejects a condition it cannot read as a logical value instead
+                // of silently taking the false branch.
+                let test =
+                    condition.to_bool().ok_or_else(|| EvalError::new(format!("IF argument 1 must be Boolean, found {}", condition.type_name())))?;
+                let branch = if test { args.get(1) } else { args.get(2) };
                 return match branch {
                     Some(expr) => self.eval(expr, ctx),
                     None => Ok(Scalar::Blank),
@@ -463,10 +736,19 @@ impl<'a> Evaluator<'a> {
             }
             "SUMX" | "AVERAGEX" | "COUNTX" | "COUNTAX" | "MINX" | "MAXX" | "PRODUCTX" => return self.aggregate_x(name, args, ctx),
             "COUNTROWS" => {
-                let table = match args.first() {
-                    Some(arg) => self.eval_table(arg, ctx)?,
-                    None => return Err(EvalError::new("COUNTROWS() without a home table is not supported")),
+                let Some(arg) = args.first() else {
+                    return Err(EvalError::new("COUNTROWS() without a home table is not supported"));
                 };
+                // A plain model table needs no materialized rows: the filtered row-id set already
+                // has the count.
+                if let BoundExpr::Table(table) = arg
+                    && let Some(rows) = self.filtered_row_ids(*table, &ctx.filters)
+                {
+                    self.bump(|counters| &counters.count_rows);
+                    self.note_rows(rows.len());
+                    return Ok(if rows.is_empty() { Scalar::Blank } else { Scalar::Integer(rows.len() as i64) });
+                }
+                let table = self.eval_table(arg, ctx)?;
                 return Ok(if table.rows.is_empty() { Scalar::Blank } else { Scalar::Integer(table.rows.len() as i64) });
             }
             _ => {}
@@ -533,7 +815,23 @@ impl<'a> Evaluator<'a> {
                 self.eval_table(&args[0], &mut inner)
             }
             "RELATEDTABLE" => {
-                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("RELATEDTABLE needs a table"))?, ctx)?;
+                let argument = args.first().ok_or_else(|| EvalError::new("RELATEDTABLE needs a table"))?;
+                // A plain model table over a row context needs no materialized source table: the
+                // index gives the matching row ids directly.
+                if let BoundExpr::Table(lineage) = argument
+                    && let Some(frame) = ctx.rows.last()
+                    && let Some(frame_table) = frame.lineage
+                    && let Some(rows) = self.related_table_via_index(*lineage, frame_table, frame, &ctx.filters)
+                {
+                    let columns = self
+                        .model
+                        .tables
+                        .get(*lineage)
+                        .map(|table| table.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect())
+                        .unwrap_or_default();
+                    return Ok(TableValue::new(columns, rows).with_lineage(*lineage));
+                }
+                let table = self.eval_table(argument, ctx)?;
                 let Some(frame) = ctx.rows.last() else {
                     return Err(EvalError::new("RELATEDTABLE needs a row context"));
                 };
@@ -577,6 +875,17 @@ impl<'a> Evaluator<'a> {
             "VALUES" | "DISTINCT" => {
                 let arg = args.first().ok_or_else(|| EvalError::new("VALUES needs a table or column"))?;
                 if let BoundExpr::Column { table, column } = arg {
+                    if let Some(values) = self.storage_distinct_values(*table, *column, &ctx.filters) {
+                        let name = self
+                            .model
+                            .tables
+                            .get(*table)
+                            .and_then(|table| table.columns.get(*column))
+                            .map(|column| column.name.clone())
+                            .unwrap_or_default();
+                        let rows = values.into_iter().map(|value| vec![value]).collect::<Vec<_>>();
+                        return Ok(TableValue::new(vec![TableColumn { name }], rows).with_lineage(*table));
+                    }
                     let source = self.table(*table, &ctx.filters);
                     let name = source.columns.get(*column).map(|column| column.name.clone()).unwrap_or_default();
                     let values: Vec<Scalar> = source.column(*column);
@@ -730,11 +1039,20 @@ impl<'a> Evaluator<'a> {
     }
 
     fn aggregate(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
-        let values = self.column_values(args.first().ok_or_else(|| EvalError::new("aggregation needs a column"))?, ctx)?;
+        let arg = args.first().ok_or_else(|| EvalError::new("aggregation needs a column"))?;
+        if let Some(column) = self.resolve_column(arg)
+            && let Some(result) = self.storage_aggregate(name, column, &ctx.filters)
+        {
+            return result;
+        }
+        let values = self.column_values(arg, ctx)?;
         aggregate_values(name, &values)
     }
 
     fn aggregate_x(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+        if let Some(result) = self.storage_aggregate_x(name, args, &ctx.filters) {
+            return result;
+        }
         let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("iterator needs a table"))?, ctx)?;
         let expression = args.get(1).ok_or_else(|| EvalError::new("iterator needs an expression"))?;
         let mut values = Vec::with_capacity(table.rows.len());
@@ -747,9 +1065,140 @@ impl<'a> Evaluator<'a> {
         aggregate_values(&name[..name.len() - 1], &values)
     }
 
+    /// `*X` fast path: the iterator's table is a model table and its expression is a plain column
+    /// of that table, so the aggregate runs over the column rather than evaluating a row frame per
+    /// row. `None` keeps the iterator path for every other expression.
+    fn storage_aggregate_x(&self, name: &str, args: &[BoundExpr], filters: &FilterContext) -> Option<Result<Scalar, EvalError>> {
+        let BoundExpr::Table(table) = args.first()? else {
+            return None;
+        };
+        let column = match args.get(1)? {
+            BoundExpr::Column { table: expression_table, column } if expression_table == table => *column,
+            BoundExpr::UnqualifiedColumn { name } => self.model.column_index(*table, name)?,
+            _ => return None,
+        };
+        let aggregate = name.to_ascii_uppercase();
+        let result = self.storage_aggregate(aggregate.strip_suffix('X')?, (*table, column), filters)?;
+        self.bump(|counters| &counters.iterators);
+        Some(result)
+    }
+
+    /// Column aggregate fast path. `None` means "use the row path", which also reproduces its
+    /// errors (ambiguous references, a column that is not numeric).
+    fn storage_aggregate(&self, name: &str, (table, column): (usize, usize), filters: &FilterContext) -> Option<Result<Scalar, EvalError>> {
+        let storage = self.substrate()?;
+        let table_storage = storage.table(table)?;
+        let kind = table_storage.column(column)?.kind();
+        let rows = self.filtered_row_ids(table, filters)?;
+        let aggregate = name.to_ascii_uppercase();
+        let scalar = match aggregate.as_str() {
+            "SUM" | "AVERAGE" | "PRODUCT" | "MIN" | "MAX" => {
+                // These read numbers only: booleans and text contribute nothing, so a logical or
+                // promoted-to-text column keeps the row path where that rule lives.
+                if !matches!(kind, ColumnKind::Integer | ColumnKind::Currency | ColumnKind::Decimal | ColumnKind::DateTime) {
+                    return None;
+                }
+                let numbers = table_storage.numeric_values(column, &rows).ok()?;
+                match aggregate.as_str() {
+                    "MIN" => numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank),
+                    "MAX" => numbers.iter().copied().reduce(f64::max).map(Scalar::Decimal).unwrap_or(Scalar::Blank),
+                    "SUM" if numbers.is_empty() => Scalar::Blank,
+                    "SUM" => Scalar::Decimal(numbers.iter().sum()),
+                    "PRODUCT" if numbers.is_empty() => Scalar::Blank,
+                    "PRODUCT" => Scalar::Decimal(numbers.iter().product()),
+                    _ if numbers.is_empty() => Scalar::Blank,
+                    _ => Scalar::Decimal(numbers.iter().sum::<f64>() / numbers.len() as f64),
+                }
+            }
+            "COUNT" | "COUNTA" => {
+                // `COUNT` ignores booleans; a logical column keeps the row path so that rule is
+                // applied in one place only.
+                if aggregate == "COUNT" && kind == ColumnKind::Boolean {
+                    return None;
+                }
+                let count = match table_storage.count(column, &rows).ok()? {
+                    Scalar::Integer(count) => count,
+                    _ => return None,
+                };
+                if count == 0 { Scalar::Blank } else { Scalar::Integer(count) }
+            }
+            "COUNTBLANK" => table_storage.count_blank(column, &rows).ok()?,
+            "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
+                if rows.is_empty() {
+                    Scalar::Blank
+                } else {
+                    let count = match table_storage.distinct_count(column, &rows).ok()? {
+                        Scalar::Integer(count) => count,
+                        _ => return None,
+                    };
+                    Scalar::Integer(count)
+                }
+            }
+            _ => return None,
+        };
+        self.bump(|counters| &counters.aggregates);
+        self.note_rows(rows.len());
+        Some(Ok(scalar))
+    }
+
+    /// The `(table, column)` of a plain column reference, or `None` for every other expression.
+    fn resolve_column(&self, expr: &BoundExpr) -> Option<(usize, usize)> {
+        match expr {
+            BoundExpr::Column { table, column } => Some((*table, *column)),
+            BoundExpr::UnqualifiedColumn { name } => {
+                let tables = self.model.tables_with_column(name);
+                if tables.len() != 1 {
+                    return None;
+                }
+                let table = tables[0];
+                self.model.column_index(table, name).map(|column| (table, column))
+            }
+            _ => None,
+        }
+    }
+
+    /// Values of one column over the filtered row set, read from storage.
+    fn storage_column(&self, table: usize, column: usize, filters: &FilterContext) -> Option<Vec<Scalar>> {
+        let storage = self.substrate()?;
+        let rows = self.filtered_row_ids(table, filters)?;
+        let values = rows.iter().map(|row| storage.value(table, column, *row)).collect::<Option<Vec<Scalar>>>()?;
+        self.note_rows(rows.len());
+        Some(values)
+    }
+
+    /// Distinct values of one column over the filtered row set, in first-occurrence row order.
+    fn storage_distinct_values(&self, table: usize, column: usize, filters: &FilterContext) -> Option<Vec<Scalar>> {
+        let storage = self.substrate()?;
+        let table_storage = storage.table(table)?;
+        let rows = self.filtered_row_ids(table, filters)?;
+        let values = table_storage.distinct_values(column, &rows).ok()?;
+        self.bump(|counters| &counters.distinct_values);
+        self.note_rows(rows.len());
+        Some(values)
+    }
+
+    /// Finite numeric observations of a column over the filtered row set.
+    ///
+    /// The statistical aggregates (`STDEV`, `VAR`, `MEDIAN`, `PERCENTILE`, `GEOMEAN`) need the
+    /// numbers, not a scalar list; this reads them from columns. `None` keeps those functions on
+    /// their column path, which also reports its errors.
+    pub(crate) fn storage_numeric_values(&self, expr: &BoundExpr, ctx: &Context) -> Option<Vec<f64>> {
+        let (table, column) = self.resolve_column(expr)?;
+        let storage = self.substrate()?;
+        let table_storage = storage.table(table)?;
+        let rows = self.filtered_row_ids(table, &ctx.filters)?;
+        let numbers: Vec<f64> = table_storage.numeric_values(column, &rows).ok()?.into_iter().filter(|number| number.is_finite()).collect();
+        self.bump(|counters| &counters.aggregates);
+        self.note_rows(rows.len());
+        Some(numbers)
+    }
+
     fn column_values(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<Vec<Scalar>, EvalError> {
         match expr {
             BoundExpr::Column { table, column } => {
+                if let Some(values) = self.storage_column(*table, *column, &ctx.filters) {
+                    return Ok(values);
+                }
                 let table = self.table(*table, &ctx.filters);
                 Ok(table.column(*column))
             }
@@ -760,6 +1209,9 @@ impl<'a> Evaluator<'a> {
                 }
                 let table = tables[0];
                 let column = self.model.column_index(table, name).ok_or_else(|| EvalError::new("missing column"))?;
+                if let Some(values) = self.storage_column(table, column, &ctx.filters) {
+                    return Ok(values);
+                }
                 Ok(self.table(table, &ctx.filters).column(column))
             }
             _ => Err(EvalError::new("aggregation needs a column reference")),
@@ -794,6 +1246,29 @@ impl<'a> Evaluator<'a> {
                     .map(|candidate| ScalarKey::from(&candidate))
                     .collect();
                 filters.set(table, column, keys);
+                Ok(())
+            }
+            BoundExpr::Binary { op: BinaryOp::In, left, right } => {
+                // `CALCULATE ( expr, Table[Column] IN { ... } )`: the list (or table expression)
+                // is the membership set, and the filter keeps the rows whose column value is a
+                // member — the same per-row truth the other comparison operators apply.
+                let BoundExpr::Column { table, column } = &**left else {
+                    return Err(EvalError::new("CALCULATE filter must compare a column"));
+                };
+                let members = self.eval_table(right, ctx)?;
+                if members.columns.len() != 1 {
+                    return Err(EvalError::new("CALCULATE filter IN needs a single-column table"));
+                }
+                let mut candidate_filters = ctx.filters.clone();
+                candidate_filters.filters.remove(&(*table, *column));
+                let keys: BTreeSet<ScalarKey> = self
+                    .table(*table, &candidate_filters)
+                    .column(*column)
+                    .into_iter()
+                    .filter(|candidate| members.rows.iter().any(|row| row.first().is_some_and(|member| member.strict_eq(candidate))))
+                    .map(|candidate| ScalarKey::from(&candidate))
+                    .collect();
+                filters.set(*table, *column, keys);
                 Ok(())
             }
             BoundExpr::Call { spec, args } if spec.name == "USERELATIONSHIP" || spec.name == "CROSSFILTER" => {
@@ -919,6 +1394,9 @@ impl<'a> Evaluator<'a> {
         let Some(frame_table) = frame.lineage else {
             return Err(EvalError::new("RELATED needs a row context over a model table"));
         };
+        if let Some(result) = self.related_via_index(*table, *column, frame_table, frame, &ctx.filters) {
+            return result;
+        }
         for relationship in &self.model.relationships {
             if relationship.inactive {
                 continue;
@@ -938,6 +1416,84 @@ impl<'a> Evaluator<'a> {
             }
         }
         Err(EvalError::new("no active relationship for RELATED"))
+    }
+
+    /// `RELATED` through the relationship index: the frame's key selects related row ids, so the
+    /// related key column is never scanned. `None` keeps the row path, which also reproduces its
+    /// errors (no row context, no active relationship, a key with no match).
+    fn related_via_index(
+        &self,
+        table: usize,
+        column: usize,
+        frame_table: usize,
+        frame: &RowFrame,
+        filters: &FilterContext,
+    ) -> Option<Result<Scalar, EvalError>> {
+        let storage = self.substrate()?;
+        for relationship in storage.relationships() {
+            if relationship.inactive || relationship.from_table != frame_table || relationship.to_table != table {
+                continue;
+            }
+            let key = frame.get(relationship.from_column)?;
+            // ScalarKey folds NaN keys together while `strict_eq` does not; keep the row path for
+            // that edge so the match rule stays strict.
+            if is_nan_key(key) {
+                return None;
+            }
+            let key = ScalarKey::from(key);
+            self.bump(|counters| &counters.relationship_lookups);
+            let rows = self.filtered_row_ids(table, filters)?;
+            let found = relationship.rows_to(&key).iter().copied().find(|row| rows.binary_search(row).is_ok());
+            // A matching relationship whose key is absent from the filtered rows falls through to
+            // the next candidate relationship, like the key-column scan does.
+            if let Some(matched) = found
+                && let Some(value) = storage.value(table, column, matched)
+            {
+                self.bump(|counters| &counters.related);
+                self.note_rows(1);
+                return Some(Ok(value));
+            }
+        }
+        None
+    }
+
+    /// `RELATEDTABLE` through the relationship index: the frame's key selects row ids in the
+    /// related table, which are then intersected with its filtered rows. `None` keeps the row
+    /// path, which also reproduces its errors.
+    fn related_table_via_index(&self, lineage: usize, frame_table: usize, frame: &RowFrame, filters: &FilterContext) -> Option<Vec<Vec<Scalar>>> {
+        let storage = self.substrate()?;
+        let table_storage = storage.table(lineage)?;
+        for relationship in storage.relationships() {
+            if relationship.inactive {
+                continue;
+            }
+            // `RELATEDTABLE` reads both directions: a many-side row lists its one-side rows and a
+            // one-side row lists its many-side rows.
+            let forward = relationship.from_table == frame_table && relationship.to_table == lineage;
+            let reverse = relationship.to_table == frame_table && relationship.from_table == lineage;
+            if !forward && !reverse {
+                continue;
+            }
+            let key_column = if forward { relationship.from_column } else { relationship.to_column };
+            let key = frame.get(key_column)?;
+            if is_nan_key(key) {
+                return None;
+            }
+            let key = ScalarKey::from(key);
+            self.bump(|counters| &counters.relationship_lookups);
+            let candidates = if forward { relationship.rows_to(&key) } else { relationship.rows_from(&key) };
+            let rows = self.filtered_row_ids(lineage, filters)?;
+            let columns = table_storage.columns().len();
+            let matched: Vec<Vec<Scalar>> = candidates
+                .iter()
+                .filter(|row| rows.binary_search(row).is_ok())
+                .map(|row| (0..columns).map(|column| storage.value(lineage, column, *row).unwrap_or(Scalar::Blank)).collect())
+                .collect();
+            self.bump(|counters| &counters.related_table);
+            self.note_rows(matched.len());
+            return Some(matched);
+        }
+        None
     }
 
     #[allow(dead_code)] // table families use this as they land
@@ -978,6 +1534,20 @@ fn literal_value(literal: &Literal) -> Scalar {
 
 fn scalar_from_key(key: &ScalarKey) -> Scalar {
     key.to_scalar()
+}
+
+/// The rows of `rows` that also appear in `keep`. Both are ascending row-id lists.
+fn intersect_rows(rows: Vec<usize>, keep: &[usize]) -> Vec<usize> {
+    rows.into_iter().filter(|row| keep.binary_search(row).is_ok()).collect()
+}
+
+/// Whether a scalar is a NaN number. [`ScalarKey`] folds NaNs into one key while `strict_eq`
+/// never matches them, so relationship lookups fall back for this value.
+fn is_nan_key(value: &Scalar) -> bool {
+    match value {
+        Scalar::Decimal(number) | Scalar::DateTime(number) => number.is_nan(),
+        _ => false,
+    }
 }
 
 fn reverse_comparison(op: BinaryOp) -> BinaryOp {
@@ -1063,13 +1633,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "ABS" => Ok(Scalar::Decimal(number(0)?.abs())),
         "ROUND" => Ok(Scalar::Decimal(round_to(number(0)?, number(1)? as i32))),
         "ROUNDUP" => Ok(Scalar::Decimal(round_direction(number(0)?, number(1)? as i32, true))),
-        "ROUNDDOWN" => Ok(Scalar::Decimal(round_direction(number(0)?, number(1)? as i32, false))),
         "INT" => Ok(Scalar::Integer(number(0)?.floor() as i64)),
         "TRUNC" => Ok(Scalar::Decimal(number(0)?.trunc())),
-        "MOD" => {
-            let (a, b) = (number(0)?, number(1)?);
-            if b == 0.0 { Ok(Scalar::Blank) } else { Ok(Scalar::Decimal(a % b)) }
-        }
         "POWER" => Ok(Scalar::Decimal(number(0)?.powf(number(1)?))),
         "SQRT" => Ok(Scalar::Decimal(number(0)?.sqrt())),
         "EXP" => Ok(Scalar::Decimal(number(0)?.exp())),
@@ -1083,7 +1648,6 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             let (a, b) = (number(0)?, number(1)?);
             if b == 0.0 { Ok(args.get(2).cloned().unwrap_or(Scalar::Blank)) } else { Ok(Scalar::Decimal(a / b)) }
         }
-        "TIME" => Ok(Scalar::DateTime((number(0)? * 3600.0 + number(1)? * 60.0 + number(2)?) / 86400.0)),
         "FIND" | "SEARCH" => {
             let needle = text(0)?;
             let haystack = text(1)?;
@@ -1111,7 +1675,6 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "LEN" => Ok(Scalar::Integer(text(0)?.chars().count() as i64)),
         "UPPER" => Ok(Scalar::String(text(0)?.to_uppercase())),
         "LOWER" => Ok(Scalar::String(text(0)?.to_lowercase())),
-        "TRIM" => Ok(Scalar::String(text(0)?.trim().to_string())),
         "LEFT" => Ok(Scalar::String(text(0)?.chars().take(number(1)? as usize).collect())),
         "RIGHT" => {
             let value = text(0)?;
@@ -1158,10 +1721,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "HOUR" => Ok(Scalar::Integer((number(0)?.fract() * 24.0).floor() as i64)),
         "MINUTE" => Ok(Scalar::Integer(((number(0)?.fract() * 24.0).fract() * 60.0).floor() as i64)),
         "SECOND" => Ok(Scalar::Integer((((number(0)?.fract() * 24.0).fract() * 60.0).fract() * 60.0).round() as i64)),
-        "WEEKDAY" => Ok(Scalar::Integer(date_weekday(number(0)?))),
         "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i64))),
         "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i64))),
-        "DATEDIFF" => Ok(Scalar::Integer((number(1)? - number(0)?).trunc() as i64)),
         "PATH" => Ok(Scalar::String(format!("{}{}", text(0)?, text(1)?))),
         "PATHLENGTH" => Ok(Scalar::Integer(text(0)?.split('|').count() as i64)),
         "PATHCONTAINS" => {

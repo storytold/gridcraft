@@ -261,8 +261,14 @@ impl Statistic {
 fn column_statistic(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, statistic: Statistic) -> Result<Scalar, EvalError> {
     let name = statistic.name();
     let column = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
-    let values = column_values(ev, column, ctx, name)?;
-    let observations: Vec<StatValue> = numeric_values(&values).into_iter().map(StatValue::Number).collect();
+    // Storage supplies the same finite observations straight from the column; `numeric_values`
+    // stays the fallback for models that cannot be stored faithfully (ragged or promoted
+    // columns).
+    let numbers = match ev.storage_numeric_values(column, ctx) {
+        Some(numbers) => numbers,
+        None => numeric_values(&column_values(ev, column, ctx, name)?),
+    };
+    let observations: Vec<StatValue> = numbers.into_iter().map(StatValue::Number).collect();
     statistic_result(statistic, observations)
 }
 

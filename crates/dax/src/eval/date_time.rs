@@ -17,7 +17,10 @@ const MAX_DATE_SERIAL: f64 = 2_958_465.0;
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let upper = name.to_ascii_uppercase();
     let result = match upper.as_str() {
+        "DATEDIFF" => datediff(ev, args, ctx),
         "DATEVALUE" => datevalue(ev, args, ctx),
+        "TIME" => time(ev, args, ctx),
+        "WEEKDAY" => weekday(ev, args, ctx),
         "NETWORKDAYS" => networkdays(ev, args, ctx),
         "NOW" => now(),
         "QUARTER" => quarter(ev, args, ctx),
@@ -193,6 +196,83 @@ fn datevalue(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     let text = value.to_text();
     let serial = parse_date_serial(&text).ok_or_else(|| EvalError::new(format!("DATEVALUE cannot convert `{text}` to a date")))?;
     Ok(Scalar::DateTime(serial))
+}
+
+/// `DATEDIFF ( <Date1>, <Date2>, <Interval> )`: the number of interval boundaries crossed between
+/// the two dates, positively when Date2 is later. `Interval` is a keyword (the binder keeps it as
+/// a keyword expression, which evaluates to its text).
+fn datediff(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+    let values = support::eval_all(ev, args, ctx)?;
+    let start = date_arg("DATEDIFF", &values, 0)?;
+    let end = date_arg("DATEDIFF", &values, 1)?;
+    let interval = values.get(2).ok_or_else(|| EvalError::new("DATEDIFF is missing argument 3"))?.to_text();
+    let (start_year, start_month, _) = support::date_parts(start);
+    let (end_year, end_month, _) = support::date_parts(end);
+    let elapsed_days = end.floor() - start.floor();
+    let count = match interval.trim().to_ascii_uppercase().as_str() {
+        "SECOND" => ((end - start) * 86_400.0).trunc(),
+        "MINUTE" => ((end - start) * 1_440.0).trunc(),
+        "HOUR" => ((end - start) * 24.0).trunc(),
+        "DAY" => elapsed_days,
+        // Whole weeks crossed, truncated toward zero so the sign follows Date2 - Date1.
+        "WEEK" => (elapsed_days / 7.0).trunc(),
+        "MONTH" => ((end_year - start_year) * 12 + (end_month - start_month)) as f64,
+        "QUARTER" => ((end_year - start_year) * 4 + (end_month - 1) / 3 - (start_month - 1) / 3) as f64,
+        "YEAR" => (end_year - start_year) as f64,
+        other => {
+            return Err(EvalError::new(format!("DATEDIFF interval `{other}` must be SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, QUARTER or YEAR")));
+        }
+    };
+    if !count.is_finite() || count.abs() >= 9_223_372_036_854_775_808.0 {
+        return Err(EvalError::new("DATEDIFF result is outside the 64-bit integer range"));
+    }
+    Ok(Scalar::Integer(count as i64))
+}
+
+/// `TIME ( <Hour>, <Minute>, <Second> )`: a time on the 1899-12-30 epoch. Each argument is capped
+/// at 32,767 and the total wraps inside one day, as the catalog documents (`TIME ( 50, 0, 0 )` is
+/// 02:00, not 02:00 the next day).
+fn time(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+    const MAX_TIME_PART: f64 = 32_767.0;
+    let values = support::eval_all(ev, args, ctx)?;
+    let mut parts = [0.0f64; 3];
+    for (index, part) in parts.iter_mut().enumerate() {
+        let value = values.get(index).ok_or_else(|| EvalError::new(format!("TIME is missing argument {}", index + 1)))?.to_number();
+        let value = value.filter(|value| value.is_finite()).ok_or_else(|| EvalError::new(format!("TIME argument {} must be numeric", index + 1)))?;
+        if !(0.0..=MAX_TIME_PART).contains(&value) {
+            return Err(EvalError::new(format!("TIME argument {} must be between 0 and 32767", index + 1)));
+        }
+        *part = value;
+    }
+    let seconds = parts[0] * 3_600.0 + parts[1] * 60.0 + parts[2];
+    Ok(Scalar::DateTime(seconds.rem_euclid(86_400.0) / 86_400.0))
+}
+
+/// `WEEKDAY ( <Date> [, <ReturnType>] )`: return type 1 numbers Sunday 1 through Saturday 7,
+/// 2 numbers Monday 1 through Sunday 7, 3 numbers Monday 0 through Sunday 6, and 11-17 start the
+/// week on Monday through Sunday with the first day numbered 1.
+fn weekday(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+    let values = support::eval_all(ev, args, ctx)?;
+    let serial = date_arg("WEEKDAY", &values, 0)?;
+    let return_type = optional_int("WEEKDAY", &values, 1, 1)?;
+    // Days since the epoch, 1899-12-30 was a Saturday, so serial 0 is Saturday and the
+    // zero-based day of week with Sunday first is (days + 6) mod 7.
+    let days = serial.floor() as i64;
+    let sunday_first = (days + 6).rem_euclid(7);
+    let index = match return_type {
+        1 => sunday_first + 1,
+        2 => (sunday_first + 6).rem_euclid(7) + 1,
+        3 => (sunday_first + 6).rem_euclid(7),
+        11..=17 => {
+            // The first day of the week is Monday for 11 through Sunday for 17.
+            let first = (return_type - 10).rem_euclid(7);
+            (sunday_first - first).rem_euclid(7) + 1
+        }
+        other => {
+            return Err(EvalError::new(format!("WEEKDAY return type `{other}` must be 1, 2, 3 or 11 to 17")));
+        }
+    };
+    Ok(Scalar::Integer(index))
 }
 
 /// `TIMEVALUE ( <TimeText> )` — the time of day as a fraction, ignoring any date portion.

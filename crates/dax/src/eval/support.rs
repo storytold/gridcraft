@@ -235,10 +235,14 @@ pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
     (value * factor).round() / factor
 }
 
+/// ROUNDUP/ROUNDDOWN: `up` rounds away from zero, otherwise toward zero. Excel and DAX define
+/// both in terms of the sign, not the floor/ceiling, so `ROUNDDOWN ( -2.9, 0 )` is -2 and
+/// `ROUNDUP ( -2.1, 0 )` is -3.
 pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
     let factor = 10f64.powi(digits);
     let scaled = value * factor;
-    (if up { scaled.ceil() } else { scaled.floor() }) / factor
+    let rounded = if up { scaled.abs().ceil().copysign(scaled) } else { scaled.trunc() };
+    rounded / factor
 }
 
 pub(crate) fn gcd(mut a: i64, mut b: i64) -> i64 {

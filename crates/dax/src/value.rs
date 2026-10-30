@@ -134,6 +134,10 @@ impl Scalar {
     pub fn compare(&self, other: &Scalar) -> Option<Ordering> {
         match (self, other) {
             (Scalar::Blank, Scalar::Blank) => Some(Ordering::Equal),
+            // BLANK converts to the empty string when compared with text, so `BLANK () = ""` is
+            // TRUE and `BLANK () <> ""` is FALSE, symmetrically.
+            (Scalar::Blank, Scalar::String(b)) => Some(String::new().cmp(&b.to_lowercase())),
+            (Scalar::String(a), Scalar::Blank) => Some(a.to_lowercase().cmp(&String::new())),
             (Scalar::String(a), Scalar::String(b)) => Some(a.to_lowercase().cmp(&b.to_lowercase())),
             (Scalar::Boolean(a), Scalar::Boolean(b)) => Some(a.cmp(b)),
             _ => self.to_number()?.partial_cmp(&other.to_number()?),

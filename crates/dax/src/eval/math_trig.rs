@@ -11,14 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::support::{args as arg_values, eval_all, parse_date_text};
+use super::support::{args as arg_values, eval_all, parse_date_text, round_direction};
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let name = name.to_ascii_uppercase();
     match name.as_str() {
         "ACOS" | "ACOSH" | "ACOT" | "ACOTH" | "ASIN" | "ASINH" | "ATAN" | "ATANH" | "CONVERT" | "COSH" | "COT" | "COTH" | "CURRENCY" | "EVEN"
-        | "MROUND" | "ODD" | "QUOTIENT" | "RAND" | "RANDBETWEEN" | "SINH" | "SQRTPI" | "TANH" => {}
+        | "MOD" | "MROUND" | "ODD" | "QUOTIENT" | "RAND" | "RANDBETWEEN" | "ROUNDDOWN" | "SINH" | "SQRTPI" | "TANH" => {}
         _ => return None,
     }
     Some(evaluate(&name, ev, args, ctx))
@@ -99,6 +99,9 @@ fn evaluate(name: &str, ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Contex
             let multiple = finite(a.number(1)?, name)?;
             Ok(Scalar::Decimal(mround(number, multiple)?))
         }
+        "MOD" => modulo(a.arg(0)?, a.arg(1)?),
+        // ROUNDDOWN rounds toward zero (support::round_direction), so negatives go up.
+        "ROUNDDOWN" => Ok(Scalar::Decimal(round_direction(finite(a.number(0)?, name)?, a.number(1)? as i32, false))),
         "ODD" => Ok(Scalar::Integer(round_away_to_odd(finite(a.number(0)?, name)?)?)),
         "QUOTIENT" => {
             let numerator = finite(a.number(0)?, name)?;
@@ -209,6 +212,29 @@ fn mround(number: f64, multiple: f64) -> Result<f64, EvalError> {
         return Err(EvalError::new("MROUND number and multiple must have the same sign"));
     }
     finite((number / multiple).round() * multiple, "MROUND")
+}
+
+/// `MOD ( <Number>, <Divisor> )`: the remainder whose sign follows the *divisor*
+/// (`number - divisor * FLOOR ( number / divisor )`), unlike Rust's `%`, which follows the
+/// dividend. A zero divisor is a division-by-zero error in DAX, not BLANK. Two integer operands
+/// keep the Integer type the catalog documents; anything else returns a Decimal.
+fn modulo(number: &Scalar, divisor: &Scalar) -> Result<Scalar, EvalError> {
+    let divisor_number = finite(divisor.to_number().ok_or_else(|| EvalError::new("MOD argument 2 must be numeric"))?, "MOD")?;
+    if divisor_number == 0.0 {
+        return Err(EvalError::new("MOD divisor must not be zero"));
+    }
+    if let (Scalar::Integer(number), Scalar::Integer(divisor)) = (number, divisor) {
+        let divisor = *divisor;
+        let remainder = number.checked_rem(divisor).ok_or_else(|| EvalError::new("MOD result is outside the 64-bit integer range"))?;
+        if remainder != 0 && (remainder < 0) != (divisor < 0) {
+            return Ok(Scalar::Integer(
+                remainder.checked_add(divisor).ok_or_else(|| EvalError::new("MOD result is outside the 64-bit integer range"))?,
+            ));
+        }
+        return Ok(Scalar::Integer(remainder));
+    }
+    let number = finite(number.to_number().ok_or_else(|| EvalError::new("MOD argument 1 must be numeric"))?, "MOD")?;
+    Ok(Scalar::Decimal(finite(number - divisor_number * (number / divisor_number).floor(), "MOD")?))
 }
 
 // ---------------------------------------------------------------------------------------------

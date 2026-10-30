@@ -35,6 +35,7 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
         "REPLACE" => replace(ev, args, ctx),
         "TOCSV" => to_csv(ev, args, ctx),
         "TOJSON" => to_json(ev, args, ctx),
+        "TRIM" => trim(ev, args, ctx),
         "UNICODE" => unicode(ev, args, ctx),
         _ => return None,
     };
@@ -1038,6 +1039,29 @@ fn replace(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<
     push_checked(&mut out, &new_text)?;
     let suffix: String = characters[prefix_length + remove..].iter().collect();
     push_checked(&mut out, &suffix)?;
+    Ok(Scalar::String(out))
+}
+
+/// `TRIM ( <Text> )`: removes leading and trailing ASCII spaces and collapses every run of ASCII
+/// spaces between words to one. Only character 32 is affected, so tabs and the non-breaking space
+/// survive, as the catalog documents.
+fn trim(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+    let values = eval_all(ev, args, ctx)?;
+    let a = super::support::args("TRIM", &values);
+    let text = a.text(0)?;
+    let mut out = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for character in text.chars() {
+        if character == ' ' {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && !out.is_empty() {
+            out.push(' ');
+        }
+        pending_space = false;
+        out.push(character);
+    }
     Ok(Scalar::String(out))
 }
 
