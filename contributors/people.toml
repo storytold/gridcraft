@@ -106,3 +106,6 @@ sync_github_name = true
 
 [people.uwe-schwarz]
 real_name = "Uwe Schwarz"
+
+[people.dylanmtaylor]
+sync_github_name = true
