@@ -13,13 +13,21 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
-/// Values a pass keeps of the constant column blocks it has read (see [`PassHost::constant_column`]).
+/// Values a pass keeps of the column blocks it has read (see [`PassHost::column_block`]).
 const COLUMN_CACHE_BUDGET: usize = 1 << 22;
 
-/// Constant values of one column, rows `top..top + values.len()`, as read during a pass.
+/// Values of some columns, row-major from row `top`, as read during a pass.
 struct ColumnBlock {
     top: u32,
     values: Vec<Value>,
+}
+
+/// Why a column block is read the long way.
+enum Uncached {
+    /// The columns hold a spilled value there, or a formula while iterating: they are never kept.
+    Never,
+    /// A formula read for the block has no final value yet: it is not kept this time.
+    NotYet,
 }
 
 pub(super) struct PassHost<'a> {
@@ -33,13 +41,15 @@ pub(super) struct PassHost<'a> {
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
-    /// Constant column blocks read so far, by (sheet, column); `None` once the column held a
-    /// formula or spilled value where it was read. Running ranges (`$B$2:B2`, `$B$2:B3`…) read
-    /// the same cells again and again, and copying them from here is much cheaper than walking
-    /// the cell store each time.
-    columns: HashMap<(usize, u32), Option<ColumnBlock>>,
-    /// Values held in `columns`, capped at [`COLUMN_CACHE_BUDGET`].
-    column_values: usize,
+    /// Column blocks read so far, by sheet and first and last column; `None` once the columns
+    /// held a spilled value where they were read (or a formula, when iterating). Running ranges
+    /// (`$B$2:B2`, `$B$2:B3`…) and lookup tables read the same cells again and again, and copying
+    /// them from here is much cheaper than walking the cell store and the results each time.
+    columns: HashMap<(usize, u32, u32), Option<ColumnBlock>>,
+    /// Values held in `columns`, capped at `column_budget`.
+    pub(super) column_values: usize,
+    /// [`COLUMN_CACHE_BUDGET`], lowered by tests.
+    pub(super) column_budget: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -94,6 +104,7 @@ impl<'a> PassHost<'a> {
             used: HashMap::default(),
             columns: HashMap::default(),
             column_values: 0,
+            column_budget: COLUMN_CACHE_BUDGET,
             rng,
             now,
             cycle: false,
@@ -154,64 +165,113 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
 }
 
 impl PassHost<'_> {
-    /// The values of a one-column block made of constants only, from the column blocks kept
-    /// during this pass (read from the store and kept on first use). `None` when the block
-    /// holds a formula or a spilled value, or the budget is spent: the caller reads it normally.
-    /// The workbook doesn't change during a pass, so constants read once stay valid; spills
-    /// found during the pass are the caller's to check.
-    fn constant_column(&mut self, sheet: usize, range: RangeRef) -> Option<Vec<Value>> {
-        let (r0, r1, col) = (range.start.row, range.end.row, range.start.col);
-        let key = (sheet, col);
-        let (top, end) = match self.columns.get(&key) {
-            Some(None) => return None,
-            Some(Some(b)) => (b.top, b.top.saturating_add(u32::try_from(b.values.len()).ok()?)),
-            None => (r0, r0),
-        };
-        // Rows `lo..hi` cover the block kept so far and the one asked for.
-        let (lo, hi) = if top == end { (r0, r1.saturating_add(1)) } else { (top.min(r0), end.max(r1.saturating_add(1))) };
-        let grow = ((hi - lo) - (end - top)) as usize;
-        if grow > 0 {
-            if self.column_values.saturating_add(grow) > COLUMN_CACHE_BUDGET {
-                return None;
-            }
-            let above = if top == end { Some(Vec::new()) } else { self.read_constants(sheet, col, lo, top) };
-            let below = if top == end { self.read_constants(sheet, col, lo, hi) } else { self.read_constants(sheet, col, end, hi) };
-            let (Some(mut values), Some(below)) = (above, below) else {
-                self.columns.insert(key, None);
-                return None;
-            };
-            if let Some(Some(old)) = self.columns.remove(&key) {
-                values.extend(old.values);
-            }
-            values.extend(below);
-            self.column_values = self.column_values.saturating_add(grow);
-            self.columns.insert(key, Some(ColumnBlock { top: lo, values }));
-        }
-        let Some(Some(block)) = self.columns.get(&key) else { return None };
-        block.values.get((r0 - block.top) as usize..=(r1 - block.top) as usize).map(<[Value]>::to_vec)
-    }
-
-    /// Stored values of rows `from..to` of a column, or `None` if one of them is a formula or
-    /// a spilled value (not a constant).
-    fn read_constants(&self, sheet: usize, col: u32, from: u32, to: u32) -> Option<Vec<Value>> {
-        let mut out = vec![Value::Empty; to.saturating_sub(from) as usize];
-        if from >= to {
-            return Some(out);
-        }
-        let sh = self.wb.sheet(sheet)?;
-        let part = RangeRef::new(CellRef::new(from, col), CellRef::new(to - 1, col));
-        for (c, cell) in sh.cells.iter_range(part) {
-            if cell.formula.is_some() {
-                return None;
-            }
-            if let Some(slot) = out.get_mut((c.row - from) as usize) {
-                *slot = cell.value.clone();
-            }
-        }
-        if sh.spill.range(part.start..=part.end).any(|(c, _)| part.contains(*c)) {
+    /// The values of a block of rows of some columns, from the block of the same columns kept
+    /// during this pass (read on first use, then grown up or down as later reads need, or read
+    /// again where a read doesn't touch it). `None` when the block can't be kept, a formula read
+    /// for it has no final value yet or changed the block kept of these columns, or the budget is
+    /// spent: the caller reads it normally. The workbook doesn't change during a pass and a
+    /// formula's result doesn't once calculated, so what is kept stays valid; spills found during
+    /// the pass are the caller's to check.
+    fn column_block(&mut self, sheet: usize, range: RangeRef) -> Option<Vec<Value>> {
+        #[cfg(test)]
+        if crate::tests::COLUMN_BLOCKS_OFF.with(std::cell::Cell::get) {
             return None;
         }
-        Some(out)
+        let key = (sheet, range.start.col, range.end.col);
+        let w = range.width() as usize;
+        let cells = |rows: u32| (rows as usize).saturating_mul(w);
+        let (r0, r1) = (range.start.row, range.end.row.saturating_add(1));
+        let kept = match self.columns.get(&key) {
+            Some(None) => return None,
+            Some(Some(b)) => Some((b.top, b.top.saturating_add(u32::try_from(b.values.len() / w).ok()?))),
+            None => None,
+        };
+        // Only rows of the block asked for are read: reading others would calculate formulas the
+        // caller doesn't read, ahead of the order it reads them in.
+        let (top, end) = match kept {
+            Some((top, end)) if r0 <= end && top <= r1 => (top, end),
+            _ => (r0, r0),
+        };
+        let (lo, hi) = (top.min(r0), end.max(r1));
+        let from = cells(r0 - lo);
+        let to = from.saturating_add(cells(r1 - r0));
+        if kept == Some((lo, hi)) {
+            let Some(Some(block)) = self.columns.get(&key) else { return None };
+            return block.values.get(from..to).map(<[Value]>::to_vec);
+        }
+        let held = kept.map_or(0, |(t, e)| cells(e - t));
+        if self.column_values.saturating_sub(held).saturating_add(cells(hi - lo)) > self.column_budget {
+            return None;
+        }
+        let read = self.read_rows(sheet, range, lo, top).and_then(|above| Ok((above, self.read_rows(sheet, range, end, hi)?)));
+        // A formula read here may have read these columns as well, and kept a block of them.
+        let now = self.columns.get(&key).map(|b| b.as_ref().map(|b| (b.top, b.values.len())));
+        if now != kept.map(|(t, e)| Some((t, cells(e - t)))) {
+            return None;
+        }
+        let (above, below) = match read {
+            Ok(parts) => parts,
+            Err(Uncached::NotYet) => return None,
+            Err(Uncached::Never) => {
+                self.column_values = self.column_values.saturating_sub(held);
+                self.columns.insert(key, None);
+                return None;
+            }
+        };
+        let mut values = match self.columns.remove(&key) {
+            Some(Some(old)) if top < end && above.is_empty() => old.values,
+            Some(Some(old)) if top < end => {
+                let mut v = above;
+                v.extend(old.values);
+                v
+            }
+            _ => above,
+        };
+        values.extend(below);
+        let out = values.get(from..to).map(<[Value]>::to_vec);
+        self.column_values = self.column_values.saturating_sub(held);
+        // Formulas read here may have kept blocks of other columns, so the budget is checked again.
+        if self.column_values.saturating_add(values.len()) <= self.column_budget {
+            self.column_values = self.column_values.saturating_add(values.len());
+            self.columns.insert(key, Some(ColumnBlock { top: lo, values }));
+        }
+        out
+    }
+
+    /// Values of rows `from..to` of the columns of `range`, row-major: constants from the store,
+    /// formulas through `cell_value`, which calculates them in the order `range_values` would.
+    fn read_rows(&mut self, sheet: usize, range: RangeRef, from: u32, to: u32) -> Result<Vec<Value>, Uncached> {
+        let w = range.width() as usize;
+        let mut out = vec![Value::Empty; (to.saturating_sub(from) as usize).saturating_mul(w)];
+        if from >= to {
+            return Ok(out);
+        }
+        let wb = self.wb;
+        let Some(sh) = wb.sheet(sheet) else { return Ok(out) };
+        let part = RangeRef::new(CellRef::new(from, range.start.col), CellRef::new(to - 1, range.end.col));
+        if sh.spill.range(part.start..=part.end).any(|(c, _)| part.contains(*c)) {
+            return Err(Uncached::Never);
+        }
+        let spills = self.spills.len();
+        for (c, cell) in sh.cells.iter_range(part) {
+            let v = if cell.formula.is_none() {
+                cell.value.clone()
+            } else if self.iterate {
+                return Err(Uncached::Never);
+            } else {
+                let v = self.cell_value(sheet, c);
+                // Still pending (in progress, or abandoned for a suspension): not the value it ends
+                // with. Spilled: its array may lie over this block.
+                if self.pending.contains(&(sheet, c)) || self.spills.len() != spills {
+                    return Err(Uncached::NotYet);
+                }
+                v
+            };
+            if let Some(slot) = out.get_mut((c.row - from) as usize * w + (c.col - range.start.col) as usize) {
+                *slot = v;
+            }
+        }
+        Ok(out)
     }
 
     /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
@@ -520,10 +580,9 @@ impl Host for PassHost<'_> {
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
-        if range.start.col == range.end.col
-            && range.start.row < range.end.row
+        if range.start.row < range.end.row
             && !self.spills.keys().any(|a| a.0 == sheet)
-            && let Some(values) = self.constant_column(sheet, range)
+            && let Some(values) = self.column_block(sheet, range)
         {
             return values;
         }

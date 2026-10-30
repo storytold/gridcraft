@@ -760,6 +760,134 @@ pub(crate) mod tests {
         assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
     }
 
+    /// A pass with formulas given as (cell, text), calculated in the order given; its results.
+    fn pass_results(cells: &[(&str, &str)], order: &[&str]) -> HashMap<Key, Value> {
+        with_pass(cells, |host| {
+            for at in order {
+                host.calculate((0, CellRef::parse(at).unwrap()));
+            }
+            std::mem::take(&mut host.results)
+        })
+    }
+
+    /// What `run` makes of a pass over the formulas and numbers given as (cell, text).
+    fn with_pass<R>(cells: &[(&str, &str)], run: impl FnOnce(&mut PassHost<'_>) -> R) -> R {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        for (at, text) in cells {
+            let at = CellRef::parse(at).unwrap();
+            let cell = match text.strip_prefix('=') {
+                Some(f) => {
+                    exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(f).unwrap()));
+                    Cell::formula(Formula::new(text))
+                }
+                None => Cell::value(Value::Number(text.parse().unwrap())),
+            };
+            wb.sheet_mut(0).unwrap().cells.set(at, cell);
+        }
+        let mut rng = 1u64;
+        run(&mut PassHost::new(&wb, &exprs, &mut rng, 0.0))
+    }
+
+    /// A block read while a formula in it is being calculated (here, by that formula itself) isn't
+    /// kept with the `#CIRC!` that read gives: a later read of the block gets the formula's result.
+    #[test]
+    fn column_blocks_keep_only_final_values() {
+        let results = pass_results(&[("B1", "1"), ("B2", "=IFERROR(SUMPRODUCT(B1:B3),7)"), ("B3", "3"), ("D1", "=SUMPRODUCT(B1:B3)")], &["B2", "D1"]);
+        let got = |at: &str| results.get(&(0, CellRef::parse(at).unwrap())).cloned();
+        assert_eq!((got("B2"), got("D1")), (Some(Value::Number(7.0)), Some(Value::Number(11.0))));
+    }
+
+    /// A formula calculated for a block read may read the same columns and grow the block kept of
+    /// them (B3 here, for D2): the outer read doesn't put its rows together with the grown block.
+    #[test]
+    fn column_blocks_grown_by_a_nested_read_stay_aligned() {
+        let mut cells = vec![("B3", "=SUMPRODUCT(B5:B10)"), ("B4", "7"), ("B10", "100")];
+        cells.extend([("B5", "1"), ("B6", "2"), ("B7", "3"), ("B8", "4"), ("B9", "5")]);
+        cells.extend([("D1", "=SUMPRODUCT(B5:B9)"), ("D2", "=SUMPRODUCT(B3:B10)"), ("D3", "=SUMPRODUCT(B3:B11)")]);
+        let results = pass_results(&cells, &["D1", "D2", "D3"]);
+        let got = |at: &str| results.get(&(0, CellRef::parse(at).unwrap())).cloned();
+        assert_eq!((got("D1"), got("D2"), got("D3")), (Some(Value::Number(15.0)), Some(Value::Number(237.0)), Some(Value::Number(237.0))));
+    }
+
+    /// A read away from the block kept of its columns reads only its own rows: calculating the
+    /// formulas in between (B5 here, while D2 is in progress) would make a circular reference.
+    #[test]
+    fn column_blocks_read_no_rows_between() {
+        let cells = [
+            ("B1", "1"),
+            ("B2", "2"),
+            ("B5", "=IFERROR(D2+1,-1)"),
+            ("B10", "10"),
+            ("B11", "11"),
+            ("D1", "=SUMPRODUCT(B1:B2)"),
+            ("D2", "=SUMPRODUCT(B10:B11)"),
+        ];
+        let results = pass_results(&cells, &["D1", "D2", "B5"]);
+        let got = |at: &str| results.get(&(0, CellRef::parse(at).unwrap())).cloned();
+        assert_eq!((got("D2"), got("B5")), (Some(Value::Number(21.0)), Some(Value::Number(22.0))));
+    }
+
+    /// Within a pass, a block read that calculates a formula spilling into it gets the spilled
+    /// values, and a block kept before a spill on its sheet isn't reused after it (the next pass
+    /// would correct either, from the spill it stores).
+    #[test]
+    fn column_blocks_see_values_spilled_in_the_same_pass() {
+        let results = pass_results(
+            &[
+                ("B1", "=SUMPRODUCT(C1:C3)"),
+                ("C1", "1"),
+                ("C2", "=SEQUENCE(2)"),
+                ("D1", "=SUMPRODUCT(E$1:E2)"),
+                ("E1", "1"),
+                ("E2", "2"),
+                ("E3", "=SEQUENCE(2)"),
+                ("D5", "=SUMPRODUCT(E$1:E4)"),
+            ],
+            &["D1", "B1", "C2", "E3", "D5"],
+        );
+        let got = |at: &str| results.get(&(0, CellRef::parse(at).unwrap())).cloned();
+        assert_eq!((got("B1"), got("D1"), got("D5")), (Some(Value::Number(4.0)), Some(Value::Number(3.0)), Some(Value::Number(6.0))));
+    }
+
+    /// Blocks that formulas keep while a block is read for another formula count against the same
+    /// budget: the outer block isn't kept when they leave no room for it.
+    #[test]
+    fn column_blocks_stay_within_the_budget() {
+        let cells = [
+            ("B1", "=SUMPRODUCT(C1:C4)"),
+            ("C1", "=SUMPRODUCT(D1:D4)"),
+            ("C2", "5"),
+            ("C3", "6"),
+            ("C4", "7"),
+            ("D1", "1"),
+            ("D2", "2"),
+            ("D3", "3"),
+            ("D4", "4"),
+        ];
+        let got = with_pass(&cells, |host| {
+            host.column_budget = 6;
+            host.calculate((0, CellRef::parse("B1").unwrap()));
+            (host.results.get(&(0, CellRef::parse("B1").unwrap())).cloned(), host.column_values)
+        });
+        assert_eq!(got, (Some(Value::Number(28.0)), 4), "D1:D4 kept, C1:C4 not");
+    }
+
+    /// A block given up for the rest of the pass (here, for a formula read while iterating) gives
+    /// its values back to the budget.
+    #[test]
+    fn column_blocks_given_up_free_their_budget() {
+        let cells = [("B1", "=SUMPRODUCT(D1:D4)"), ("B2", "=SUMPRODUCT(D1:D5)"), ("D1", "1"), ("D2", "2"), ("D3", "3"), ("D4", "4"), ("D5", "=1")];
+        let got = with_pass(&cells, |host| {
+            host.iterate = true;
+            host.calculate((0, CellRef::parse("B1").unwrap()));
+            let kept = host.column_values;
+            host.calculate((0, CellRef::parse("B2").unwrap()));
+            (kept, host.column_values, host.results.get(&(0, CellRef::parse("B2").unwrap())).cloned())
+        });
+        assert_eq!(got, (4, 0, Some(Value::Number(11.0))));
+    }
+
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
     /// values it hands over for `range` while the formulas in `pending` (cell, formula) have not been
     /// calculated yet, or `None` when it declines the block.
