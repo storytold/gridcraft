@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::sheet::Visibility;
+use crate::style::Style;
 
 /// A relationship from an owning part (the package root, the workbook or a sheet, or a kept part)
 /// to a kept part or to an external target.
@@ -32,6 +33,13 @@ pub struct PreservedPart {
     pub data: Arc<[u8]>,
     /// The part's own relationships, ids unchanged (the part's bytes refer to them).
     pub rels: Vec<PreservedRel>,
+    /// Differential formats its XML refers to by `dxfId`, by their id in the source file's styles
+    /// part. GridCraft rewrites the styles part, so the ids are renumbered on save (kept
+    /// PivotTables).
+    pub dxfs: Vec<(u32, Style)>,
+    /// Custom number formats its XML refers to by `numFmtId` (code by id in the source file),
+    /// renumbered on save like [`Self::dxfs`] (kept PivotTables and pivot caches).
+    pub num_fmts: Vec<(u32, String)>,
 }
 
 /// A raw XML element of an owning part that refers to kept parts, re-emitted on save with its

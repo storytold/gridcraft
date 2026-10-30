@@ -12,6 +12,13 @@ pub struct KeptOut {
     vml_blocks: u32,
     /// Package-root relationships (type, target, external), added when `_rels/.rels` is written.
     root: Vec<(String, String, bool)>,
+    /// Names of the workbook's kept parts, which sheets' kept parts can refer to (the cache of a
+    /// kept PivotTable).
+    pub(super) wb_names: NameMap,
+    /// The `cacheId`s of the workbook's kept pivot caches: a kept PivotTable that names its cache
+    /// only by id is written only when its cache is among them.
+    pub(super) cache_ids: HashSet<u32>,
+    patches: StylePatches,
 }
 
 impl KeptOut {
@@ -54,6 +61,79 @@ impl KeptOut {
     }
 }
 
+/// Rewrites the values of `dxfId` and `numFmtId` attributes through the maps (ids not in a map
+/// are kept). `None` when the XML is damaged.
+fn map_style_ids(data: &[u8], dxfs: &HashMap<u32, u32>, fmts: &HashMap<u32, u32>) -> Option<Vec<u8>> {
+    let text = xml::to_utf8(data);
+    let mut reader = Reader::from_reader(text.as_ref());
+    let mut writer = Writer::new(Vec::with_capacity(data.len()));
+    let mut buf = vec![];
+    let map = |e: &BytesStart<'_>| -> Option<BytesStart<'static>> {
+        let name = String::from_utf8(e.name().as_ref().to_vec()).ok()?;
+        let mut out = BytesStart::new(name);
+        for a in e.attributes().with_checks(false) {
+            let a = a.ok()?;
+            let k = a.key.local_name();
+            let table = match k.as_ref() {
+                b"dxfId" => Some(dxfs),
+                b"numFmtId" => Some(fmts),
+                _ => None,
+            };
+            let new = table.and_then(|t| std::str::from_utf8(&a.value).ok()?.trim().parse::<u32>().ok().and_then(|id| t.get(&id)));
+            match new {
+                Some(n) => out.push_attribute(Attribute { key: a.key, value: Cow::Owned(n.to_string().into_bytes()) }),
+                None => out.push_attribute(Attribute { key: a.key, value: Cow::Owned(a.value.to_vec()) }),
+            }
+        }
+        Some(out)
+    };
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Eof => break,
+            Event::Start(e) => writer.write_event(Event::Start(map(&e)?)).ok()?,
+            Event::Empty(e) => writer.write_event(Event::Empty(map(&e)?)).ok()?,
+            ev => writer.write_event(ev).ok()?,
+        }
+        buf.clear();
+    }
+    Some(writer.into_inner())
+}
+
+/// Kept parts whose style ids are renumbered once the styles part is written.
+#[derive(Default)]
+pub struct StylePatches {
+    /// (written part name, source bytes, dxf id map, source number format id → code).
+    pub(super) list: Vec<StylePatch>,
+}
+
+pub(super) type StylePatch = (String, Arc<[u8]>, HashMap<u32, u32>, Vec<(u32, String)>);
+
+impl KeptOut {
+    /// Number format codes kept parts refer to (to be registered in the styles part).
+    pub fn num_fmt_codes(&self) -> Vec<String> {
+        let mut v: Vec<String> = vec![];
+        for (_, _, _, fmts) in &self.patches.list {
+            for (_, code) in fmts {
+                if !v.contains(code) {
+                    v.push(code.clone());
+                }
+            }
+        }
+        v
+    }
+}
+
+/// Renumbers the `dxfId` and `numFmtId` attributes of kept PivotTables and pivot caches to the
+/// written styles part. `fmt_id` maps a number format code to its id there.
+pub fn finish_style_ids(out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+    for (name, data, dxfs, fmts) in std::mem::take(&mut out.kept.patches.list) {
+        let fmts: HashMap<u32, u32> = fmts.iter().filter_map(|(old, code)| Some((*old, fmt_id(code)?))).collect();
+        if let Some(x) = map_style_ids(&data, &dxfs, &fmts) {
+            out.replace(&name, x);
+        }
+    }
+}
+
 /// Original part name (normalized) → written part name.
 pub(super) type NameMap = HashMap<String, String>;
 
@@ -84,13 +164,21 @@ pub(super) fn write_parts(out: &mut Out, parts: &[PreservedPart]) -> NameMap {
     for p in parts {
         names.entry(normalize(&p.name)).or_insert_with(|| out.kept.claim(&p.name));
     }
+    let own: HashSet<String> = names.values().cloned().collect();
+    for (k, v) in &out.kept.wb_names {
+        names.entry(k.clone()).or_insert_with(|| v.clone());
+    }
     let mut written = HashSet::new();
     for p in parts {
         let Some(new) = names.get(&normalize(&p.name)).cloned() else { continue };
-        if !written.insert(new.clone()) {
+        if !own.contains(&new) || !written.insert(new.clone()) {
             continue;
         }
         out.part(&new, Some(&p.content_type), p.data.to_vec());
+        if !p.dxfs.is_empty() || !p.num_fmts.is_empty() {
+            let dxfs = p.dxfs.iter().map(|(old, s)| (*old, crate::styles::dxf_id(&mut out.dxfs, s))).collect();
+            out.kept.patches.list.push((new.clone(), p.data.clone(), dxfs, p.num_fmts.clone()));
+        }
         if !p.rels.is_empty() {
             out.part(&rels_part_name(&new), None, part_rels_xml(&p.rels, &names).into_bytes());
         }
@@ -156,9 +244,25 @@ pub struct WorkbookKept {
     /// Workbook XML elements that go right after `<sheets>` (`<externalReferences>`).
     pub elements: String,
     sheets: Vec<KeptSheet>,
+    /// Kept pivot caches: (`cacheId`, new relationship id).
+    pivot_caches: Vec<(u32, String)>,
 }
 
 impl WorkbookKept {
+    /// The `cacheId`s of the kept pivot caches (written PivotTables must not reuse them).
+    pub fn pivot_cache_ids(&self) -> Vec<u32> {
+        self.pivot_caches.iter().map(|(id, _)| *id).collect()
+    }
+
+    /// The `<pivotCache>` entries of the kept pivot caches.
+    pub fn pivot_cache_entries(&self) -> String {
+        let mut x = String::new();
+        for (id, rid) in &self.pivot_caches {
+            let _ = write!(x, "<pivotCache cacheId=\"{id}\" r:id=\"{}\"/>", esc_attr(rid));
+        }
+        x
+    }
+
     /// Where the model's sheet `i` is in the file's sheet list: chart sheets come between worksheets.
     pub fn file_index(&self, i: usize) -> usize {
         i + self.sheets.iter().filter(|s| s.before <= i).count()
@@ -276,9 +380,37 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s));
     let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
-    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
-    // Parts reached only by dropped chart sheets go with them.
-    let mut gone: HashSet<String> = dropped.iter().filter_map(|s| root_of(s)).flat_map(|r| reachable(p, r)).collect();
+    // Pivot caches no kept PivotTable of a sheet uses any more (their sheets were deleted).
+    let sheet_parts = || wb.sheets.iter().filter_map(|s| s.preserved.as_deref()).flat_map(|q| q.parts.iter());
+    let mut used_caches: HashSet<String> = sheet_parts()
+        .flat_map(|part| part.rels.iter())
+        .filter(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]))
+        .map(|r| normalize(&r.target))
+        .collect();
+    // A PivotTable can name its cache only by the workbook's `cacheId`.
+    let cache_of_id: HashMap<u32, String> = p
+        .elements
+        .iter()
+        .filter(|e| e.slot == "pivotCache")
+        .filter_map(|e| {
+            let x = xml::parse(e.xml.as_bytes()).ok()?;
+            let rel = p.rels.iter().find(|r| Some(r.id.as_str()) == x.attr("id"))?;
+            Some((x.attr_u32("cacheId")?, normalize(&rel.target)))
+        })
+        .collect();
+    used_caches.extend(
+        sheet_parts()
+            .filter(|part| part.content_type == CT_PIVOT_TABLE)
+            .filter_map(|part| xml::parse(&part.data).ok()?.attr_u32("cacheId"))
+            .filter_map(|id| cache_of_id.get(&id).cloned()),
+    );
+    let unused_caches: Vec<&PreservedRel> =
+        p.rels.iter().filter(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]) && !used_caches.contains(&normalize(&r.target))).collect();
+    let mut dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
+    dropped_ids.extend(unused_caches.iter().map(|r| r.id.as_str()));
+    // Parts reached only by dropped chart sheets and pivot caches go with them.
+    let mut gone: HashSet<String> =
+        dropped.iter().filter_map(|s| root_of(s)).chain(unused_caches.iter().copied()).flat_map(|r| reachable(p, r)).collect();
     if !gone.is_empty() {
         let others = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r));
         for n in others {
@@ -294,7 +426,19 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             out.kept.root.push((r.rel_type.clone(), target, r.external));
         }
     }
+    let pivot_caches: Vec<(u32, String)> = p
+        .elements
+        .iter()
+        .filter(|e| e.slot == "pivotCache")
+        .filter_map(|e| {
+            let x = xml::parse(e.xml.as_bytes()).ok()?;
+            Some((x.attr_u32("cacheId")?, ids.get(x.attr("id")?)?.clone()))
+        })
+        .collect();
+    out.kept.wb_names = names;
+    out.kept.cache_ids = pivot_caches.iter().map(|(id, _)| *id).collect();
     WorkbookKept {
+        pivot_caches,
         elements: p.elements.iter().filter(|e| e.slot == "externalReferences").filter_map(|e| remap(&e.xml, &ids)).collect(),
         sheets: live
             .iter()

@@ -104,6 +104,11 @@ pub struct PivotWriter {
     caches: Vec<(u32, String)>,
     pending: Vec<Pending>,
     tables: u32,
+    /// Cache ids taken by kept pivot caches (PivotTables on another workbook).
+    reserved: Vec<u32>,
+    /// `<pivotCache>` entries of the kept caches.
+    kept_entries: String,
+    next_id: u32,
 }
 
 struct Pending {
@@ -115,6 +120,21 @@ struct Pending {
 }
 
 impl PivotWriter {
+    /// A writer whose caches don't reuse the kept caches' ids; `kept_entries` (their
+    /// `<pivotCache>` elements) are listed with the written ones.
+    pub fn new(reserved: Vec<u32>, kept_entries: String) -> PivotWriter {
+        PivotWriter { reserved, kept_entries, ..PivotWriter::default() }
+    }
+
+    fn next_cache_id(&mut self) -> u32 {
+        loop {
+            self.next_id = self.next_id.saturating_add(1);
+            if !self.reserved.contains(&self.next_id) || self.next_id == u32::MAX {
+                return self.next_id;
+            }
+        }
+    }
+
     /// Writes the caches of a sheet's PivotTables and adds the sheet's relationships to its
     /// PivotTable parts. Pivots whose source can't be resolved are not written.
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
@@ -122,6 +142,7 @@ impl PivotWriter {
         for (idx, pt) in sheet.pivots.iter().enumerate() {
             let Some(cache) = build_cache(wb, pt, si) else { continue };
             let n = self.caches.len() as u32 + 1;
+            let cache_id = self.next_cache_id();
             let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
             let rec_rid = if let Some((count, xml)) = &cache.records {
                 let mut r = Rels::default();
@@ -134,24 +155,25 @@ impl PivotWriter {
                 None
             };
             out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
-            self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+            self.caches.push((cache_id, format!("pivotCache/pivotCacheDefinition{n}.xml")));
             self.tables += 1;
             let t = self.tables;
             rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
             let mut tr = Rels::default();
             tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
             out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id, cache });
         }
     }
 
     /// Adds the workbook relationships to the caches; returns the `<pivotCaches>` element (empty
     /// when there are none).
     pub fn workbook_xml(&self, wb_rels: &mut Rels) -> String {
-        if self.caches.is_empty() {
+        if self.caches.is_empty() && self.kept_entries.is_empty() {
             return String::new();
         }
         let mut s = String::from("<pivotCaches>");
+        s.push_str(&self.kept_entries);
         for (id, target) in &self.caches {
             let rid = wb_rels.add("pivotCacheDefinition", target);
             let _ = write!(s, "<pivotCache cacheId=\"{id}\" r:id=\"{rid}\"/>");

@@ -53,6 +53,9 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// Cache definition parts of the PivotTables kept with their sheets (source in another
+    /// workbook, a data connection or the Data Model), kept with the workbook.
+    pivot_caches: Vec<(String, KeptSource)>,
 }
 
 impl KeptReader {
@@ -64,6 +67,7 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
+            pivot_caches: vec![],
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -141,7 +145,12 @@ impl KeptReader {
                 }
                 queue.push_back((r.target.clone(), depth + 1));
             }
-            parts.push(PreservedPart { name, content_type, data: Arc::from(data), rels });
+            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF {
+                style_refs(cx, &data).ok_or_else(|| format!("{name} is damaged"))?
+            } else {
+                (vec![], vec![])
+            };
+            parts.push(PreservedPart { name, content_type, data: Arc::from(data), rels, dxfs, num_fmts });
         }
         self.budget = self.budget.saturating_sub(bytes);
         self.parts_left = self.parts_left.saturating_sub(parts.len());
@@ -212,6 +221,20 @@ impl KeptReader {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
             }
         }
+        // The Data Model: its tables are loaded through the workbook's connections, so it is kept
+        // only with them.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        for r in wb_rels.iter().filter(|r| !r.external && is_kind(r, DATA_MODEL_GRAPH)).take(1) {
+            let kept = if connections {
+                self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, DATA_MODEL_GRAPH)
+            } else {
+                Err("the workbook's data connections were not kept".into())
+            };
+            match kept {
+                Ok(()) => cx.warn("the workbook's Data Model is kept for saving as it is; it can't be viewed, edited or refreshed here"),
+                Err(why) => cx.warn(format!("the workbook's Data Model was dropped: {why}")),
+            }
+        }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the
         // drawing, chart, style and colour parts behind it.
         for (worksheets, se) in chart_sheet_entries(wb_xml, &wb_rels, file_to_model) {
@@ -256,6 +279,7 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }
         }
+        self.keep_pivot_caches(cx, wb_xml, &wb_rels, &mut p, &mut seen);
         // Excel trusts the saved cell values only when both are present; without them it
         // recalculates everything on open, and links into closed workbooks come back as errors.
         if let Some(v) = wb_xml.child("fileVersion") {
@@ -283,9 +307,68 @@ impl KeptReader {
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    /// Sheet-level content of the sheet part `part`.
-    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str) -> Option<Arc<Preserved>> {
+    /// The caches of the kept PivotTables, each with its `<pivotCache>` entry (original `cacheId`
+    /// and relationship id).
+    fn keep_pivot_caches(&mut self, cx: &mut Ctx<'_>, wb_xml: &xml::El, wb_rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
+        let caches = std::mem::take(&mut self.pivot_caches);
+        // A cache names its connection by id in the kept connections part, and a Data Model cache
+        // reads the kept model: without them Excel refuses the file or can't refresh it.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        let model = p.rels.iter().any(|r| is_kind(r, DATA_MODEL_GRAPH));
+        let (mut no_connections, mut no_model) = (0usize, 0usize);
+        for (cache, source) in &caches {
+            match source {
+                KeptSource::Connection | KeptSource::DataModel if !connections => {
+                    no_connections += 1;
+                    continue;
+                }
+                KeptSource::DataModel if !model => {
+                    no_model += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            let entry = wb_xml.child("pivotCaches").into_iter().flat_map(|c| c.kids("pivotCache")).find_map(|c| {
+                let id = c.attr_u32("cacheId")?;
+                let r = wb_rels.iter().find(|r| Some(r.id.as_str()) == c.attr("id") && !r.external && is_kind(r, &["pivotCacheDefinition"]))?;
+                (normalize(&r.target) == normalize(cache)).then(|| (id, r.clone()))
+            });
+            let Some((id, r)) = entry else {
+                cx.warn(format!(
+                    "the cache {cache} of a PivotTable on {} is not in the workbook's list; the PivotTable was dropped",
+                    source.describe()
+                ));
+                continue;
+            };
+            match self.keep_through(cx, p, std::slice::from_ref(&r), seen, PIVOT_CACHE_GRAPH) {
+                Ok(()) => p.elements.push(PreservedXml {
+                    slot: "pivotCache".into(),
+                    xml: format!("<pivotCache xmlns:r=\"{NS_REL}\" cacheId=\"{id}\" r:id=\"{}\"/>", esc_attr(&r.id)),
+                }),
+                Err(why) => cx.warn(format!("the cache of a PivotTable on {} was dropped with its PivotTables: {why}", source.describe())),
+            }
+        }
+        if no_connections > 0 {
+            cx.warn(format!(
+                "{no_connections} PivotTable cache(s) on a data connection or the Data Model were dropped with their PivotTables (kept as plain cells): the workbook's data connections were not kept"
+            ));
+        }
+        if no_model > 0 {
+            cx.warn(format!(
+                "{no_model} PivotTable cache(s) on the workbook's Data Model were dropped with their PivotTables (kept as plain cells): the Data Model was not kept"
+            ));
+        }
+    }
+
+    /// Sheet-level content of the sheet part `part`; `pivots` are its PivotTables whose source is
+    /// in another workbook.
+    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, pivots: &[ExternalPivot]) -> Option<Arc<Preserved>> {
         if !self.on {
+            if !pivots.is_empty() {
+                cx.warn(format!(
+                    "sheet \"{name}\": PivotTables on another workbook, a data connection or the Data Model are not kept on save in this file"
+                ));
+            }
             return None;
         }
         let rels = match raw_rels(cx, part) {
@@ -307,6 +390,22 @@ impl KeptReader {
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
         if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes {
             self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen);
+        }
+        for ep in pivots {
+            let Some(r) = rels.iter().find(|r| r.id == ep.rel_id && !r.external && is_kind(r, &["pivotTable"])) else { continue };
+            // The cache is kept with the workbook, not followed from here.
+            let mut scoped = seen.clone();
+            scoped.insert(normalize(&ep.cache_part));
+            match self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut scoped, PIVOT_TABLE_GRAPH) {
+                Ok(()) => {
+                    scoped.remove(&normalize(&ep.cache_part));
+                    seen = scoped;
+                    if !self.pivot_caches.iter().any(|(c, _)| normalize(c) == normalize(&ep.cache_part)) {
+                        self.pivot_caches.push((ep.cache_part.clone(), ep.source));
+                    }
+                }
+                Err(why) => cx.warn(format!("sheet \"{name}\": a PivotTable on {} was dropped: {why}", ep.source.describe())),
+            }
         }
         (!p.is_empty()).then(|| Arc::new(p))
     }
@@ -412,9 +511,66 @@ impl KeptReader {
         let mut q = Preserved::default();
         let roots: Vec<PreservedRel> = vrels.iter().filter(|r| !r.external).cloned().collect();
         self.keep(cx, &mut q, &roots, seen)?;
-        let vml = PreservedPart { name: rel.target.clone(), content_type: CT_VML.into(), data: Arc::from(text.into_bytes()), rels: vrels };
+        let vml = PreservedPart {
+            name: rel.target.clone(),
+            content_type: CT_VML.into(),
+            data: Arc::from(text.into_bytes()),
+            rels: vrels,
+            ..Default::default()
+        };
         Ok((vml, q.parts))
     }
+}
+
+/// Attribute values of `local` (any prefix) in an XML part, in document order. `None` when the
+/// XML is damaged.
+fn attr_values(data: &[u8], local: &[&[u8]], mut f: impl FnMut(&[u8], &str)) -> Option<()> {
+    let text = xml::to_utf8(data);
+    let mut reader = Reader::from_reader(text.as_ref());
+    let mut buf = vec![];
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Eof => return Some(()),
+            Event::Start(e) | Event::Empty(e) => {
+                for a in e.attributes().with_checks(false) {
+                    let a = a.ok()?;
+                    let k = a.key.local_name();
+                    if let Some(name) = local.iter().find(|n| **n == k.as_ref())
+                        && let Ok(v) = std::str::from_utf8(&a.value)
+                    {
+                        f(name, v);
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// The differential formats (`dxfId`) and custom number formats (`numFmtId`) of the source
+/// styles part a kept PivotTable or pivot cache refers to. `None` when its XML is damaged.
+type StyleRefs = (Vec<(u32, gridcraft_model::Style)>, Vec<(u32, String)>);
+fn style_refs(cx: &Ctx<'_>, data: &[u8]) -> Option<StyleRefs> {
+    let mut dxfs: Vec<(u32, gridcraft_model::Style)> = vec![];
+    let mut fmts: Vec<(u32, String)> = vec![];
+    // Membership sets: a crafted part can name many distinct ids, so scanning the vectors would be quadratic.
+    let (mut seen_dxfs, mut seen_fmts) = (HashSet::new(), HashSet::new());
+    attr_values(data, &[b"dxfId", b"numFmtId"], |name, v| {
+        let Ok(id) = v.trim().parse::<u32>() else { return };
+        if name == b"dxfId" {
+            if let Some(s) = cx.dxfs.get(id as usize)
+                && seen_dxfs.insert(id)
+            {
+                dxfs.push((id, s.clone()));
+            }
+        } else if let Some(code) = cx.num_fmts.get(&id)
+            && seen_fmts.insert(id)
+        {
+            fmts.push((id, code.clone()));
+        }
+    })?;
+    Some((dxfs, fmts))
 }
 
 /// What a sheet part holds for pass-through.
