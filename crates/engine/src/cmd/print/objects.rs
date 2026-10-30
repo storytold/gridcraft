@@ -1,9 +1,63 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, CellRef, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use std::borrow::Cow;
+use std::collections::hash_map::Entry;
+
+/// A decoded picture: RGBA pixels, width, height.
+type Decoded = (Vec<u8>, u32, u32);
+
+/// Most bytes of decoded pictures one render memoizes; a picture decoded past it is used once
+/// and dropped (and decoded again on the next page that prints it).
+const MAX_PIC_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum PicKey {
+    /// A floating picture: sheet index and position in `Sheet::images`.
+    Floating(usize, usize),
+    /// A cell picture: sheet index, cell and the thumbnail size it is decoded at.
+    Cell(usize, CellRef, u32, u32),
+}
+
+/// Decoded pictures reused across the pages (and repeated title rows) that print them, so a
+/// picture is decoded once per render instead of once per page (#2389).
+#[derive(Default)]
+pub(super) struct PicCache {
+    map: std::collections::HashMap<PicKey, Option<Decoded>>,
+    /// Bytes of pixels in `map`.
+    bytes: u64,
+}
+
+impl PicCache {
+    /// The decoded picture for `key`, running `decode` the first time. A failed decode is
+    /// remembered too; a decode that does not fit in the cache is returned without being kept.
+    fn get(&mut self, key: PicKey, decode: impl FnOnce() -> Option<Decoded>) -> Option<Cow<'_, Decoded>> {
+        let slot = match self.map.entry(key) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let decoded = decode();
+                let size = decoded.as_ref().map_or(0, |d| d.0.len() as u64);
+                if self.bytes.saturating_add(size) > MAX_PIC_CACHE_BYTES {
+                    return decoded.map(Cow::Owned);
+                }
+                self.bytes = self.bytes.saturating_add(size);
+                e.insert(decoded)
+            }
+        };
+        slot.as_ref().map(Cow::Borrowed)
+    }
+}
+
+/// Whether a picture decoded into at most `max_w`×`max_h` pixels can still be kept by the PDF.
+/// The document's image room only shrinks while it is built, so a picture refused here would be
+/// refused on every later page too and is not decoded at all.
+fn fits(room: u64, max_w: u32, max_h: u32) -> bool {
+    u64::from(max_w).saturating_mul(u64::from(max_h)).saturating_mul(4) <= room
+}
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
-pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
+/// `at` (sheet index and cell) keys the decode in `pics`.
+pub(super) fn draw_cell_picture(pg: &mut Page, pics: &mut PicCache, at: (usize, CellRef), data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
     let (x, y, w, h) = rect;
     let pad = 2.0 * k;
     let (w, h) = ((w - 2.0 * pad).max(0.0), (h - 2.0 * pad).max(0.0));
@@ -14,18 +68,30 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
     if iw == 0 || ih == 0 || iw > 8192 || ih > 8192 || u64::from(iw) * u64::from(ih) > 16_000_000 {
         return;
     }
-    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format() else { return };
+    let (tw, th) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
+    let room = pg.image_room();
+    let Some(image) = pics.get(PicKey::Cell(at.0, at.1, tw, th), || decode_cell_picture(data, tw, th, room)) else { return };
+    let (px, px_w, px_h) = &*image;
+    let fit = (w / iw as f32).min(h / ih as f32);
+    let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
+    pg.image_rgba(Rect::new(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph), px, [*px_w, *px_h]);
+}
+
+/// Decodes a cell picture to RGBA scaled to fit `tw`×`th` pixels, unless the PDF has no `room`
+/// left for it.
+fn decode_cell_picture(data: &[u8], tw: u32, th: u32, room: u64) -> Option<Decoded> {
+    if !fits(room, tw, th) {
+        return None;
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(8192);
     limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    let Ok(image) = reader.decode() else { return };
-    let image =
-        image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
-    let fit = (w / iw as f32).min(h / ih as f32);
-    let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
-    pg.image_rgba(Rect::new(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph), image.as_raw(), [image.width(), image.height()]);
+    let image = reader.decode().ok()?.thumbnail(tw, th).to_rgba8();
+    let (pw, ph) = (image.width(), image.height());
+    Some((image.into_raw(), pw, ph))
 }
 
 /// Sheet pixel rectangle of an anchor.
@@ -33,10 +99,11 @@ fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
 
-/// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels.
-fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+/// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels, unless the
+/// PDF has no `room` left for it.
+fn decode_image(data: &[u8], max_w: u32, max_h: u32, room: u64) -> Option<Decoded> {
     let (w, h) = crate::io::image_size(data)?;
-    if w == 0 || h == 0 || w as u64 * h as u64 > 60_000_000 {
+    if w == 0 || h == 0 || w as u64 * h as u64 > 60_000_000 || !fits(room, w.min(max_w.max(1)), h.min(max_h.max(1))) {
         return None;
     }
     let img = image::load_from_memory(data).ok()?;
@@ -49,7 +116,7 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
-pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut super::PicCache) {
+pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut PicCache) {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -68,8 +135,9 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         let (x, y, w, h) = place(r);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
-        if let Some((px, pw, ph)) = decoded.as_ref() {
+        let room = pg.image_room();
+        if let Some(decoded) = pics.get(PicKey::Floating(si, imi), || decode_image(&im.data, mw, mh, room)) {
+            let (px, pw, ph) = &*decoded;
             pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
         }
     }

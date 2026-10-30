@@ -11,7 +11,7 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
-use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{Alignment, CellPicture, Image, SheetViewMode};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId, StyleTable,
     Underline, VAlign, Visibility, Workbook,
@@ -32,15 +32,13 @@ use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
-/// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
-type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
 
 #[cfg(test)]
 use layout::bands;
 pub(crate) use layout::split_bands;
 pub use layout::{PrintOptions, SheetLayout, layout_sheet, layouts, paper_size, print_range};
 use layout::{known_paper, seg_size, segments};
-use objects::draw_objects;
+use objects::{PicCache, draw_objects};
 #[cfg(test)]
 use text::{center_across_width, wrap_lines};
 
@@ -92,7 +90,14 @@ pub const MAX_PAGES: usize = 2000;
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+    render_pdf_with_image_budget(wb, layouts, file, path, gridcraft_pdf::MAX_DOC_IMAGE_BYTES)
+}
+
+/// [`render_pdf`] keeping at most `image_bytes` of picture data in the document (tests lower it
+/// to exercise the cap without building gigabytes of pictures).
+fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, image_bytes: u64) -> (Vec<u8>, usize) {
     let mut doc = PdfDoc::new();
+    doc.set_image_budget(image_bytes);
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
@@ -101,8 +106,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut pending_links = Vec::new();
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
-    // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
-    let mut pics = PicCache::new();
+    // spanning 40 pages was decoded 40 times (#2389). Each page still keeps its own copy in the
+    // PDF, within the document's image budget.
+    let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
@@ -125,7 +131,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block(pg, &b, lay.settings.gridlines, &mut cf, &mut pics);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
                     if lay.settings.headings {

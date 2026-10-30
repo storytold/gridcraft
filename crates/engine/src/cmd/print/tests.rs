@@ -359,6 +359,62 @@ fn charts_and_images_are_drawn() {
     }
 }
 
+/// Bytes of pixel data in a PDF's image XObjects: 3 per RGB pixel, 1 per soft-mask pixel.
+fn image_bytes(pdf: &[u8]) -> u64 {
+    let text = String::from_utf8_lossy(pdf);
+    text.split("/Subtype /Image")
+        .skip(1)
+        .map(|obj| {
+            let dict = &obj[..obj.find(">>").unwrap()];
+            let num = |key: &str| -> u64 {
+                let at = dict.find(key).unwrap() + key.len();
+                dict[at..].split_whitespace().next().unwrap().parse().unwrap()
+            };
+            num("/Width ") * num("/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 }
+        })
+        .sum()
+}
+
+#[test]
+fn picture_copies_across_pages_stay_within_the_image_budget() {
+    // Each page a picture overlaps kept its own decoded copy in the PDF with no document-wide
+    // bound: a 3 KB workbook with one tall picture reached 2 GiB before running out of pages.
+    let mut s = s();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 120, 200, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Title"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    let sh = wb.sheet_mut(0).unwrap();
+    // A floating picture over some 20 pages, and a cell picture in the title row on every page.
+    sh.images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 200.0, height: 19_990.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: std::sync::Arc::new(png.clone()),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    sh.cell_pictures.insert(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
+    let d = s.doc().unwrap();
+    let lays = layouts(&d.wb, &PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap());
+
+    let (full, pages) = render_pdf(&d.wb, &lays, "t", "");
+    assert!(pages >= 15, "{pages} pages");
+    // Within the default budget every page keeps its own copy (64×64 RGB is 12,288 bytes).
+    let full_bytes = image_bytes(&full);
+    assert!(full_bytes >= (pages as u64 - 1) * 12_288, "{full_bytes} bytes of images on {pages} pages");
+
+    let budget = 64 * 1024;
+    let (capped, capped_pages) = render_pdf_with_image_budget(&d.wb, &lays, "t", "", budget);
+    assert_eq!(capped_pages, pages, "pages past the budget still print, without the pictures");
+    let kept = image_bytes(&capped);
+    assert!((12_288..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
+    assert!(contains(&capped, "%%EOF"));
+}
+
 #[test]
 fn page_setup_edits_settings() {
     let mut s = s();

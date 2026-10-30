@@ -5,7 +5,9 @@
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
-//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
+//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded). The
+//!   decoded image bytes one document keeps across all its pages are capped
+//!   ([`MAX_DOC_IMAGE_BYTES`]); images past the cap are left out.
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
 //! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
@@ -349,6 +351,9 @@ pub struct Page {
     content: String,
     fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
+    /// Image bytes this page may still keep before the document's image budget is spent. Set by
+    /// [`PdfDoc::add_page`] and [`PdfDoc::page_mut`], which hand out one page at a time.
+    image_room: u64,
     links: Vec<LinkAnnotation>,
     depth: u32,
 }
@@ -358,6 +363,10 @@ pub struct Page {
 const MAX_PAGE_CONTENT: usize = 64 * 1024 * 1024;
 /// Largest image (pixels) embedded.
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+/// Most bytes of image data (RGB plus alpha planes) one document keeps across all its pages.
+/// Each [`Page::image_rgba`] call keeps its own copy, so a picture repeated on every page of a
+/// long export would otherwise grow without bound; images past the budget are left out.
+pub const MAX_DOC_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PAGE_LINKS: usize = 4096;
 const MAX_LINK_URI_BYTES: usize = 4096;
 
@@ -374,6 +383,20 @@ impl Page {
     fn full(&self) -> bool {
         self.content.len() > MAX_PAGE_CONTENT
     }
+
+    /// Bytes of image data this page may still add before the document's image budget
+    /// ([`MAX_DOC_IMAGE_BYTES`]) is spent. An image of `pw`×`ph` pixels needs up to `pw * ph * 4`;
+    /// callers can skip decoding pictures that cannot fit (the room never grows back while a
+    /// document is built).
+    pub fn image_room(&self) -> u64 {
+        self.image_room
+    }
+
+    /// Bytes of image data kept by this page.
+    fn image_bytes(&self) -> u64 {
+        self.images.iter().fold(0u64, |acc, i| acc.saturating_add(i.rgb.len() as u64).saturating_add(i.alpha.as_ref().map_or(0, |a| a.len() as u64)))
+    }
+
     fn op(&mut self, s: &str) {
         if !self.full() {
             self.content.push_str(s);
@@ -605,12 +628,18 @@ impl Page {
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
-    /// `(x, y, w, h)`. Malformed or oversized buffers are ignored.
+    /// `(x, y, w, h)`. Malformed or oversized buffers are ignored, and so are images that do not
+    /// fit in what is left of the document's image budget ([`Page::image_room`]).
     pub fn image_rgba(&mut self, destination: Rect, rgba: &[u8], pixel_size: [u32; 2]) {
         let Rect { x, y, width: w, height: h } = destination;
         let [pw, ph] = pixel_size;
         let px = pw as u64 * ph as u64;
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
+            return;
+        }
+        // Room for the worst case (RGB plus an alpha plane) is checked before anything is
+        // allocated, so the document's image bytes stay bounded however many pages it has.
+        if px * 4 > self.image_room {
             return;
         }
         let px = px as usize;
@@ -621,6 +650,8 @@ impl Page {
             alpha.push(p[3]);
         }
         let alpha = if alpha.iter().all(|a| *a == 255) { None } else { Some(alpha) };
+        let kept = (rgb.len() as u64).saturating_add(alpha.as_ref().map_or(0, |a| a.len() as u64));
+        self.image_room = self.image_room.saturating_sub(kept);
         let idx = self.images.len();
         self.images.push(ImageData { width: pw, height: ph, rgb, alpha });
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
@@ -641,6 +672,8 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// Image budget lowered by [`PdfDoc::set_image_budget`]; `None` = [`MAX_DOC_IMAGE_BYTES`].
+    image_budget: Option<u64>,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -708,9 +741,31 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        let image_room = self.image_room();
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            images: Vec::new(),
+            image_room,
+            links: Vec::new(),
+            depth: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
+    }
+
+    /// Lowers the bytes of image data the whole document keeps (never above
+    /// [`MAX_DOC_IMAGE_BYTES`]); images drawn past it are left out.
+    pub fn set_image_budget(&mut self, bytes: u64) {
+        self.image_budget = Some(bytes.min(MAX_DOC_IMAGE_BYTES));
+    }
+
+    /// Image bytes the document may still keep: its budget minus what every page holds.
+    fn image_room(&self) -> u64 {
+        let used = self.pages.iter().fold(0u64, |acc, p| acc.saturating_add(p.image_bytes()));
+        self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES).saturating_sub(used)
     }
 
     pub fn page_count(&self) -> usize {
@@ -719,7 +774,10 @@ impl PdfDoc {
 
     /// The page at `i`, to keep drawing on it.
     pub fn page_mut(&mut self, i: usize) -> Option<&mut Page> {
-        self.pages.get_mut(i)
+        let room = self.image_room();
+        let page = self.pages.get_mut(i)?;
+        page.image_room = room;
+        Some(page)
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
