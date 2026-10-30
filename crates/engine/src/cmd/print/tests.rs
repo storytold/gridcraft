@@ -565,3 +565,66 @@ fn rotated_wrapped_text_prints_rotated() {
     assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
 }
+
+fn png_of(img: image::DynamicImage) -> Vec<u8> {
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+/// Rewrites a PNG's IHDR size (and its CRC) so the header declares `w`×`h` pixels.
+fn forge_png_size(png: &mut [u8], w: u32, h: u32) {
+    let ihdr = png.windows(4).position(|c| c == b"IHDR").unwrap();
+    png[ihdr + 4..ihdr + 8].copy_from_slice(&w.to_be_bytes());
+    png[ihdr + 8..ihdr + 12].copy_from_slice(&h.to_be_bytes());
+    let mut crc = !0u32;
+    for &b in &png[ihdr..ihdr + 17] {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    png[ihdr + 17..ihdr + 21].copy_from_slice(&(!crc).to_be_bytes());
+}
+
+#[test]
+fn print_decodes_pictures_within_byte_limits() {
+    use super::objects::{DecodeCaps, FLOATING_PICTURE_CAPS, decode_image, decode_limited};
+    // The byte limit counts the bit depth and channels the header declares, not just pixels:
+    // 64×64 is 16 KiB as 8-bit RGBA but 32 KiB as 16-bit RGBA.
+    let rgba8 = png_of(image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64)));
+    let rgba16 = png_of(image::DynamicImage::ImageRgba16(image::ImageBuffer::new(64, 64)));
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 1_000_000, max_alloc: 24 * 1024 };
+    assert!(decode_limited(&rgba8, caps).is_some());
+    assert!(decode_limited(&rgba16, caps).is_none());
+    assert!(decode_limited(&rgba8, DecodeCaps { max_side: 32, ..caps }).is_none());
+    assert!(decode_limited(&rgba8, DecodeCaps { max_pixels: 64 * 64 - 1, ..caps }).is_none());
+    assert!(decode_limited(b"not a picture", caps).is_none());
+
+    // A header declaring 7000×7000 16-bit RGBA pixels (49 megapixels, under the pixel cap, but
+    // about 392 MB) is refused from its header, before anything that size is allocated.
+    let mut bomb = rgba16.clone();
+    forge_png_size(&mut bomb, 7000, 7000);
+    assert_eq!(image::ImageReader::with_format(std::io::Cursor::new(&bomb), image::ImageFormat::Png).into_dimensions().unwrap(), (7000, 7000));
+    assert!(decode_limited(&bomb, FLOATING_PICTURE_CAPS).is_none());
+    assert!(decode_image(&bomb, 100, 100).is_none());
+    assert!(decode_image(&rgba16, 100, 100).is_some_and(|(px, w, h)| (w, h) == (64, 64) && px.len() == 64 * 64 * 4));
+
+    // Printing a sheet holding such a picture leaves it out instead of failing.
+    let mut s = s();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    wb.sheet_mut(0).unwrap().images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: bomb.into(),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    s.execute("cell.set", json!({"cell": "A1", "input": "Report"})).unwrap();
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "(Report) Tj"));
+    assert!(!contains(&pdf, "/Subtype /Image"));
+}
