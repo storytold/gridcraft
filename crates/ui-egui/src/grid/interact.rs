@@ -100,6 +100,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if handle_draw_tool(app, &input) {
         return;
     }
+    select_on_press(app, &input);
     // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
     // button resets it. Runs before the generic object select/drag so tiles stay clickable.
     if primary_clicked
@@ -214,25 +215,6 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
                 app.grid.ink.push([sx, sy]);
             }
-            if !app.grid.ink.is_empty() {
-                // Live preview.
-                let pts: Vec<Pos2> = app
-                    .grid
-                    .ink
-                    .iter()
-                    .map(|q| {
-                        let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
-                        geo.mirror_pos(pos2(
-                            geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z,
-                            geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z,
-                        ))
-                    })
-                    .collect();
-                input
-                    .ui
-                    .painter()
-                    .add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0 * geo.z, Color32::from_rgb(0x1F, 0x5F, 0xC9))));
-            }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
                 let _ = app.run("draw.stroke", json!({"points": pts}));
@@ -250,6 +232,28 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
     }
     false
+}
+
+/// The pen stroke being drawn, over the cells. Painted after the grid: input is handled before
+/// the grid paints, so a stroke drawn then would end up underneath.
+pub(super) fn paint_ink_preview(app: &SheetApp, ui: &egui::Ui, geo: &Geo, sh: &Sheet) {
+    if app.session.draw_tool != "pen" || app.grid.ink.is_empty() {
+        return;
+    }
+    let pos = ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos())).map(|p| geo.mirror_pos(p));
+    if !pos.is_some_and(|p| geo.in_cells(p)) {
+        return;
+    }
+    let pts: Vec<Pos2> = app
+        .grid
+        .ink
+        .iter()
+        .map(|q| {
+            let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
+            geo.mirror_pos(pos2(geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z, geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z))
+        })
+        .collect();
+    ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0 * geo.z, Color32::from_rgb(0x1F, 0x5F, 0xC9))));
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
@@ -345,6 +349,53 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
+    }
+}
+
+/// Moves the selection as soon as the primary button goes down on a cell, as Excel does. egui
+/// reports a click only on release, so the outline used to wait for the whole press.
+///
+/// Only a plain or Shift press on a cell selects here. Whatever else a press can mean (an object,
+/// the fill handle or the move border, a filter or list button, point mode, an open editor,
+/// Ctrl to add an area, a touch that may become a pan) is left to [`handle_press`], which runs on
+/// release or drag start as before and finds these selections already in place.
+fn select_on_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
+    let (geo, sh, sel, mods) = (input.geo, input.sheet, &input.selection, input.modifiers);
+    let pressed = input.context.input(|i| i.pointer.primary_pressed() && !i.any_touches());
+    if !pressed || !input.response.is_pointer_button_down_on() || !input.in_cells || mods.command || mods.alt {
+        return;
+    }
+    // A button drawn over the cells (the Auto Fill Options or error-check tag) takes the click
+    // while the grid still sees the press as a possible drag: leave such a press to the button.
+    let grid = input.response.id;
+    let hovered = input.context.interaction_snapshot(|s| s.hovered.clone());
+    if hovered.into_iter().any(|id| id != grid && input.context.read_response(id).is_some_and(|r| r.sense.senses_click())) {
+        return;
+    }
+    if app.grid.drag != Drag::None
+        || app.editor.is_some()
+        || app.dialog.as_ref().is_some_and(|d| d.picks_references())
+        || !app.session.draw_tool.is_empty()
+    {
+        return;
+    }
+    let Some(p) = input.press_origin.map(|p| geo.mirror_pos(p)).or(input.position) else { return };
+    if input.on_handle(p)
+        || input.on_current_border(p)
+        || is_filter_button(sh, geo, p)
+        || validation_arrow(sh, geo, sel.active).is_some_and(|r| r.contains(p))
+        || crate::chartview::hit(app, geo, sh, p).is_some()
+    {
+        return;
+    }
+    let c = geo.cell_at(sh, p);
+    if mods.shift {
+        let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
+        if let Some(d) = app.session.active_mut() {
+            d.selection.anchor = sel.anchor;
+        }
+    } else {
+        let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
     }
 }
 
