@@ -156,9 +156,79 @@ fn lines_logged_before_the_file_exists_are_written_when_it_is_attached() {
     let mut sink = Sink::new(MAX_FILE_BYTES);
     sink.write("early 1\n");
     sink.write("early 2\n");
-    sink.attach(file);
+    sink.attach(file).expect("attach");
     sink.write("late\n");
     assert_eq!(read(&path), "early 1\nearly 2\nlate\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn attach_checks_an_empty_file_handle_for_writability() {
+    let dir = temp_dir("empty-attach");
+    let (path, file) = rotate(&dir).expect("rotate");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.attach(file).expect("attach an empty file");
+    sink.write("late\n");
+    assert_eq!(read(&path), "late\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn attach_rejects_a_file_that_cannot_accept_writes() {
+    let dir = temp_dir("read-only-attach");
+    std::fs::create_dir_all(&dir).expect("directory");
+    let path = dir.join("read-only.log");
+    std::fs::write(&path, "existing").expect("create file");
+    let file = File::open(&path).expect("open read-only file");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.write("pending\n");
+    assert!(sink.attach(file).is_err());
+    assert_eq!(sink.pending, ["pending\n"]);
+    assert!(sink.file.is_none());
+    let (_, writable_file) = rotate(&dir.join("fallback")).expect("fallback rotate");
+    sink.attach(writable_file).expect("fallback attach");
+    assert!(read(&dir.join("fallback").join(LOG_FILE)).contains("pending\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn failed_attach_retains_unwritten_pending_records_and_drop_count() {
+    let dir = temp_dir("failed-attach");
+    std::fs::create_dir_all(&dir).expect("directory");
+    let path = dir.join("unwritable.log");
+    std::fs::write(&path, "not writable through this handle").expect("create file");
+    let file = File::open(&path).expect("open read-only file");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.write("pending 1\n");
+    sink.write("pending 2\n");
+    sink.dropped = 3;
+    assert!(sink.attach(file).is_err());
+    assert_eq!(sink.pending, ["pending 1\n", "pending 2\n"]);
+    assert_eq!(sink.dropped, 3);
+    assert!(sink.file.is_none());
+    assert!(!sink.capped);
+    let (_, writable_file) = rotate(&dir.join("fallback")).expect("fallback rotate");
+    sink.attach(writable_file).expect("fallback attach");
+    let fallback_text = read(&dir.join("fallback").join(LOG_FILE));
+    assert!(fallback_text.contains("pending 1\npending 2\n"), "{fallback_text}");
+    assert!(fallback_text.contains("3 earlier log lines were dropped"), "{fallback_text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_write_failure_stops_future_records_from_buffering() {
+    let dir = temp_dir("runtime-write-failure");
+    let (_, file) = rotate(&dir).expect("rotate");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.attach(file).expect("attach");
+    sink.file = Some(File::options().write(true).open("/dev/full").expect("open full device"));
+    sink.write("fails\n");
+    assert!(sink.file.is_none());
+    assert!(sink.capped);
+    sink.write("must not buffer\n");
+    assert!(sink.pending.is_empty());
+    assert_eq!(sink.dropped, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -170,7 +240,7 @@ fn the_pending_buffer_is_bounded_and_says_how_much_it_dropped() {
     for i in 0..MAX_PENDING + 5 {
         sink.write(&format!("line {i}\n"));
     }
-    sink.attach(file);
+    sink.attach(file).expect("attach");
     let text = read(&path);
     assert_eq!(text.lines().filter(|l| l.starts_with("line ")).count(), MAX_PENDING);
     assert!(text.contains("5 earlier log lines were dropped"), "{text}");
@@ -186,7 +256,7 @@ fn exactly_a_full_pending_buffer_drops_nothing() {
     for i in 0..MAX_PENDING {
         sink.write(&format!("line {i}\n"));
     }
-    sink.attach(file);
+    sink.attach(file).expect("attach");
     let text = read(&path);
     assert_eq!(text.lines().count(), MAX_PENDING);
     assert!(!text.contains("dropped"), "{text}");
@@ -207,7 +277,7 @@ fn the_file_stops_at_its_size_cap_with_one_note() {
     let dir = temp_dir("cap");
     let (path, file) = rotate(&dir).expect("rotate");
     let mut sink = Sink::new(100);
-    sink.attach(file);
+    sink.attach(file).expect("attach");
     for i in 0..50 {
         sink.write(&format!("line {i:02} with some padding\n"));
     }
@@ -268,16 +338,21 @@ fn records_from_many_threads_are_whole_lines() {
 }
 
 #[test]
-fn attaching_to_an_unusable_directory_reports_an_error_and_keeps_logging() {
+fn attaching_to_an_unusable_directory_preserves_pending_records_for_fallback() {
     let dir = temp_dir("unusable");
     std::fs::create_dir_all(dir.parent().expect("parent")).expect("tmp");
     std::fs::write(&dir, "not a directory").expect("block");
     let logger = AppLogger::new(Filter::parse("info"), false);
+    record(&logger, log::Level::Info, "gridcraft", "before failed attachment");
     assert!(logger.attach_dir(&dir).is_err());
-    record(&logger, log::Level::Error, "x", "still fine");
-    // Nothing waits in memory for a file that won't come.
-    assert!(logger.sink.lock().expect("sink").pending.is_empty());
+    record(&logger, log::Level::Error, "x", "after failed attachment");
+    let fallback = temp_dir("fallback");
+    let path = logger.attach_dir(&fallback).expect("fallback attachment");
+    let text = read(&path);
+    assert!(text.contains("before failed attachment"), "{text}");
+    assert!(text.contains("after failed attachment"), "{text}");
     let _ = std::fs::remove_file(&dir);
+    let _ = std::fs::remove_dir_all(fallback);
 }
 
 #[test]
