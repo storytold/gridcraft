@@ -13,6 +13,9 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
+    /// Desktop: print to a network printer (WS-Print or IPP). The Print page then offers a
+    /// "Network printer" destination next to the system's printers.
+    pub network_print: Option<printing::Network>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.

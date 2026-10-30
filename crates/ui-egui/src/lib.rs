@@ -217,6 +217,8 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,
+    /// The Print page's network-printer destination (only offered with `services.network_print`).
+    pub network: printing::NetworkDest,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,

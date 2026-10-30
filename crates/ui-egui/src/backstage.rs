@@ -238,6 +238,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         out.close = true;
     }
     if let Some(page) = out.page {
+        // Arriving on Print clears the network destination's confirmation: it covers one print.
+        if page == Page::Print && bs.page != Page::Print {
+            app.network.state.dialog_opened();
+        }
         bs.page = page;
     }
     // A command run from a page may itself have opened (or replaced) the view; keep that.

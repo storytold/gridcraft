@@ -9,9 +9,8 @@ description = "GridCraft egui frontend (Excel-style UI); swappable — nothing b
 workspace = true
 
 [dependencies]
-# The shared capture slot (`craft_ui::capture`) comes from the one craft-libs revision every
-# craft-libs dependency uses (see the root Cargo.toml).
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# The network-printer destination (`printing::network`) is storytold/craft-libs#112; pinned to that ref until it merges, then an immutable revision.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/112/head" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 # `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind

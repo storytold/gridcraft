@@ -511,6 +511,29 @@ fn export_pdf_without_a_path_returns_bytes_and_never_opens_a_dialog() {
 }
 
 #[test]
+fn grayscale_print_and_export_have_only_gray_colours() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Red on yellow"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A1", "color": "#FFC800"})).unwrap();
+    s.execute("home.fontColor", json!({"range": "A1", "color": "#DC1E28"})).unwrap();
+    fn ops(s: &mut Session, cmd: &str, params: Json) -> Vec<(String, String, String)> {
+        let r = s.execute(cmd, params).unwrap();
+        let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let words: Vec<&str> = text.split_whitespace().collect();
+        words.windows(4).filter(|w| w[3] == "rg" || w[3] == "RG").map(|w| (w[0].to_owned(), w[1].to_owned(), w[2].to_owned())).collect()
+    }
+    let is_gray = |c: &(String, String, String)| c.0 == c.1 && c.1 == c.2;
+    for cmd in ["file.print", "file.exportPdf"] {
+        let colour = ops(&mut s, cmd, json!({}));
+        assert!(colour.iter().any(|c| !is_gray(c)), "{cmd}: the cell colours print as colour by default: {colour:?}");
+        let gray = ops(&mut s, cmd, json!({"grayscale": true}));
+        assert!(!gray.is_empty() && gray.iter().all(is_gray), "{cmd}: {gray:?}");
+        assert!(ops(&mut s, cmd, json!({"grayscale": false})).iter().any(|c| !is_gray(c)), "{cmd}");
+    }
+}
+
+#[test]
 fn bands_unit() {
     let b = bands(0, 9, |_| 10.0, |_| 35.0, &[], 100);
     assert_eq!(b, vec![(0, 2), (3, 5), (6, 8), (9, 9)]);

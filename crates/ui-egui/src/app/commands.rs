@@ -133,6 +133,11 @@ impl SheetApp {
         }
     }
 
+    /// [`Self::alert`] for the Backstage pages.
+    pub(crate) fn alert_text(&mut self, e: String) {
+        self.alert(e);
+    }
+
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
@@ -359,6 +364,9 @@ impl SheetApp {
         }
         if !self.commit_edit(0, 0, false, false) {
             return;
+        }
+        if page == backstage::Page::Print && self.backstage.as_ref().is_none_or(|b| b.page != backstage::Page::Print) {
+            self.network.state.dialog_opened();
         }
         match &mut self.backstage {
             Some(b) => b.page = page,

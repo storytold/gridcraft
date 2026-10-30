@@ -129,3 +129,14 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
         assert!(app.toast.is_none());
     }
 }
+
+#[test]
+fn print_parameters_that_are_not_an_object_are_refused_not_a_panic() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Services::default());
+    for bad in [json!([]), json!([1, 2]), json!("x"), json!(3), json!(true)] {
+        assert!(app.run("ui.printSubmit", bad.clone()).is_err(), "{bad}");
+        assert!(app.print_network(bad.clone(), None, None).is_err(), "{bad}");
+    }
+}

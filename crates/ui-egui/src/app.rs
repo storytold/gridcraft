@@ -40,6 +40,7 @@ impl SheetApp {
             notice: None,
             services,
             printing: Default::default(),
+            network: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             synthetic_pending: false,

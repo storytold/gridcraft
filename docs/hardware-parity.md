@@ -14,7 +14,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 | Multiple windows and monitors | One window per workbook, New Window for the same workbook, per-monitor DPI | A native window per workbook window on the desktop, New Window for the same workbook; new windows cascade from the last one on its monitor; View › Arrange All tiles, stacks or cascades them over the main window's monitor (web: one window) | Arrange All across monitors; verify per-monitor DPI with windows on two monitors: 2–3 h |
 | High-DPI and display scaling | yes | yes (display scale matched to desktop density; View › Interface size 75–200 % on top, #230) | — |
 | Accessibility hardware (screen readers, braille displays, switch control) | Narrator, JAWS, NVDA, VoiceOver | AccessKit enabled in eframe; grid cells and ribbon not yet exposed as an accessible tree | Counted under UI ([ui-parity.md](ui-parity.md)) |
-| Printers | System print with driver options | Desktop submits through craft-print with printer choice, copies, duplex and grayscale; web browser printing | Counted under print |
+| Printers | System print with driver options | Desktop submits through craft-print with printer choice, copies, duplex and grayscale (the PDF and preview are gray); File > Print > Printer list (system queues, then Network printer…) sends to a printer by IP address over WS-Print or IPP (queried first, three-state options, per-job confirmation, status naming the printer); web browser printing | Counted under print |
 
 ## Revision history
 
@@ -22,6 +22,9 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 |---|---|---|
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |
 | 2026-10-22 | minor | Multiple windows: each workbook window is a native window of its own (desktop). |
+| 2026-10-18 | minor | Network printer jobs name a paper size only when every printed page is on the same paper (a workbook of Letter and Legal sheets names none), from the sheet's Page Setup paper (Executive and B5 included) before the page size. A cancel that may have reached the printer keeps the request to check it. |
+| 2026-10-15 | minor | File > Print has one Printer list (the system queues, the default first, then Network printer…) instead of a System/Network switch. Grayscale (was Black and white) now makes the printed PDF and the preview gray (Rec. 709) as well as asking the driver for monochrome. Local jobs go on the queue's own paper, shrunk to fit. |
+| 2026-10-15 | minor | File > Print has a Network printer destination (craft-ui `printing::network` over craft-print's WS-Print and IPP backends, desktop only, `network-print` feature): address check, query, three-state options, one confirmation per job, tracked status naming the printer. Printers that list no PDF are refused (no PDF rasteriser to convert with). Needs a real network printer to validate. |
 | 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, duplex and grayscale; browser printing and PDF export remain available. Remaining print parity includes page ranges and driver-specific tray/options UI; physical printer fidelity needs hardware validation. |
 | 2026-10-11 | trivial | Windows: DirectX 12 shaders compiled with FXC, no DXC runtime needed (#339, #354) |
 | 2026-10-11 | trivial | Windows: OpenGL fallback when DirectX 12 has no GPU or fails to start; Vulkan never by default (#120) |
