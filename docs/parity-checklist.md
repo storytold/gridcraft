@@ -4,17 +4,17 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 284 / 300 commands implemented (94.7%).**
+**Overall: 302 / 318 commands implemented (95.0%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 11 | 11 | 100% |
 | Home | 94 | 94 | 100% |
-| Insert | 17 | 25 | 68% |
+| Insert | 18 | 26 | 69% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 32 | 37 | 86% |
+| Data | 49 | 54 | 91% |
 | Review | 15 | 18 | 83% |
 | View | 20 | 20 | 100% |
 | Automate | 4 | 4 | 100% |
@@ -139,7 +139,7 @@ Implemented:
 - `edit.goToSpecial` Go To Special (Editing)
 - `home.addIns` Add-ins (Add-ins)
 
-## Insert (17 / 25, 68%)
+## Insert (18 / 26, 69%)
 
 Implemented:
 
@@ -160,6 +160,7 @@ Implemented:
 - `pageLayout.headerFooter` Header & Footer (Text)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
+- `insert.modelPivotTable` PivotTable from Data Model (Tables)
 
 Missing:
 
@@ -237,7 +238,7 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (32 / 37, 86%)
+## Data (49 / 54, 91%)
 
 Implemented:
 
@@ -273,6 +274,23 @@ Implemented:
 - `dataModel.deleteMeasure` Delete Measure (Data Model)
 - `dataModel.addRelationship` Create Relationship (Data Model)
 - `dataModel.deleteRelationship` Delete Relationship (Data Model)
+- `dataModel.view` Data View Rows (Data Model)
+- `dataModel.find` Find in Data Model (Data Model)
+- `dataModel.sortTable` Sort Data View (Data Model)
+- `dataModel.clearSort` Clear Data View Sort (Data Model)
+- `dataModel.setFilter` Filter Data View (Data Model)
+- `dataModel.clearFilters` Clear Data View Filters (Data Model)
+- `dataModel.sortByColumn` Sort by Column (Data Model)
+- `dataModel.setShowHidden` Show Hidden Columns (Data Model)
+- `dataModel.setShowImplicitMeasures` Show Implicit Measures (Data Model)
+- `dataModel.setFormat` Format Measure (Data Model)
+- `dataModel.setColumnHidden` Hide Column (Data Model)
+- `dataModel.setColumnType` Data Type (Data Model)
+- `dataModel.setSummarizeBy` Summarize By (Data Model)
+- `dataModel.markDateTable` Mark as Date Table (Data Model)
+- `dataModel.unmarkDateTable` Unmark Date Table (Data Model)
+- `dataModel.validate` Validate Data Model (Data Model)
+- `dataModel.createPivot` Create PivotTable (Data Model)
 
 Missing:
 

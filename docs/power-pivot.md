@@ -30,18 +30,21 @@ explanatory tooltip.
 | Clipboard | — | Paste, Paste Append, Paste Replace, Copy |
 | Get External Data | **Existing Connections** (connection overlay) | From Database, From Data Service, From Other Sources |
 | Refresh | **Refresh** (`dataModel.status` plus the selected table's rows) | — |
-| PivotTable | — | PivotTable |
-| Formatting | read-only type/format labels | Data Type, Format, currency, percent, comma, increase/decrease decimals |
-| Sort and Filter | — | Sort A to Z, Sort Z to A, Clear Sort, Clear All Filters, Sort by Column |
-| Find | — | Find |
+| PivotTable | **PivotTable** — creates a worksheet PivotTable over the model (`dataModel.createPivot`) in the same window's workbook | — |
+| Formatting | **Data Type** (selected column's type), **Format** for the selected measure (`dataModel.setFormat`), currency/percent/comma/increase/decrease decimals applied to the measure's format | — |
+| Sort and Filter | **Sort A to Z**, **Sort Z to A**, **Clear Sort**, **Filter** by value, **Clear All Filters**, **Sort by Column** (through a relationship) — all session view state | — |
+| Find | **Find** (`dataModel.find`): table/column scope, case, returns `{table, column, row, value}` matches | — |
 | Calculations | — | AutoSum, Create KPI |
-| View | Data View, Diagram View, Calculation Area, Show Hidden (state only) | — |
+| View | Data View, Diagram View, Calculation Area, Show Hidden (now changes the grid) | — |
 
 - Data View / Diagram View and Calculation Area take effect immediately.
-- **Show Hidden** is an enabled toggle that only stores UI state: the model has no hidden-column
-  flag, so the grid does not change.
-- The Formatting group shows the selected column's type from `dataModel.status`; when a measure is
-  selected, the Format field reads `Measure`.
+- **Show Hidden** is a real toggle: `dataModel.setShowHidden` makes the grid show hidden columns,
+  and `dataModel.setColumnHidden` (Design › Columns › Hide) sets a column's hidden flag in the model.
+- Sort and filter commands mutate the window's view state (`Session::dax_view`), never the model:
+  they change which rows the Data View shows and in what order; clearing restores model order.
+- The Formatting group edits the selected measure through `dataModel.setFormat`: a preset (General,
+  Number, Currency, Percent, Date) or a literal format, with optional decimals. Currency, percent,
+  comma and the decimal buttons apply the corresponding preset.
 
 ## Design ribbon
 
@@ -57,17 +60,23 @@ Edit. The Data View/Diagram canvas stays visible below this ribbon.
   are listed in [DAX functions](dax-functions.md).
 - **Relationships — Create Relationship…** and **Manage Relationships** both work (see dialogs).
 - **Table Properties** opens the read-only properties dialog.
-- **Mark as Date Table**, **Date Table**, **Undo** and **Redo** are disabled; date-table metadata
-  is not supported and model edits commit immediately.
+- **Mark as Date Table** works (`dataModel.markDateTable`, `dataModel.unmarkDateTable`): it validates
+  that the chosen column holds contiguous, unique dates before it stores the mark on the model.
+  **Date Table**, **Undo** and **Redo** stay disabled; model edits commit immediately.
+- **Columns — Hide/Unhide** works (`dataModel.setColumnHidden`). Delete, Freeze and Width remain
+  disabled: model columns cannot be deleted, frozen or resized.
 
 ## Advanced ribbon
 
 Groups: Perspectives, Show Implicit Measures, Summarize By, Reporting Properties.
 
-- **Show Implicit Measures** is a toggle that holds UI state; the engine reports only explicit
-  measures, so it does not add rows to the Calculation Area.
-- Perspectives, Summarize By, Table Detail, Table Behavior and Image URL are disabled: the model
-  engine has no perspectives, default-summarization or reporting-property metadata.
+- **Show Implicit Measures** is a real toggle (`dataModel.setShowImplicitMeasures`): with it on, the
+  Calculation Area lists an implicit measure per numeric column (its default aggregation) and per
+  non-numeric column (`COUNTROWS`), matching Excel's default summarization.
+- **Summarize By** works (`dataModel.setSummarizeBy`): Sum, Average, Count, Min, Max or None on the
+  selected column, which is what the implicit measure uses.
+- Perspectives, Table Detail, Table Behavior and Image URL are disabled: the model engine has no
+  perspectives or reporting-property metadata.
 
 ## Data View
 
@@ -135,6 +144,24 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.deleteMeasure` | `{name}` | status |
 | `dataModel.addRelationship` | `{from_table, from_column, to_table, to_column, bidirectional?, inactive?}` | status |
 | `dataModel.deleteRelationship` | `{from_table, from_column, to_table, to_column}` | status |
+| `dataModel.view` | `{table, show_hidden?}` | `{columns, rows, text_rows, row_numbers, hidden, sort, filters}` (view state) |
+| `dataModel.find` | `{query, table?, column?, case?}` | `{matches: [{table, column, row, value}]}` |
+| `dataModel.sortTable` | `{table, column, descending?}` | view state (session only) |
+| `dataModel.clearSort` | `{table}` | view state (session only) |
+| `dataModel.setFilter` | `{table, column, values: [text]}` (empty clears) | view state (session only) |
+| `dataModel.clearFilters` | `{table}` | view state (session only) |
+| `dataModel.sortByColumn` | `{table, by_table, by_column, column?, descending?}` | view state (session only) |
+| `dataModel.setShowHidden` | `{show}` | status |
+| `dataModel.setShowImplicitMeasures` | `{show}` | status |
+| `dataModel.setFormat` | `{name, format?, preset?, decimals?}` | status (also applies to `evaluate`/`pivot` output) |
+| `dataModel.setColumnHidden` | `{table, column, hidden?}` | status |
+| `dataModel.setColumnType` | `{table, column, data_type}` | status (rejects a value the new type cannot hold) |
+| `dataModel.setSummarizeBy` | `{table, column, summarize_by: Sum\|Average\|Count\|Min\|Max\|None}` | status |
+| `dataModel.markDateTable` | `{table, column}` | status (the column must be contiguous, unique dates) |
+| `dataModel.unmarkDateTable` | `{table}` | status |
+| `dataModel.validate` | `{}` | `{tables, rows, relationships, findings}` — referential integrity, cardinality, blank keys, cycles |
+| `dataModel.createPivot` | `{measure, row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?}` | `{name, sheet, at, rows, columns, values, cached}` |
+| `insert.modelPivotTable` | same as `dataModel.createPivot` | same (Insert › Tables entry point) |
 
 `status` is:
 
@@ -181,16 +208,16 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Diagram cards and relationship lines | Matches, with a 60-table/12-column display cap |
 | Get External Data / database and service imports | Missing: `dataModel.load` reads a JSON model file only |
 | Paste, copy, Import, existing worksheet connections | Missing in this window; worksheet commands are separate |
-| Add/delete/rename model columns, data-type editing, freeze, width | Missing: only Add (which starts a measure) is enabled |
-| Sort, filter and format model rows | Missing: sorting/formatting are disabled and header filters are display-only |
-| Mark as Date Table / Date Table metadata | Missing |
-| Perspectives, KPIs, hierarchies, Summarize By, reporting properties | Missing |
-| Undo/Redo, Find, AutoSum | Missing; edits commit immediately |
+| Add/delete/rename model columns, data-type editing, freeze, width | Partial: **Hide/Unhide** and **Data Type** work (`setColumnHidden`, `setColumnType`); delete, rename, freeze and width are missing |
+| Sort, filter and format model rows | Partial: sort/filter/find work on the window's view state (`sortTable`, `setFilter`, `sortByColumn`, `find`); they do not reorder model storage |
+| Mark as Date Table / Date Table metadata | Partial: **Mark as Date Table** / **Unmark** validate and store the mark; the automatic Date Table command is missing |
+| Perspectives, KPIs, hierarchies, Summarize By, reporting properties | Partial: **Summarize By** works (`setSummarizeBy`) and feeds implicit measures; perspectives, KPIs, hierarchies and reporting properties are missing |
+| Undo/Redo, Find, AutoSum | Find works (`dataModel.find`); undo/redo and AutoSum are missing; edits commit immediately |
 | Calculation Options Manual mode | Window state only; commands still commit immediately |
-| Show Hidden / Show Implicit Measures | UI toggles only; the model reports neither hidden columns nor implicit measures |
-| Worksheet PivotTable field list and cache | Missing: `dataModel.pivot` returns a table, but no worksheet PivotTable is created |
+| Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
+| Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml` and keeps them on save; the field-list pane is missing, and **Excel currently refuses to open a package with our cache definition** (the same package with an Excel-written cache opens — open defect) |
 | Pivot Preview | Not present: the window has no separate preview surface |
-| Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook |
+| Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook (the pivot cache can reference an `xl/model/item.data` that is already in the file) |
 
 DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
 [DAX functions](dax-functions.md) for the per-category breakdown.
