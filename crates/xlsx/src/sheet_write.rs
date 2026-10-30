@@ -411,7 +411,7 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
             ("firstFooter", &p.first_footer),
         ] {
             if !text.is_empty() {
-                let _ = write!(s, "<{tag}>{}</{tag}>", esc(text));
+                let _ = write!(s, "<{tag}>{}</{tag}>", esc(&encode_xstring(text)));
             }
         }
         s.push_str("</headerFooter>");

@@ -286,6 +286,18 @@ fn strict_namespace_and_shared_strings() {
     assert!(rep.warnings.iter().any(|w| w.contains("shared strings")));
 }
 
+/// A header or footer keeps Excel's 255 characters, decoded from no more of the text than they
+/// need, however long the file makes it.
+#[test]
+fn a_long_escaped_footer_is_cut_at_255_characters() {
+    let long = "_x0041_".repeat(100_000);
+    let body = format!(
+        r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddFooter>{long}</oddFooter></headerFooter>"#
+    );
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.footer, "A".repeat(255));
+}
+
 #[test]
 fn hyperlinks_comments_tables_validation_filters() {
     let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>H</t></is></c></row></sheetData>
@@ -349,6 +361,16 @@ Check this</t></r></text></comment></commentList></comments>"#;
     assert!(!rep.warnings.iter().any(|w| w.contains("password")), "{:?}", rep.warnings);
     assert_eq!(s.sparklines.len(), 1);
     assert_eq!(s.sparklines[0].kind, gridcraft_model::SparklineKind::Column);
+}
+
+/// A carriage return in a header or footer comes escaped (`_x000D_`), and goes back the same way.
+#[test]
+fn a_carriage_return_in_a_footer_is_decoded_and_saved_escaped() {
+    let body = r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddFooter>Page &amp;P_x000D_</oddFooter></headerFooter>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.footer, "Page &P\r");
+    let saved = crate::write_xlsx(&wb).unwrap();
+    assert_eq!(read_xlsx(&saved).unwrap().0.sheet(0).unwrap().print.footer, "Page &P\r");
 }
 
 /// The sheet's hyperlinks as written: cell, relationship target (external only), location.

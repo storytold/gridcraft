@@ -64,6 +64,21 @@ fn header_sections_split_join_and_field_names() {
 }
 
 #[test]
+fn header_footer_lines_break_at_cr_and_lf() {
+    use header_footer::hf_lines;
+    assert_eq!(hf_lines("Thanks"), ["Thanks"]);
+    assert_eq!(hf_lines("Thanks\r"), ["Thanks", ""]);
+    assert_eq!(hf_lines("a\r\nb"), ["a", "", "b"]);
+    assert_eq!(hf_lines("a\nb"), ["a", "b"]);
+    // Eleven lines apart by CR LF are 21: every one kept, the last too.
+    let crlf = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"].join("\r\n");
+    assert_eq!(hf_lines(&crlf).last(), Some(&"11"));
+    // As many as 255 characters can make, and no more.
+    assert_eq!(hf_lines(&"\n".repeat(255)).len(), 256);
+    assert_eq!(hf_lines(&"\n".repeat(10_000)).len(), 256);
+}
+
+#[test]
 fn header_footer_date_follows_the_workbook_date_system() {
     let mut wb = Workbook::new();
     let date_1900 = hf_date_time(&wb).0;
