@@ -159,6 +159,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python 모드",
         "Python Object" => "Python 개체",
         "Excel Value" => "Excel 값",
+        "Show Card" => "카드 표시",
         "This version of GridCraft stores Python code but does not run it." => "이 버전의 GridCraft는 Python 코드를 저장하지만 실행하지는 않습니다.",
         "Insert\nPython" => "Python\n삽입",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python 삽입 (Ctrl+Alt+Shift+P)",

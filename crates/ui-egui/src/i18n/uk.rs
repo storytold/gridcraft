@@ -155,6 +155,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Режим Python",
         "Python Object" => "Об’єкт Python",
         "Excel Value" => "Значення Excel",
+        "Show Card" => "Показати картку",
         "This version of GridCraft stores Python code but does not run it." => "Ця версія GridCraft зберігає код Python, але не виконує його.",
         "Insert\nPython" => "Вставити\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Вставити Python (Ctrl+Alt+Shift+P)",

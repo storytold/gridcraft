@@ -157,6 +157,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Modalità Python",
         "Python Object" => "Oggetto Python",
         "Excel Value" => "Valore di Excel",
+        "Show Card" => "Mostra scheda",
         "This version of GridCraft stores Python code but does not run it." => {
             "Questa versione di GridCraft salva il codice Python ma non lo esegue."
         }

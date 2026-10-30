@@ -239,3 +239,51 @@ fn ui_python_card_opens_only_on_python_cells_and_never_a_dialog() {
     h.run_steps(4);
     assert_eq!(card(&h), None);
 }
+
+#[test]
+fn a_python_cell_that_shows_an_error_gets_the_warning_button_which_says_why() {
+    let mut h = harness(session(false));
+    select(&mut h, "B2");
+    // egui waits for the pointer to settle before opening a tooltip: remove the delay.
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    h.get_by_label("Error checking options").hover();
+    h.run_steps(6);
+    assert!(h.query_by_value(NOT_RUN).is_some() || h.query_by_label(NOT_RUN).is_some(), "hovering the button says why the cell shows #BLOCKED!");
+    h.get_by_label("Error checking options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("#BLOCKED!").is_some(), "the menu names the error");
+    h.get_by_label("Show Card").click();
+    h.run_steps(3);
+    assert_eq!(card(&h), Some(CellRef::parse("B2").unwrap()));
+}
+
+#[test]
+fn python_cells_with_a_result_and_other_cells_get_no_warning_button() {
+    let mut h = harness(session(false));
+    for cell in ["C4", "E2", "A1"] {
+        select(&mut h, cell);
+        assert!(h.query_by_label("Error checking options").is_none(), "{cell}");
+    }
+}
+
+#[test]
+fn the_warning_button_says_python_did_not_run_only_for_blocked() {
+    // A file can cache another Python error, such as #PYTHON! from Excel: the button names it
+    // but doesn't say this version didn't run the code.
+    let mut s = session(false);
+    s.execute("python.set", json!({"cell": "G2", "code": "1 / 0"})).unwrap();
+    let error = Value::Error(gridcraft_engine::core::CellError::Python);
+    cache(&mut s, "G2", PyOutput { value: error, type_name: "ZeroDivisionError".into(), preview: String::new(), convertible: true });
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    let mut h = harness(s);
+    select(&mut h, "G2");
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    h.get_by_label("Error checking options").hover();
+    h.run_steps(6);
+    assert!(h.query_by_value(NOT_RUN).is_none() && h.query_by_label(NOT_RUN).is_none(), "the hover doesn't say the code didn't run");
+    h.get_by_label("Error checking options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("#PYTHON!").is_some(), "the menu names the error");
+    assert!(h.query_by_label(NOT_RUN).is_none(), "the menu doesn't say the code didn't run");
+    assert!(h.query_by_label("Show Card").is_some(), "the menu still opens the card");
+}

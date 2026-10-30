@@ -149,6 +149,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Λειτουργία Python",
         "Python Object" => "Αντικείμενο Python",
         "Excel Value" => "Τιμή Excel",
+        "Show Card" => "Εμφάνιση κάρτας",
         "This version of GridCraft stores Python code but does not run it." => {
             "Αυτή η έκδοση του GridCraft αποθηκεύει κώδικα Python αλλά δεν τον εκτελεί."
         }
