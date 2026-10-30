@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
-use gridcraft_formula::{Expr, SheetSel};
+use gridcraft_formula::{Expr, SheetSel, UnOp};
 use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
@@ -320,16 +320,65 @@ fn group_for(k: ChartKind) -> G {
 
 const MAX_CACHE: u64 = 100_000;
 
-/// The sheet and range a same-workbook reference (`Sheet1!$B$2:$B$9`) names.
+/// How many names may refer to names (or OFFSETs nest) before a series stops resolving.
+const MAX_NAME_DEPTH: u32 = 8;
+
+/// The sheet and range a series formula names: a same-workbook reference (`Sheet1!$B$2:$B$9`), a
+/// defined name that stands for one (names may refer to names), or an `OFFSET` of one with
+/// literal arguments. A name that has to be calculated (`OFFSET(…,COUNTA(…))`) has no target
+/// here: this crate doesn't evaluate formulas.
 fn ref_target(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<(usize, RangeRef)> {
-    let e = gridcraft_formula::parse(f).ok()?;
-    let Expr::Ref(r) = e else { return None };
-    let si = match &r.sheet {
-        SheetSel::Current => sheet_idx,
-        SheetSel::Named(n) => wb.sheet_index(n)?,
-        SheetSel::Span(..) => return None,
-    };
-    Some((si, r.range()))
+    let e = gridcraft_formula::parse(f.trim()).ok()?;
+    expr_target(wb, sheet_idx, &e, 0)
+}
+
+fn expr_target(wb: &Workbook, sheet_idx: usize, e: &Expr, depth: u32) -> Option<(usize, RangeRef)> {
+    if depth > MAX_NAME_DEPTH {
+        return None;
+    }
+    match e {
+        Expr::Paren(inner) => expr_target(wb, sheet_idx, inner, depth + 1),
+        Expr::Ref(r) => {
+            let si = match &r.sheet {
+                SheetSel::Current => sheet_idx,
+                SheetSel::Named(n) => wb.sheet_index(n)?,
+                SheetSel::Span(..) => return None,
+            };
+            Some((si, r.range()))
+        }
+        Expr::Name(n) => {
+            let (_, _, def) = chart_name(wb, sheet_idx, n)?;
+            let def = def?;
+            let body = gridcraft_formula::parse_name(&def.formula).ok()?;
+            expr_target(wb, def.scope.unwrap_or(sheet_idx), &body, depth + 1)
+        }
+        Expr::Call(func, args) if func == "OFFSET" => {
+            let (si, r) = expr_target(wb, sheet_idx, args.first()?, depth + 1)?;
+            let int = |i: usize| match args.get(i) {
+                None | Some(Expr::Missing) => Some(None),
+                Some(Expr::Number(n)) if n.fract() == 0.0 && n.abs() < 2e6 => Some(Some(*n as i64)),
+                Some(Expr::Unary(UnOp::Neg, n)) => match **n {
+                    Expr::Number(n) if n.fract() == 0.0 && n < 2e6 => Some(Some(-(n as i64))),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let (dr, dc) = (int(1)?.unwrap_or(0), int(2)?.unwrap_or(0));
+            let (h, w) = (int(3)?.unwrap_or(i64::from(r.height())), int(4)?.unwrap_or(i64::from(r.width())));
+            let start = r.start.offset(dr, dc)?;
+            let end = start.offset(h.checked_sub(1).filter(|v| *v >= 0)?, w.checked_sub(1).filter(|v| *v >= 0)?)?;
+            Some((si, RangeRef::new(start, end)))
+        }
+        _ => None,
+    }
+}
+
+/// The number format code of the first cell a series formula refers to, as Excel writes it in
+/// `<c:formatCode>` (`General` when the formula isn't a reference or a name for one).
+fn source_format(wb: &Workbook, sheet_idx: usize, f: &str) -> String {
+    ref_target(wb, sheet_idx, f)
+        .and_then(|(si, r)| Some(wb.styles.get(wb.sheet(si)?.style_id(r.start)).num_fmt.0.to_string()))
+        .unwrap_or_else(|| "General".into())
 }
 
 /// Values of a same-workbook reference (`Sheet1!$B$2:$B$9`), row-major.
@@ -408,7 +457,7 @@ fn num_data(tag: &str, f: Option<&str>, wb: &Workbook, si: usize) -> String {
     }
     let mut s = format!("<c:{tag}><c:numRef><c:f>{}</c:f>", esc(&chart_ref_to_file(wb, si, f)));
     if let Some(vals) = ref_values(wb, si, f) {
-        let _ = write!(s, "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", vals.len());
+        let _ = write!(s, "<c:numCache><c:formatCode>{}</c:formatCode><c:ptCount val=\"{}\"/>", esc(&source_format(wb, si, f)), vals.len());
         for (i, v) in vals.iter().enumerate() {
             if let Value::Number(n) = v {
                 let _ = write!(s, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", num(*n));
@@ -486,7 +535,16 @@ fn str_data(tag: &str, f: &str, wb: &Workbook, si: usize) -> String {
 /// year beside month). Its cache lists the innermost level first, then each outer level with
 /// only the cells that start a group, as Excel writes it.
 fn cat_data(f: &str, values: &str, wb: &Workbook, si: usize) -> String {
-    multi_level_cat(f.trim(), values, wb, si).unwrap_or_else(|| str_data("cat", f, wb, si))
+    multi_level_cat(f.trim(), values, wb, si).or_else(|| numeric_cat(f, wb, si)).unwrap_or_else(|| str_data("cat", f, wb, si))
+}
+
+/// Categories that are all numbers (dates, years) are a number reference with a number cache, as
+/// Excel writes them; the cache's format code makes a viewer show dates rather than serials.
+fn numeric_cat(f: &str, wb: &Workbook, si: usize) -> Option<String> {
+    let vals = ref_values(wb, si, f)?;
+    let mut filled = vals.iter().filter(|v| !v.is_empty()).peekable();
+    filled.peek()?;
+    filled.all(|v| matches!(v, Value::Number(_))).then(|| num_data("cat", Some(f), wb, si))
 }
 
 fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<String> {
@@ -508,7 +566,7 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
     } else {
         (w, (0..=levels.outer as usize).filter_map(|k| (h - 1).checked_sub(k)).map(|r| (0..w).map(|c| text(r, c)).collect()).collect())
     };
-    let mut s = format!("<c:cat><c:multiLvlStrRef><c:f>{}</c:f><c:multiLvlStrCache><c:ptCount val=\"{n}\"/>", esc(&crate::fmla::text_to_file(f)));
+    let mut s = format!("<c:cat><c:multiLvlStrRef><c:f>{}</c:f><c:multiLvlStrCache><c:ptCount val=\"{n}\"/>", esc(&chart_ref_to_file(wb, si, f)));
     for lvl in &lvls {
         s.push_str("<c:lvl>");
         for (i, v) in lvl.iter().enumerate() {

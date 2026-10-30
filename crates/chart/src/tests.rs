@@ -1255,3 +1255,55 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+/// A series through a defined name takes its number format (and its date categories) from the
+/// cells the name stands for, as the same series over the plain reference does.
+#[test]
+fn names_resolve_formats_like_references() {
+    let mut wb = Workbook::new();
+    let date = wb.styles.intern(Style { num_fmt: gridcraft_model::NumFmt(Arc::from("m/d/yyyy")), ..Style::default() });
+    let money = wb.styles.intern(Style { num_fmt: gridcraft_model::NumFmt(Arc::from("0.00")), ..Style::default() });
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (i, (d, v)) in [(45296.0, 10.0), (45327.0, 20.0), (45356.0, 30.0)].iter().enumerate() {
+            let r = i as u32 + 1;
+            s.set_value(CellRef::new(r, 0), Value::Number(*d));
+            s.set_style(CellRef::new(r, 0), date);
+            s.set_value(CellRef::new(r, 1), Value::Number(*v));
+            s.set_style(CellRef::new(r, 1), money);
+        }
+    }
+    let name =
+        |n: &str, f: &str| gridcraft_model::DefinedName { name: n.into(), scope: None, formula: f.into(), comment: String::new(), hidden: false };
+    wb.names = vec![
+        name("Cats", "Sheet1!$A$2:$A$4"),
+        name("Vals", "Sheet1!$B$2:$B$4"),
+        name("DynC", "OFFSET(Sheet1!$A$2,0,0,3,1)"),
+        name("DynV", "OFFSET(Sheet1!$B$2,0,0,COUNT(Sheet1!$B:$B),1)"),
+        name("Dates", "Sheet1!$A$2:$A$4"),
+    ];
+    let resolved = |cats: &str, vals: &str| {
+        let mut c = chart(ChartKind::ColumnClustered);
+        c.series = vec![Series {
+            name: None,
+            categories: Some(cats.into()),
+            values: vals.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            quartiles: Default::default(),
+            smooth: false,
+            trendlines: Vec::new(),
+        }];
+        let d = resolve(&wb, 0, &c);
+        (d.categories, d.series[0].number_format.clone())
+    };
+    let direct = resolved("Sheet1!$A$2:$A$4", "Sheet1!$B$2:$B$4");
+    assert_eq!(direct, (vec!["1/5/2024".to_string(), "2/5/2024".to_string(), "3/5/2024".to_string()], "0.00".to_string()));
+    assert_eq!(resolved("Cats", "Vals"), direct);
+    // Dynamic names: an OFFSET with a calculated height is followed through the calculation.
+    assert_eq!(resolved("DynC", "DynV"), direct);
+    // The axis of a series whose values are date cells reads the date format through a name.
+    assert_eq!(resolved("Cats", "Dates").1, "m/d/yyyy");
+}

@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Area, Ev, Evaluator, Host, precedents, stack_position};
 
 mod graph;
 mod pass_host;
@@ -517,6 +517,22 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
+}
+
+/// The sheet and range a formula evaluates to when it is a single reference: `Sheet1!A1:B2`, a
+/// defined name for one, an `OFFSET` or `INDEX` result. Chart series use it to find the cells
+/// behind a name (for number formats); `None` for values and for unions of areas.
+pub fn evaluate_area(wb: &Workbook, sheet: usize, formula: &str) -> Option<Area> {
+    let body = formula.trim().strip_prefix('=').unwrap_or(formula.trim());
+    let expr = gridcraft_formula::parse(body).ok()?;
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, CellRef::default());
+    match ev.eval(&expr) {
+        Ev::R(areas) if areas.len() == 1 => areas.first().copied(),
+        _ => None,
+    }
 }
 
 fn prof_now() -> f64 {
