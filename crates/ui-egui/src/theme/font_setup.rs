@@ -446,8 +446,8 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
     }
-    // And the other way round: cells fall back to the interface font before the script faces, so
-    // what the formula bar draws a cell draws too (#2035: macOS has ₽ and the other recent
+    // And the other way round: cells fall back to the interface font right after their own face,
+    // so what the formula bar draws a cell draws too (#2035: macOS has ₽ and the other recent
     // currency signs in its UI fonts but not in Arial, Calibri or Apple Symbols).
     bind_ui_fallback(&mut fonts, &fallback);
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
@@ -524,14 +524,19 @@ fn build_role_chain(
     chain
 }
 
-/// Inserts the loaded interface faces before the script fallbacks of the cell families, so a cell
-/// can draw whatever the formula bar can (#2035). Bold roles take the bold interface face first
-/// and the regular one behind it, for a system where only the regular face loads.
+/// Inserts the loaded interface faces right after the cell face of the cell families, so a cell
+/// draws what its face lacks the way the formula bar does (#2035). Right after, not before the
+/// script fallbacks: epaint takes the first face with the glyph, and egui's bundled Ubuntu-Light
+/// and Hack have ₹ and ₸ (thin, monospace, never bold). The interface fonts have no Hebrew, Thai,
+/// Arabic or CJK, so those still reach their script faces. Bold roles take the bold interface face
+/// first and the regular one behind it, for a system where only the regular face loads. With no
+/// cell face loaded the chain leads with egui's faces, which stay first.
 fn bind_ui_fallback(fonts: &mut FontDefinitions, fallback: &[String]) {
     let bold: &[&str] = &[UI_BOLD, UI];
     for (role, uis) in [(CELL, &[UI][..]), (CELL_BOLD, bold), (CELL_ITALIC, &[UI]), (CELL_BOLD_ITALIC, bold), (SERIF, &[UI]), (MONO, &[UI])] {
         let Some(chain) = fonts.families.get_mut(&FontFamily::Name(role.into())) else { continue };
-        let mut at = chain.iter().position(|k| fallback.contains(k)).unwrap_or(chain.len());
+        let cell_faces = chain.iter().take_while(|k| k.starts_with("sys-") && !fallback.contains(k)).count();
+        let mut at = if cell_faces > 0 { cell_faces } else { chain.iter().position(|k| fallback.contains(k)).unwrap_or(chain.len()) };
         for ui in uis {
             let ui_key = format!("sys-{ui}");
             if fonts.font_data.contains_key(&ui_key) && !chain.contains(&ui_key) {

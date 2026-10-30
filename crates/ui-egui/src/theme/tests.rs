@@ -225,6 +225,18 @@ fn fallback_covers_its_script() {
 /// but not in Arial, Calibri or Apple Symbols (#2035).
 const CURRENCY_SIGNS: &str = "₽₹₺₸₾₼";
 
+/// The first face of `family`'s chain whose character map has `c`: the one epaint draws it with.
+fn first_face_with(fonts: &FontDefinitions, family: &str, c: char) -> Option<String> {
+    use skrifa::MetadataProvider;
+    let chain = fonts.families.get(&FontFamily::Name(family.into()))?;
+    chain
+        .iter()
+        .find(|k| {
+            fonts.font_data.get(*k).is_some_and(|fd| skrifa::FontRef::from_index(fd.bytes(), fd.index).is_ok_and(|f| f.charmap().map(c).is_some()))
+        })
+        .cloned()
+}
+
 /// Returns the characters of `sample` with no glyph in `family`.
 fn without_glyph(ctx: &egui::Context, family: FontFamily, sample: &str) -> String {
     let font = FontId::new(14.0, family);
@@ -265,6 +277,13 @@ fn cells_draw_the_currency_signs_the_interface_draws() {
             let ui_at = chain.iter().position(|k| k.starts_with("sys-ui"));
             let first_craft = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
             assert!(ui_at.is_some_and(|at| at < first_craft), "{family} must reach the interface font before the craft faces: {chain:?}");
+            // And the face that draws them is the cell's own or the interface's, never one behind
+            // them such as egui's bundled Ubuntu-Light (₹, thin) or Hack (₸, monospace).
+            let own_or_ui = |k: &str| k.starts_with("sys-ui") || k.starts_with("fnt-src:") || chain.first().is_some_and(|f| f == k);
+            for c in signs.chars() {
+                let face = first_face_with(&fonts, &family, c);
+                assert!(face.as_deref().is_some_and(own_or_ui), "{family} draws {c} with {face:?}, not its own or the interface font: {chain:?}");
+            }
             // Bold text reaches the bold interface face, ahead of any regular one; a bold cell role
             // also keeps the regular face behind it, for a system with no bold interface face.
             let bold_key = format!("sys-{UI_BOLD}");
