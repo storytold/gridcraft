@@ -27,12 +27,18 @@ impl SheetApp {
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
     }
 
-    /// Keeps egui's own keyboard zoom and quit shortcuts off and applies GridCraft's zoom factor.
+    /// Keeps egui's own keyboard zoom and quit shortcuts off, makes only Ctrl+wheel zoom and
+    /// applies GridCraft's zoom factor.
     pub(super) fn sync_input_options(&mut self, ctx: &egui::Context) {
         // Interface size: the preference owns the zoom factor, so egui's own Ctrl/Cmd +/-/0 zoom
         // keys stay off (they would also swallow GridCraft's shortcuts).
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        }
+        // Ctrl+wheel zooms the sheet; on macOS Cmd+wheel scrolls, as in Excel for Mac (egui's
+        // default zooms on either). A trackpad pinch zooms through its own event.
+        if ctx.options(|o| o.input_options.zoom_modifier != egui::Modifiers::CTRL) {
+            ctx.options_mut(|o| o.input_options.zoom_modifier = egui::Modifiers::CTRL);
         }
         // egui closes the window on Ctrl+Q (and with Shift or Alt held too) without asking to save
         // (#1443). Excel for Windows has no such key (Ctrl+Q is Quick Analysis). With a native

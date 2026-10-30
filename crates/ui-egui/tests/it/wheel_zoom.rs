@@ -1,4 +1,4 @@
-//! Ctrl+wheel zoom steps along a ladder of percentages that always comes back to 100%.
+//! Ctrl+wheel zoom (not Cmd+wheel) steps along a ladder of percentages that always comes back to 100%.
 
 use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, vec2};
 use gridcraft_engine::Session;
@@ -43,10 +43,10 @@ fn set_zoom(h: &mut Harness, percent: u16) {
 /// Turns the wheel `turns` notches at a time with Ctrl held (up zooms in), each turn `frames`
 /// frames after the last, then lets egui's easing play out.
 fn wheel_turns(h: &mut Harness, turns: &[f32], frames: usize) {
-    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::CTRL));
     for &t in turns {
         let delta = vec2(0.0, t);
-        h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::COMMAND));
+        h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::CTRL));
         h.run_steps(frames);
     }
     h.run_steps(60);
@@ -68,9 +68,9 @@ fn animated() -> Harness {
 
 /// Turns the wheel `notches` with Ctrl held and records the zoom over the next `frames` frames.
 fn turn_and_watch(h: &mut Harness, notches: f32, frames: usize) -> Vec<u16> {
-    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::CTRL));
     let delta = vec2(0.0, notches);
-    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::COMMAND));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::CTRL));
     (0..frames)
         .map(|_| {
             h.step();
@@ -127,6 +127,23 @@ fn with_view_animations_off_a_notch_steps_at_once() {
     let seen = turn_and_watch(&mut h, 1.0, 40);
     assert!(seen.iter().all(|&z| z == 100 || z == 120), "no percentages in between: {seen:?}");
     assert_eq!(seen.last(), Some(&120));
+}
+
+#[test]
+/// On macOS Cmd+wheel scrolls the sheet and only Ctrl+wheel zooms, as in Excel for Mac.
+fn cmd_wheel_scrolls_and_ctrl_wheel_zooms() {
+    let mut h = harness();
+    // winit reports ⌘ as both `mac_cmd` and `command`.
+    let cmd = Modifiers::MAC_CMD | Modifiers::COMMAND;
+    h.input_mut().events.push(Event::ModifiersChanged(cmd));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Wheel, TouchPhase::Move, vec2(0.0, -3.0), cmd));
+    h.run_steps(60);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(zoom(&h), 100, "Cmd+wheel doesn't zoom");
+    assert!(h.state().view().scroll.y > 0.0, "Cmd+wheel scrolls down: {}", h.state().view().scroll.y);
+    wheel(&mut h, 1.0);
+    assert_eq!(zoom(&h), 120, "Ctrl+wheel zooms");
 }
 
 #[test]
@@ -193,8 +210,8 @@ fn from_a_zoom_set_another_way_a_notch_goes_to_the_next_step_or_100() {
 
 /// One notch in `unit`: a line event or its equivalent in points (egui's 40-point line speed).
 fn turn_in_unit(h: &mut Harness, unit: MouseWheelUnit, delta: egui::Vec2, frames: usize) -> Vec<u16> {
-    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
-    h.input_mut().events.push(wheel_event(unit, MouseWheelSource::Wheel, TouchPhase::Move, delta, Modifiers::COMMAND));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::CTRL));
+    h.input_mut().events.push(wheel_event(unit, MouseWheelSource::Wheel, TouchPhase::Move, delta, Modifiers::CTRL));
     let seen = (0..frames)
         .map(|_| {
             h.step();
@@ -208,9 +225,9 @@ fn turn_in_unit(h: &mut Harness, unit: MouseWheelUnit, delta: egui::Vec2, frames
 
 /// A trackpad/momentum gesture: the starting phase carries no delta, the move does.
 fn gesture(h: &mut Harness, source: MouseWheelSource, delta: f32, frames: usize) -> Vec<u16> {
-    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
-    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Start, vec2(0.0, 0.0), Modifiers::COMMAND));
-    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Move, vec2(0.0, delta), Modifiers::COMMAND));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::CTRL));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Start, vec2(0.0, 0.0), Modifiers::CTRL));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Move, vec2(0.0, delta), Modifiers::CTRL));
     let seen = (0..frames)
         .map(|_| {
             h.step();

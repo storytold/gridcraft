@@ -70,6 +70,10 @@ and a notch turned during a glide steps on from the step it's going to. With Vie
 it goes to the step at once. Whether the zoom glide should have a setting of its own is left to the
 maintainers.
 
+Only Ctrl+wheel zooms (egui's `input_options.zoom_modifier`; its default also zooms on Cmd). On
+macOS Cmd+wheel scrolls the sheet, as Excel for Mac does (observed 2026-10-29); a trackpad pinch
+still zooms.
+
 Before, each frame multiplied the whole-number zoom by egui's eased factor and rounded, so a notch
 out never undid a notch in (100 → 122 → 101 → 123 → 102). Keeping the zoom unrounded fixed that
 for a wheel with exact notches, but not for one that sends uneven parts of a notch.
