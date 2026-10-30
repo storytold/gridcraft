@@ -3,18 +3,16 @@ use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
-use super::interact::{interact, paint_freeze_handles};
+use super::interact::{interact, paint_freeze_handles, paint_ink_preview};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
 use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
-    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
-    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    Align2, Arc, CellRef, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, Pos2, RangeRef, Rect, Sense, Sheet, SheetApp,
+    Stroke, StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
     zoom_glide_step,
 };
-#[cfg(test)]
-use super::{CellRef, Pos2};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -137,12 +135,17 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         *v = view;
     }
     app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
+    app.grid.geo = Some(geo.clone());
+    // Pointer and keyboard input before painting, so this frame shows the selection the input
+    // leaves: painted first, the outline trailed a drag (and every key press) by a frame.
+    let popups = Popups::of(app);
+    handle_grid_input(app, ui, &resp, &geo, sh, &wb);
+    let sel = selection_after_input(app, place, sel);
     // The selection outline glides to a new selection. It stays on its cells when Animations is
     // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
-    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
-    // a gliding outline trails the pointer and reads as lag.
+    // A mouse button pressed, held or released (a click, a tap or a drag selecting cells) moves it
+    // at once, as in Excel: a gliding outline trails the pointer and reads as lag.
     let outline = selection_outline(app, ui, &geo, sh, &sel, place, now);
-    app.grid.geo = Some(geo.clone());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, t.grid_bg);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
@@ -205,7 +208,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if geo.paper.is_some() {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
-    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    show_grid_overlays(app, ui, &resp, &geo, sh, &wb, popups);
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
@@ -245,7 +248,7 @@ fn selection_outline(
     place: (u64, usize),
     now: f64,
 ) -> Rect {
-    let pointer_selecting = ui.input(|i| i.pointer.any_down());
+    let pointer_selecting = ui.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released());
     let outline = app.grid.glide.frame(crate::selection_glide::Frame {
         place,
         range: sel.current(),
@@ -322,8 +325,25 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
     }
 }
 
-fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
+/// The grid's popups as they were before this frame's input: one the input has just opened
+/// doesn't take the press that opened it for a click outside.
+#[derive(Clone, Copy)]
+struct Popups {
+    filter: Option<(u32, u32, Pos2)>,
+    list: Option<CellRef>,
+    header: Option<(Pos2, bool)>,
+    fill: Option<(RangeRef, RangeRef, Pos2)>,
+}
+
+impl Popups {
+    fn of(app: &SheetApp) -> Self {
+        Popups { filter: app.grid.filter_menu, list: app.grid.list_picker, header: app.grid.header_menu, fill: app.grid.fill_menu }
+    }
+}
+
+/// Pointer and keyboard input on the grid: selecting, dragging, the keys. Runs before the grid
+/// is painted.
+fn handle_grid_input(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -337,16 +357,31 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }
+}
+
+/// The selection to paint after this frame's input: the one the input left, unless the input
+/// went to another sheet or workbook (a hyperlink), which the next frame paints.
+fn selection_after_input(app: &SheetApp, place: (u64, usize), before: gridcraft_engine::Selection) -> gridcraft_engine::Selection {
+    match app.session.active() {
+        Some(d) if (d.uid, d.wb.active_sheet()) == place => d.selection.clone(),
+        _ => before,
+    }
+}
+
+/// What is drawn over the painted grid: the ink being drawn, the cursor, text boxes, the cell
+/// editor and the grid's popups.
+fn show_grid_overlays(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook, popups: Popups) {
+    paint_ink_preview(app, ui, geo, sh);
     update_cursor(app, ui, resp, geo, sh);
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
     }
-    filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
-    list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
-    header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
+    filter_menu(app, ui, geo, popups.filter == app.grid.filter_menu);
+    list_picker(app, ui, geo, popups.list == app.grid.list_picker);
+    header_menu(app, ui, popups.header == app.grid.header_menu);
     context_menu(app, ui);
-    fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
+    fill_menu(app, ui, popups.fill == app.grid.fill_menu);
     fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);

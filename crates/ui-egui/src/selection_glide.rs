@@ -1,14 +1,17 @@
 //! The selection outline glides to a new selection instead of jumping there, like Excel's cell
-//! cursor: press an arrow key or click a cell and the border slides over in about a tenth of a
-//! second; extend the selection and it grows edge by edge. View ▸ Animations turns it off.
+//! cursor: press an arrow key and the border slides over in under a tenth of a second; extend the
+//! selection and it grows edge by edge. View ▸ Animations turns it off.
 //!
 //! The behaviour comes from using Excel as a user; the duration and the easing curve are an
 //! estimate ([`GLIDE_SECS`]), not yet measured against Excel.
 //!
 //! What glides and what doesn't:
-//! - the selection changed (arrows, Enter, Tab, a click, a drag, Shift+arrows, the Name Box, any
-//!   command): the outline of the current area, its fill and its fill handle glide from wherever
-//!   they are drawn right now, so a held arrow key reads as one continuous motion;
+//! - the selection changed (arrows, Enter, Tab, Shift+arrows, the Name Box, any command): the
+//!   outline of the current area, its fill and its fill handle glide from wherever they are drawn
+//!   right now, so a held arrow key reads as one continuous motion. The first frame drawn after
+//!   the change already shows it on its way;
+//! - the mouse selected (a click, a tap, a drag): it is on its cells at once, as in Excel. The
+//!   grid decides this ([`Frame::animate`]): an outline gliding after the pointer reads as lag;
 //! - the same cells moved on screen (scrolling, zoom, a resized column or window): the outline
 //!   stays glued to its cells;
 //! - another sheet or workbook, an outline that wasn't drawn the frame before, a move that starts
@@ -29,7 +32,11 @@ use egui::{Rect, pos2};
 use gridcraft_engine::core::RangeRef;
 
 /// How long a glide takes, in seconds.
-pub const GLIDE_SECS: f64 = 0.12;
+pub const GLIDE_SECS: f64 = 0.08;
+/// A new glide is drawn as if it had set off one 60 Hz frame earlier: the key was pressed some
+/// time during the frame before, and a first frame showing the outline where it was reads as a
+/// key press that didn't register.
+const HEAD_START_SECS: f64 = 1.0 / 60.0;
 /// How far outside the cell area a glide may start or end (screen points).
 const OFFSCREEN_SLACK: f32 = 48.0;
 
@@ -82,7 +89,7 @@ impl SelectionGlide {
             // A new destination: set off from where the outline is drawn now (mid-glide or at rest).
             let same_sheet = self.last.is_some_and(|(place, _)| place == f.place);
             self.offset = if same_sheet && fresh { offset_between(self.drawn, f.target, f.view) } else { [0.0; 4] };
-            self.started = f.now;
+            self.started = f.now - HEAD_START_SECS;
             self.last = key;
         }
         if !f.animate {
@@ -215,9 +222,10 @@ mod tests {
         let mut r = Rig::new(cell(0, 0), a);
         r.select(cell(2, 1), b);
         let drawn = r.settle(DT);
-        assert_eq!(drawn.first(), Some(&a), "it sets off from where it was");
+        let first = drawn[0];
+        assert!(first.min.x > a.min.x && first.min.x < b.min.x, "the first frame is already on its way: {first:?}");
         assert_eq!(drawn.last(), Some(&b), "and lands exactly on the cells");
-        assert!(drawn.len() > 20, "over about {GLIDE_SECS} s, not in one frame: {} frames", drawn.len());
+        assert!(drawn.len() > 10, "over about {GLIDE_SECS} s, not in one frame: {} frames", drawn.len());
         for w in drawn.windows(2) {
             assert!(w[0].min.x <= w[1].min.x && w[0].min.y <= w[1].min.y, "never backwards or past the cells: {w:?}");
             assert!(w[1].min.x <= b.min.x && w[1].min.y <= b.min.y);
@@ -261,10 +269,11 @@ mod tests {
         r.step(0.0);
         let mid = r.step(GLIDE_SECS / 3.0);
         assert!(mid.min.x > 0.0 && mid.min.x < 64.0);
-        // The next arrow key lands before the first glide is over.
+        // The next arrow key lands before the first glide is over: it carries on from there, a
+        // little further along, without jumping back or ahead.
         r.select(cell(0, 2), at(128.0, 0.0));
         let next = r.step(0.0);
-        assert!(near(next, mid), "no jump when the destination changes: {next:?} vs {mid:?}");
+        assert!(next.min.x > mid.min.x && next.min.x < mid.min.x + 64.0, "no jump when the destination changes: {next:?} vs {mid:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
     }
 
@@ -324,12 +333,13 @@ mod tests {
         let mut r = Rig::new(RangeRef::cols(0, 0), column);
         r.select(cell(3, 0), at(0.0, 48.0));
         let first = r.step(DT);
-        assert_eq!(first.min, column.min);
-        assert_eq!(first.max.y, 64.0 + VIEW.height(), "from the window's height below, not from row 1,048,576");
+        assert!(first.min.x == 0.0 && first.min.y > 0.0 && first.min.y < 48.0, "the near edge on its way: {first:?}");
+        assert!(first.max.y <= 64.0 + VIEW.height() && first.max.y > 64.0, "from the window's height below, not from row 1,048,576: {first:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(0.0, 48.0)));
         // And back: the far edge leaves the same way.
         r.select(RangeRef::cols(0, 0), column);
-        assert_eq!(r.step(DT).max.y, 16_000_000.0 - VIEW.height());
+        let back = r.step(DT).max.y;
+        assert!(back >= 16_000_000.0 - VIEW.height() && back < 16_000_000.0, "{back}");
         assert_eq!(r.settle(DT).last(), Some(&column));
     }
 

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (the selection follows a mouse press at once and is drawn in the frame that changed it; earlier: AutoSum over a selected row puts its total to the right; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -51,7 +51,7 @@ this logic, with one undo step.
 |---|---|
 | Click/drag/Shift/Ctrl selection, multi-area selection | rectangular drag works in one direction only in some cases (#28) |
 | Cursor while dragging cells, headers, freeze handles and objects | stable for the active drag (#936); Draw tools keep their crosshair; header arrows and a custom cell cursor remain unimplemented |
-| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
+| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.08 s, decelerating, already moving in its first frame, with the fill and fill handle; mouse selections (click, tap, drag) are drawn on their cells at once; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series; month patterns use the workbook's 1900 or 1904 date system); right-drag menu partial: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, and from a date Fill Days, Fill Weekdays, Fill Months and Fill Years, then Series…; a left-drag leaves an Auto Fill Options button with the same fill choices (gone once the workbook changes or the selection moves); Linear/Growth Trend and Flash Fill missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
@@ -190,6 +190,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Selecting is quicker to show. A press on a cell selects it at once, as in Excel, instead of on release (egui's click), which held the outline back for as long as the button was down; a press on an object, the fill handle, the move border or a cell's button, Ctrl+press and touch still act as before. The grid handles pointer and keyboard input before it paints, so the outline is drawn in the frame that moved it rather than the next one (a drag's outline trailed the pointer by a frame, ~30–45 ms in a measured drag). A quick click or tap no longer glides; the keyboard glide is 0.08 s instead of 0.12 s and already moving in its first frame |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
