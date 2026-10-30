@@ -8,7 +8,7 @@
 //! and the wrapper hands back the stored answers at once. Calls from elsewhere (automation,
 //! macros) keep waiting for the answer, as before.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use gridcraft_engine::datasource::{DataSource, DbRequest, DbTable, PENDING};
@@ -18,11 +18,20 @@ use crate::SheetApp;
 
 type Answer = Option<Result<DbTable, String>>;
 
+/// A request started in the background. `id` is its own: a worker whose request was cancelled
+/// can't fill the slot of the same request started again.
+struct Job {
+    id: u64,
+    req: DbRequest,
+    /// `None` while the request runs.
+    answer: Answer,
+}
+
 /// The wrapper's shared state.
 #[derive(Clone, Default)]
 pub struct DbJobs {
-    /// Requests started in the background and their answers (`None` while running).
-    jobs: Arc<Mutex<Vec<(DbRequest, Answer)>>>,
+    jobs: Arc<Mutex<Vec<Job>>>,
+    next_id: Arc<AtomicU64>,
     /// Set while the interface runs a database command.
     defer: Arc<AtomicBool>,
 }
@@ -39,24 +48,27 @@ pub struct Waiting {
 impl DbJobs {
     /// Wraps `inner`; `wake` asks for a frame when an answer comes in.
     fn wrap(&self, inner: DataSource, wake: Arc<dyn Fn() + Send + Sync>) -> DataSource {
-        let (jobs, defer) = (self.jobs.clone(), self.defer.clone());
+        let (jobs, next_id, defer) = (self.jobs.clone(), self.next_id.clone(), self.defer.clone());
         Arc::new(move |req: &DbRequest| {
             let mut list = jobs.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some((_, answer)) = list.iter().find(|(r, _)| r == req) {
-                return answer.clone().unwrap_or_else(|| Err(PENDING.to_string()));
+            if let Some(job) = list.iter().find(|j| j.req == *req) {
+                return job.answer.clone().unwrap_or_else(|| Err(PENDING.to_string()));
             }
             if !defer.load(Ordering::SeqCst) {
                 drop(list);
                 return inner(req);
             }
-            list.push((req.clone(), None));
+            let id = next_id.fetch_add(1, Ordering::SeqCst);
+            list.push(Job { id, req: req.clone(), answer: None });
             drop(list);
             let (jobs, inner, wake, req) = (jobs.clone(), inner.clone(), wake.clone(), req.clone());
             std::thread::spawn(move || {
-                let answer = inner(&req);
+                // A driver that panics answers with an error, so the request doesn't wait forever.
+                let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner(&req)))
+                    .unwrap_or_else(|_| Err("The database driver stopped unexpectedly.".to_string()));
                 // A cancelled request is no longer listed: its answer is dropped.
-                if let Some(slot) = jobs.lock().unwrap_or_else(PoisonError::into_inner).iter_mut().find(|(r, _)| *r == req) {
-                    slot.1 = Some(answer);
+                if let Some(job) = jobs.lock().unwrap_or_else(PoisonError::into_inner).iter_mut().find(|j| j.id == id) {
+                    job.answer = Some(answer);
                 }
                 wake();
             });
@@ -66,7 +78,7 @@ impl DbJobs {
 
     /// Some request is still running.
     pub fn busy(&self) -> bool {
-        self.jobs.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|(_, a)| a.is_none())
+        self.jobs.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|j| j.answer.is_none())
     }
 
     /// Forgets every request and answer (the command that used them finished, or was cancelled).
@@ -224,6 +236,61 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         app.poll_db();
         assert_eq!(app.session.active().unwrap().undo.len(), undo);
+    }
+
+    #[test]
+    fn a_panicking_driver_answers_with_an_error() {
+        let mut session = Session::new();
+        session.new_workbook();
+        #[allow(clippy::panic)]
+        let source: DataSource = Arc::new(|_: &DbRequest| panic!("driver bug"));
+        session.data_source = Some(source);
+        let mut app = SheetApp::new(session, Services::default());
+        app.install_db_jobs(&egui::Context::default());
+        let p = json!({"driver": "sqlite", "connection": "/x.db", "query": "q"});
+        assert!(app.run_db("data.fromDatabase", p.clone()).is_none());
+        for _ in 0..200 {
+            if !app.db_running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let r = app.run_db("data.fromDatabase", p).expect("answered");
+        assert!(r.is_err_and(|e| e.contains("stopped unexpectedly")));
+    }
+
+    #[test]
+    fn a_cancelled_worker_cannot_fill_a_new_request() {
+        let jobs = DbJobs::default();
+        let calls = Arc::new(AtomicU64::new(0));
+        let n = calls.clone();
+        // The first answer is slow and stale; the second is quick.
+        let inner: DataSource = Arc::new(move |_: &DbRequest| {
+            let k = n.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(if k == 0 { 150 } else { 10 }));
+            Ok(DbTable { columns: vec![format!("answer{k}")], rows: vec![], truncated: false })
+        });
+        let source = jobs.wrap(inner, Arc::new(|| {}));
+        let req = DbRequest {
+            driver: "sqlite".into(),
+            connection: "/x.db".into(),
+            password: None,
+            user: None,
+            query: "q".into(),
+            max_rows: 10,
+            timeout_secs: 5,
+            op: Default::default(),
+        };
+        jobs.defer.store(true, Ordering::SeqCst);
+        assert!(source(&req).is_err());
+        jobs.clear();
+        assert!(source(&req).is_err());
+        while jobs.busy() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Wait for the stale worker too, then check it changed nothing.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(source(&req).map(|t| t.columns), Ok(vec!["answer1".to_string()]));
     }
 
     #[test]

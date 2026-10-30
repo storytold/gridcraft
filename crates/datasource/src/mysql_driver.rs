@@ -44,12 +44,28 @@ fn split_ssl_mode(url: &str) -> Result<(String, Option<SslMode>), String> {
     Ok((if kept.is_empty() { base.to_string() } else { format!("{base}?{}", kept.join("&")) }, mode))
 }
 
+/// The TLS options of a connection, and whether it may fall back to an unencrypted session.
+/// Without an `ssl-mode`, TLS options written into the URL (`root_cert_path`,
+/// `danger_accept_invalid_certs=false`…) are used as written, so their certificate checks hold;
+/// with neither, the mode is PREFERRED.
+fn tls_opts(mode: Option<SslMode>, from_url: Option<SslOpts>) -> (Option<SslOpts>, bool) {
+    let mode = match (mode, from_url) {
+        (None, Some(given)) => return (Some(given), false),
+        (mode, given) => (mode.unwrap_or(SslMode::Preferred), given.unwrap_or_default()),
+    };
+    match mode {
+        (SslMode::Disabled, _) => (None, false),
+        (SslMode::Preferred, given) => (Some(given.with_danger_accept_invalid_certs(true)), true),
+        (SslMode::Required, given) => (Some(given.with_danger_accept_invalid_certs(true)), false),
+        (SslMode::VerifyCa, given) => (Some(given.with_danger_skip_domain_validation(true)), false),
+        (SslMode::VerifyIdentity, given) => (Some(given), false),
+    }
+}
+
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let (url, mode) = split_ssl_mode(&req.connection)?;
     let opts = Opts::from_url(&url).map_err(|e| format!("Invalid MySQL connection URL: {e}"))?;
-    // TLS options written into the URL (`root_cert_path`, `danger_…`) require TLS, as before.
-    let mode = mode.unwrap_or(if opts.get_ssl_opts().is_some() { SslMode::Required } else { SslMode::Preferred });
-    let given = opts.get_ssl_opts().cloned().unwrap_or_default();
+    let (tls, fallback) = tls_opts(mode, opts.get_ssl_opts().cloned());
     let timeout = Some(Duration::from_secs(req.timeout_secs));
     let mut b = OptsBuilder::from_opts(opts).tcp_connect_timeout(timeout).read_timeout(timeout).write_timeout(timeout);
     if let Some(u) = &req.user {
@@ -58,15 +74,9 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     if let Some(p) = &req.password {
         b = b.pass(Some(p.as_str()));
     }
-    let tls = match mode {
-        SslMode::Disabled => None,
-        SslMode::Preferred | SslMode::Required => Some(given.with_danger_accept_invalid_certs(true)),
-        SslMode::VerifyCa => Some(given.with_danger_skip_domain_validation(true)),
-        SslMode::VerifyIdentity => Some(given),
-    };
     let mut conn = match Conn::new(b.clone().ssl_opts(tls)) {
         // PREFERRED falls back to an unencrypted session only when the server has no TLS at all.
-        Err(mysql::Error::DriverError(DriverError::TlsNotSupported)) if mode == SslMode::Preferred => Conn::new(b.ssl_opts(None::<SslOpts>)),
+        Err(mysql::Error::DriverError(DriverError::TlsNotSupported)) if fallback => Conn::new(b.ssl_opts(None::<SslOpts>)),
         r => r,
     }
     .map_err(|e| format!("Could not connect to MySQL: {e}"))?;
@@ -153,6 +163,21 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_tls_options_keep_their_certificate_checks() {
+        // `root_cert_path` without `ssl-mode`: TLS required, the certificate checked.
+        let opts = Opts::from_url("mysql://u@h/db?root_cert_path=/etc/ca.pem").unwrap();
+        let (tls, fallback) = tls_opts(None, opts.get_ssl_opts().cloned());
+        assert!(tls.is_some_and(|t| !t.accept_invalid_certs()) && !fallback);
+        // An explicit mode still decides.
+        let (tls, _) = tls_opts(Some(SslMode::Required), opts.get_ssl_opts().cloned());
+        assert!(tls.is_some_and(|t| t.accept_invalid_certs()));
+        // Neither: PREFERRED, which may fall back.
+        let (tls, fallback) = tls_opts(None, None);
+        assert!(tls.is_some() && fallback);
+        assert_eq!(tls_opts(Some(SslMode::Disabled), None), (None, false));
+    }
 
     #[test]
     fn ssl_mode_is_read_and_removed() {
