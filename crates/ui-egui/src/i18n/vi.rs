@@ -350,6 +350,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Lưu thành",
         "Export" => "Xuất",
         "Close" => "Đóng",
+        "Minimize" => "Thu nhỏ",
+        "Maximize" => "Phóng to",
+        "Restore" => "Khôi phục",
+        "Use system title bar" => "Dùng thanh tiêu đề của hệ thống",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Hiển thị một thanh tiêu đề đơn giản chứa các nút cửa sổ phía trên thanh tiêu đề của GridCraft. GNOME không vẽ thanh tiêu đề cho ứng dụng nên thanh này không theo chủ đề của GNOME."
+        }
         "Options" => "Tùy chọn",
         "Blank workbook" => "Sổ làm việc trống",
         "Recent" => "Gần đây",

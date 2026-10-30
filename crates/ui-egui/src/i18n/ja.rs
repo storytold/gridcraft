@@ -1151,6 +1151,14 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
+    ("Minimize", "最小化"),
+    ("Maximize", "最大化"),
+    ("Restore", "元に戻す (縮小)"),
+    ("Use system title bar", "システムのタイトル バーを使う"),
+    (
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.",
+        "GridCraft のタイトル バーの上に、ウィンドウ ボタン付きの基本的なタイトル バーを表示します。GNOME はアプリのタイトル バーを描画しないため、このバーはテーマに従いません。",
+    ),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

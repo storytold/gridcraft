@@ -990,6 +990,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Gravando",
         "New Macro" => "Nova Macro",
         "Show" => "Mostrar",
+        "Minimize" => "Minimizar",
+        "Maximize" => "Maximizar",
+        "Restore" => "Restaurar",
+        "Use system title bar" => "Usar a barra de título do sistema",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Mostra uma barra de título simples para os botões da janela acima da do GridCraft. O GNOME não desenha barras de título para os aplicativos, então esta não segue o tema dele."
+        }
         _ => return None,
     })
 }

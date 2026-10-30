@@ -345,6 +345,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Зберегти як",
         "Export" => "Експорт",
         "Close" => "Закрити",
+        "Minimize" => "Згорнути",
+        "Maximize" => "Розгорнути",
+        "Restore" => "Відновити",
+        "Use system title bar" => "Використовувати системний заголовок вікна",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Показувати простий заголовок вікна з кнопками вікна над заголовком GridCraft. GNOME не малює заголовки для програм, тому цей заголовок не відповідає його темі."
+        }
         "Options" => "Параметри",
         "Blank workbook" => "Порожня книга",
         "Recent" => "Останні",

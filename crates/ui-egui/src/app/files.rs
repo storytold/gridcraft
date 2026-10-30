@@ -124,4 +124,29 @@ impl SheetApp {
     pub fn toggle_autosave(&mut self) {
         self.ui.autosave = !self.ui.autosave;
     }
+
+    /// Whether the app draws the window's title-bar buttons and resize edges: the desktop leaves
+    /// the frame to the app and Use system title bar is off.
+    pub fn draws_window_frame(&self) -> bool {
+        self.window_controls.is_some() && !self.ui.system_title_bar
+    }
+
+    /// Follow Use system title bar at once in every window: each opens without winit's frame
+    /// wherever the app may draw its own (see the desktop app's `main`), and gets it back (or
+    /// loses it again) when the preference changes.
+    pub(crate) fn sync_window_frame(&mut self, ctx: &egui::Context) {
+        if self.window_controls.is_none() {
+            return;
+        }
+        let app_frame = self.draws_window_frame();
+        // Every window opens with the frame the preference gave at launch (the root window's
+        // builder, which later windows copy), even one opened after the preference changed. The
+        // first call is the root window's first frame, so it records that frame.
+        let opened_with = *self.window_frame_at_launch.get_or_insert(app_frame);
+        let shown = self.app_frame_shown.get(&ctx.viewport_id()).copied().unwrap_or(opened_with);
+        if shown != app_frame {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
+        }
+        self.app_frame_shown.insert(ctx.viewport_id(), app_frame);
+    }
 }

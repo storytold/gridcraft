@@ -18,16 +18,26 @@ thread_local! {
     static INFOS: RefCell<egui::ViewportIdMap<ViewportInfo>> = RefCell::new(egui::ViewportIdMap::default());
     /// The viewport commands the app sent this frame.
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
+    /// Each viewport's builder as last drawn (how its native window is created).
+    static BUILT: RefCell<egui::ViewportIdMap<egui::ViewportBuilder>> = RefCell::new(egui::ViewportIdMap::default());
+    /// Each viewport's pointer events for the next frame.
+    static EVENTS: RefCell<egui::ViewportIdMap<Vec<egui::Event>>> = RefCell::new(egui::ViewportIdMap::default());
+    /// Each viewport's accessibility tree as last drawn, to find a widget to click.
+    static TREES: RefCell<egui::ViewportIdMap<egui::accesskit::TreeUpdate>> = RefCell::new(egui::ViewportIdMap::default());
 }
 
-fn record(mut out: egui::FullOutput) {
+fn record(id: ViewportId, mut out: egui::FullOutput) {
     out.textures_delta.clear(); // not painted
+    if let Some(tree) = out.platform_output.accesskit_update.take() {
+        TREES.with(|t| t.borrow_mut().insert(id, tree));
+    }
     SENT.with(|s| {
         let mut s = s.borrow_mut();
         for (id, v) in &out.viewport_output {
             s.extend(v.commands.iter().map(|c| (*id, c.clone())));
         }
     });
+    BUILT.with(|b| b.borrow_mut().extend(out.viewport_output.iter().map(|(id, v)| (*id, v.builder.clone()))));
 }
 
 struct Desk {
@@ -38,20 +48,31 @@ struct Desk {
 
 impl Desk {
     fn new(quit_with_last_window: bool) -> Desk {
+        Desk::with_window_controls(quit_with_last_window, None)
+    }
+
+    /// `controls`: the title bar carries these window buttons, as on GNOME's Wayland session.
+    fn with_window_controls(quit_with_last_window: bool, controls: Option<gridcraft_ui_egui::window_controls::Layout>) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
+        BUILT.with(|b| b.borrow_mut().clear());
+        EVENTS.with(|e| e.borrow_mut().clear());
+        TREES.with(|t| t.borrow_mut().clear());
         let ctx = Context::default();
+        ctx.enable_accesskit();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
             let id = viewport.ids.this;
             let mut input = RawInput { viewport_id: id, ..RawInput::default() };
             input.viewports = INFOS.with(|i| i.borrow().clone());
             input.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
+            input.events = EVENTS.with(|e| e.borrow_mut().remove(&id).unwrap_or_default());
             let mut cb = viewport.viewport_ui_cb;
-            record(ctx.run_ui(input, |ui| cb(ui)));
+            record(id, ctx.run_ui(input, |ui| cb(ui)));
         });
         let mut session = Session::new();
         session.new_workbook();
         let mut app = SheetApp::new(session, Default::default());
+        app.window_controls = controls;
         let windows = DocWindows::new(&mut app, egui::ViewportBuilder::default(), quit_with_last_window);
         let mut desk = Desk { ctx, app, windows };
         desk.frames(3);
@@ -76,7 +97,7 @@ impl Desk {
             windows.logic(app, &ctx);
             windows.show(app, ui);
         });
-        record(out);
+        record(ViewportId::ROOT, out);
         // Close buttons are one-shot events.
         INFOS.with(|i| i.borrow_mut().values_mut().for_each(|v| v.events.clear()));
         SENT.with(|s| s.borrow().clone())
@@ -96,6 +117,26 @@ impl Desk {
         INFOS.with(|i| i.borrow_mut().entry(vp).or_default().events.push(ViewportEvent::Close));
         let mut sent = self.frame_with(|_, _| {});
         sent.extend(self.frames(2));
+        sent
+    }
+
+    /// The user clicks the button labelled `label` in window `window`, as drawn in its last frame.
+    fn click(&mut self, window: u64, label: &str) -> Vec<(ViewportId, ViewportCommand)> {
+        use egui::accesskit::Role;
+        let vp = self.viewport(window);
+        let bounds = TREES.with(|t| {
+            let t = t.borrow();
+            let tree = t.get(&vp).unwrap_or_else(|| panic!("window {window} drew no accessibility tree"));
+            tree.nodes.iter().find(|(_, n)| n.role() == Role::Button && n.label() == Some(label)).and_then(|(_, n)| n.bounds())
+        });
+        let b = bounds.unwrap_or_else(|| panic!("window {window} has no {label} button"));
+        let pos = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut sent = vec![];
+        for event in [egui::Event::PointerMoved(pos), button(true), button(false)] {
+            EVENTS.with(|e| e.borrow_mut().entry(vp).or_default().push(event));
+            sent.extend(self.frame_with(|_, _| {}));
+        }
         sent
     }
 
@@ -419,4 +460,62 @@ fn arrange_all_lays_out_the_native_windows_active_first() {
     let tiled = gridcraft_ui_egui::doc_windows::arrange_rects("tiled", 3, craft_window::Rect::new(0.0, 0.0, 1000.0, 800.0));
     let r = |x, y, w, h| craft_window::Rect::new(x, y, w, h);
     assert_eq!(tiled, [r(0.0, 0.0, 500.0, 400.0), r(500.0, 0.0, 500.0, 400.0), r(0.0, 400.0, 1000.0, 400.0)]);
+}
+
+/// GNOME on Wayland: GridCraft draws the window buttons, so every window opens without winit's
+/// frame, as the first does; it showed both sets of buttons. Use system title bar gives every
+/// window its frame back, one opened after the change too.
+#[test]
+fn every_window_follows_the_app_drawn_frame_and_use_system_title_bar() {
+    let decorated = |vp: ViewportId| BUILT.with(|b| b.borrow().get(&vp).and_then(|v| v.decorations));
+    let mut desk = Desk::with_window_controls(true, Some(gridcraft_ui_egui::window_controls::Layout::default()));
+    desk.app.run("file.new", json!({})).unwrap();
+    let sent = desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    let second = desk.viewport(w2);
+    assert_ne!(desk.viewport(w1), second, "the second workbook has a native window");
+    assert_eq!(decorated(second), Some(false), "the second window opens without winit's frame");
+    assert!(!sent.iter().any(|(_, c)| matches!(c, ViewportCommand::Decorations(_))), "windows already have the right frame");
+
+    desk.app.run("view.systemTitleBar", json!({"on": true})).unwrap();
+    let sent = desk.frames(3);
+    for w in [w1, w2] {
+        assert!(sent_to(&sent, desk.viewport(w), &ViewportCommand::Decorations(true)), "window {w} gets its frame back");
+    }
+
+    desk.app.run("file.new", json!({})).unwrap();
+    let sent = desk.frames(3);
+    let third = desk.viewport(desk.window_of(2));
+    assert_eq!(decorated(third), Some(false), "a new window is built as at launch");
+    assert!(sent_to(&sent, third, &ViewportCommand::Decorations(true)), "and then given its frame");
+    assert!(!sent_to(&sent, second, &ViewportCommand::Decorations(true)), "the others are asked only once");
+}
+
+/// GNOME on Wayland: the Close button GridCraft draws in a second window's title bar closes that
+/// window as the desktop's close button would. Its unsaved workbook is asked about in that window
+/// and the app keeps running.
+#[test]
+fn the_drawn_close_button_closes_its_own_window_and_asks_first() {
+    let mut desk = Desk::with_window_controls(true, Some(gridcraft_ui_egui::window_controls::Layout::default()));
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    assert_eq!(desk.windows.root_window(), Some(w1));
+
+    let sent = desk.click(w2, "Close");
+    assert!(sent_to(&sent, desk.viewport(w2), &ViewportCommand::Close), "the button asks its own window to close: {sent:?}");
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    // egui-winit turns a window's Close command into that window's close event, as the desktop's
+    // close button does (`process_viewport_command`).
+    let sent = desk.close(w2);
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "Book2 is unsaved: it asks");
+    assert_eq!(desk.app.session.active_window(), Some(w2), "in Book2's window");
+    assert_eq!(desk.app.session.documents().len(), 2);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+
+    let sent = desk.answer(SaveAnswer::DontSave);
+    assert_eq!(desk.app.session.documents().len(), 1, "Book2 closes");
+    assert_eq!(desk.windows.shown_windows(), [w1], "and its window with it");
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "the app keeps running: {sent:?}");
 }

@@ -341,6 +341,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Zapisz jako",
         "Export" => "Eksportuj",
         "Close" => "Zamknij",
+        "Minimize" => "Minimalizuj",
+        "Maximize" => "Maksymalizuj",
+        "Restore" => "Przywróć",
+        "Use system title bar" => "Użyj systemowego paska tytułu",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Pokazuje prosty pasek tytułu z przyciskami okna nad paskiem GridCraft. GNOME nie rysuje pasków tytułu dla aplikacji, więc ten pasek nie korzysta z jego motywu."
+        }
         "Options" => "Opcje",
         "Blank workbook" => "Pusty skoroszyt",
         "Recent" => "Ostatnie",

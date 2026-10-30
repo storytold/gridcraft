@@ -170,6 +170,10 @@ impl SheetApp {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
             }
+            "view.systemTitleBar" => {
+                self.ui.system_title_bar = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.system_title_bar);
+                Ok(json!({"on": self.ui.system_title_bar, "appDrawsFrame": self.draws_window_frame()}))
+            }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
                 let percent = match p.get("percent") {

@@ -260,6 +260,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Farklı Kaydet",
         "Export" => "Dışarı Aktar",
         "Close" => "Kapat",
+        "Minimize" => "Simge Durumuna Küçült",
+        "Maximize" => "Ekranı Kapla",
+        "Restore" => "Önceki Boyut",
+        "Use system title bar" => "Sistem başlık çubuğunu kullan",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Pencere düğmeleri için GridCraft'ın kendi başlık çubuğunun üstünde basit bir başlık çubuğu gösterir. GNOME uygulamalar için başlık çubuğu çizmez, bu nedenle bu çubuk onun temasını izlemez."
+        }
         "Options" => "Seçenekler",
         "Blank workbook" => "Boş çalışma kitabı",
         "Recent" => "Son Kullanılanlar",

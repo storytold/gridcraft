@@ -345,6 +345,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Opslaan als",
         "Export" => "Exporteren",
         "Close" => "Sluiten",
+        "Minimize" => "Minimaliseren",
+        "Maximize" => "Maximaliseren",
+        "Restore" => "Herstellen",
+        "Use system title bar" => "Systeemtitelbalk gebruiken",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Toont een eenvoudige titelbalk voor de vensterknoppen boven die van GridCraft. GNOME tekent geen titelbalken voor apps, dus deze volgt het thema niet."
+        }
         "Options" => "Opties",
         "Blank workbook" => "Lege werkmap",
         "Recent" => "Recent",

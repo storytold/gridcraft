@@ -254,6 +254,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Αποθήκευση ως",
         "Export" => "Εξαγωγή",
         "Close" => "Κλείσιμο",
+        "Minimize" => "Ελαχιστοποίηση",
+        "Maximize" => "Μεγιστοποίηση",
+        "Restore" => "Επαναφορά",
+        "Use system title bar" => "Χρήση γραμμής τίτλου συστήματος",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Εμφανίζει μια απλή γραμμή τίτλου για τα κουμπιά του παραθύρου πάνω από τη γραμμή τίτλου του GridCraft. Το GNOME δεν σχεδιάζει γραμμές τίτλου για τις εφαρμογές, γι' αυτό αυτή δεν ακολουθεί το θέμα του."
+        }
         "Options" => "Επιλογές",
         "Blank workbook" => "Κενό βιβλίο εργασίας",
         "Recent" => "Πρόσφατα",

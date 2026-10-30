@@ -348,6 +348,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Salvare ca",
         "Export" => "Exportare",
         "Close" => "Închidere",
+        "Minimize" => "Minimizare",
+        "Maximize" => "Maximizare",
+        "Restore" => "Restabilire",
+        "Use system title bar" => "Utilizare bară de titlu a sistemului",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Afișează o bară de titlu simplă pentru butoanele ferestrei deasupra celei din GridCraft. GNOME nu desenează bare de titlu pentru aplicații, așa că aceasta nu urmează tema sa."
+        }
         "Options" => "Opțiuni",
         "Blank workbook" => "Registru gol",
         "Recent" => "Recente",

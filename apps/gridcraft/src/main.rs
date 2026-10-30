@@ -12,6 +12,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod decorations;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -334,6 +335,12 @@ fn main() -> eframe::Result<()> {
         .with_drag_and_drop(true);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    // GNOME on Wayland leaves the window frame to the app (decorations.rs): the title bar carries
+    // the window buttons instead.
+    app.window_controls = decorations::app_drawn();
+    if app.draws_window_frame() {
+        viewport = viewport.with_decorations(false);
     }
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
