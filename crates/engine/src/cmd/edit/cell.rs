@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use gridcraft_model::FileFunctionPrefix;
+
 use super::{
     Cell, CellRef, EngineError, Formula, Json, MAX_ROWS, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json,
     locked_cell_error, str_param, target_range, target_ranges, target_sheet,
@@ -25,9 +29,31 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
+        let explicit_prefixes = explicit_function_prefixes(body);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
-        let mut cell = Cell::formula(Formula::from_expr(expr));
+        let mut formula = match wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()) {
+            Some(previous) => previous.rewrite_input_expr(expr),
+            None => Formula::from_expr(expr),
+        };
+        if let Some(mut prefixes) = explicit_prefixes {
+            // File-only operator calls can disappear during parsing. Never attach their
+            // occurrence metadata to another call when the parsed count no longer matches.
+            let mut counts = BTreeMap::new();
+            if let Some(expr) = formula.expr_arc() {
+                expr.walk(&mut |node| {
+                    if let gridcraft_formula::Expr::Call(name, _) = node {
+                        let count = counts.entry(name.to_ascii_uppercase()).or_insert(0usize);
+                        *count = count.saturating_add(1);
+                    }
+                });
+            }
+            prefixes.retain(|name, sequence| sequence.iter().any(Option::is_some) && counts.get(name) == Some(&sequence.len()));
+            // Only explicitly marked function groups override inheritance. Other functions
+            // keep imported spellings or their canonical XLSX namespaces.
+            formula.file_functions.extend(prefixes);
+        }
+        let mut cell = Cell::formula(formula);
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
         if wb.styles.get(style).num_fmt.as_str() == "General" {
@@ -75,6 +101,33 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
     Ok(Some(Cell { value: parsed.value, formula: None, style }))
+}
+
+/// Preserve explicit editor spellings before parsing normalizes them. Only function tokens
+/// count: namespace-looking strings, references and local declaration names are ordinary data.
+/// `None` lets unprefixed argument edits inherit the imported occurrence metadata as before.
+fn explicit_function_prefixes(body: &str) -> Option<BTreeMap<String, Vec<Option<FileFunctionPrefix>>>> {
+    if body.len() > gridcraft_formula::MAX_FORMULA_LEN || !body.as_bytes().windows(6).any(|part| part.eq_ignore_ascii_case(b"_xlfn.")) {
+        return None;
+    }
+    let tokens = gridcraft_formula::lexer::tokenize(body).ok()?;
+    let mut calls: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
+    let mut explicit = false;
+    for token in tokens {
+        let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
+        let upper = raw.to_ascii_uppercase();
+        let prefix = if upper.starts_with("_XLFN._XLWS.") {
+            Some(FileFunctionPrefix::XlfnXlws)
+        } else if upper.starts_with("_XLFN.") {
+            Some(FileFunctionPrefix::Xlfn)
+        } else {
+            None
+        };
+        explicit |= prefix.is_some();
+        let name = gridcraft_formula::normalize_function_name(&raw).to_ascii_uppercase();
+        calls.entry(name).or_default().push(prefix);
+    }
+    explicit.then_some(calls)
 }
 
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
@@ -248,15 +301,16 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count}))
 }
 
+/// Fill a range with adjusted formulas while retaining imported call namespaces.
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        // Each cell gets what typing the input there gives: the automatic number format where
-        // it's General, its own format otherwise, text where it's Text. That depends only on
-        // the cell's style, so the input is parsed once per style.
+        // Automatic number formatting and Text input depend only on the destination style.
+        // Formula input also preserves a destination's imported namespaces: parse those cells
+        // independently, without reading or populating the shared style cache.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
             if r.count() > 2_000_000 {
@@ -264,12 +318,18 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
             }
             for at in r.iter() {
                 let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
-                let base = match by_style.get(&style) {
-                    Some(c) => c.clone(),
-                    None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
-                        by_style.insert(style, c.clone());
-                        c
+                let has_imported_namespaces =
+                    cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()).is_some_and(|f| !f.file_functions.is_empty());
+                let base = if has_imported_namespaces {
+                    input_to_cell(&input, sheet, at, &mut cx.wb)?
+                } else {
+                    match by_style.get(&style) {
+                        Some(c) => c.clone(),
+                        None => {
+                            let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                            by_style.insert(style, c.clone());
+                            c
+                        }
                     }
                 };
                 let mut cell = base.unwrap_or_default();
@@ -277,7 +337,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewrite_expr(shifted)));
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 sh.set_cell(at, cell);

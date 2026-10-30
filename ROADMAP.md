@@ -244,6 +244,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |

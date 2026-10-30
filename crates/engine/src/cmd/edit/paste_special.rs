@@ -8,6 +8,7 @@ fn tiled_cells(rows: u32, cols: u32, tiles_r: u32, tiles_c: u32) -> impl Iterato
     (0..tiles_r).flat_map(move |tr| (0..tiles_c).flat_map(move |tc| (0..rows).flat_map(move |r| (0..cols).map(move |c| (tr, tc, r, c)))))
 }
 
+/// Apply arithmetic paste operations without losing the original formula call namespaces.
 fn apply_operation(op: &str, old: &Cell, new: &mut Cell) {
     let operand = new.value.clone();
     if let (Ok(x), Ok(y)) = (old.value.to_number(), operand.to_number())
@@ -31,7 +32,9 @@ fn apply_operation(op: &str, old: &Cell, new: &mut Cell) {
         && let Some(symbol) = operation_symbol(op)
     {
         let text = format!("=({}){symbol}{}", formula.text, gridcraft_core::number_to_text(y));
-        new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
+        let mut rewritten = Formula::new(&text);
+        rewritten.file_functions = formula.file_functions.clone();
+        new.formula = Some(std::sync::Arc::new(rewritten));
         new.value = Value::Empty;
     }
 }
@@ -72,6 +75,7 @@ fn copy_merges(
     Ok(())
 }
 
+/// Paste the requested cell components, shifting formula references and preserving file namespaces.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -176,7 +180,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     } else {
                         e
                     };
-                    let mut moved = Formula::from_expr(e);
+                    let mut moved = f.rewrite_expr(e);
                     // The array range moves with its formula.
                     let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                     moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
@@ -184,7 +188,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     return Some(std::sync::Arc::new(moved));
                 }
                 let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..f.rewrite_expr(moved) }))
             };
             if link {
                 let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
@@ -341,7 +345,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             if (text != f.text || array != f.array)
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
-                let mut nf = Formula::from_expr(new);
+                let mut nf = f.rewrite_expr(new);
                 nf.array = array;
                 nf.dynamic = f.dynamic;
                 cell.formula = Some(std::sync::Arc::new(nf));

@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
@@ -29,8 +28,7 @@ use rules::{read_cf, read_validation};
 
 struct Shared {
     anchor: CellRef,
-    expr: Option<Expr>,
-    text: String,
+    formula: Formula,
 }
 
 #[derive(Default)]
@@ -533,28 +531,28 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
     read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
 }
 
+/// Read ordinary, shared and array formulas with the source function namespace metadata.
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    let model = from_file(f.text.trim());
-    let text = model.as_str();
+    let formula = crate::fmla::cell_from_file(f.text.trim());
+    let text = formula.text.as_str();
     match f.attr("t").unwrap_or("normal") {
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
-                let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
-                Some(Formula::new(text))
+                st.shared.insert(si, Shared { anchor: pos, formula: formula.clone() });
+                Some(formula)
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
-                Some(match &sh.expr {
+                Some(match sh.formula.expr() {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
                         let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
+                        sh.formula.rewrite_expr(gridcraft_formula::adjust::shift_relative(e, dr, dc))
                     }
-                    None => Formula::new(&sh.text),
+                    None => sh.formula.clone(),
                 })
             }
         }
@@ -562,7 +560,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 return None;
             }
-            let mut fm = Formula::new(text);
+            let mut fm = formula;
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 push_dynamic(st, range);
@@ -580,7 +578,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 None
             } else {
-                Some(Formula::new(text))
+                Some(formula)
             }
         }
     }

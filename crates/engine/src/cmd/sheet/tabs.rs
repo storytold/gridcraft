@@ -36,6 +36,7 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     crate::cmd::commit(d, f)
 }
 
+/// Remove a worksheet and adjust its references while preserving formula call namespaces.
 pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -58,7 +59,7 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 if let Some(e) = f.expr() {
                     let ne = gridcraft_formula::adjust::delete_sheet(e, &name, &order);
                     if let Some(cell) = sh.cells.get_mut(c) {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        cell.formula = Some(Arc::new(f.rewrite_expr(ne)));
                     }
                 }
             }
@@ -91,6 +92,7 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     ok()
 }
 
+/// Rename a worksheet and its references while preserving formula call namespaces.
 pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
@@ -112,7 +114,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     if text != f.text
                         && let Some(cell) = sh.cells.get_mut(c)
                     {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        cell.formula = Some(Arc::new(f.rewrite_expr(ne)));
                     }
                 }
             }

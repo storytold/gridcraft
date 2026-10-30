@@ -1,6 +1,6 @@
 use super::{
-    Anchor, AnchorMode, Arc, Cell, CellRef, Comment, EngineError, Formula, Hyperlink, Json, LineInfo, Ordering, RangeRef, Result, Session, Sheet,
-    Value, bad, bool_param, col_param, data_range, edit, guess_header, json, ok, sort_compare, split_sheet, str_param, target_sheet,
+    Anchor, AnchorMode, Arc, Cell, CellRef, Comment, EngineError, Hyperlink, Json, LineInfo, Ordering, RangeRef, Result, Session, Sheet, Value, bad,
+    bool_param, col_param, data_range, edit, guess_header, json, ok, sort_compare, split_sheet, str_param, target_sheet,
 };
 
 #[derive(Clone)]
@@ -77,6 +77,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     do_sort(s, sheet, r, header, keys, by_cols, case)
 }
 
+/// Sort rows while shifting formulas and retaining their imported call namespaces.
 fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<SortKey>, by_cols: bool, case: bool) -> Result<Json> {
     // Protect Sheet ▸ Sort. Both Sort… and the A-to-Z buttons come through here.
     crate::cmd::refuse_unless_allowed(s, sheet, "Sorting", |p| p.sort)?;
@@ -169,7 +170,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
-                    c.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                    c.formula = Some(Arc::new(f.rewrite_expr(shifted)));
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
