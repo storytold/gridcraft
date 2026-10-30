@@ -1081,6 +1081,48 @@ fn sort_and_filter() {
     assert_eq!(r["hiddenRows"], 1);
 }
 
+/// Delete and the Clear commands on a filtered selection clear only the rows showing, as in
+/// Excel (#1419); rows hidden by hand are cleared with the rest.
+#[test]
+fn clearing_a_filtered_selection_leaves_the_rows_the_filter_hides() {
+    let mut s = s();
+    let rows = [["Name", "Status"], ["John", "Active"], ["Mary", "Inactive"], ["David", "Active"], ["Sarah", "Inactive"], ["Michael", "Active"]];
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("home.bold", json!({"range": "A2:A6", "on": true})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A3", "text": "note", "author": "Example"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["Active"]})).unwrap();
+    let bold = |s: &Session, a: &str| {
+        let d = s.doc().unwrap();
+        d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::parse(a).unwrap())).font.bold
+    };
+
+    s.execute("edit.clearContents", json!({"range": "A2:A6"})).unwrap();
+    for a in ["A2", "A4", "A6"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} shows and is cleared");
+    }
+    assert_eq!(v(&s, "A3"), Value::from("Mary"));
+    assert_eq!(v(&s, "A5"), Value::from("Sarah"));
+
+    s.execute("edit.clearFormats", json!({"range": "A2:A6"})).unwrap();
+    assert!(!bold(&s, "A2"));
+    assert!(bold(&s, "A3"), "a filtered-out row keeps its format");
+
+    s.execute("edit.clearAll", json!({"range": "A2:B6"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Empty);
+    assert_eq!(v(&s, "B3"), Value::from("Inactive"));
+    assert_eq!(v(&s, "A5"), Value::from("Sarah"));
+    assert!(s.doc().unwrap().wb.active().unwrap().comments.contains_key(&CellRef::parse("A3").unwrap()));
+
+    // Without the filter, a row hidden by hand is cleared like the rows around it.
+    s.execute("data.clearFilter", json!({})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "5:5"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "A3:A5"})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Empty);
+    assert_eq!(v(&s, "A5"), Value::Empty);
+}
+
 /// Top 10 keeps the top or bottom N items or percent, ties at the threshold included.
 #[test]
 fn filter_top10_items_and_percent() {
@@ -2834,6 +2876,24 @@ fn checkboxes_keep_values_toggle_and_delete_in_two_passes() {
     s.execute("edit.clearFormats", json!({"range": "B2"})).unwrap();
     assert_eq!(v(&s, "B2"), Value::Bool(true));
     assert_ne!(fmt_of(&s, "B2"), "checkbox");
+}
+
+/// A checked box in a row the filter hides doesn't hold back Delete on the boxes showing, and
+/// stays as it is (#1419).
+#[test]
+fn delete_on_filtered_checkboxes_skips_the_hidden_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Status"], ["on"], ["off"], ["on"]]})).unwrap();
+    s.execute("insert.checkbox", json!({"range": "B2:B4"})).unwrap();
+    s.execute("cell.toggleCheckbox", json!({"cell": "B3"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["on"]})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "B2:B4"})).unwrap();
+    assert_ne!(fmt_of(&s, "B2"), "checkbox", "the unchecked boxes showing are removed at once");
+    assert_ne!(fmt_of(&s, "B4"), "checkbox");
+    assert_eq!(fmt_of(&s, "B3"), "checkbox");
+    assert_eq!(v(&s, "B3"), Value::Bool(true));
 }
 
 #[test]
