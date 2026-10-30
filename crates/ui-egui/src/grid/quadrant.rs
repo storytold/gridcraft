@@ -298,8 +298,20 @@ fn localized_cell_text(text: String, v: &Value, sh: &Sheet, wb: &Workbook, si: u
         && !text.is_empty()
     {
         match locale {
-            gridcraft_engine::formula::FormulaLocale::Tr => if *b { "DOĞRU".into() } else { "YANLIŞ".into() },
-            gridcraft_engine::formula::FormulaLocale::Es => if *b { "VERDADERO".into() } else { "FALSO".into() },
+            gridcraft_engine::formula::FormulaLocale::Tr => {
+                if *b {
+                    "DOĞRU".into()
+                } else {
+                    "YANLIŞ".into()
+                }
+            }
+            gridcraft_engine::formula::FormulaLocale::Es => {
+                if *b {
+                    "VERDADERO".into()
+                } else {
+                    "FALSO".into()
+                }
+            }
             _ => text,
         }
     } else {
