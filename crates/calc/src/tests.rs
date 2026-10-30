@@ -1428,6 +1428,22 @@ fn aggregate_without_data_argument_is_an_error() {
 }
 
 #[test]
+fn aggregate_ref_form_rejects_scalar_and_array_values() {
+    let mut t = T::new();
+    t.set("A1", "=AGGREGATE(1,1,1)");
+    t.set("A2", "=AGGREGATE(1,6,{1,2})");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Value));
+    assert_eq!(t.get("A2"), Value::Error(CellError::Value));
+}
+
+#[test]
+fn aggregate_ref_form_preserves_reference_errors() {
+    let mut t = T::new();
+    t.set("A1", "=AGGREGATE(9,4,INDIRECT(\"XFE1\"))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Ref));
+}
+
+#[test]
 fn recalc_all_after_load() {
     let mut t = T::new();
     let s = t.wb.sheet_mut(0).unwrap();

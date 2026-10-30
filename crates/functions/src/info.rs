@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, compare_text};
 
-use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
+use crate::util::{A, MAX_CELLS, R, S, has, scalar, text, text_val};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -315,7 +315,7 @@ fn hyperlink(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if let Value::Error(e) = link {
         return Err(e);
     }
-    Ok(link)
+    text_val(empty_to_zero(link).to_text()?)
 }
 
 fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -606,6 +606,8 @@ mod tests {
     #[test]
     fn web_and_cube() {
         is_text(ev("HYPERLINK", vec![t("http://x.com")]), "http://x.com");
+        is_text(ev("HYPERLINK", vec![n(1.0)]), "1");
+        assert_eq!(ev("ISTEXT", vec![av(ev("HYPERLINK", vec![n(1.0)]))]), Value::Bool(true));
         is_text(ev("HYPERLINK", vec![t("http://x.com"), t("Click")]), "Click");
         close(ev("HYPERLINK", vec![t("http://x.com"), n(5.0)]), 5.0);
         is_text(ev("ENCODEURL", vec![t("a b&c/é")]), "a%20b%26c%2F%C3%A9");
