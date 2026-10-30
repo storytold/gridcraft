@@ -37,6 +37,14 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 use serde::{Deserialize, Serialize};
 
+mod model_data;
+mod model_io;
+mod vertipaq;
+pub mod xpress8;
+
+pub use model_data::{ModelColumnData, ModelData, ModelRelationship, ModelTableData, RelationshipMultiplicity};
+pub use model_io::{ModelColumnMetrics, column_metrics, read_model, write_model};
+
 /// Page size of the Spreadsheet Data Model container.
 pub const PAGE_SIZE: usize = 4096;
 
@@ -90,6 +98,12 @@ pub enum ModelFileError {
     /// The requested output would exceed the configured limits.
     #[error("model file exceeds the supported size limit")]
     TooLarge,
+    /// The model contains a construct this reader or writer does not implement.
+    #[error("unsupported model construct: {0}")]
+    Unsupported(String),
+    /// The caller's model cannot be written into this container.
+    #[error("invalid model: {0}")]
+    InvalidModel(String),
 }
 
 type Result<T, E = ModelFileError> = std::result::Result<T, E>;
@@ -132,12 +146,6 @@ fn crc32(bytes: &[u8]) -> u32 {
 // Plain XPRESS (MS-XCA LZ77) decoder
 // ---------------------------------------------------------------------------------------------
 
-fn read_u8(input: &[u8], pos: &mut usize) -> Result<u8> {
-    let byte = input.get(*pos).copied().ok_or_else(|| ModelFileError::Compression("truncated stream".into()))?;
-    *pos += 1;
-    Ok(byte)
-}
-
 fn read_u16(input: &[u8], pos: &mut usize) -> Result<u16> {
     let end = pos.checked_add(2).ok_or_else(|| ModelFileError::Compression("offset overflow".into()))?;
     let bytes = input.get(*pos..end).ok_or_else(|| ModelFileError::Compression("truncated stream".into()))?;
@@ -145,84 +153,16 @@ fn read_u16(input: &[u8], pos: &mut usize) -> Result<u16> {
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
-fn read_u32(input: &[u8], pos: &mut usize) -> Result<u32> {
-    let end = pos.checked_add(4).ok_or_else(|| ModelFileError::Compression("offset overflow".into()))?;
-    let bytes = input.get(*pos..end).ok_or_else(|| ModelFileError::Compression("truncated stream".into()))?;
-    *pos = end;
-    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
 /// Decodes one raw MS-XCA plain LZ77 buffer into exactly `expected` bytes.
 ///
 /// This is the `COMPRESSION_FORMAT_XPRESS` (3) variant: 32-bit flag words, most significant bit
-/// first, a literal byte for a zero flag and a two-byte match token for a one flag. The low three
-/// bits of a token are `length - 3`; `7` escapes to a four-bit length, then a byte, then a 16-bit
-/// value (with `0` escaping to 32 bits). The upper thirteen bits are `offset - 1`.
-///
-/// Every read and copy is bounds checked and the output length is bounded by the caller.
+/// first, a literal byte for a zero flag and a two-byte match token for a one flag. Every read
+/// and copy is bounds checked and the output length is bounded by the caller.
 fn xpress_decompress(input: &[u8], expected: usize) -> Result<Vec<u8>> {
     if expected > MAX_FILE_CONTENT {
         return Err(ModelFileError::TooLarge);
     }
-    let mut out = Vec::with_capacity(expected);
-    let mut pos = 0usize;
-    let mut high_nibble: Option<u8> = None;
-    while out.len() < expected {
-        let flags = read_u32(input, &mut pos)?;
-        for bit in (0..32).rev() {
-            if out.len() >= expected {
-                break;
-            }
-            if flags & (1 << bit) == 0 {
-                let byte = read_u8(input, &mut pos)?;
-                out.push(byte);
-                continue;
-            }
-            // A one flag at the very end of the input is only the terminal marker once every
-            // declared byte has been produced; anything shorter is a corrupt or truncated chunk.
-            if pos >= input.len() {
-                return Err(ModelFileError::Compression("stream ends before the declared uncompressed size".into()));
-            }
-            let token = read_u16(input, &mut pos)?;
-            let offset = usize::from(token >> 3) + 1;
-            let mut length = usize::from(token & 0x7);
-            if length == 7 {
-                length = match high_nibble.take() {
-                    Some(nibble) => usize::from(nibble),
-                    None => {
-                        let byte = read_u8(input, &mut pos)?;
-                        high_nibble = Some(byte >> 4);
-                        usize::from(byte & 0x0F)
-                    }
-                };
-                if length == 15 {
-                    length = usize::from(read_u8(input, &mut pos)?);
-                    if length == 255 {
-                        length = usize::from(read_u16(input, &mut pos)?);
-                        if length == 0 {
-                            length = usize::try_from(read_u32(input, &mut pos)?)
-                                .map_err(|_| ModelFileError::Compression("match length overflow".into()))?;
-                        }
-                        length = length.checked_sub(22).ok_or_else(|| ModelFileError::Compression("invalid match length".into()))?;
-                    }
-                    length = length.checked_add(15).ok_or_else(|| ModelFileError::Compression("match length overflow".into()))?;
-                }
-                length = length.checked_add(7).ok_or_else(|| ModelFileError::Compression("match length overflow".into()))?;
-            }
-            length = length.checked_add(3).ok_or_else(|| ModelFileError::Compression("match length overflow".into()))?;
-
-            let start = out.len().checked_sub(offset).ok_or_else(|| ModelFileError::Compression("match offset before output start".into()))?;
-            let end = out.len().checked_add(length).ok_or_else(|| ModelFileError::Compression("match length overflow".into()))?;
-            if end > expected {
-                return Err(ModelFileError::Compression("match extends past the declared uncompressed size".into()));
-            }
-            for index in 0..length {
-                let byte = out.get(start + index).copied().ok_or_else(|| ModelFileError::Compression("match copy out of bounds".into()))?;
-                out.push(byte);
-            }
-        }
-    }
-    if out.len() == expected { Ok(out) } else { Err(ModelFileError::Compression("truncated stream".into())) }
+    xpress8::decompress(input, expected).map_err(ModelFileError::Compression)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -585,7 +525,25 @@ impl<'a> Container<'a> {
                 return Err(ModelFileError::Corrupt(format!("file {} lies outside the data section", entry.path)));
             }
         }
-        Ok(Self { header, entries, data })
+        let container = Self { header, entries, data };
+        if container.header.error_code {
+            // Validate every CRC once, including files this reader never decodes: a corrupt
+            // container must be rejected as a whole rather than only when a file is touched.
+            for entry in &container.entries {
+                let stored = container.entry_bytes(entry)?;
+                if stored.len() < 4 {
+                    return Err(ModelFileError::Corrupt(format!("file {} has no CRC trailer", entry.path)));
+                }
+                let split = stored.len() - 4;
+                let payload = stored.get(..split).ok_or_else(|| ModelFileError::Corrupt("file body".into()))?;
+                let trailer = stored.get(split..).ok_or_else(|| ModelFileError::Corrupt("CRC trailer".into()))?;
+                let expected = u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
+                if crc32(payload) != expected {
+                    return Err(ModelFileError::Corrupt(format!("CRC mismatch in file {}", entry.path)));
+                }
+            }
+        }
+        Ok(container)
     }
 
     fn entry_bytes(&self, entry: &VdirEntry) -> Result<&'a [u8]> {
@@ -624,31 +582,7 @@ impl<'a> Container<'a> {
         if body.is_empty() {
             return Ok(Vec::new());
         }
-        let mut output = Vec::new();
-        let mut pos = 0usize;
-        while pos < body.len() {
-            let uncompressed = read_u16(body, &mut pos)? as usize;
-            let compressed = read_u16(body, &mut pos)? as usize;
-            if compressed == 0 {
-                return Err(ModelFileError::Compression(format!("zero-length chunk in file {}", entry.path)));
-            }
-            let end = pos.checked_add(compressed).ok_or_else(|| ModelFileError::Compression("chunk offset overflow".into()))?;
-            let chunk = body.get(pos..end).ok_or_else(|| ModelFileError::Compression("truncated chunk".into()))?;
-            pos = end;
-            if uncompressed == compressed {
-                if output.len().checked_add(chunk.len()).is_none_or(|len| len > MAX_FILE_CONTENT) {
-                    return Err(ModelFileError::TooLarge);
-                }
-                output.extend_from_slice(chunk);
-            } else {
-                let decoded = xpress_decompress(chunk, uncompressed)?;
-                if output.len().checked_add(decoded.len()).is_none_or(|len| len > MAX_FILE_CONTENT) {
-                    return Err(ModelFileError::TooLarge);
-                }
-                output.extend_from_slice(&decoded);
-            }
-        }
-        Ok(output)
+        decode_chunk_stream(body, &entry.path)
     }
 
     /// Returns the entry index of the cube's MDX script.
@@ -693,6 +627,42 @@ impl<'a> Container<'a> {
         }
         None
     }
+}
+
+/// Decodes one file body made of `u16 uncompressed_len, u16 compressed_len, body` chunks.
+///
+/// Equal lengths mean the body is stored verbatim. A compressed chunk must declare more than
+/// eight bytes, at least eight compressed bytes and strictly fewer compressed bytes than its
+/// declared output, as required by the Xpress8 acceptance rules.
+fn decode_chunk_stream(body: &[u8], path: &str) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut pos = 0usize;
+    while pos < body.len() {
+        let uncompressed = read_u16(body, &mut pos)? as usize;
+        let compressed = read_u16(body, &mut pos)? as usize;
+        if compressed == 0 {
+            return Err(ModelFileError::Compression(format!("zero-length chunk in file {path}")));
+        }
+        let end = pos.checked_add(compressed).ok_or_else(|| ModelFileError::Compression("chunk offset overflow".into()))?;
+        let chunk = body.get(pos..end).ok_or_else(|| ModelFileError::Compression("truncated chunk".into()))?;
+        pos = end;
+        let decoded = if uncompressed == compressed {
+            Cow::Borrowed(chunk)
+        } else {
+            if uncompressed > 8 * 1024 * 8 {
+                return Err(ModelFileError::Compression("chunk declares more than 64 KiB".into()));
+            }
+            if uncompressed <= 8 || compressed < 8 || compressed >= uncompressed {
+                return Err(ModelFileError::Compression("invalid compressed chunk lengths".into()));
+            }
+            Cow::Owned(xpress_decompress(chunk, uncompressed).map_err(|error| ModelFileError::Compression(format!("{path}: {error}")))?)
+        };
+        if output.len().checked_add(decoded.len()).is_none_or(|len| len > MAX_FILE_CONTENT) {
+            return Err(ModelFileError::TooLarge);
+        }
+        output.extend_from_slice(&decoded);
+    }
+    Ok(output)
 }
 
 fn content_text(content: &[u8]) -> Cow<'_, str> {
@@ -1143,12 +1113,23 @@ fn apply_script_edits(root: &mut XmlNode, old_names: &[String], measures: &[Mode
 
 fn encode_file(content: &[u8], compressed: bool, error_code: bool) -> Result<Vec<u8>> {
     let mut blob = Vec::new();
-    if compressed {
+    // Files whose logical payload is UTF-16 with a BOM (PARTITIONS and the backup log) stay raw.
+    if compressed && !content.starts_with(&[0xFF, 0xFE]) {
         for chunk in content.chunks(WRITE_CHUNK) {
             let length = u16::try_from(chunk.len()).map_err(|_| ModelFileError::TooLarge)?;
-            blob.extend_from_slice(&length.to_le_bytes());
-            blob.extend_from_slice(&length.to_le_bytes());
-            blob.extend_from_slice(chunk);
+            match xpress8::compress(chunk) {
+                Some(encoded) => {
+                    let compressed_length = u16::try_from(encoded.len()).map_err(|_| ModelFileError::TooLarge)?;
+                    blob.extend_from_slice(&length.to_le_bytes());
+                    blob.extend_from_slice(&compressed_length.to_le_bytes());
+                    blob.extend_from_slice(&encoded);
+                }
+                None => {
+                    blob.extend_from_slice(&length.to_le_bytes());
+                    blob.extend_from_slice(&length.to_le_bytes());
+                    blob.extend_from_slice(chunk);
+                }
+            }
         }
     } else {
         blob.extend_from_slice(content);
