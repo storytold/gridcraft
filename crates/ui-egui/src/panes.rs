@@ -287,7 +287,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for n in 1..=6 {
                 if ui.button(lang.tr("Layout {n}").replace("{n}", &n.to_string())).clicked() {
                     app.run_or_alert("chart.quickLayout", json!({"chart": id, "layout": n}));
