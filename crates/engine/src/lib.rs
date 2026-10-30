@@ -18,6 +18,7 @@ pub mod links;
 pub mod macros;
 pub mod outline;
 pub mod paper;
+pub mod pdf_fonts;
 pub mod pivot;
 pub mod pivot_calc;
 pub mod record;

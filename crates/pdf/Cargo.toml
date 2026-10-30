@@ -10,3 +10,5 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+skrifa = { workspace = true }
+subsetter = { workspace = true }

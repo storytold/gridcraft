@@ -59,6 +59,7 @@ sys-locale = "0.3"
 # Font parser egui's epaint uses; the UI validates system font files with it before handing them
 # to egui, which panics on a file it can't parse. Same version as epaint's, so no second copy.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
+subsetter = { version = "0.2.6", default-features = false }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport

@@ -2,18 +2,23 @@
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
-//!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   WinAnsiEncoding (Cyrillic, Greek, …) are set in an embedded TrueType subset when the
+//!   application has installed a font for the face ([`install_font`]); the rest (CJK and other
+//!   scripts) in a predefined, non-embedded Adobe-GB1 CID font with the `UniGB-UTF16-H` CMap
+//!   instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the trivial RunLengthDecode filter). Embedded
+//! fonts are read with `skrifa` and subset with `subsetter`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod embed;
 mod metrics;
+
+pub use embed::{EmbeddedFont, FontError, MAX_FONT_BYTES, can_draw, clear_fonts, has_font, install_font};
 
 use std::fmt::Write as _;
 
@@ -113,6 +118,15 @@ impl Font {
         Font::ALL.iter().position(|f| *f == self).unwrap_or(0)
     }
 
+    /// The family this face belongs to.
+    pub fn family(self) -> Family {
+        match self {
+            Font::Helvetica | Font::HelveticaBold | Font::HelveticaOblique | Font::HelveticaBoldOblique => Family::Sans,
+            Font::TimesRoman | Font::TimesBold | Font::TimesItalic | Font::TimesBoldItalic => Family::Serif,
+            Font::Courier | Font::CourierBold | Font::CourierOblique | Font::CourierBoldOblique => Family::Mono,
+        }
+    }
+
     /// The face of `family` with the given weight and slant.
     pub fn styled(family: Family, bold: bool, italic: bool) -> Font {
         match (family, bold, italic) {
@@ -148,6 +162,10 @@ impl Font {
 
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        embed::with_installed(|fonts| self.char_width_with(c, fonts))
+    }
+
+    fn char_width_with(self, c: char, fonts: &embed::Installed) -> u16 {
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -156,7 +174,10 @@ impl Font {
             _ => None,
         };
         if needs_cid(c) {
-            return CID_WIDTH;
+            return match embed::resolve(fonts, self, Some(c)) {
+                Some((i, g)) => fonts.get(i).and_then(Option::as_ref).map_or(CID_WIDTH, |f| f.width(g)),
+                None => CID_WIDTH,
+            };
         }
         let Some(table) = table else { return 600 };
         let ascii = |c: char| -> Option<u16> {
@@ -179,7 +200,7 @@ impl Font {
 /// Width of `text` in points when set in `font` at `size` points.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let units: u64 = embed::with_installed(|fonts| text.chars().map(|c| u64::from(font.char_width_with(c, fonts))).sum());
     units as f32 * size / 1000.0
 }
 
@@ -224,8 +245,10 @@ pub fn win_ansi(c: char) -> u8 {
 
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the first embedded font in a page's font flags; one per [`Font::ALL`] face.
+const EMBEDDED_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
+const FONT_SLOTS: usize = EMBEDDED_FONT + Font::ALL.len();
 /// Base font of the CID font used for characters WinAnsiEncoding lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
@@ -348,6 +371,10 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    /// The fonts installed when the document started, and the glyphs drawn with each (glyph id
+    /// to the character it stands for, for the `ToUnicode` map).
+    embedded: embed::Installed,
+    glyphs: [std::collections::BTreeMap<u16, char>; Font::ALL.len()],
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
@@ -586,14 +613,36 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
-        // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
-        // advances the text position, so the runs follow each other on the baseline.
+        // Runs of WinAnsi text use `font`; runs it cannot encode use an embedded font that has
+        // the glyphs, else the CID font. Each `Tj` advances the text position, so the runs follow
+        // each other on the baseline.
+        let embedded = self.embedded.clone();
+        let slot_of = |c: char| -> (usize, u16) {
+            if !needs_cid(c) { (fi, 0) } else { embed::resolve(&embedded, font, Some(c)).map_or((CID_FONT, 0), |(i, g)| (EMBEDDED_FONT + i, g)) }
+        };
         let mut rest = text;
         while let Some(first) = rest.chars().next() {
-            let cid = needs_cid(first);
-            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let slot = slot_of(first).0;
+            let end = rest.char_indices().find(|(_, c)| slot_of(*c).0 != slot).map_or(rest.len(), |(i, _)| i);
             let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+            let string = if slot == fi {
+                pdf_string(run)
+            } else if slot == CID_FONT {
+                pdf_utf16_string(run)
+            } else {
+                let mut hex = String::with_capacity(run.len() * 4 + 2);
+                hex.push('<');
+                let mut glyphs = self.glyphs.get_mut(slot - EMBEDDED_FONT);
+                for c in run.chars() {
+                    let g = slot_of(c).1;
+                    let _ = write!(hex, "{g:04X}");
+                    if let Some(map) = glyphs.as_deref_mut() {
+                        map.entry(g).or_insert(c);
+                    }
+                }
+                hex.push('>');
+                hex
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
@@ -641,6 +690,8 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// The installed fonts, taken when the first page is added.
+    fonts: embed::Installed,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -708,7 +759,21 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        if self.pages.is_empty() {
+            // One set of fonts for the whole document, as installed when it started.
+            self.fonts = embed::installed();
+        }
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            embedded: self.fonts.clone(),
+            glyphs: Default::default(),
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -722,35 +787,27 @@ impl PdfDoc {
         self.pages.get_mut(i)
     }
 
-    /// Serializes the document. A document without pages gets one blank Letter page.
-    pub fn finish(mut self) -> Vec<u8> {
-        if self.pages.is_empty() {
-            self.add_page(612.0, 792.0);
-        }
-        // Object numbering: 1 catalog, 2 page tree, 3 info, then fonts, then per page.
-        let mut used = [false; FONT_SLOTS];
-        for p in &self.pages {
-            for (u, f) in used.iter_mut().zip(p.fonts.iter()) {
-                *u |= *f;
-            }
-        }
-        let mut next = 4u32;
-        let mut font_ids = [0u32; FONT_SLOTS];
-        for (i, u) in used.iter().enumerate() {
-            if *u {
-                font_ids[i] = next;
-                // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
-            }
-        }
-        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
-        let mut kids = Vec::new();
-        let mut annotations = Vec::new();
-        let page_count = self.pages.len();
+    /// Writes the font objects used by any page into `objects`, returning the page resource
+    /// dictionary entries that name them.
+    fn font_objects(&self, font_ids: &[u32; FONT_SLOTS], objects: &mut Vec<(u32, Vec<u8>)>) -> String {
         let mut font_dict = String::new();
         for (i, id) in font_ids.iter().enumerate() {
             if *id != 0 {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
+                if let Some(k) = i.checked_sub(EMBEDDED_FONT) {
+                    let mut glyphs = std::collections::BTreeMap::new();
+                    for page in &self.pages {
+                        if let Some(map) = page.glyphs.get(k) {
+                            for (g, c) in map {
+                                glyphs.entry(*g).or_insert(*c);
+                            }
+                        }
+                    }
+                    if let Some(Some(font)) = self.fonts.get(k) {
+                        objects.extend(font.objects(*id, &glyphs));
+                    }
+                    continue;
+                }
                 if i == CID_FONT {
                     let (cid_id, desc_id) = (id + 1, id + 2);
                     objects.push((
@@ -781,6 +838,42 @@ impl PdfDoc {
                 objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
             }
         }
+        font_dict
+    }
+
+    /// Serializes the document. A document without pages gets one blank Letter page.
+    pub fn finish(mut self) -> Vec<u8> {
+        if self.pages.is_empty() {
+            self.add_page(612.0, 792.0);
+        }
+        // Object numbering: 1 catalog, 2 page tree, 3 info, then fonts, then per page.
+        let mut used = [false; FONT_SLOTS];
+        for p in &self.pages {
+            for (u, f) in used.iter_mut().zip(p.fonts.iter()) {
+                *u |= *f;
+            }
+        }
+        let mut next = 4u32;
+        let mut font_ids = [0u32; FONT_SLOTS];
+        for (i, u) in used.iter().enumerate() {
+            if *u {
+                font_ids[i] = next;
+                // The CID font also needs its descendant font and font descriptor; an embedded
+                // font its descendant, descriptor, font file, CIDToGIDMap and ToUnicode map.
+                next += if i == CID_FONT {
+                    3
+                } else if i >= EMBEDDED_FONT {
+                    embed::OBJECTS_PER_FONT
+                } else {
+                    1
+                };
+            }
+        }
+        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut kids = Vec::new();
+        let mut annotations = Vec::new();
+        let page_count = self.pages.len();
+        let font_dict = self.font_objects(&font_ids, &mut objects);
         for page in &mut self.pages {
             while page.depth > 0 {
                 page.restore();

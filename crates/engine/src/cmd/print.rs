@@ -174,6 +174,8 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
 
 fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
+    // Before layout: the embedded fonts also measure the text they draw.
+    crate::pdf_fonts::ensure_installed();
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
@@ -203,6 +205,7 @@ fn print(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let opts = PrintOptions::from_params(p, "file.printPreview")?;
+    crate::pdf_fonts::ensure_installed();
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let mut list = Vec::new();
