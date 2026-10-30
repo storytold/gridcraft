@@ -64,6 +64,9 @@ pub const CT_PIVOT_CACHE_DEF: &str = "application/vnd.openxmlformats-officedocum
 pub const CT_CONNECTIONS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml";
 /// Content type of the data model database part (a `Default` on the `data` extension).
 pub const CT_MODEL_DATA: &str = "application/vnd.openxmlformats-officedocument.model+data";
+
+/// The workbook part that carries the Spreadsheet Data Model (`xl/model/item.data`).
+pub const MODEL_DATA_PART: &str = "xl/model/item.data";
 const REL_PIVOT_TABLE: &str = "pivotTable";
 const REL_PIVOT_CACHE: &str = "pivotCacheDefinition";
 const REL_CONNECTIONS: &str = "connections";
@@ -792,6 +795,11 @@ fn build_table_xml(spec: &ModelPivotSpec, anchor: CellRef, rows: usize, cols: us
         if f.measure {
             s.push_str(" dataField=\"1\"");
         }
+        // Excel refuses a package whose row/column fields are not marked as fully drilled:
+        // `allDrilled="1"` on every axis field, row and column alike (verified by Excel bisect).
+        if row || col {
+            s.push_str(" allDrilled=\"1\"");
+        }
         match spec.layout {
             ModelPivotLayout::Compact => {}
             ModelPivotLayout::Outline => s.push_str(" compact=\"0\""),
@@ -1048,17 +1056,47 @@ fn ensure_connections(p: &mut Preserved, connection_id: u32) -> u32 {
     wanted
 }
 
-fn data_model_ext(spec: &ModelPivotSpec) -> String {
+/// Fills the tables without a connection name from the workbook's kept `xl/connections.xml`: Excel
+/// names a worksheet connection `WorksheetConnection_<file>!<Table>`, and `<x15:modelTable>` must
+/// carry that name or Excel loads the package but never shows the PivotTable.
+fn resolve_connections(p: &Preserved, spec: &ModelPivotSpec) -> ModelPivotSpec {
+    if spec.tables.iter().all(|t| !t.connection.trim().is_empty()) {
+        return spec.clone();
+    }
+    let Some(part) = p.parts.iter().find(|q| q.name.eq_ignore_ascii_case("xl/connections.xml")) else { return spec.clone() };
+    let text = String::from_utf8_lossy(&part.data);
+    let names: Vec<&str> = text.split("name=\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+    let mut out = spec.clone();
+    for table in &mut out.tables {
+        if !table.connection.trim().is_empty() {
+            continue;
+        }
+        let suffix = format!("!{}", table.name);
+        if let Some(name) = names.iter().find(|n| n.ends_with(&suffix)) {
+            table.connection = (*name).to_string();
+        }
+    }
+    out
+}
+
+/// The workbook's `x15:dataModel` extension, or `None` when it cannot be written faithfully.
+///
+/// Excel refuses a package whose `<x15:modelTable>` has an empty `connection` attribute (observed
+/// by bisecting opens of the same package with and without the attribute), so a table without a
+/// usable connection name gets no `connection` attribute at all, and a spec with no usable name
+/// anywhere gets no extension at all — which Excel accepts.
+fn data_model_ext(spec: &ModelPivotSpec) -> Option<String> {
+    if !spec.tables.iter().any(|t| !t.connection.trim().is_empty()) {
+        return None;
+    }
     let mut s = format!("<ext uri=\"{EXT_DATA_MODEL}\" xmlns:x15=\"{NS_X15}\"><x15:dataModel><x15:modelTables>");
     for table in &spec.tables {
         let hash = fnv1a(&table.name);
-        let _ = write!(
-            s,
-            "<x15:modelTable id=\"{}_{hash:016x}\" name=\"{}\" connection=\"{}\"/>",
-            esc_attr(&table.name),
-            esc_attr(&table.name),
-            esc_attr(&table.connection)
-        );
+        let mut attrs = format!("id=\"{}_{hash:016x}\" name=\"{}\"", esc_attr(&table.name), esc_attr(&table.name));
+        if !table.connection.trim().is_empty() {
+            let _ = write!(attrs, " connection=\"{}\"", esc_attr(&table.connection));
+        }
+        let _ = write!(s, "<x15:modelTable {attrs}/>");
     }
     s.push_str("</x15:modelTables>");
     if !spec.relationships.is_empty() {
@@ -1076,7 +1114,7 @@ fn data_model_ext(spec: &ModelPivotSpec) -> String {
         s.push_str("</x15:modelRelationships>");
     }
     s.push_str("</x15:dataModel></ext>");
-    s
+    Some(s)
 }
 
 fn fnv1a(s: &str) -> u64 {
@@ -1090,6 +1128,8 @@ fn fnv1a(s: &str) -> u64 {
 
 /// Adds `cacheId`/`r:id` to the workbook's `<pivotCaches>`, creating the element when absent.
 fn add_pivot_cache(p: &mut Preserved, cache_id: u32, rid: &str) -> Result<(), IoError> {
+    // `cacheId="0"` is not a valid pivot cache id: the first cache is 1.
+    let cache_id = cache_id.max(1);
     let child = format!("<pivotCache cacheId=\"{cache_id}\" r:id=\"{}\"/>", esc_attr(rid));
     if let Some(element) = p.elements.iter_mut().find(|e| e.slot == SLOT_PIVOT_CACHES) {
         if element.xml.contains(&format!("cacheId=\"{cache_id}\"")) {
@@ -1106,7 +1146,9 @@ fn add_pivot_cache(p: &mut Preserved, cache_id: u32, rid: &str) -> Result<(), Io
 
 /// Keeps the workbook's `x15:dataModel` declaration in step with `spec` (tables and relationships).
 fn set_data_model_ext(p: &mut Preserved, spec: &ModelPivotSpec) {
-    let xml = data_model_ext(spec);
+    // No table names a connection: leave whatever the file already declares alone and write none
+    // of our own (an extension with empty connection attributes is refused by Excel).
+    let Some(xml) = data_model_ext(spec) else { return };
     match p.elements.iter_mut().find(|e| e.slot == "ext" && e.xml.contains("x15:dataModel")) {
         Some(element) => element.xml = xml,
         None => p.elements.push(PreservedXml { slot: "ext".to_string(), xml }),
@@ -1147,6 +1189,11 @@ pub fn attach_model_pivot(
     report: &[Vec<Value>],
     model_data: Option<&[u8]>,
 ) -> Result<(), IoError> {
+    // Excel ignores a PivotTable whose `cacheId` is 0 (it loads the model but never shows the
+    // pivot), so a caller's placeholder id is clamped instead of failing; a real id is kept as is.
+    let mut spec = spec.clone();
+    spec.cache_id = spec.cache_id.max(1);
+    let spec = &spec;
     validate_spec(spec)?;
     let sheet_index = wb.sheet_index(sheet).ok_or_else(|| IoError::Format(format!("there is no sheet named \"{sheet}\"")))?;
     if !location.is_valid() {
@@ -1182,15 +1229,18 @@ pub fn attach_model_pivot(
         data: Arc::from(table_xml.into_bytes()),
         rels: vec![PreservedRel { id: "rId1".to_string(), rel_type: rel_uri(REL_PIVOT_CACHE), target: cache_part.clone(), external: false }],
     });
-    if let Some(data) = model_data
-        && !p.parts.iter().any(|q| q.name.eq_ignore_ascii_case("xl/model/item.data"))
-    {
-        p.parts.push(PreservedPart {
-            name: "xl/model/item.data".to_string(),
-            content_type: CT_MODEL_DATA.to_string(),
-            data: Arc::from(data),
-            ..Default::default()
-        });
+    if let Some(data) = model_data {
+        match p.parts.iter_mut().find(|q| q.name.eq_ignore_ascii_case(MODEL_DATA_PART)) {
+            // A kept part holds the model as read; the caller's bytes carry the session's measures,
+            // so they replace it rather than being dropped.
+            Some(part) => part.data = Arc::from(data),
+            None => p.parts.push(PreservedPart {
+                name: MODEL_DATA_PART.to_string(),
+                content_type: CT_MODEL_DATA.to_string(),
+                data: Arc::from(data),
+                ..Default::default()
+            }),
+        }
     }
     let cache_rid = ensure_rel(p, REL_PIVOT_CACHE, &cache_part);
     if p.parts.iter().any(|q| q.name.eq_ignore_ascii_case("xl/connections.xml")) {
@@ -1200,7 +1250,8 @@ pub fn attach_model_pivot(
         let _ = ensure_rel(p, REL_MODEL, "xl/model/item.data");
     }
     add_pivot_cache(p, spec.cache_id, &cache_rid)?;
-    set_data_model_ext(p, spec);
+    let resolved = resolve_connections(p, spec);
+    set_data_model_ext(p, &resolved);
     attach_sheet_rel(wb, sheet_index, &table_part)
 }
 

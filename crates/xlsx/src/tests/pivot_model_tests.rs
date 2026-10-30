@@ -14,6 +14,7 @@ use crate::{
     ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue, attach_model_pivot, read_model_pivots, read_xlsx, write_model_pivot,
     write_xlsx,
 };
+use gridcraft_model::preserved::{Preserved, PreservedPart};
 
 fn at(a: &str) -> CellRef {
     CellRef::parse(a).unwrap()
@@ -512,7 +513,6 @@ fn invalid_specs_are_refused_before_anything_is_written() {
             Box::new(|s| s.values.push(ModelPivotValue { measure: "Nope".into(), caption: String::new(), number_format: None })),
         ),
         ("no name", Box::new(|s| s.name = "  ".into())),
-        ("cache id 0", Box::new(|s| s.cache_id = 0)),
         ("filter on an axis", Box::new(|s| s.filters[0].field = field("Sales", "Region"))),
         ("filter keeps nothing", Box::new(|s| s.filters[0].allowed.clear())),
     ];
@@ -621,6 +621,40 @@ fn a_written_multi_value_filter_round_trips_through_the_items() {
 }
 
 #[test]
+fn a_supplied_model_part_replaces_the_kept_one() {
+    // A workbook read from disk keeps `xl/model/item.data`; the caller's bytes carry the session's
+    // measures, so attaching must replace the kept part instead of silently keeping the old bytes.
+    let mut wb = workbook();
+    let preserved = wb.preserved.get_or_insert_with(|| Arc::new(Preserved::default()));
+    Arc::make_mut(preserved).parts.push(PreservedPart {
+        name: crate::pivot_model::MODEL_DATA_PART.to_string(),
+        content_type: crate::pivot_model::CT_MODEL_DATA.to_string(),
+        data: Arc::from(b"stale model".to_vec()),
+        ..Default::default()
+    });
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), Some(b"fresh model")).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = entries(&bytes);
+    assert_eq!(parts.get(crate::pivot_model::MODEL_DATA_PART).map(Vec::as_slice), Some(b"fresh model".as_slice()));
+}
+
+#[test]
+fn axis_fields_are_marked_all_drilled() {
+    // Excel refuses the package unless every row/column field is marked fully drilled; the data
+    // field must not carry the attribute. Both directions were proven by an Excel bisect.
+    let bytes = written();
+    let table = text(&entries(&bytes), "xl/pivotTables/pivotTable1.xml");
+    for axis in ["axisRow", "axisCol"] {
+        let rest = table.split(&format!("axis=\"{axis}\"")).nth(1).expect("an axis field");
+        let tag = rest.split('>').next().unwrap_or_default();
+        assert!(tag.contains("allDrilled=\"1\""), "{axis} field lacks allDrilled: {tag}");
+    }
+    let data = table.split("dataField=\"1\"").nth(1).expect("a data field");
+    let tag = data.split('>').next().unwrap_or_default();
+    assert!(!tag.contains("allDrilled"), "a data field must not be allDrilled: {tag}");
+}
+
+#[test]
 fn a_single_value_filter_is_named_by_its_member() {
     let mut spec = spec();
     spec.filters[0].allowed = vec![ModelPivotScalar::Text("SMB".into())];
@@ -647,4 +681,133 @@ fn zip_is_deterministic() {
     for name in &a {
         assert_eq!(a_parts.get(*name), b_parts.get(*name), "{name} differs between two writes");
     }
+}
+
+#[test]
+fn empty_table_connections_never_produce_an_empty_attribute() {
+    let mut spec = spec();
+    for table in &mut spec.tables {
+        table.connection.clear();
+    }
+    let bytes = write_model_pivot(&mut workbook(), "Pivot", at("A3"), &spec, &report(), None).unwrap();
+    let parts = entries(&bytes);
+    let wb = text(&parts, "xl/workbook.xml");
+    assert!(!wb.contains("connection=\"\""), "{wb}");
+    assert!(!wb.contains("x15:dataModel"), "{wb}");
+    // The pivot itself still reads back.
+    let (pivots, _) = read_model_pivots(&bytes).unwrap();
+    assert_eq!(pivots.len(), 1);
+    assert_eq!(pivots[0].spec.name, "ModelPivot");
+    assert_eq!(pivots[0].spec.row_fields, vec![field("Sales", "Region")]);
+}
+
+#[test]
+fn one_real_connection_keeps_the_extension_but_omits_the_blank_ones() {
+    let mut spec = spec();
+    spec.tables[0].connection = "WorksheetConnection_book.xlsx!Sales".into();
+    spec.tables[1].connection.clear();
+    let bytes = write_model_pivot(&mut workbook(), "Pivot", at("A3"), &spec, &report(), None).unwrap();
+    let wb = text(&entries(&bytes), "xl/workbook.xml");
+    assert!(wb.contains("<x15:dataModel>"), "{wb}");
+    assert!(wb.contains("connection=\"WorksheetConnection_book.xlsx!Sales\""), "{wb}");
+    assert!(!wb.contains("connection=\"\""), "{wb}");
+}
+
+#[test]
+fn connection_names_are_resolved_from_the_kept_connections_part() {
+    let kept = "<connections xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><connection id=\"1\" keepAlive=\"1\" name=\"ThisWorkbookDataModel\" type=\"5\"/><connection id=\"2\" name=\"WorksheetConnection_book.xlsx!Sales\" type=\"102\"/><connection id=\"3\" name=\"WorksheetConnection_book.xlsx!Products\" type=\"102\"/><connection id=\"4\" name=\"WorksheetConnection_book.xlsx!Customers\" type=\"102\"/></connections>";
+    let mut wb = workbook();
+    wb.preserved = Some(Arc::new(gridcraft_model::Preserved {
+        parts: vec![gridcraft_model::PreservedPart {
+            name: "xl/connections.xml".into(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(),
+            data: Arc::from(kept.as_bytes().to_vec()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let mut spec = spec();
+    for table in &mut spec.tables {
+        table.connection.clear();
+    }
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec, &report(), None).unwrap();
+    let parts = entries(&write_xlsx(&wb).unwrap());
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert!(wb_xml.contains("<x15:dataModel>"), "{wb_xml}");
+    for name in ["WorksheetConnection_book.xlsx!Sales", "WorksheetConnection_book.xlsx!Products", "WorksheetConnection_book.xlsx!Customers"] {
+        assert!(wb_xml.contains(&format!("connection=\"{name}\"")), "{name} missing: {wb_xml}");
+    }
+    assert!(!wb_xml.contains("connection=\"\""), "{wb_xml}");
+}
+
+/// A package with a workbook-level data-model database and its `powerPivotData` relationship.
+fn with_model_part() -> Vec<u8> {
+    let rel = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/powerPivotData" Target="model/item.data"/>"#;
+    let ct = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="data" ContentType="application/vnd.openxmlformats-officedocument.model+data"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
+    let wb = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>{rel}</Relationships>"#
+    );
+    let sheet = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    super::make_zip(&[
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/model/item.data", b"the model database"),
+    ])
+}
+
+#[test]
+fn the_model_database_survives_a_read_and_save() {
+    let bytes = with_model_part();
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = write_xlsx(&wb).unwrap();
+    let parts = entries(&out);
+    assert_eq!(parts.get("xl/model/item.data").map(Vec::as_slice), Some(&b"the model database"[..]), "parts {:?}", parts.keys().collect::<Vec<_>>());
+    let ct = text(&parts, "[Content_Types].xml");
+    assert!(ct.contains("Extension=\"data\""), "{ct}");
+    let rels = text(&parts, "xl/_rels/workbook.xml.rels");
+    assert!(rels.contains("relationships/powerPivotData"), "{rels}");
+}
+
+#[test]
+fn attach_without_model_data_keeps_the_existing_one() {
+    let bytes = with_model_part();
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    let mut spec = spec();
+    for table in &mut spec.tables {
+        table.connection.clear();
+    }
+    attach_model_pivot(&mut wb, "Data", at("A3"), &spec, &report(), None).unwrap();
+    let parts = entries(&write_xlsx(&wb).unwrap());
+    assert_eq!(parts.get("xl/model/item.data").map(Vec::as_slice), Some(&b"the model database"[..]));
+    assert!(text(&parts, "[Content_Types].xml").contains("Extension=\"data\""));
+    let rels = text(&parts, "xl/_rels/workbook.xml.rels");
+    assert!(rels.contains("relationships/powerPivotData"), "{rels}");
+    // The pivot itself is there too.
+    let (pivots, _) = read_model_pivots(&entries_to_bytes(&parts)).unwrap();
+    assert_eq!(pivots.len(), 1);
+}
+
+fn entries_to_bytes(parts: &HashMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in parts {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut z, data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+#[test]
+fn a_zero_cache_id_is_clamped_to_one() {
+    let mut spec = spec();
+    spec.cache_id = 0;
+    let bytes = write_model_pivot(&mut workbook(), "Pivot", at("A3"), &spec, &report(), None).unwrap();
+    let parts = entries(&bytes);
+    let wb = text(&parts, "xl/workbook.xml");
+    assert!(wb.contains("<pivotCache cacheId=\"1\""), "{wb}");
+    let table = text(&parts, "xl/pivotTables/pivotTable1.xml");
+    assert!(table.contains("cacheId=\"1\""), "{table}");
 }

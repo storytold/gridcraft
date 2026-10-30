@@ -105,6 +105,7 @@ fn two_row_fields_write_subtotal_and_grand_total_rows() {
     );
 }
 
+#[allow(clippy::cognitive_complexity)] // Asserts every part and slot the written package must carry.
 #[test]
 fn the_package_carries_the_pivot_table_and_cache_definitions() {
     let mut s = load();
@@ -152,7 +153,11 @@ fn the_package_carries_the_pivot_table_and_cache_definitions() {
         text
     };
     assert!(workbook.contains("<pivotCaches>"), "the workbook declares the cache: {workbook}");
-    assert!(workbook.contains("x15:modelTables"), "the workbook declares the model tables: {workbook}");
+    // The model extension is only written when a table resolves to a worksheet connection; this
+    // workbook has none, and Excel refuses an extension whose connections are empty, so it is
+    // omitted rather than emitted blank.
+    assert!(!workbook.contains("connection=\"\""), "no empty connection attribute: {workbook}");
+    assert!(!workbook.contains("x15:modelTables"), "no model tables without a connection: {workbook}");
 
     // Reading the package back gives the same pivot: the axes, the filter with blank, the value
     // and the totals the command was asked for.

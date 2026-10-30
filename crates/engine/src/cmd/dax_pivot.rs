@@ -114,7 +114,7 @@ fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<
     let mut spec = spec_from_model(model, &pivot, &values)?;
     check_axes(&spec)?;
     let formats = value_formats(&values);
-    let model_data = model_data(s);
+    let model_data = model_data(s)?;
     let replace = optional_bool(p, "replace")?.unwrap_or(false);
     let requested_name = optional_str(p, "name")?;
     let (sheet, at) = destination(s, p)?;
@@ -356,12 +356,40 @@ fn destination(s: &Session, p: &Json) -> Result<(String, CellRef)> {
     Ok((sheet, at))
 }
 
-/// The workbook's `xl/model/item.data`, when a read kept it: the cache can then be refreshed in
-/// Excel.
-fn model_data(s: &Session) -> Option<Arc<[u8]>> {
-    let d = s.doc().ok()?;
-    let preserved = d.wb.preserved.as_ref()?;
-    preserved.parts.iter().find(|part| part.name.eq_ignore_ascii_case(MODEL_DATA_PART)).map(|part| Arc::clone(&part.data))
+/// The workbook's `xl/model/item.data` with the session model's measures written into it, when a
+/// read kept the part: the cache can then be refreshed in Excel and its measures evaluate.
+///
+/// Measures live only in the session model, so a cache that references them needs them in the
+/// workbook's model too; `write_measures` rewrites the `MdxScript` of the kept container without
+/// touching its tables.
+fn model_data(s: &Session) -> Result<Option<Arc<[u8]>>> {
+    let Ok(d) = s.doc() else { return Ok(None) };
+    let Some(preserved) = d.wb.preserved.as_ref() else { return Ok(None) };
+    let Some(part) = preserved.parts.iter().find(|part| part.name.eq_ignore_ascii_case(MODEL_DATA_PART)) else {
+        return Ok(None);
+    };
+    let bytes = Arc::clone(&part.data);
+    let Some(model) = s.dax_model.as_ref() else { return Ok(Some(bytes)) };
+    let measures: Vec<gridcraft_dax::model_file::ModelMeasure> = model
+        .measures
+        .iter()
+        .filter_map(|measure| {
+            let table = measure.table.clone()?;
+            let formula = measure.formula.trim().trim_start_matches('=').trim().to_string();
+            (!table.trim().is_empty() && !formula.is_empty()).then(|| gridcraft_dax::model_file::ModelMeasure {
+                table,
+                name: measure.name.clone(),
+                formula,
+                format: measure.format.clone().unwrap_or_default(),
+            })
+        })
+        .collect();
+    if measures.is_empty() {
+        return Ok(Some(bytes));
+    }
+    let written = gridcraft_dax::model_file::write_measures(&bytes, &measures)
+        .map_err(|error| other(format!("the data model could not be written to the workbook: {error}")))?;
+    Ok(Some(Arc::from(written)))
 }
 
 /// The PivotTable's name: the `name` parameter (checked against every PivotTable the workbook
