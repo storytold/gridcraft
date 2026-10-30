@@ -63,3 +63,85 @@ fn turning_the_file_tab_off_closes_an_open_backstage() {
     h.run_steps(3);
     assert!(h.state().backstage.is_none(), "and closes when the host turns the File tab off");
 }
+
+/// #2546 (macOS): AppKit moved, and on a double-click zoomed, the window for presses on the title
+/// bar's own buttons. The window may move only from the bar's empty area: not while the pointer
+/// is on Undo, Redo, Home or the other controls. A double-click on a button is two clicks on it,
+/// never a maximize; one on the empty area still maximizes.
+#[test]
+fn title_bar_buttons_keep_their_clicks_from_the_window() {
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        {
+            let mut session = Session::new();
+            session.new_workbook();
+            crate::common::prepare(SheetApp::new(session, Services::default()))
+        },
+    );
+    h.run_steps(4);
+    for v in [1, 2, 3] {
+        h.state_mut().session.execute("cell.set", serde_json::json!({"ref": "A1", "value": v})).ok();
+    }
+    h.state_mut().session.execute("edit.undo", serde_json::json!({})).ok();
+    h.run_steps(2);
+    let maximized = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.output()
+            .viewport_output
+            .values()
+            .any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Maximized(_) | egui::ViewportCommand::StartDrag)))
+    };
+    let double_click = |h: &mut egui_kittest::Harness<'static, SheetApp>, at: egui::Pos2| {
+        let mut seen = false;
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.step();
+                seen |= maximized(h);
+            }
+        }
+        h.run_steps(2);
+        seen || maximized(h)
+    };
+    let undo_steps = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().map(|d| d.undo.len()).unwrap_or_default();
+    // The empty bar (left of AutoSave) moves the window and maximizes it on a double-click.
+    let empty = egui::pos2(3.0, h.get_by_label("Undo").rect().center().y);
+    h.event(egui::Event::PointerMoved(empty));
+    h.run_steps(2);
+    assert!(craft_window::title_bar::window_movable(&h.ctx), "the empty bar moves the window");
+    assert!(double_click(&mut h, empty), "a double-click on the empty bar maximizes");
+    for label in ["Undo", "Redo", "Home", "More commands"] {
+        let at = h.get_by_label(label).rect().center();
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert!(!craft_window::title_bar::window_movable(&h.ctx), "{label}: the window must not move from a press on it");
+        let before = undo_steps(&h);
+        assert!(!double_click(&mut h, at), "{label}: a double-click on it maximized the window");
+        if label == "Undo" {
+            assert_eq!(undo_steps(&h), before.saturating_sub(2), "two clicks on Undo undo twice");
+        }
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+    }
+    // A drag that starts on a button doesn't move the window either.
+    let at = h.get_by_label("Redo").rect().center();
+    let mut moved = false;
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    for dx in [4.0, 12.0, 40.0, 80.0] {
+        h.event(egui::Event::PointerMoved(at + egui::vec2(dx, 0.0)));
+        h.step();
+        moved |= maximized(&h);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: at + egui::vec2(80.0, 0.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+    assert!(!moved && !maximized(&h), "a drag from Redo moved the window");
+}
