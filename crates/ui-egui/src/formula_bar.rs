@@ -156,6 +156,8 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     sh.spill_anchor(at)
 }
 
+/// Returns localized formula-bar text for the active cell or its spill anchor.
+/// Respects hidden formulas and supplies picture descriptions when the selected cell contains a picture.
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
@@ -181,7 +183,7 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            crate::formula_locale::edit_text(&d.wb, sh, a, app.ui.language.formula_locale())
         };
     }
     String::new()

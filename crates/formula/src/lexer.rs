@@ -118,14 +118,33 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+/// Case variants can have different UTF-8 byte lengths, so compare character-aligned prefixes.
+fn spelling_prefix<'a>(source: &'a str, spelling: &str) -> &'a str {
+    let end = source.char_indices().nth(spelling.chars().count()).map_or(source.len(), |(byte, _)| byte);
+    source.get(..end).unwrap_or("")
+}
+
+/// Consumes a canonical or localized error literal and records its original UTF-8 byte span.
+/// Returns the next character index, or a lexical error for an unknown error spelling.
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    let error = CellError::ALL
+    let (error, end) = CellError::ALL
         .iter()
-        .copied()
-        .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
+        .chain([CellError::Circ].iter())
+        .find_map(|error| {
+            [locale.error_name(*error), error.as_str()].into_iter().find_map(|spelling| {
+                let prefix = spelling_prefix(rest, spelling);
+                (locale.fold_alias(prefix) == locale.fold_alias(spelling)).then_some((*error, i + prefix.chars().count()))
+            })
+        })
         .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
-    let end = i + error.as_str().chars().count();
     emit(src, chars, out, Tok::Error(error), start, end);
     Ok(end)
 }
@@ -211,10 +230,12 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
     Ok(j)
 }
 
+/// Emits a word, function, Boolean, or sheet token using the locale and array context.
+/// Returns the character index immediately after the consumed token.
 fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, i: usize, start: usize, out: &mut Vec<Token>) -> usize {
     let ch = |index| char_at(chars, index);
     let mut j = i;
-    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && locale.is_array_separator(c))) {
         j += 1;
     }
     let value: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -223,7 +244,7 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
         j + 1
     } else if ch(j) == Some(':') && sheet_range_end(chars, locale, array_depth, &value, j, out) {
         let mut end = j + 1;
-        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+        while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && locale.is_array_separator(c))) {
             end += 1;
         }
         let last: String = chars.get(j + 1..end).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -247,10 +268,11 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
     }
 }
 
+/// Whether the colon begins a sheet-range qualifier rather than a cell range or array delimiter.
 fn sheet_range_end(chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, value: &str, colon: usize, out: &[Token]) -> bool {
     let ch = |index| char_at(chars, index);
     let mut end = colon + 1;
-    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+    while ch(end).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && locale.is_array_separator(c))) {
         end += 1;
     }
     let repeats_sheet = is_range_end(value)
@@ -293,7 +315,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             '#' => {
-                i = error_literal(src, &chars, i, start, &mut out)?;
+                i = error_literal(src, &chars, locale, i, start, &mut out)?;
             }
             '[' => {
                 i = structured_ref(src, &chars, i, start, &mut out)?;
@@ -333,7 +355,11 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
-            ';' => {
+            c if array_depth > 0 && c == locale.array_row_separator() => {
+                push(&mut out, Tok::Semicolon, i + 1);
+                i += 1;
+            }
+            ';' if array_depth == 0 => {
                 push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
             }
@@ -379,4 +405,14 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
     }
     out.push(Token { tok: Tok::Eof, start: src.len(), end: src.len() });
     Ok(out)
+}
+
+#[cfg(test)]
+mod error_prefix_tests {
+    /// Checks error-token spans when equivalent case variants occupy different UTF-8 byte lengths.
+    #[test]
+    fn literal_prefixes_do_not_assume_equal_utf8_case_lengths() {
+        assert_eq!(super::spelling_prefix("#id!+1", "#İD!"), "#id!");
+        assert_eq!(super::spelling_prefix("#İD!+1", "#id!"), "#İD!");
+    }
 }

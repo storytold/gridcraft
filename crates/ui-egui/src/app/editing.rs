@@ -27,7 +27,7 @@ impl SheetApp {
         } else {
             match sh.cell(at) {
                 Some(c) if c.formula.is_some() => formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet()),
-                _ => gridcraft_engine::display::edit_text(&d.wb, sh, at),
+                _ => formula_locale::edit_text(&d.wb, sh, at, locale),
             }
         };
         let (text, replace) = match text {

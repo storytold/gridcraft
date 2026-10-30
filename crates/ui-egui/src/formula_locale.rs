@@ -3,6 +3,8 @@ use crate::i18n::Language;
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
+/// Converts editor input to canonical engine syntax using the selected formula locale.
+/// Preserves quoted text and explicit Text formatting, and resolves workbook names before aliases.
 pub(crate) fn canonical(
     text: &str,
     locale: FormulaLocale,
@@ -21,15 +23,21 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
+    // The engine's leading =/+/- convention, with localized identifiers (no trimming).
     let body = text;
-    if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
-    {
+    if is_formula_entry(body) {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
+    }
+    if let Some(error) = locale.parse_error(text) {
+        return Ok(error.as_str().to_string());
+    }
+    for value in ["TRUE", "FALSE"] {
+        if locale.fold_alias(text) == locale.fold_alias(locale.function_name(value)) {
+            return Ok(value.to_string());
+        }
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
     let normalized = body.trim().replace(locale.decimal_separator(), ".");
@@ -40,6 +48,13 @@ pub(crate) fn canonical(
     Ok(text.to_string())
 }
 
+/// Recognizes explicit formulas and signed expression starts without treating ordinary signed numbers as formulas.
+fn is_formula_entry(text: &str) -> bool {
+    text.starts_with('=') || ((text.starts_with('+') || text.starts_with('-')) && text.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
+}
+
+/// Localizes a stored canonical formula for display, preserving the original text on parse failure.
+/// Workbook names keep precedence over aliases; user-defined call prefixes are hidden for presentation.
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
     // English (and every language without a formula table) shows the stored text, `_xludf.`
     // prefixes aside, and skips a parse per frame.
@@ -52,6 +67,41 @@ pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: u
         .map(|body| format!("={body}"))
         .unwrap_or_else(|_| text.to_string());
     hide_udf_prefix(&shown, locale)
+}
+
+/// Display spelling of Boolean/error constants, independent of the grid's layout and formatting.
+pub(crate) fn localized_constant(value: &gridcraft_engine::core::Value, locale: FormulaLocale) -> Option<&'static str> {
+    use gridcraft_engine::core::Value;
+    match value {
+        Value::Error(error) => Some(locale.error_name(*error)),
+        Value::Bool(value) => Some(locale.function_name(if *value { "TRUE" } else { "FALSE" })),
+        _ => None,
+    }
+}
+
+/// Localizes a typed value without reinterpreting literal cell text on an unchanged edit.
+pub(crate) fn edit_text(
+    wb: &Workbook,
+    sheet: &gridcraft_engine::model::Sheet,
+    cell: gridcraft_engine::core::CellRef,
+    locale: FormulaLocale,
+) -> String {
+    use gridcraft_engine::core::Value;
+    let raw = gridcraft_engine::display::edit_text(wb, sheet, cell);
+    if locale == FormulaLocale::En || wb.styles.get(sheet.style_id(cell)).num_fmt.as_str() == "@" {
+        return raw;
+    }
+    match sheet.value(cell) {
+        Value::Text(text)
+            if !raw.starts_with('\'')
+                && (is_formula_entry(&text)
+                    || ["TRUE", "FALSE"].iter().any(|v| locale.fold_alias(&text) == locale.fold_alias(locale.function_name(v)))
+                    || locale.parse_error(&text).is_some()) =>
+        {
+            format!("'{raw}")
+        }
+        value => localized_constant(&value, locale).map_or(raw, str::to_string),
+    }
 }
 
 const UDF_PREFIX: &str = "_xludf.";
@@ -169,5 +219,22 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
+}
+
+#[cfg(test)]
+mod russian_help_tests {
+    use super::*;
+    /// Checks Russian help combines current catalog signatures with the chosen formula syntax.
+    #[test]
+    fn russian_help_uses_catalog_signature_and_selected_syntax() {
+        let translated_number = Language::Ru.function_argument("number").unwrap();
+        let expected = format!("СУММ({translated_number}1; [{translated_number}2]; ...)");
+        assert_eq!(signature("сумм", FormulaLocale::Ru, Language::Ru), Some(expected));
+        assert_eq!(signature("SUM", FormulaLocale::En, Language::Ru), Some(format!("SUM({translated_number}1, [{translated_number}2], ...)")));
+        let english = crate::formula_bar::function_description("IF").unwrap();
+        let expected = Language::Ru.function_description(&english);
+        assert!(expected.is_some());
+        assert_eq!(description("ЕСЛИ", FormulaLocale::Ru, Language::Ru).as_deref(), expected);
     }
 }

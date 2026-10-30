@@ -288,6 +288,8 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
 
+/// Paints a cell using its effective style, conditional formatting, and merge geometry.
+/// Formats values and localized constants for display, then clips or extends text within the available space.
 fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
@@ -328,8 +330,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
     let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+    let locale = crate::i18n::current(p.ctx()).formula_locale();
     if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
-        text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
+        text = crate::formula_locale::display(&text, locale, wb, si);
+    } else if let Some(localized) = crate::formula_locale::localized_constant(&v, locale) {
+        text = localized.to_string();
     }
     if text.is_empty() {
         return;
