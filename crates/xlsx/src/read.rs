@@ -17,6 +17,8 @@ pub struct Ctx<'a> {
     pub sst: Vec<Arc<str>>,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
+    /// Shared strings, by index, whose reading differs from their text's entry in `phonetics`.
+    pub sst_reading: Vec<Option<Arc<PhoneticString>>>,
     /// Cell format index → model style.
     pub xf_map: Vec<StyleId>,
     pub dxfs: Vec<Style>,
@@ -38,33 +40,33 @@ impl Ctx<'_> {
     pub fn warn(&mut self, m: impl Into<String>) {
         self.report.warn(m);
     }
-    /// Stores the phonetic data read from `xl/sharedStrings.xml`.
+    /// Stores the phonetic data read from `xl/sharedStrings.xml`: `readings` has one entry per
+    /// `<si>` of `self.sst`, in order.
     ///
-    /// One entry per base text: the writer rebuilds the shared string table from the values the
-    /// sheets use and holds each text once (the format's `uniqueCount`), so only one reading can be
-    /// written per text. A later `<si>` with a text that is already there is dropped — with a
-    /// warning when its data differs, so nothing is lost silently.
-    pub fn keep_phonetics(&mut self, list: Vec<PhoneticString>) {
-        let mut kept: Vec<PhoneticString> = Vec::new();
-        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut conflicts = 0usize;
-        for p in list {
-            match index.get(p.text.as_str()) {
-                Some(&i) => {
-                    if kept.get(i).is_some_and(|k| *k != p) {
-                        conflicts += 1;
-                    }
-                }
+    /// The first item with a text gives the workbook its reading for that text (`phonetics`). A
+    /// later item with the same text and another reading, or none, keeps its own (`sst_reading`),
+    /// which the cells using it carry, so nothing is lost.
+    pub fn keep_phonetics(&mut self, readings: Vec<Option<PhoneticString>>) {
+        if readings.iter().all(Option::is_none) {
+            return;
+        }
+        let mut first: std::collections::HashMap<Arc<str>, Option<PhoneticString>> = std::collections::HashMap::new();
+        let mut own: Vec<Option<Arc<PhoneticString>>> = vec![None; readings.len()];
+        for ((text, reading), slot) in self.sst.iter().zip(readings).zip(own.iter_mut()) {
+            match first.get(text) {
                 None => {
-                    index.insert(p.text.clone(), kept.len());
-                    kept.push(p);
+                    if let Some(p) = &reading {
+                        self.phonetics.push(p.clone());
+                    }
+                    first.insert(text.clone(), reading);
                 }
+                Some(base) if *base != reading => {
+                    *slot = Some(Arc::new(reading.unwrap_or_else(|| PhoneticString { text: text.to_string(), runs: vec![], props: None })));
+                }
+                Some(_) => {}
             }
         }
-        if conflicts > 0 {
-            self.warn(format!("shared strings: {conflicts} phonetic readings were dropped because another <si> with the same text already had one"));
-        }
-        self.phonetics = kept;
+        self.sst_reading = own;
     }
     /// A fresh id for a chart, picture, shape or table.
     pub fn next_object_id(&mut self) -> u32 {
@@ -103,16 +105,14 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
-                let mut phonetics = Vec::new();
+                let mut readings = Vec::new();
                 let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
                     let text = xml::rich_text(&si);
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
                     dropped += raw.saturating_sub(runs.len());
-                    if !runs.is_empty() || props.is_some() {
-                        phonetics.push(PhoneticString { text: text.clone(), runs, props });
-                    }
+                    readings.push((!runs.is_empty() || props.is_some()).then(|| PhoneticString { text: text.clone(), runs, props }));
                     sst.push(Arc::from(text));
                     Ok(())
                 });
@@ -123,7 +123,8 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
                 }
                 cx.sst = sst;
-                cx.keep_phonetics(phonetics);
+                readings.truncate(cx.sst.len());
+                cx.keep_phonetics(readings);
             }
             None => cx.warn(format!("missing part {}", r.target)),
         }
@@ -228,6 +229,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         report: ReadReport::default(),
         sst: vec![],
         phonetics: vec![],
+        sst_reading: vec![],
         xf_map: vec![],
         dxfs: vec![],
         palette: crate::tables::INDEXED.to_vec(),

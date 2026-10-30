@@ -103,7 +103,7 @@ pub struct DocProps {
 /// `start` and `end` are zero-based offsets into the base text (`sb` and `eb` in the file) with
 /// `start < end`; reading keeps them within the text's length in UTF-16 code units. Behaviour
 /// reference: ISO/IEC 29500-1 §18.4.6 `rPh` and the Microsoft Learn `PhoneticRun` class.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhoneticRun {
     pub start: u32,
     pub end: u32,
@@ -113,7 +113,7 @@ pub struct PhoneticRun {
 /// The `<phoneticPr>` of a string item: how its phonetic runs are displayed. `kind` (`type`) and
 /// `alignment` only ever hold values ISO/IEC 29500-1 §18.18.57 `ST_PhoneticType` / §18.18.56
 /// `ST_PhoneticAlignment` define, so damaged files cannot be written back invalid.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhoneticProps {
     /// `fontId`: a required attribute, an index into the style sheet's fonts. A file without one
     /// gets 0 — the Normal style's font, which an out-of-range index falls back to anyway.
@@ -130,7 +130,7 @@ pub struct PhoneticProps {
 ///
 /// `text` is the string's base text — the only handle a cell keeps on its shared string — and is
 /// the key the writer uses to re-emit the runs next to the right `<si>`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhoneticString {
     pub text: String,
     pub runs: Vec<PhoneticRun>,
@@ -164,9 +164,9 @@ pub struct Workbook {
     /// text, so that an open + save keeps a Japanese workbook's readings. Written back next to the
     /// `<si>` holding the same text.
     ///
-    /// Keyed by text because that is all a cell keeps of its shared string: the saved table holds
-    /// each text once (the format's `uniqueCount`), so two `<si>` items that share a base text can
-    /// only keep one reading — the reader keeps the first and warns. Empty for workbooks without
+    /// Keyed by text because that is all a cell keeps of its shared string: the first `<si>` with a
+    /// text gives its reading here; a later one with the same text and another reading (or none)
+    /// keeps it on the cells that use it ([`crate::Sheet::readings`]). Empty for workbooks without
     /// phonetic data; not present in older JSON. Modelled data (unlike [`Workbook::preserved`],
     /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

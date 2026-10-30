@@ -72,6 +72,49 @@ fn copy_merges(
     Ok(())
 }
 
+type Reading = std::sync::Arc<gridcraft_model::PhoneticString>;
+
+/// What a pasted cell's phonetic reading is decided by: the paste, the source (its own reading,
+/// its workbook, its value) and the target before and after.
+struct PastedReading<'a> {
+    what: What,
+    op: &'a str,
+    own: Option<Reading>,
+    src_wb: &'a gridcraft_model::Workbook,
+    same_doc: bool,
+    src_val: &'a Value,
+    old: &'a Cell,
+    old_reading: Option<Reading>,
+    new: &'a Cell,
+    picture: bool,
+}
+
+/// The reading a pasted cell keeps in `here`. Pasting what a cell holds brings its reading (from
+/// another workbook, text read with that workbook's default reading keeps it, as the default here
+/// may differ); pasting formats, or an operation that leaves the target's text as it was, leaves
+/// the target's. A formula's result, a picture or anything but text has none, and one this
+/// workbook gives the text anyway needs no entry.
+fn pasted_reading(here: &gridcraft_model::Workbook, p: PastedReading<'_>) -> Option<Reading> {
+    let Value::Text(text) = &p.new.value else { return None };
+    if p.new.formula.is_some() || p.picture {
+        return None;
+    }
+    let formats_only = matches!(p.what, What::Formats | What::Comments | What::Validation | What::ColumnWidths);
+    let reading = if formats_only || (p.op != "none" && p.new.value == p.old.value) {
+        p.old_reading
+    } else {
+        let default = |t: &str| p.src_wb.phonetics.iter().find(|x| x.text == t).map(|x| std::sync::Arc::new(x.clone()));
+        p.own.or_else(|| match p.src_val {
+            Value::Text(t) if !p.same_doc => default(t),
+            _ => None,
+        })
+    };
+    reading.filter(|r| !here.phonetics.iter().any(|x| x.text == text.as_ref() && *x == **r))
+}
+
+/// `edit.pasteSpecial`: the clipboard's cells, or one part of them (values, formulas, formats …),
+/// with an operation, skipping blanks, transposed or as links; a cut moves them, with their
+/// pictures and phonetic readings.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -128,10 +171,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let mut moved_formulas = Vec::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
+        let mut moved_readings = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
             moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
+            moved_readings = source.readings.iter().filter(|(c, _)| src.contains(**c)).map(|(c, r)| (*c, r.clone())).collect();
             let taken = source.take_cells(src);
             // Notes, hyperlinks and merged areas sit beside the cells, and a cut takes them
             // with the block: the destination is written from the clipboard snapshot taken
@@ -152,12 +197,16 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             let src_cell = if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
             let src_val = src_sheet.value(sc);
             let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
+            // A text's own phonetic reading travels with it, as its picture does (a cut's from the
+            // cells it took, which only a cut fills).
+            let src_reading = moved_readings.get(&sc).or_else(|| (!cut_move).then(|| src_sheet.readings.get(&sc)).flatten()).cloned();
             if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
                 continue;
             }
             let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
             let old_picture = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell_pictures.get(&dest)).cloned();
             let mut new_picture = old_picture.clone();
+            let old_reading = cx.wb.sheet(dest_sheet).and_then(|sh| sh.readings.get(&dest)).cloned();
             let mut new = old.clone();
             let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                 let f = cell.formula.as_ref()?;
@@ -255,6 +304,21 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     sh.validations.push(dv);
                 }
             }
+            let new_reading = pasted_reading(
+                &cx.wb,
+                PastedReading {
+                    what,
+                    op: &op,
+                    own: src_reading,
+                    src_wb: &src_wb,
+                    same_doc,
+                    src_val: &src_val,
+                    old: &old,
+                    old_reading,
+                    new: &new,
+                    picture: new_picture.is_some(),
+                },
+            );
             match what {
                 What::Comments => {
                     if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
@@ -280,6 +344,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             if let Some(picture) = new_picture {
                 cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
             }
+            cx.sheet_mut(dest_sheet)?.readings.extend(new_reading.map(|r| (dest, r)));
             cx.touch(dest_sheet, dest);
         }
         // Merged areas inside the copied block travel with it.

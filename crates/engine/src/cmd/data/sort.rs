@@ -159,6 +159,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             .collect();
         let mut moved: Vec<(CellRef, Option<Cell>)> = Vec::with_capacity(body.count() as usize);
         let mut pictures = Vec::new();
+        let mut readings = Vec::new();
         for (dst_i, &src_i) in order.iter().enumerate() {
             for &k in &lanes {
                 let src = line(src_i, k);
@@ -173,6 +174,10 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
+                }
+                // A text's own phonetic reading travels with it, as its picture does.
+                if let Some(reading) = sh.readings.get(&src) {
+                    readings.push((dst, reading.clone()));
                 }
                 moved.push((dst, cell));
             }
@@ -229,6 +234,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             shm.hyperlinks.insert(at, h);
         }
         shm.cell_pictures.extend(pictures);
+        shm.readings.extend(readings);
         for (i, h) in heights.into_iter().enumerate() {
             let row = body.start.row + i as u32;
             match h {

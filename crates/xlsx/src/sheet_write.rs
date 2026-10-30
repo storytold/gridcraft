@@ -221,6 +221,7 @@ struct CellWriteInput<'a> {
     reference: CellRef,
     cell: Option<&'a Cell>,
     picture: Option<&'a std::sync::Arc<gridcraft_model::CellPicture>>,
+    reading: Option<&'a std::sync::Arc<gridcraft_model::PhoneticString>>,
     header_override: Option<&'a String>,
     spill_value: Option<&'a Value>,
     dynamic_range: Option<&'a RangeRef>,
@@ -623,6 +624,7 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                     reference: cell_ref,
                     cell,
                     picture: sheet.cell_pictures.get(&cell_ref),
+                    reading: sheet.readings.get(&cell_ref),
                     header_override: ov,
                     spill_value: ex,
                     dynamic_range: array.as_ref(),
@@ -702,8 +704,10 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     s.push_str("</sheetView></sheetViews>");
 }
 
+/// Writes one `<c>`: its value or formula with its style and picture; a text with a reading of its
+/// own goes to that reading's shared string item.
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { reference: c, cell, picture, reading, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
@@ -787,7 +791,11 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
         Value::Text(t) => {
-            let i = out.sst.index(t);
+            // A reading made for other text is stale and not written.
+            let i = match reading.filter(|p| *p.text == **t) {
+                Some(p) => out.sst.index_reading(t, p),
+                None => out.sst.index(t),
+            };
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
         }
         Value::Bool(b) => {

@@ -112,6 +112,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
     let mut pictures = Vec::new();
+    let mut readings = Vec::new();
     for lane in lanes {
         let src_cells: Vec<(CellRef, Option<Cell>)> = (0..src_len)
             .map(|i| {
@@ -183,6 +184,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             if let Some(picture) = sh.cell_pictures.get(&sc) {
                 pictures.push((*t, picture.clone()));
             }
+            readings.extend(filled_reading(sh, sc, &cell).map(|r| (*t, r)));
             writes.push((*t, if cell.is_blank() { None } else { Some(cell) }));
         }
     }
@@ -197,10 +199,18 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
         }
     }
     sh.cell_pictures.extend(pictures);
+    sh.readings.extend(readings);
     for (c, _) in writes {
         cx.touch(sheet, c);
     }
     Ok(())
+}
+
+/// The source cell's own phonetic reading for a cell filled from it: it goes where the same text
+/// goes; a formula, or a series that changes the text (`Item 1`, `Item 2`), leaves it behind.
+fn filled_reading(sh: &gridcraft_model::Sheet, source: CellRef, cell: &Cell) -> Option<Arc<gridcraft_model::PhoneticString>> {
+    let reading = sh.readings.get(&source)?;
+    (cell.formula.is_none() && matches!(&cell.value, Value::Text(text) if reading.text == text.as_ref())).then(|| reading.clone())
 }
 
 #[derive(Clone, Debug)]
