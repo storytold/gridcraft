@@ -98,3 +98,19 @@ fn custom_dialogs_are_translated() {
         }
     }
 }
+
+#[test]
+fn command_search_matches_translated_and_english_labels() {
+    // (typed, a result that must show): French labels, accents included, and English still work.
+    for (typed, shown) in [("gras", "Gras"), ("figer", "Figer les volets"), ("graphique", "graphique"), ("bold", "Gras")] {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+        h.input_mut().events.push(egui::Event::Text(typed.into()));
+        h.run_steps(3);
+        // Inside the dialog: the ribbon's Bold button also reads "Gras".
+        let dialog = h.get_by_role_and_label(egui::accesskit::Role::Window, Language::Fr.tr("Search Commands"));
+        assert!(dialog.query_all_by_label_contains(shown).next().is_some(), "{typed}: no result showing {shown}");
+    }
+}

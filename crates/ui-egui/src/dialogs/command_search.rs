@@ -20,14 +20,19 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         d.focus_initialized = true;
     }
 
-    let q = d.search.to_ascii_lowercase();
+    // Matches the label as shown in the interface language as well as the English label and id,
+    // so "gras" finds Bold in French and "bold" still does.
+    let lang = app.ui.language;
+    let q = d.search.to_lowercase();
     let cmds: Vec<(String, String, String)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › ")))
+        .filter(|c| {
+            q.is_empty() || lang.tr(c.label).to_lowercase().contains(&q) || c.label.to_lowercase().contains(&q) || c.id.to_lowercase().contains(&q)
+        })
+        .map(|c| (c.id.to_string(), lang.tr(c.label).to_string(), c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
         .take(40)
         .collect();
 

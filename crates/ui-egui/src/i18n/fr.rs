@@ -1137,7 +1137,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Two-sided: short edge" => "Recto verso : bord court",
         "Type" => "Type",
         "Type (custom format code):" => "Type (code de format personnalisé) :",
-        "Type a command, e.g. freeze, chart, bold…" => "Tapez une commande, par exemple freeze, chart, bold…",
+        "Type a command, e.g. freeze, chart, bold…" => "Tapez une commande, par exemple figer, graphique, gras…",
         "Type to filter…" => "Tapez pour filtrer…",
         "Underline (⌘U)" => "Souligné (⌘U)",
         "Undo" => "Annuler",
