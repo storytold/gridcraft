@@ -34,6 +34,7 @@ fn rejects_non_model_input_without_panicking() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // The lint budget is for the engine; tests keep one readable assertion table.
 fn reads_an_excel_authored_model() {
     let Some(data) = fixture() else { return };
     assert!(is_model_file(&data));

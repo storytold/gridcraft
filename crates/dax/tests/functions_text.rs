@@ -144,6 +144,7 @@ fn every_record_has_consistent_signature_and_metadata() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // The lint budget is for the engine; tests keep one readable assertion table.
 fn documented_parameter_kinds_and_overloads() {
     let combinevalues = spec("COMBINEVALUES");
     assert_eq!(overload_kinds(combinevalues, 3), Some(vec![ParamKind::Text, ParamKind::Any, ParamKind::Any]));

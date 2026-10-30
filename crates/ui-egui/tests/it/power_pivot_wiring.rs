@@ -156,6 +156,7 @@ fn data_type_and_summarize_by_controls_edit_model_metadata() {
     assert_eq!(values(&h)["resultText"], json!("20"));
 }
 
+#[allow(clippy::cognitive_complexity)] // Walks every Data View command the test covers.
 #[test]
 fn sort_filter_find_and_hide_wire_the_data_view_to_engine_commands() {
     let mut h = open();

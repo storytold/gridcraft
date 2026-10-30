@@ -104,6 +104,8 @@ impl LexError {
 ///
 /// Whitespace is insignificant and comments (`//`, `--` to end of line, and `/* ... */`) are
 /// skipped. A block comment does not nest.
+#[allow(clippy::cognitive_complexity)]
+// A hand-written scanner: one loop with a case per token kind.
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();

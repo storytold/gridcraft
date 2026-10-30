@@ -220,6 +220,8 @@ fn generate_series(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) ->
 /// using strict (no coercion) semantics. Lineage is tracked per table here: two model tables with
 /// a same-named column have different lineage and therefore raise an error, while a column with
 /// lineage and one without are ignored as join keys (as documented for the natural joins).
+#[allow(clippy::type_complexity)]
+// The pair is (matching column index pairs, ones holding a common column on the right).
 fn natural_join_columns(left: &TableValue, right: &TableValue) -> Result<(Vec<(usize, usize)>, Vec<usize>), EvalError> {
     let mut common = Vec::new();
     let mut right_common = vec![false; right.columns.len()];

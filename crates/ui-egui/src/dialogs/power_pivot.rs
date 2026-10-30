@@ -1843,9 +1843,10 @@ fn power_pivot_formula(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, t:
         ui,
         |ui| {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("pp_name_box").width(180.0).selected_text(egui::RichText::new(display.clone()).color(t.text)).show_ui(
-                    ui,
-                    |ui| {
+                craft_ui::ComboBox::from_id_salt("pp_name_box")
+                    .width(180.0)
+                    .selected_text(egui::RichText::new(display.clone()).color(t.text))
+                    .show_ui(ui, |ui| {
                         if columns.is_empty() {
                             ui.label(egui::RichText::new("No columns").italics().color(t.text_dim));
                         }
@@ -1855,8 +1856,7 @@ fn power_pivot_formula(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, t:
                                 chosen_column = Some(index);
                             }
                         }
-                    },
-                );
+                    });
                 if crate::widgets::icon_button(ui, Icon::Close, t.text_dim, "Cancel (X): clear the formula", vec2(22.0, 20.0)).clicked() {
                     clear = true;
                 }
@@ -2339,24 +2339,24 @@ fn power_pivot_create_relationship(ui: &mut egui::Ui, app: &mut SheetApp, d: &mu
         ui.label(egui::RichText::new("To").strong().color(t.text));
     });
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("pp_rel_from_table").width(190.0).selected_text(from_table.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_rel_from_table").width(190.0).selected_text(from_table.clone()).show_ui(ui, |ui| {
             for table in &tables {
                 ui.selectable_value(&mut from_table, table.clone(), table);
             }
         });
-        egui::ComboBox::from_id_salt("pp_rel_to_table").width(190.0).selected_text(to_table.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_rel_to_table").width(190.0).selected_text(to_table.clone()).show_ui(ui, |ui| {
             for table in &tables {
                 ui.selectable_value(&mut to_table, table.clone(), table);
             }
         });
     });
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("pp_rel_from_column").width(190.0).selected_text(from_column.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_rel_from_column").width(190.0).selected_text(from_column.clone()).show_ui(ui, |ui| {
             for column in &from_columns {
                 ui.selectable_value(&mut from_column, column.clone(), column);
             }
         });
-        egui::ComboBox::from_id_salt("pp_rel_to_column").width(190.0).selected_text(to_column.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_rel_to_column").width(190.0).selected_text(to_column.clone()).show_ui(ui, |ui| {
             for column in &to_columns {
                 ui.selectable_value(&mut to_column, column.clone(), column);
             }
@@ -2516,7 +2516,7 @@ fn power_pivot_find_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dialog
     });
     ui.horizontal(|ui| {
         ui.label("Within");
-        egui::ComboBox::from_id_salt("pp_find_table")
+        craft_ui::ComboBox::from_id_salt("pp_find_table")
             .selected_text(if table_scope.is_empty() { "All tables".to_string() } else { table_scope.clone() })
             .show_ui(ui, |ui| {
                 if ui.selectable_label(table_scope.is_empty(), "All tables").clicked() {
@@ -2530,7 +2530,7 @@ fn power_pivot_find_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dialog
                     }
                 }
             });
-        egui::ComboBox::from_id_salt("pp_find_column")
+        craft_ui::ComboBox::from_id_salt("pp_find_column")
             .selected_text(if column_scope.is_empty() { "All columns".to_string() } else { column_scope.clone() })
             .show_ui(ui, |ui| {
                 if ui.selectable_label(column_scope.is_empty(), "All columns").clicked() {
@@ -2648,7 +2648,7 @@ fn power_pivot_sort_by_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dia
     ui.add_space(3.0);
     egui::Grid::new("pp_sort_by_grid").spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         ui.label("Sort column");
-        egui::ComboBox::from_id_salt("pp_sort_key").selected_text(key.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_sort_key").selected_text(key.clone()).show_ui(ui, |ui| {
             for column in &key_columns {
                 if ui.selectable_label(key == *column, column).clicked() {
                     key = column.clone();
@@ -2657,7 +2657,7 @@ fn power_pivot_sort_by_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dia
         });
         ui.end_row();
         ui.label("By table");
-        egui::ComboBox::from_id_salt("pp_sort_by_table").selected_text(by_table.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_sort_by_table").selected_text(by_table.clone()).show_ui(ui, |ui| {
             for name in &connected {
                 if ui.selectable_label(by_table == *name, name).clicked() {
                     by_table = name.clone();
@@ -2667,7 +2667,7 @@ fn power_pivot_sort_by_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dia
         });
         ui.end_row();
         ui.label("By column");
-        egui::ComboBox::from_id_salt("pp_sort_by_column").selected_text(by_column.clone()).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("pp_sort_by_column").selected_text(by_column.clone()).show_ui(ui, |ui| {
             for column in &by_columns {
                 if ui.selectable_label(by_column == *column, column).clicked() {
                     by_column = column.clone();
@@ -2723,7 +2723,7 @@ fn power_pivot_measure_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dia
     }
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Table").small().color(t.text_dim));
-    egui::ComboBox::from_id_salt("pp_new_measure_table").width(220.0).selected_text(if table.is_empty() { "Select…" } else { &table }).show_ui(
+    craft_ui::ComboBox::from_id_salt("pp_new_measure_table").width(220.0).selected_text(if table.is_empty() { "Select…" } else { &table }).show_ui(
         ui,
         |ui| {
             for candidate in &tables {

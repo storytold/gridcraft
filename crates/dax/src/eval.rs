@@ -28,6 +28,11 @@
 //! iterators) because they need a row context. [`Evaluator::storage_stats`] reports which path
 //! served a call.
 
+// Every family module shares the evaluator's vocabulary through `use super::*` (`Evaluator`,
+// `Context`, `Scalar`, `TableValue`, `EvalError`, the value helpers), so each one reads as DAX
+// functions rather than an import list.
+#![allow(clippy::wildcard_imports)]
+
 mod aggregation;
 mod date_time;
 mod filter;
@@ -619,6 +624,8 @@ impl<'a> Evaluator<'a> {
         Ok(Scalar::Boolean(found))
     }
 
+    #[allow(clippy::cognitive_complexity)]
+    // The dispatcher is a flat list of function names: each arm is one documented DAX function.
     fn call(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
         match name.to_ascii_uppercase().as_str() {
             "TRUE" => return Ok(Scalar::Boolean(true)),

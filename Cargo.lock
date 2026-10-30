@@ -2011,9 +2011,10 @@ dependencies = [
 
 [[package]]
 name = "gridcraft-dax"
-version = "0.10.0"
+version = "0.13.0"
 dependencies = [
- "quick-xml",
+ "chrono",
+ "quick-xml 0.41.0",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

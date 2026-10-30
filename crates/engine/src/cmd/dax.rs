@@ -24,7 +24,7 @@ use gridcraft_dax::{
 use gridcraft_numfmt::{NumberFormat, format_value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cmd, str_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -1684,6 +1684,7 @@ mod tests {
         status["measures"].as_array().expect("measures").iter().find(|m| m["name"] == name).expect("measure")
     }
 
+    #[allow(clippy::cognitive_complexity)] // Add, update and delete of a measure, each with its error cases.
     #[test]
     fn measure_add_update_and_delete() {
         let (path, dir) = write_model(

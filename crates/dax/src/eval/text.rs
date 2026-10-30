@@ -865,6 +865,9 @@ fn cased_name(name: &str, upper: bool) -> String {
     if upper { name.to_uppercase() } else { name.to_string() }
 }
 
+#[allow(clippy::cognitive_complexity)]
+// One pass over Excel's date tokens (y/m/d/h/s and the elapsed-time forms) keeps the section
+// handling and the token cases together.
 fn format_date(serial: f64, format: &str) -> Result<String, EvalError> {
     let section = split_sections(format).into_iter().next().unwrap_or_default();
     let (year, month, day) = date_parts(serial);

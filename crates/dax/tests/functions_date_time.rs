@@ -170,6 +170,7 @@ fn volatile_and_host_flags_are_honest() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // The lint budget is for the engine; tests keep one readable assertion table.
 fn arity_boundaries_are_enforced_for_representative_functions() {
     // Zero-argument functions reject any argument.
     assert!(!has_arity_error("NOW ()"));

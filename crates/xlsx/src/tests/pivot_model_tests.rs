@@ -156,6 +156,7 @@ fn wb_rel_target(parts: &HashMap<String, Vec<u8>>, rid: &str) -> Option<String> 
     Some(target.to_string())
 }
 
+#[allow(clippy::cognitive_complexity)] // One round trip asserts every setting the writer stores.
 #[test]
 fn round_trip_keeps_every_representable_setting() {
     let bytes = written();
@@ -500,6 +501,7 @@ fn deeply_nested_pivot_xml_is_refused() {
     assert!(matches!(read_model_pivots(&bytes), Err(IoError::Xml(_))));
 }
 
+#[allow(clippy::type_complexity)] // Each case carries the mutation that makes the spec invalid.
 #[test]
 fn invalid_specs_are_refused_before_anything_is_written() {
     let mutations: Vec<(&str, Box<dyn Fn(&mut ModelPivotSpec)>)> = vec![

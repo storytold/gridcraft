@@ -372,6 +372,8 @@ fn group_layout(group: &[GroupArg]) -> Result<GroupLayout, EvalError> {
 }
 
 /// Groups the rows of `table` by `columns`; each entry holds the group values and the source rows.
+#[allow(clippy::type_complexity)]
+// Each entry pairs the group's key values with the rows that fall in it.
 fn group_details(ev: &Evaluator<'_>, table: &TableValue, columns: &[ColumnRef]) -> Result<Vec<(Vec<Scalar>, Vec<Vec<Scalar>>)>, EvalError> {
     let mut groups: BTreeMap<Vec<ScalarKey>, (Vec<Scalar>, Vec<Vec<Scalar>>)> = BTreeMap::new();
     for row in &table.rows {
@@ -857,6 +859,9 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     Ok(TableValue::new(columns, rows))
 }
 
+#[allow(clippy::cognitive_complexity)]
+// ADDMISSINGITEMS merges explicit rows, companion columns and the invisible-total filter, so the
+// shape it builds reads best in one place.
 fn add_missing_items(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<TableValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::new("ADDMISSINGITEMS needs a table"));

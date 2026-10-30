@@ -476,6 +476,7 @@ fn esc_scalar(v: &ModelPivotScalar) -> String {
 }
 
 /// Builds the hierarchy list (every table column, then every measure) and the used cache fields.
+#[allow(clippy::type_complexity)] // Hierarchies, cache fields and the column → hierarchy index come out together.
 fn plan_fields(spec: &ModelPivotSpec) -> (Vec<Hierarchy>, Vec<CacheField>, HashMap<(String, String), usize>) {
     let mut hierarchies = Vec::new();
     let mut by_column: HashMap<(String, String), usize> = HashMap::new();

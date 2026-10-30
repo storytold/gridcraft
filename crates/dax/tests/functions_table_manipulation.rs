@@ -186,6 +186,7 @@ fn return_types_and_flags_are_honest() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // The lint budget is for the engine; tests keep one readable assertion table.
 fn overloads_model_the_documented_signatures() {
     assert_eq!(overload_kinds(spec("ADDCOLUMNS"), 3), Some(vec![ParamKind::Table, ParamKind::Text, ParamKind::Expression]));
     assert!(spec("ADDCOLUMNS").overload_for(5).is_some_and(|overload| overload.variadic));

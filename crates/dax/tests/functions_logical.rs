@@ -137,6 +137,7 @@ fn every_record_has_consistent_signature_and_metadata() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // Asserts every catalogued overload and parameter kind in one table walk.
 fn documented_parameter_kinds_and_overloads() {
     assert_eq!(overload_kinds(spec("AND"), 2), Some(vec![ParamKind::Logical, ParamKind::Logical]));
     assert_eq!(overload_kinds(spec("OR"), 2), Some(vec![ParamKind::Logical, ParamKind::Logical]));

@@ -67,6 +67,7 @@ fn hostile_model() -> DataModel {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // One named argument per column of the expected finding row.
 fn finding(
     check: IntegrityCheck,
     severity: Severity,

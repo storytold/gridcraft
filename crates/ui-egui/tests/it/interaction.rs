@@ -1514,6 +1514,7 @@ fn enter_formula(h: &mut egui_kittest::Harness<'static, SheetApp>, formula: &str
     h.run_steps(3);
 }
 
+#[allow(clippy::cognitive_complexity)] // One end-to-end Power Pivot walkthrough: load, measure, relationship.
 #[test]
 fn power_pivot_window_loads_a_model_and_edits_measures_and_relationships() {
     let (dir, path) = power_pivot_fixture("ui");

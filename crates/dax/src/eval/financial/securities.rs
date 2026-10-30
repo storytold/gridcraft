@@ -801,6 +801,9 @@ fn price(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     finite(a.name, price_value(settle, maturity, rate, yld, redemption, freq, basis)?).map(Scalar::Decimal)
 }
 
+#[allow(clippy::too_many_arguments)]
+// The signature mirrors YIELD's documented argument list (settlement, maturity, rate, price,
+// redemption, frequency, basis) plus the function name for its error messages.
 fn yield_from_price(settle: f64, maturity: f64, rate: f64, price: f64, redemption: f64, freq: i64, basis: i64, name: &str) -> Result<f64, EvalError> {
     let (period, accrued, to_next, count) = coupon_context(settle, maturity, freq, basis)?;
     if count == 1.0 {
@@ -980,6 +983,8 @@ fn quasi_period_units(from: f64, to: f64, anchor: f64, months: i64, period: f64,
     total
 }
 
+#[allow(clippy::too_many_arguments)]
+// ODDFPRICE takes eight date/rate arguments plus the function name, as Excel documents them.
 fn oddfprice_value(
     settle: f64,
     maturity: f64,

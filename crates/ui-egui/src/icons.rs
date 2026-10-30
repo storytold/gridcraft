@@ -556,6 +556,7 @@ impl G<'_> {
         self.p.text(self.pt(x, y), egui::Align2::CENTER_CENTER, t, font, c);
     }
     /// `steps` + 1 points along an ellipse centred at (`cx`, `cy`), from angle `a0` to `a1` radians.
+    #[allow(clippy::too_many_arguments)] // Centre, radii, angle range and step count of one arc.
     fn arc(&self, cx: f32, cy: f32, rx: f32, ry: f32, a0: f32, a1: f32, steps: usize) -> Vec<(f32, f32)> {
         let steps = steps.max(2);
         (0..=steps)
@@ -634,6 +635,7 @@ pub fn paint_on_sheet(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
 }
 
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with palette `pal`.
+#[allow(clippy::cognitive_complexity)] // One arm per icon: a drawing vocabulary, not branching logic.
 fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
     let side = rect.width().min(rect.height());
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
