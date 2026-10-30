@@ -321,7 +321,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
     let rect = &text_rect;
     let st = &lk.style;
-    let size = st.font.size * 96.0 / 72.0 * z;
+    let script = st.font.vert != gridcraft_engine::model::VertAlign::Baseline;
+    let size = st.font.size * 96.0 / 72.0 * z * if script { 0.67 } else { 1.0 };
     let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
     let font = FontId::new(size, fam);
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
@@ -334,7 +335,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if text.is_empty() {
         return;
     }
-    let color = ncolor.unwrap_or(lk.text_color);
+    let color = conditional_text_color(cfl.as_ref(), lk.text_color, ncolor);
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
@@ -362,7 +363,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             HAlign::Right => rect.right() - pad,
             _ => text_left + pad + indent,
         };
-        let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+        let y = script_text_y(st, *rect, &galley, z, true);
         p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
         return;
     }
@@ -456,8 +457,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         HAlign::Right => rect.right() - pad - w - indent,
         _ => text_left + pad + indent,
     };
-    let gh = galley.size().y;
-    let y = cell_text_y(st.align.v, *rect, gh, z);
+    let y = script_text_y(st, *rect, &galley, z, false);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
@@ -475,7 +475,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     } else {
         cp.galley(pos2(x, y), galley.clone(), color);
     }
-    paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+    paint_text_decorations(
+        &cp,
+        TextDecoration { x, y, width: w, height: galley.size().y, color, underline: st.font.underline, strike: st.font.strike },
+    );
 }
 
 struct TextDecoration {
@@ -615,4 +618,23 @@ fn paint_filter_buttons(q: &QuadrantPaint<'_>, range: RangeRef) {
         }
         paint_filter_button(p, filter_button_rect(geo, sh, c), active);
     }
+}
+
+/// Conditional font colors take precedence over a number format's color directive.
+fn conditional_text_color(cf: Option<&CfLook>, font: Color32, number: Option<Color32>) -> Color32 {
+    if cf.and_then(|look| look.style.as_ref()).is_some_and(|style| style.sets(gridcraft_engine::model::StyleProperty::FontColor)) {
+        font
+    } else {
+        number.unwrap_or(font)
+    }
+}
+
+/// Reserve one baseline allowance for script text, regardless of the wrapped line count.
+fn script_text_y(style: &gridcraft_engine::model::Style, rect: Rect, galley: &egui::Galley, z: f32, wrapped: bool) -> f32 {
+    use gridcraft_engine::model::VertAlign;
+    let height = galley.size().y;
+    let line_height = galley.rows.first().map_or(height, |row| row.rect().height());
+    let extra = if style.font.vert == VertAlign::Baseline { 0.0 } else { line_height / 0.67 - line_height };
+    let y = if wrapped { wrapped_cell_text_y(style.align.v, rect, height + extra, z) } else { cell_text_y(style.align.v, rect, height + extra, z) };
+    y + if style.font.vert == VertAlign::Subscript { extra } else { 0.0 }
 }

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (custom conditional formats integrated with current main; multiline superscript/subscript alignment) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -167,6 +167,16 @@ New Formatting Rule's formula box points like the formula bar: a click on the gr
 cell's absolute reference at the caret (`=$B$2`) and a drag a range, leaving the selection the rule
 applies to as it is (#2348). Other dialogs' reference fields don't take clicks yet.
 
+Conditional Formatting's quick-rule dialogs include **Custom Format…**, with Number, Font,
+Border and Fill tabs, reusing Format Cells controls. Manage Rules can edit a rule’s format. Checked properties override the existing cell style; unchecked ones inherit.
+Font family/size, bold/italic/underline/strikethrough/vertical position, arbitrary RGB and palette
+colors, border styles/colors, patterned fills and custom number codes can be chosen. Explicit
+"off", automatic, no-fill, no-border and General overrides survive XLSX saving and reopening.
+The draft returns to the rule on OK or Cancel and does not format the worksheet directly.
+Inherited controls use the selected cell/table style. Invalid color text cannot be confirmed;
+rule edits retain ranges, priority and Stop If True, and reject a changed rule or another worksheet.
+Pattern fills retain the existing renderer's approximate blend; they are stored as full patterns.
+
 ## Accessibility
 
 AccessKit is enabled, but the grid, ribbon and dialogs are not exposed as an accessible tree with
@@ -190,6 +200,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Custom conditional formats integrated with the current grid, dialogs and XLSX implementation; wrapped superscript/subscript positioning uses one line of baseline allowance, preserving multiline alignment and clipping. Shared editor dropdowns have accessible names and its clear action stays above the scrollable controls. |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
@@ -201,11 +212,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-24 | minor | Right-clicking a PivotTable's value, subtotal or grand total cell offers Show Details in the cell menu, as in Excel ("Right-click a field in the values area of the PivotTable, and then click Show Details"): it lists the cell's source records on a new sheet, as double-clicking the cell does (`pivot.showDetails`). Labels and headers of a current report don't offer it; in a report that is out of date every cell offers it, and choosing it asks for a refresh |
 | 2026-10-24 | minor | Sheet tabs: the handle at the horizontal scrollbar's left edge shows the resize cursor, and dragging it moves the boundary, as in Excel ("Hover the mouse pointer at the edge of the scrollbar until you see the double-headed arrow"). Dragging it right gives the tabs more of the bar, until the scrollbar is 100 px wide (the scrollbar stays 100 px wide after the window is narrowed); dragging it left gives the scrollbar more, down to the New sheet button. Room the tabs don't fill stays empty, with New sheet after the last tab. Each open workbook keeps its own share; a workbook starts at the default (tabs up to 60%) |
 | 2026-10-24 | minor | Outline Settings (Data ▸ Outline ▸ Settings, `data.outlineSettings`): clearing Summary rows below detail or Summary columns to right of detail puts the − / + buttons on the line above or left of each group, and Hide Detail, Show Detail and the level buttons mark that line collapsed. Changing a direction moves the marks of collapsed groups. Read and written as `outlinePr summaryBelow` / `summaryRight` |
+| 2026-10-24 | minor | When the fill starts from a date, the right-drag fill menu and the Auto Fill Options button also offer Fill Days, Fill Weekdays (Saturday and Sunday skipped), Fill Months and Fill Years (`edit.autoFill` with `mode` set to `days`, `weekdays`, `months` or `years`). A lone date steps by one unit; two or more dates step by the difference between the first two in that unit, or one unit when they fall in the same one. Fill Months and Fill Years keep the day of the month, clamped to the month's last day. Every fill by months or years (these two, a drag of dates a month apart, and Series by Month or Year) keeps the time of day of a date with a time, which used to be dropped |
 | 2026-10-23 | minor | F3, Formulas › Use in Formula › Paste Names… and Alt+M, S, P open the Paste Name dialog (F3 only when the workbook has names). It lists the workbook's names and the active sheet's own in alphabetical order, hidden names left out; OK or a double-click puts the selected name at the caret of the formula being edited, in place of selected text, or starts `=Name` in the active cell (`formulas.pasteName` `{name}`), and Paste List writes each name and the text of what it refers to in two columns from the active cell (`{list: true}`). While a dialog is open over the edit, the cell editor takes no keys, and Cancel leaves the selected text selected. The Use in Formula menu lists the same names and inserts at the caret too (`formulas.useInFormula`); it used to list hidden names and other sheets' names, the menu added the name at the end of the text, and the command replaced the text being edited |
 | 2026-10-23 | minor | Conditional Formatting ▸ New Rule, formula: clicking a cell on the grid writes its absolute reference at the formula box's caret (`=$B$2`, an empty box starts with `=`), a drag writes a range (`$B$2:$C$4`) and a second click replaces the reference just written, as in Excel ("Selecting cells on the worksheet inserts absolute cell references"). The selection the rule applies to doesn't move, and the box keeps the keyboard. After an operand (`=A1>5`) the click does nothing (#2348) |
 | 2026-10-23 | minor | Frozen panes: Page Up, Ctrl+Up and Shift variants that move from the scrolled rows into the frozen ones bring the scrolled rows back to the top, so the rows in between are seen again (Page Up from far down used to end on row 1 with the view still a page down); Ctrl+Left and Alt+Page Up do the same for frozen columns. Other ways of selecting a frozen cell (click, Find, Go To, Undo, formula pointing) leave the view where it is |
 | 2026-10-23 | minor | After a left-drag of the fill handle an Auto Fill Options button sits below the filled cells; its menu redoes the fill as Copy Cells, Fill Series, Fill Formatting Only or Fill Without Formatting (undoes the drag's fill, then `edit.autoFill` in that mode). It goes away when the workbook changes or the selection moves (#1403) |
-| 2026-10-24 | minor | When the fill starts from a date, the right-drag fill menu and the Auto Fill Options button also offer Fill Days, Fill Weekdays (Saturday and Sunday skipped), Fill Months and Fill Years (`edit.autoFill` with `mode` set to `days`, `weekdays`, `months` or `years`). A lone date steps by one unit; two or more dates step by the difference between the first two in that unit, or one unit when they fall in the same one. Fill Months and Fill Years keep the day of the month, clamped to the month's last day. Every fill by months or years (these two, a drag of dates a month apart, and Series by Month or Year) keeps the time of day of a date with a time, which used to be dropped |
 | 2026-10-22 | minor | Show Outline Symbols (`view.showOutlineSymbols`, Ctrl+8): a sheet can hide the outline's level buttons and brackets while keeping its outline, as Excel saves with `showOutlineSymbols="0"` (read and written); the grid then gives the bands no room |
 | 2026-10-22 | minor | A number in a repeat-fill format (`*`, as in the Accounting format) that is too wide for its column shows #### like any other number, instead of the fill rebuilding the value so its leading digits were cut off (2,509.00 CHF drawn as "509.00 CHF") |
 | 2026-10-22 | minor | View › New Window and Arrange All on the View ribbon; Arrange All tiles, stacks or cascades the native windows; two windows on one workbook keep their own sheet without copying the workbook; a dialog opened in one window stays there when a command run from it switches windows |
@@ -234,6 +245,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-14 | minor | Spill-child formula bar uses the anchor formula with disabled theme text and blocks formula-bar edit entry; selection and recalculation restore ordinary behavior |
 | 2026-10-14 | minor | PivotTable source-field list fills the pane width so its scrollbar stays at the list's right edge |
 | 2026-10-14 | minor | Alt, H, B border keytips apply the preset each letter names in Excel's Borders menu (they all drew a bottom border, so H,B,N No Border added one): keytips.json entries take optional `params`; H,B,M opens Format Cells on the Border tab; Erase Border, Line Color and Line Style stay reserved |
+| 2026-10-13 | minor | Custom conditional-format editor and explicit default overrides, with shared controls retaining Format Cells translations (#868) |
 | 2026-10-13 | minor | Dragging a sheet tab with Ctrl held (Cmd or Option on macOS) drops a copy of the sheet where the tab is released, with the copy cursor (#971) |
 | 2026-10-13 | trivial | More Colors… and Recent Colors (#928) |
 | 2026-10-13 | minor | Grid drags keep their own cursor over selection borders, fill handles and outside the grid; hover resumes on release (#936) |
@@ -241,8 +253,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-13 | minor | Sheet tab bar: the tab strip shrinks to its tabs, up to 60% of the bar, so New sheet (+) sits right after the last tab and the horizontal scrollbar takes the rest (part of #943) |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-13 | minor | Formula-entry Command/Ctrl-click adds arguments and Shift-click extends references; ordinary replacement and dragging retain their behavior. Readiness estimates unchanged. |
-| 2026-10-12 | minor | Next/previous sheet navigation no longer activates hidden worksheets at either workbook boundary; command tests cover Hidden, VeryHidden and selection retention |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
+| 2026-10-12 | minor | Next/previous sheet navigation no longer activates hidden worksheets at either workbook boundary; command tests cover Hidden, VeryHidden and selection retention |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |
 | 2026-10-12 | minor | Page Layout view: left/right/top/bottom margins are dragged on the rulers (#792) |
 | 2026-10-12 | minor | Alt+Down opens the active filter header's existing popup, with validation priority and mirrored anchoring on right-to-left sheets (part of #441) |
@@ -256,11 +268,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | minor | Page Layout view with rulers and in-place headers and footers (#329) |
 | 2026-10-11 | minor | Forecast Sheet dialog (#322) |
 | 2026-10-11 | minor | Delete and Backspace now remove the selected chart, picture or shape (#213) |
-| 2026-10-10 | minor | Keep formula helpers inside the worksheet when scrolling (#200) |
 | 2026-10-11 | trivial | Theme: title-bar light/dark switch, File › Display theme, system appearance on first run (#194, #239) |
 | 2026-10-11 | minor | Keyboard shortcut audit against Microsoft's Windows and Mac lists; missing shortcuts for existing features added (#110) |
 | 2026-10-11 | minor | File tab Backstage view and File › Options (#174) |
 | 2026-10-11 | minor | Selection outline glide and the Animations setting |
 | 2026-10-11 | major | Sequential Alt keytips: full-tab table (364 sequences), badges on every control, dropdowns open for typing/arrow editing, colour-palette arrows, real-Excel corrections (issues #33, #49) |
+| 2026-10-10 | minor | Keep formula helpers inside the worksheet when scrolling (#200) |
 | 2026-10-10 | minor | Chart resize bug (#190) |
 | 2026-10-10 | major | Created: chrome, grid, keyboard, dialogs, accessibility; key tips, Page Layout view and accessibility tree flagged |

@@ -373,8 +373,33 @@ impl Default for Protection {
     }
 }
 
+/// Properties explicitly set by a conditional format. An absent property inherits the cell's
+/// format; an explicit default (for example `Bold` with false) overrides it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum StyleProperty {
+    FontName,
+    FontSize,
+    Bold,
+    Italic,
+    Underline,
+    Strike,
+    FontColor,
+    FontVertical,
+    Fill,
+    LeftBorder,
+    RightBorder,
+    TopBorder,
+    BottomBorder,
+    DiagonalDown,
+    DiagonalUp,
+    NumberFormat,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Style {
+    /// Differential formats only. Missing in older JSON workbooks: non-default parts are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specified: Option<std::collections::BTreeSet<StyleProperty>>,
     pub font: Font,
     pub fill: Fill,
     pub borders: Borders,
@@ -403,6 +428,164 @@ pub struct DxfStated {
     /// `<scheme val>`: the theme font the face follows (`major`, `minor` or `none`).
     pub scheme: Option<String>,
     pub protection: bool,
+}
+
+impl StyleProperty {
+    pub const ALL: [Self; 16] = [
+        Self::FontName,
+        Self::FontSize,
+        Self::Bold,
+        Self::Italic,
+        Self::Underline,
+        Self::Strike,
+        Self::FontColor,
+        Self::FontVertical,
+        Self::Fill,
+        Self::LeftBorder,
+        Self::RightBorder,
+        Self::TopBorder,
+        Self::BottomBorder,
+        Self::DiagonalDown,
+        Self::DiagonalUp,
+        Self::NumberFormat,
+    ];
+}
+
+impl Style {
+    /// Backwards-compatible interpretation of the old default-as-unset differential styles.
+    pub fn differential_properties(&self) -> std::collections::BTreeSet<StyleProperty> {
+        if let Some(set) = &self.specified {
+            return set.clone();
+        }
+        StyleProperty::ALL.into_iter().filter(|&property| self.sets(property)).collect()
+    }
+
+    /// Checks presence without allocating in worksheet and print rendering.
+    pub fn sets(&self, property: StyleProperty) -> bool {
+        self.specified.as_ref().map_or_else(|| self.is_non_default(property) || self.legacy_stated(property), |set| set.contains(&property))
+    }
+
+    /// Reads presence flags from JSON workbooks saved before the general property set existed.
+    fn legacy_stated(&self, property: StyleProperty) -> bool {
+        match property {
+            StyleProperty::FontName => self.dxf_stated.name,
+            StyleProperty::FontSize => self.dxf_stated.size,
+            StyleProperty::Bold => self.dxf_stated.bold,
+            StyleProperty::Italic => self.dxf_stated.italic,
+            StyleProperty::Underline => self.dxf_stated.underline,
+            StyleProperty::Strike => self.dxf_stated.strike,
+            _ => false,
+        }
+    }
+
+    /// Tests the legacy default-as-unset interpretation of one differential property without allocating.
+    fn is_non_default(&self, property: StyleProperty) -> bool {
+        match property {
+            StyleProperty::FontName => self.font.name != crate::DEFAULT_FONT,
+            StyleProperty::FontSize => self.font.size != crate::DEFAULT_FONT_SIZE,
+            StyleProperty::Bold => self.font.bold,
+            StyleProperty::Italic => self.font.italic,
+            StyleProperty::Underline => self.font.underline != Underline::None,
+            StyleProperty::Strike => self.font.strike,
+            StyleProperty::FontColor => self.font.color != Color::Auto,
+            StyleProperty::FontVertical => self.font.vert != VertAlign::Baseline,
+            StyleProperty::Fill => self.fill != Fill::default(),
+            StyleProperty::LeftBorder => self.borders.left != BorderLine::default(),
+            StyleProperty::RightBorder => self.borders.right != BorderLine::default(),
+            StyleProperty::TopBorder => self.borders.top != BorderLine::default(),
+            StyleProperty::BottomBorder => self.borders.bottom != BorderLine::default(),
+            StyleProperty::DiagonalDown => self.borders.diag_down != BorderLine::default(),
+            StyleProperty::DiagonalUp => self.borders.diag_up != BorderLine::default(),
+            StyleProperty::NumberFormat => self.num_fmt.as_str() != "General",
+        }
+    }
+
+    /// Collects the properties a legacy style overrides when explicit presence metadata is absent.
+    fn non_default_properties(&self) -> std::collections::BTreeSet<StyleProperty> {
+        StyleProperty::ALL.into_iter().filter(|&p| self.is_non_default(p)).collect()
+    }
+
+    /// Keep the old representation whenever it describes exactly the same overrides.
+    pub fn normalize_differential(&mut self) {
+        if self.specified.is_some() || StyleProperty::ALL.into_iter().any(|property| self.legacy_stated(property)) {
+            let fields = self.differential_properties();
+            let mut canonical = Self {
+                align: self.align,
+                protection: self.protection,
+                dxf_stated: DxfStated { scheme: self.dxf_stated.scheme.clone(), protection: self.dxf_stated.protection, ..DxfStated::default() },
+                ..Self::default()
+            };
+            for property in &fields {
+                canonical.copy_property(self, *property);
+            }
+            canonical.specified = Some(fields);
+            *self = canonical;
+        }
+        // Unused fill/border colors have no XML representation when their pattern/style is none.
+        if self.fill.pattern == PatternType::None {
+            self.fill = Fill::default();
+        } else if self.fill.pattern == PatternType::Solid {
+            self.fill.bg = Color::Auto;
+        }
+        for line in [
+            &mut self.borders.left,
+            &mut self.borders.right,
+            &mut self.borders.top,
+            &mut self.borders.bottom,
+            &mut self.borders.diag_down,
+            &mut self.borders.diag_up,
+        ] {
+            if line.is_none() {
+                *line = BorderLine::default();
+            }
+        }
+        if self.specified.as_ref() == Some(&self.non_default_properties()) {
+            self.specified = None;
+        }
+    }
+
+    /// Copies one property without changing the destination style’s presence metadata or unrelated values.
+    pub fn copy_property(&mut self, source: &Style, property: StyleProperty) {
+        match property {
+            StyleProperty::FontName => self.font.name = source.font.name.clone(),
+            StyleProperty::FontSize => self.font.size = source.font.size,
+            StyleProperty::Bold => self.font.bold = source.font.bold,
+            StyleProperty::Italic => self.font.italic = source.font.italic,
+            StyleProperty::Underline => self.font.underline = source.font.underline,
+            StyleProperty::Strike => self.font.strike = source.font.strike,
+            StyleProperty::FontColor => self.font.color = source.font.color,
+            StyleProperty::FontVertical => self.font.vert = source.font.vert,
+            StyleProperty::Fill => self.fill = source.fill,
+            StyleProperty::LeftBorder => self.borders.left = source.borders.left,
+            StyleProperty::RightBorder => self.borders.right = source.borders.right,
+            StyleProperty::TopBorder => self.borders.top = source.borders.top,
+            StyleProperty::BottomBorder => self.borders.bottom = source.borders.bottom,
+            StyleProperty::DiagonalDown => self.borders.diag_down = source.borders.diag_down,
+            StyleProperty::DiagonalUp => self.borders.diag_up = source.borders.diag_up,
+            StyleProperty::NumberFormat => self.num_fmt = source.num_fmt.clone(),
+        }
+    }
+
+    /// Applies only the properties a conditional format sets, including explicit defaults.
+    pub fn apply_differential(&mut self, source: &Style) {
+        for property in StyleProperty::ALL {
+            if source.sets(property) {
+                self.copy_property(source, property);
+            }
+        }
+    }
+
+    /// Fill gaps from a lower-priority rule without overwriting a higher-priority choice.
+    pub fn differential_under(&mut self, lower: &Style) {
+        let mut set = self.differential_properties();
+        for property in lower.differential_properties() {
+            if set.insert(property) {
+                self.copy_property(lower, property);
+            }
+        }
+        self.specified = Some(set);
+        self.normalize_differential();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -487,6 +670,30 @@ static DEFAULT_STYLE: std::sync::LazyLock<Style> = std::sync::LazyLock::new(Styl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Legacy presence flags still override cell defaults and migrate without losing extra XML fields.
+    #[test]
+    fn legacy_differential_presence_migrates_without_losing_scheme_or_protection() {
+        let mut style = Style {
+            dxf_stated: DxfStated { bold: true, size: true, scheme: Some("minor".into()), protection: true, ..DxfStated::default() },
+            ..Style::default()
+        };
+        let mut base = Style::default();
+        base.font.bold = true;
+        base.font.size = 24.0;
+        base.apply_differential(&style);
+        assert!(!base.font.bold);
+        assert_eq!(base.font.size, crate::DEFAULT_FONT_SIZE);
+        style.normalize_differential();
+        assert!(style.sets(StyleProperty::Bold));
+        assert!(style.sets(StyleProperty::FontSize));
+        assert!(!style.dxf_stated.bold);
+        assert_eq!(style.dxf_stated.scheme.as_deref(), Some("minor"));
+        assert!(style.dxf_stated.protection);
+        let before = style.clone();
+        style.normalize_differential();
+        assert_eq!(style, before);
+    }
 
     #[test]
     fn interning() {

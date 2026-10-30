@@ -139,6 +139,22 @@ fn conditional_number_format_reaches_the_cell_text() {
     session.execute("home.numberFormat", json!({"range": "A3", "code": "0.0"})).unwrap();
     let rule = json!({"type": "cellIs", "operator": "greater", "value": "2", "style": {"num_fmt": "0.00"}});
     session.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
+    // An upper-priority font-only rule must inherit the lower rule's number format.
+    session
+        .execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "TRUE", "style": {"font": {"bold": true}}}}),
+        )
+        .unwrap();
+    session.execute("cell.set", json!({"cell": "A4", "input": "5"})).unwrap();
+    session.execute("home.numberFormat", json!({"range": "A4", "code": "0.0"})).unwrap();
+    // General can also be an explicit reset, distinguished from legacy unset General.
+    session
+        .execute(
+            "home.conditionalFormat",
+            json!({"range": "A4", "rule": {"type": "expression", "formula": "TRUE", "style": {"num_fmt": "General", "specified": ["NumberFormat"]}}}),
+        )
+        .unwrap();
     let wb = session.active().unwrap().wb.clone();
     let sh = wb.sheet(0).unwrap();
     let mut cf = CfCache::new();
@@ -150,6 +166,7 @@ fn conditional_number_format_reaches_the_cell_text() {
     assert_eq!(text(0, &mut cf), "1");
     assert_eq!(text(1, &mut cf), "3.00");
     assert_eq!(text(2, &mut cf), "4.00");
+    assert_eq!(text(3, &mut cf), "5");
 }
 
 #[test]

@@ -5,8 +5,8 @@ use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
-    Formula, Hyperlink, Image, LegendPos, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table, TableColumn, TotalsFn, Underline,
-    Workbook,
+    Formula, Hyperlink, Image, LegendPos, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, StyleProperty, Table, TableColumn,
+    TotalsFn, Underline, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -17,6 +17,7 @@ use super::{
 };
 use crate::selection::current_region;
 
+/// Registers insert and conditional-format commands and their accepted parameters for every front end.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -197,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?, specified?: [StyleProperty names]} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -207,7 +208,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{delete?: index, moveUp?: index, moveDown?: index, format?: index, style?: differential style, expected?: rules entry}",
             has_doc,
             manage_cf
         ),
@@ -1408,7 +1409,27 @@ fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- conditional formatting
 
-fn preset_style(name: &str) -> Style {
+/// Validated differential style shared by rule creation, rule editing and the UI draft.
+pub fn conditional_style(patch: &Json) -> Result<Style> {
+    let patch = cf_style_json(patch)?;
+    let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+    let mut style: Style =
+        serde_json::from_value(super::format::merge_json(base, &patch)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?;
+    style.normalize_differential();
+    if !style.font.size.is_finite() || !(1.0..=409.0).contains(&style.font.size) {
+        return Err(bad("home.conditionalFormat", "font size must be between 1 and 409 points"));
+    }
+    if style.font.name.trim().is_empty() {
+        return Err(bad("home.conditionalFormat", "font name must not be empty"));
+    }
+    if style.sets(StyleProperty::DiagonalDown) && style.sets(StyleProperty::DiagonalUp) && style.borders.diag_down != style.borders.diag_up {
+        return Err(bad("home.conditionalFormat", "the two diagonal borders must share a style and color for XLSX"));
+    }
+    Ok(style)
+}
+
+/// Builds the differential style used by the built-in conditional-format presets.
+pub fn preset_style(name: &str) -> Style {
     let mut s = Style::default();
     match name {
         "redText" => s.font.color = Color::rgb(0x9C, 0x00, 0x06),
@@ -1444,7 +1465,7 @@ fn is_string_literal(v: &str) -> bool {
 /// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
 /// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
 fn cf_style_json(st: &Json) -> Result<Json> {
-    const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
+    const KEYS: [&str; 8] = ["font", "fill", "borders", "align", "num_fmt", "protection", "specified", "dxf_stated"];
     let err = |m: String| bad("home.conditionalFormat", m);
     let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
     let mut st = obj.clone();
@@ -1537,6 +1558,7 @@ fn check_cf_rule(rule: &CfRule) -> Result<()> {
     Ok(())
 }
 
+/// Validates a new conditional rule and inserts it ahead of existing rules on the target ranges.
 fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
@@ -1546,11 +1568,7 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
-        Some(st) if !st.is_null() => {
-            let st = cf_style_json(st)?;
-            let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(super::format::merge_json(base, &st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
-        }
+        Some(st) if !st.is_null() => conditional_style(st)?,
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
     let kind = g("type").unwrap_or_else(|| "cellIs".into());
@@ -1682,21 +1700,51 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Captures all editable rule state so an open format editor detects metadata changes too.
+fn cf_snapshot(rule: &CondFormat) -> Json {
+    json!({"ranges": rule.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": rule.rule,
+        "priority": rule.priority, "stopIfTrue": rule.stop_if_true})
+}
+
+/// Lists, formats, deletes or reorders rules; stale edits fail and unchanged format-only requests do not commit.
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
-        let list: Vec<Json> = s
-            .doc()?
-            .wb
-            .sheet(sheet)
-            .map(|sh| {
-                sh.cond_formats.iter().map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule})).collect()
-            })
-            .unwrap_or_default();
+    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() && p.get("format").is_none() {
+        let list: Vec<Json> = s.doc()?.wb.sheet(sheet).map(|sh| sh.cond_formats.iter().map(cf_snapshot).collect()).unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
+    let replacement = if p.get("format").is_some() {
+        let index = u32_param(p, "format").ok_or_else(|| bad("home.manageRules", "missing or invalid rule index"))? as usize;
+        let patch = p.get("style").ok_or_else(|| bad("home.manageRules", "missing style"))?;
+        let style = conditional_style(patch)?;
+        let current =
+            s.doc()?.wb.sheet(sheet).and_then(|sh| sh.cond_formats.get(index)).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
+        if let Some(expected) = p.get("expected").filter(|v| !v.is_null()) {
+            let snapshot = cf_snapshot(current);
+            if expected != &snapshot {
+                return Err(bad("home.manageRules", "rule changed while the format editor was open; reopen it"));
+            }
+        }
+        let mut replacement = current.rule.clone();
+        let destination =
+            replacement.style_mut().ok_or_else(|| bad("home.manageRules", "this rule uses a scale, bar or icon set instead of a cell format"))?;
+        let mut previous = destination.clone();
+        previous.normalize_differential();
+        // Returning from inside `edit` would still commit and replace the workbook Arc.
+        if previous == style && ["delete", "moveUp", "moveDown"].iter().all(|key| p.get(key).is_none()) {
+            return Ok(Json::Null);
+        }
+        *destination = style;
+        Some((index, replacement))
+    } else {
+        None
+    };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        if let Some((index, replacement)) = &replacement {
+            let rule = sh.cond_formats.get_mut(*index).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
+            rule.rule = replacement.clone();
+        }
         // The count is taken again after each step: a delete shortens the list.
         if let Some(i) = u32_param(p, "delete").map(|v| v as usize)
             && i < sh.cond_formats.len()
@@ -1714,8 +1762,10 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
         {
             sh.cond_formats.swap(i, i + 1);
         }
-        for (k, cf) in sh.cond_formats.iter_mut().enumerate() {
-            cf.priority = k as u32 + 1;
+        if p.get("delete").is_some() || p.get("moveUp").is_some() || p.get("moveDown").is_some() {
+            for (k, cf) in sh.cond_formats.iter_mut().enumerate() {
+                cf.priority = k as u32 + 1;
+            }
         }
         Ok(Json::Null)
     })

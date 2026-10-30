@@ -1,7 +1,7 @@
 use super::geo::Geo;
 use super::{
     BorderLine, BorderStyle, CellRef, CfCache, CfLook, Color, Color32, FontId, HAlign, MAX_COLS, Painter, PatternType, Pos2, RangeRef, Rect, Sheet,
-    Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
+    Stroke, Style, VAlign, Value, Workbook, pos2, theme, vec2,
 };
 
 /// Resolved look of a cell for painting.
@@ -15,7 +15,7 @@ pub(super) fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }
 
-pub(super) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
+pub(crate) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
     c.rgb().map(|[r, g, b]| Color32::from_rgb(r, g, b)).unwrap_or(Color32::BLACK)
 }
 
@@ -34,41 +34,8 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
     }
     let cfl = cf.look(wb, si, c);
-    if let Some(l) = &cfl
-        && let Some(st) = &l.style
-    {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
-        }
-        if st.font.color != Color::Auto {
-            style.font.color = st.font.color;
-        }
-        if st.font.bold {
-            style.font.bold = true;
-        }
-        if st.font.italic {
-            style.font.italic = true;
-        }
-        if st.font.underline != Underline::None {
-            style.font.underline = st.font.underline;
-        }
-        if st.font.strike {
-            style.font.strike = true;
-        }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
-            style.num_fmt = st.num_fmt.clone();
-        }
-        for (dst, src) in [
-            (&mut style.borders.left, st.borders.left),
-            (&mut style.borders.right, st.borders.right),
-            (&mut style.borders.top, st.borders.top),
-            (&mut style.borders.bottom, st.borders.bottom),
-        ] {
-            if !src.is_none() {
-                *dst = src;
-            }
-        }
+    if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        style.apply_differential(st);
     }
     let mut fill = match style.fill.pattern {
         PatternType::None => None,

@@ -565,3 +565,24 @@ fn rotated_wrapped_text_prints_rotated() {
     assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
 }
+
+/// Checks that conditional number formatting and font overrides reach the generated PDF.
+#[test]
+fn conditional_number_format_and_font_are_used_in_pdf() {
+    let mut session = s();
+    session.execute("cell.set", json!({"cell":"A1","input":"42"})).unwrap();
+    session.execute("home.columnWidth", json!({"range":"A1","width":200})).unwrap();
+    session
+        .execute(
+            "home.conditionalFormat",
+            json!({"rule":{"type":"expression","formula":"TRUE","style":{"num_fmt":"0.00","font":{"bold":true,"size":18.0}}}}),
+        )
+        .unwrap();
+    let (pdf, _) = pdf_of(&mut session, json!({}));
+    assert!(contains(&pdf, "(42.00) Tj"));
+    let doc = session.doc().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    let look = super::draw::cell_look(&doc.wb, 0, sheet, CellRef::new(0, 0), &mut Some(crate::cf::CfCache::new()));
+    assert!(look.style.font.bold);
+    assert_eq!(look.style.font.size, 18.0);
+}

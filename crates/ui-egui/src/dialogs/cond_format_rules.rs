@@ -20,6 +20,10 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
             if ui.small_button("▼").clicked() {
                 app.run_or_alert("home.manageRules", json!({"moveDown": i}));
             }
+            let style = r["rule"].as_object().and_then(|o| o.values().next()).and_then(|v| v.get("style")).cloned();
+            if ui.add_enabled(style.is_some(), egui::Button::new(app.ui.language.tr("Format…")).small()).clicked() {
+                app.open_dialog("cfFormat", json!({"style": style, "ruleIndex": i, "expected": r}));
+            }
             if ui.small_button("Delete").clicked() {
                 app.run_or_alert("home.manageRules", json!({"delete": i}));
             }
