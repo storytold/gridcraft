@@ -781,8 +781,12 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
         s.push_str(" showAll=\"0\"");
         if let Some(af) = axis_field(pt, c, i) {
             match af.sort {
-                PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
+                // A date group is already in date order; Excel would sort its labels as text. Source
+                // order on a group is written as `manual`, since no attribute reads back as ascending.
+                PivotSort::Asc if f.group.is_none() => s.push_str(" sortType=\"ascending\""),
+                PivotSort::Asc => {}
                 PivotSort::Desc => s.push_str(" sortType=\"descending\""),
+                PivotSort::None if f.group.is_some() => s.push_str(" sortType=\"manual\""),
                 PivotSort::None => {}
             }
         }
