@@ -82,11 +82,19 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             (u.start.row..=u.end.row)
                 .map(|r| {
                     (u.start.col..=u.end.col)
-                        .map(|c| match sh.value(CellRef::new(r, c)) {
-                            Value::Number(n) => json!(n),
-                            Value::Bool(b) => json!(b),
-                            Value::Empty => Json::Null,
-                            v => json!(v.display()),
+                        .map(|c| {
+                            let at = CellRef::new(r, c);
+                            // A formula field goes in as typed input, so the new sheet holds the same formula
+                            // (the parsed workbook is never recalculated: its value is still empty).
+                            if let Some(f) = sh.cell(at).and_then(|cell| cell.formula.as_ref()) {
+                                return json!(format!("={}", f.text));
+                            }
+                            match sh.value(at) {
+                                Value::Number(n) => json!(n),
+                                Value::Bool(b) => json!(b),
+                                Value::Empty => Json::Null,
+                                v => json!(v.display()),
+                            }
                         })
                         .collect()
                 })

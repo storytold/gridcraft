@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::parse::parse_input;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
-use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
+use gridcraft_model::{Cell, Formula, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::{CsvOptions, IoError};
 
@@ -275,7 +275,9 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
-            let cell = if opts.parse_values {
+            let cell = if let Some(cell) = opts.parse_values.then(|| formula_cell(&f)).flatten() {
+                cell
+            } else if opts.parse_values {
                 let p = parse_input(&f, opts.date_system);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
@@ -300,6 +302,17 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
     Ok(wb)
+}
+
+/// Like Excel, a field that starts with `=` is a formula (`=SUM(B2:B9)`), computed when the
+/// workbook opens; one that doesn't parse (`=SOMMA(B2;B9)`, a lone `=`) stays text.
+fn formula_cell(field: &str) -> Option<Cell> {
+    let body = field.strip_prefix('=')?;
+    if body.trim().is_empty() {
+        return None;
+    }
+    let expr = gridcraft_formula::parse(body).ok()?;
+    Some(Cell::formula(Formula::from_expr(expr)))
 }
 
 /// Writes the sheet as CSV from A1 to the end of its used range, so leading empty columns and rows
