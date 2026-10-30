@@ -731,33 +731,35 @@ pub(crate) mod tests {
         assert_eq!(deps, vec![at("DA9"), at("DA9")]);
     }
 
-    /// A formula at the nesting limit reading thousands of formulas not calculated yet suspends the
-    /// evaluations in progress once, not once per formula read.
+    /// Streamed and materialized range reads at the nesting limit batch thousands of pending
+    /// formulas instead of suspending once per formula read.
     #[test]
     fn wide_read_at_the_nesting_limit_suspends_once() {
         const WIDTH: u32 = 3000;
-        let mut wb = Workbook::new();
-        let mut exprs = HashMap::default();
-        let mut put = |wb: &mut Workbook, at: String, text: String| {
-            let at = CellRef::parse(&at).unwrap();
-            wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(&text)));
-            exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(&text[1..]).unwrap()));
-        };
-        // A1 reads A2, ..., A64 (the 64th formula deep) reads a wide range of formulas.
-        for r in 1..64 {
-            put(&mut wb, format!("A{r}"), format!("=A{}+1", r + 1));
+        for function in ["SUM", "SUMPRODUCT"] {
+            let mut wb = Workbook::new();
+            let mut exprs = HashMap::default();
+            let mut put = |wb: &mut Workbook, at: String, text: String| {
+                let at = CellRef::parse(&at).unwrap();
+                wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(&text)));
+                exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(&text[1..]).unwrap()));
+            };
+            // A1 reads A2, ..., A64 (the 64th formula deep) reads a wide range of formulas.
+            for r in 1..64 {
+                put(&mut wb, format!("A{r}"), format!("=A{}+1", r + 1));
+            }
+            put(&mut wb, "A64".to_string(), format!("={function}(B1:B{WIDTH})"));
+            for r in 1..=WIDTH {
+                put(&mut wb, format!("B{r}"), format!("={r}*2"));
+            }
+            let mut rng = 1u64;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+            host.calculate((0, CellRef::parse("A1").unwrap()));
+            let total = (WIDTH * (WIDTH + 1)) as f64;
+            assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)), "{function}");
+            assert!(host.cycles.is_empty(), "{function}: {:?}", host.cycles);
+            assert!(host.suspensions <= 3, "{function}: {} suspensions", host.suspensions);
         }
-        put(&mut wb, "A64".to_string(), format!("=SUM(B1:B{WIDTH})"));
-        for r in 1..=WIDTH {
-            put(&mut wb, format!("B{r}"), format!("={r}*2"));
-        }
-        let mut rng = 1u64;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
-        host.calculate((0, CellRef::parse("A1").unwrap()));
-        let total = (WIDTH * (WIDTH + 1)) as f64;
-        assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
-        assert!(host.cycles.is_empty());
-        assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
