@@ -41,6 +41,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+    /// Desktop: the folder thumbnails are kept in (`thumbnails` in the settings folder); without
+    /// one they are drawn again each run.
+    pub thumbnail_dir: Option<std::path::PathBuf>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).

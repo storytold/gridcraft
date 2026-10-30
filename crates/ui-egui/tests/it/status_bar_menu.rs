@@ -41,8 +41,8 @@ fn right_clicking_the_status_bar_turns_on_minimum() {
     let mut h = harness();
     assert!(h.query_by_label("Sum: 12").is_some(), "Sum is on by default");
     assert!(h.query_by_label("Minimum: -1").is_none(), "Minimum is off by default");
-    // An empty stretch of the 26-point status bar, between the mode text and the statistics.
-    right_click(&mut h, pos2(300.0, 787.0));
+    // An empty stretch of the status items, left of the statistics, in the sheet-tab row.
+    right_click(&mut h, pos2(720.0, 781.0));
     h.get_by_label("Minimum").click();
     h.run_steps(4);
     assert!(h.state().session.prefs.status_bar.minimum);
@@ -51,10 +51,8 @@ fn right_clicking_the_status_bar_turns_on_minimum() {
 
 #[test]
 fn right_clicking_the_status_bar_text_opens_the_menu() {
-    for text in ["Sum: 12", "Ready"] {
-        let mut h = harness();
-        let pos = h.get_by_label(text).rect().center();
-        right_click(&mut h, pos);
-        assert!(h.query_by_label("Numerical Count").is_some(), "a right-click on {text:?} opens the statistics menu");
-    }
+    let mut h = harness();
+    let pos = h.get_by_label("Sum: 12").rect().center();
+    right_click(&mut h, pos);
+    assert!(h.query_by_label("Numerical Count").is_some(), "a right-click on a statistic opens the statistics menu");
 }

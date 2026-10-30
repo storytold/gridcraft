@@ -13,13 +13,13 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.table", json!({}));
     }
-    sep(ui);
+    sep(ui, "Tables");
     let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
     anchor_keytip(app, ui, &pic, &["insert.picture"]);
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
     egui::Popup::menu(&pic).show(|ui| {
         for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
-            if ui.button(label).clicked() {
+            if crate::widgets::menu_row(ui, None, label, None).clicked() {
                 app.open_dialog("insertPicture", json!({"placement": placement}));
                 ui.close();
             }
@@ -37,12 +37,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
-            if ui.button(label).clicked() {
+            if crate::widgets::menu_row(ui, None, label, None).clicked() {
                 act(app, "insert.shape", json!({"kind": kind}));
             }
         }
     });
-    let icn = big_button(ui, Icon::Theme, "Icons", "Insert an icon", true);
+    let icn = big_button(ui, Icon::InsertIcons, "Icons", "Insert an icon", true);
     anchor_keytip(app, ui, &icn, &["insert.icons"]);
     egui::Popup::menu(&icn).show(|ui| {
         ui.set_width(260.0);
@@ -63,14 +63,15 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
+    sep(ui, "Illustrations");
     let __k = big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false);
     control_keytip(app, ui, &__k, "insert.recommendedCharts");
     if __k.clicked() {
         // Menu-style: with no chart type, run_or_alert opens the Insert Chart dialog.
         act(app, "insert.recommendedCharts", json!({}));
     }
-    ui.vertical(|ui| {
+    // Two rows of chart types, centred in the card like the other two-row groups.
+    super::controls::two_rows(ui, |ui| {
         ui.horizontal(|ui| {
             for (icon, tip, cid, subs) in [
                 (
@@ -106,7 +107,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if crate::widgets::menu_row(ui, None, label, None).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -121,9 +122,14 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                     "insert.chart.scatter",
                     vec![("Scatter", "scatter", ""), ("Scatter with Lines", "scatter", "lines"), ("Bubble", "bubble", "")],
                 ),
-                (Icon::Chart, "Statistic", "insert.chart.statistic", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
                 (
-                    Icon::Theme,
+                    Icon::ChartStatistic,
+                    "Statistic",
+                    "insert.chart.statistic",
+                    vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")],
+                ),
+                (
+                    Icon::ChartHierarchy,
                     "Hierarchy & more",
                     "insert.chart.hierarchy",
                     vec![
@@ -142,7 +148,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if crate::widgets::menu_row(ui, None, label, None).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -150,26 +156,26 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
-    if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
+    sep(ui, "Charts");
+    if big_button(ui, Icon::Slicer, "Slicer", "Insert a slicer to filter a table", false).clicked() {
         act(app, "insert.slicer", json!({}));
     }
-    sep(ui);
+    sep(ui, "Filters");
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
-            if ui.button(label).clicked() {
+            if crate::widgets::menu_row(ui, None, label, None).clicked() {
                 app.open_dialog("sparkline", json!({"type": kind}));
             }
         }
     });
-    sep(ui);
+    sep(ui, "Sparklines");
     // Cell Controls.
     if big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false).clicked() {
         act(app, "insert.checkbox", json!({}));
     }
-    sep(ui);
+    sep(ui, "Cell Controls");
     let __k = big_button(ui, Icon::Link, "Link", "Insert Link", false);
     control_keytip(app, ui, &__k, "dialog:insertLink");
     if __k.clicked() {
@@ -180,13 +186,13 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("comment", json!({"threaded": true}));
     }
-    sep(ui);
+    sep(ui, "Links");
     let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
     control_keytip(app, ui, &__k, "insert.textBox");
     if __k.clicked() {
         act(app, "insert.textBox", json!({}));
     }
-    let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
+    let __k = big_button(ui, Icon::HeaderFooter, "Header &\nFooter", "Header & Footer", false);
     control_keytip(app, ui, &__k, "dialog:headerFooter");
     if __k.clicked() {
         // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
@@ -212,15 +218,20 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
-    let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
+    let __k = big_button(ui, Icon::SelectObjects, "Select\nObjects", "Select and move ink and shapes", false);
     control_keytip(app, ui, &__k, "draw.lasso");
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
     }
-    sep(ui);
-    for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
+    sep(ui, "Drawing Tools");
+    for (icon, label, color) in [
+        (Icon::PenBlue, "Pen\nBlue", "#1F5FC9"),
+        (Icon::PenBlack, "Pen\nBlack", "#000000"),
+        (Icon::PenRed, "Pen\nRed", "#D13B2F"),
+        (Icon::Highlighter, "Highlighter", "#F2E33A"),
+    ] {
         let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
-        let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
+        let r = big_button(ui, icon, label, "Draw with ink", false);
         if on {
             ui.painter().rect_stroke(r.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
         }
@@ -229,15 +240,15 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "draw.pen", json!({"on": !on, "color": color, "width": width}));
         }
     }
-    let er = big_button(ui, Icon::Eraser, "Eraser", "Erase ink strokes", false);
+    let er = big_button(ui, Icon::DrawEraser, "Eraser", "Erase ink strokes", false);
     if tool == "eraser" {
         ui.painter().rect_stroke(er.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
     }
     if er.clicked() {
         act(app, "draw.eraser", json!({}));
     }
-    sep(ui);
-    let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
+    sep(ui, "Pens");
+    let __k = big_button(ui, Icon::InkToShape, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");
     if __k.clicked() {
         act(app, "draw.inkToShape", json!({}));

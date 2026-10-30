@@ -72,7 +72,10 @@ impl<'a> Package<'a> {
             return Err(IoError::TooLarge(format!("{part} expands to {} bytes", f.size())));
         }
         let remaining = MAX_TOTAL.saturating_sub(self.total);
-        let limit = maximum.min(remaining);
+        // Never more than the part declares either, so the declared sizes (`unpacked_size`) are
+        // a real budget: a forged entry can't claim little and expand to the general limit.
+        let declared = f.size();
+        let limit = maximum.min(remaining).min(declared);
         let mut out = Vec::with_capacity(f.size().min(16 * 1024 * 1024) as usize);
         let read = (&mut f).take(limit + 1).read_to_end(&mut out).map_err(|e| {
             // A read that fails partway has already spent decompression work and buffered data
@@ -85,7 +88,9 @@ impl<'a> Package<'a> {
             // The allowance was spent getting here; make the exhaustion terminal instead of
             // letting later reads pay the same decompression cost again.
             self.total = MAX_TOTAL;
-            return Err(IoError::TooLarge(if remaining < maximum {
+            return Err(IoError::TooLarge(if declared < maximum.min(remaining) {
+                format!("{part} expands past its declared {declared} bytes")
+            } else if remaining < maximum {
                 "package expands to more than 1 GB".into()
             } else {
                 format!("{part} expands to more than {maximum} bytes")
@@ -137,6 +142,13 @@ pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
         let f = zip.by_index_raw(i).ok()?;
         (f.size() > MAX_PART).then(|| (f.name().to_string(), f.size()))
     })
+}
+
+/// The unpacked size the package declares, summed over its parts (reading a part never unpacks
+/// more than it declares); `None` when `bytes` is not a zip package.
+pub fn unpacked_size(bytes: &[u8]) -> Option<u64> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+    Some((0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().map(|f| f.size())).fold(0u64, u64::saturating_add))
 }
 
 fn prefix(part: &str, e: IoError) -> IoError {
@@ -200,6 +212,29 @@ impl ZipOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An entry whose directory record claims fewer bytes than it holds never reads past the claim.
+    #[test]
+    fn a_part_never_reads_past_its_declared_size() {
+        let mut z = crate::tests::make_zip(&[("a.xml", b"0123456789")]);
+        // The central directory record (PK\x01\x02) keeps the uncompressed size at offset 24.
+        let cd = z.windows(4).position(|w| w == [0x50, 0x4b, 0x01, 0x02]).unwrap();
+        z[cd + 24..cd + 28].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(unpacked_size(&z), Some(4));
+        let mut pkg = Package::open(&z).unwrap();
+        match pkg.read("a.xml") {
+            Ok(Some(bytes)) => assert!(bytes.len() <= 4, "read {} bytes", bytes.len()),
+            Ok(None) => panic!("the part is there"),
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn unpacked_size_sums_the_declared_parts() {
+        let z = crate::tests::make_zip(&[("a.xml", b"0123456789"), ("b.xml", b"hello")]);
+        assert_eq!(unpacked_size(&z), Some(15));
+        assert_eq!(unpacked_size(b"not a zip"), None);
+    }
 
     #[test]
     fn resolving() {

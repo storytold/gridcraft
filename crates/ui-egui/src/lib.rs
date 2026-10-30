@@ -44,6 +44,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod quick_analysis;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -69,6 +70,7 @@ mod app;
 mod clock;
 mod services;
 mod state;
+pub mod thumbnail;
 
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
@@ -82,6 +84,10 @@ pub struct UiState {
     /// The manual preference, retained when following the system appearance.
     pub dark: bool,
     pub system_theme: bool,
+    /// In a dark theme the sheet's content goes dark too (View › Dark Sheet).
+    pub dark_sheet: bool,
+    /// A palette over light/dark: "" (none), "darkGreen", or "omarchy" (follow the Omarchy theme).
+    pub palette: String,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
@@ -131,6 +137,8 @@ impl Default for UiState {
         UiState {
             dark: false,
             system_theme: false,
+            palette: String::new(),
+            dark_sheet: true,
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,
@@ -171,7 +179,11 @@ impl UiState {
     }
 
     pub fn theme_mode(&self) -> &'static str {
-        if self.system_theme {
+        if self.palette == "darkGreen" {
+            "darkGreen"
+        } else if self.palette == "omarchy" {
+            "omarchy"
+        } else if self.system_theme {
             "system"
         } else if self.dark {
             "dark"
@@ -201,6 +213,10 @@ pub struct Perf {
 
 pub struct SheetApp {
     pub session: Session,
+    /// Workbook thumbnails for the Backstage (drawn by [`thumbnail`], kept on disk).
+    pub thumbnails: thumbnail::Thumbnails,
+    /// Drawing a thumbnail: the grid leaves out the selection.
+    pub thumbnail_mode: bool,
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
     pub chrome: Chrome,
@@ -247,6 +263,9 @@ pub struct SheetApp {
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
+    /// The palette last installed (`UiState::palette` and, for Omarchy, the theme file's text), and
+    /// when the Omarchy theme file was last checked.
+    palette_state: (String, String, f64),
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.

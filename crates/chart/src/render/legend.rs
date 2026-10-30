@@ -97,6 +97,27 @@ fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) 
     }
 }
 
+/// Width of the legend drawn as one line ([`draw_inline`]).
+pub(super) fn inline_width(ctx: &Ctx, entries: &[(String, Rgba, Swatch)]) -> f32 {
+    let size = LABEL_SIZE;
+    let s = size * 0.8;
+    let items: f32 = entries.iter().map(|e| swatch_w(e.2, s) + 4.0 + ctx.tw(&e.0, size)).sum();
+    items + size * 1.3 * entries.len().saturating_sub(1) as f32
+}
+
+/// The legend as one line starting at `x`, centred on `yc` (beside the title).
+pub(super) fn draw_inline(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], x: f32, yc: f32) {
+    let size = LABEL_SIZE;
+    let s = size * 0.8;
+    let mut x = x;
+    for e in entries {
+        draw_swatch(ctx, e.2, x, yc, s, e.1);
+        let sx = swatch_w(e.2, s) + 4.0;
+        ctx.text(x + sx, yc, &e.0, size, TEXT, (HAlign::Left, VAlign::Middle));
+        x += sx + ctx.tw(&e.0, size) + size * 1.3;
+    }
+}
+
 pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
     let size = LABEL_SIZE;
     let row_h = size * 1.6;

@@ -66,7 +66,7 @@ fn ok_starts_a_formula_with_the_selected_name() {
     press(&mut h, Key::F3);
     h.get_by_label("Sales").click();
     h.run_steps(2);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(editor_text(&h).as_deref(), Some("=Sales"));
@@ -136,7 +136,8 @@ fn cancel_leaves_the_selected_text_selected() {
     }
     press(&mut h, Key::F3);
     assert_eq!(dialog(&h), Some("pasteName"));
-    h.get_by_label(" Cancel ").click();
+    // The formula bar's own Cancel is also on screen while editing; the dialog's is the last.
+    h.get_all_by_label("Cancel").last().expect("the dialog's Cancel button").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     h.input_mut().events.push(Event::Text("B2".into()));

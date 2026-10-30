@@ -92,6 +92,12 @@ pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
     package::oversized_part(bytes)
 }
 
+/// The unpacked size a zip package declares over all its parts, or `None` for other bytes: lets
+/// a caller with a tighter budget than [`MAX_PART`] (a preview, say) refuse before reading.
+pub fn unpacked_size(bytes: &[u8]) -> Option<u64> {
+    package::unpacked_size(bytes)
+}
+
 /// Which member of the SpreadsheetML family a package is saved as. Only the content type of the
 /// workbook part differs (ECMA-376 Part 1 Workbook part; MS-OI29500 adds the macro-enabled types).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

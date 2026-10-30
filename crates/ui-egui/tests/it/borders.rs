@@ -112,7 +112,7 @@ fn border_preview_uses_the_colored_draft_until_ok_and_cancel_discards_it() {
     h.run_steps(6);
     assert_eq!(borders(&h, "A1"), original);
     assert_eq!(preview_lines(&h, Color32::from_rgb(0xab, 0x19, 0x2d)), 2);
-    h.get_by_label(" Cancel ").click();
+    h.get_by_label("Cancel").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert_eq!(borders(&h, "A1"), original);
@@ -120,7 +120,7 @@ fn border_preview_uses_the_colored_draft_until_ok_and_cancel_discards_it() {
     h.run_steps(6);
     h.get_by_label("Top double").click();
     h.run_steps(6);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert_eq!(borders(&h, "A1").top.style, BorderStyle::Double);

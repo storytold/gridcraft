@@ -1,6 +1,6 @@
 //! The formula bar (Name Box, ✕ ✓ fx, formula field) and the shared cell editor widget.
 
-use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{FontId, Key, Rect, Sense, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
@@ -11,10 +11,10 @@ use crate::theme::{self, Tokens};
 /// Lines the formula bar (and the in-cell editor) grows to before it scrolls.
 pub const MAX_LINES: usize = 5;
 /// The bar's height at one line.
-const ONE_LINE: f32 = 30.0;
-/// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
-/// and two pixels for the rounding to the pixel grid.
-const PAD: f32 = 14.0;
+const ONE_LINE: f32 = 36.0;
+/// What the bar adds around the field's rows: the field's insets (8 + 8) and one pixel for the
+/// rounding to the pixel grid.
+const PAD: f32 = 17.0;
 
 /// The bar's height for one line of a font whose rows are `row_h` tall: Excel's 30 px, unless
 /// the rows need more (the Windows UI font's row is 17.28 px). Every line counted must fit in
@@ -29,7 +29,7 @@ const EASE_SECONDS: f32 = 0.12;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BarLayout {
     pub name_box: Rect,
-    /// ✕ ✓ fx.
+    /// The fx button (✕ ✓ come and go with editing, at the bar's right end).
     pub buttons: Rect,
     pub field: Rect,
     pub height: f32,
@@ -65,10 +65,15 @@ pub struct EditorInfo {
     pub caret: Option<Rect>,
 }
 
-/// Draws the formula bar: line-count-driven height, Name Box, cancel/enter/Fx buttons, the editable field, muted read-only spill text and the expansion chevron.
+/// Draws the formula bar, docked as the first row of the sheet card: the cell name over the
+/// row-number gutter, the fx glyph, the formula (or value), and at the right the formula's result,
+/// ✕ ✓ while editing, and the expand chevron when it is useful. Its height follows the content's
+/// line count.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let font = theme::ui_font(13.0);
+    // Formulas read in the code font; plain values in the interface font.
+    let is_formula = app.editor.as_ref().map_or_else(|| active_input(app).starts_with('='), |e| e.text.starts_with('='));
+    let font = if is_formula { formula_font(13.0) } else { theme::ui_font(13.0) };
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let last = BarLayout::get(ui.ctx());
     // Height follows the content's line count (last frame's), 1 to MAX_LINES; the chevron pins it
@@ -77,75 +82,248 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
+    let gutter = crate::app::SHEET_GUTTER;
     egui::Panel::top("formula_bar")
+        .show_separator_line(false)
         .exact_size(h)
-        .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 3 }))
+        .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: gutter, right: gutter, top: 0, bottom: 0 }))
         .show(ui, |ui| {
-            // Top-aligned: the Name Box and buttons stay on the first line as the field grows.
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                layout.name_box = name_box(app, ui, &t);
-                ui.add_space(4.0);
-                let editing = app.editor.is_some();
-                let c = if editing { t.text } else { t.text_disabled };
-                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 24.0));
-                if cancel.clicked() && editing {
-                    app.cancel_edit();
-                }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
-                    app.commit_edit(0, 0, false, false);
-                }
-                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
-                if fx.clicked() {
-                    app.open_dialog("insertFunction", json!({}));
-                }
-                layout.buttons = cancel.rect.union(fx.rect);
-                ui.add_space(4.0);
-                // The formula field fills the rest, as tall as the bar.
-                let avail = ui.available_width() - 24.0;
-                let field = Rect::from_min_size(ui.cursor().min, vec2(avail, ui.available_height()));
-                ui.painter().rect_filled(field, 4.0, t.input_bg);
-                ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
-                let inner = field.shrink2(vec2(6.0, 3.0));
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
-                let id = egui::Id::unique("gridcraft.formula_bar");
-                // A spill child shows its anchor's formula muted and read-only.
-                let read_only = active_spill_anchor(app).is_some();
-                let info = if app.editor.is_some() {
-                    editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
-                } else {
-                    // Show the active cell's content; clicking starts editing in the bar.
-                    let text = active_input(app);
-                    let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = child.painter().layout(text, font.clone(), color, inner.width());
-                    let lines = galley.rows.len();
-                    // Each cell's view starts at its top: the offset is kept per cell, not per bar.
-                    let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));
-                    egui::ScrollArea::vertical().id_salt(id.with(("view", shown))).max_height(inner.height()).auto_shrink([false, true]).show(
-                        &mut child,
-                        |ui| {
-                            if ui.add(egui::Label::new(galley).sense(Sense::click())).clicked() && !read_only {
-                                app.begin_edit(None, true);
-                            }
-                        },
-                    );
-                    if !read_only && ui.interact(field, id.with("click"), Sense::click()).clicked() {
-                        app.begin_edit(None, true);
-                    }
-                    EditorInfo { lines, caret: None }
-                };
-                layout.field = field;
-                layout.lines = info.lines.max(1);
-                layout.visible_lines = ((inner.height() / row_h).floor() as usize).max(1);
-                layout.caret = info.caret;
-                ui.allocate_space(vec2(avail, field.height()));
+            let row = ui.max_rect();
+            let editing = app.editor.is_some();
+            let anim = crate::widgets::animations_on(ui.ctx());
+            let secs = if anim { 0.12 } else { 0.0 };
+            let edit_t = ui.ctx().animate_bool_with_time(egui::Id::unique("formula_bar.editing"), editing, secs);
+            // The row is the card's top: its fill, tinted green while editing, with rounded top corners.
+            let card = t.sheet_bg(app.ui.dark_sheet);
+            let tint = card.lerp_to_gamma(t.accent, if t.dark { 0.07 } else { 0.05 });
+            ui.painter().rect_filled(row, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, card.lerp_to_gamma(tint, edit_t));
+            let hovered = ui.rect_contains_pointer(row);
+            let cy = row.top() + ONE_LINE / 2.0;
+
+            // Cell name, over the row-number gutter.
+            layout.name_box = name_box(app, ui, &t, pos2(row.left() + 4.0, cy), edit_t);
+            // fx: gray at rest, green while editing.
+            let fx_rect = Rect::from_center_size(pos2(layout.name_box.right() + 2.0 + 14.0, cy), vec2(28.0, 28.0));
+            let fx = ui.interact(fx_rect, egui::Id::unique("formula_bar.fx"), Sense::click()).on_hover_text(app.ui.language.tr("Insert Function"));
+            fx.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Insert Function"));
+            if let Some(fill) = crate::widgets::hover_fill(ui, fx.id, fx.hovered(), t.hover) {
+                ui.painter().rect_filled(fx_rect, 6.0, fill);
+            }
+            let rest = t.text_dim.lerp_to_gamma(t.ribbon, 0.25);
+            icons::paint(ui.painter(), Rect::from_center_size(fx_rect.center(), vec2(16.0, 16.0)), Icon::Fx, rest.lerp_to_gamma(t.accent, edit_t));
+            if fx.clicked() {
+                app.open_dialog("insertFunction", json!({}));
+            }
+            layout.buttons = fx_rect;
+
+            // Right end, from the edge in: the chevron, then ✕ ✓ while editing, then the result.
+            let mut right = row.right() - 6.0;
+            let chevron_rect = Rect::from_center_size(pos2(right - 14.0, cy), vec2(28.0, 28.0));
+            right -= 28.0;
+            let overflow = last.lines > 1 || app.ui.formula_bar_expanded;
+            let chev_t = ui.ctx().animate_bool_with_time(egui::Id::unique("formula_bar.chevron"), overflow || hovered, secs);
+            if chev_t > 0.01 {
                 let chevron = if app.ui.formula_bar_expanded { Icon::ChevronUp } else { Icon::Chevron };
-                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 24.0)).clicked() {
+                let r = ui
+                    .interact(chevron_rect, egui::Id::unique("formula_bar.expand"), Sense::click())
+                    .on_hover_text(app.ui.language.tr("Expand formula bar"));
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Expand formula bar"));
+                if let Some(fill) = crate::widgets::hover_fill(ui, r.id, r.hovered(), t.hover) {
+                    ui.painter().rect_filled(chevron_rect, 6.0, fill);
+                }
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(chevron_rect.center(), vec2(14.0, 14.0)),
+                    chevron,
+                    t.text_dim.gamma_multiply(chev_t),
+                );
+                if r.clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
                 }
-            });
+            }
+            if edit_t > 0.01 {
+                // They fade and slide in from 4 px to the right; the formula never moves for them.
+                let slide = (1.0 - edit_t) * 4.0;
+                let enter_rect = Rect::from_center_size(pos2(right - 14.0 + slide, cy), vec2(28.0, 28.0));
+                let cancel_rect = enter_rect.translate(vec2(-30.0, 0.0));
+                right -= 60.0;
+                for (rect, icon, color, tip, salt) in
+                    [(cancel_rect, Icon::Close, t.text_dim, "Cancel", "cancel"), (enter_rect, Icon::Check, t.accent, "Enter", "enter")]
+                {
+                    let r = ui.interact(rect, egui::Id::unique("formula_bar").with(salt), Sense::click()).on_hover_text(app.ui.language.tr(tip));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, editing, tip));
+                    if let Some(fill) = crate::widgets::hover_fill(ui, r.id, r.hovered(), t.hover) {
+                        ui.painter().rect_filled(rect, 6.0, fill.gamma_multiply(edit_t));
+                    }
+                    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color.gamma_multiply(edit_t));
+                    if r.clicked() && editing {
+                        if salt == "cancel" {
+                            app.cancel_edit();
+                        } else {
+                            app.commit_edit(0, 0, false, false);
+                        }
+                    }
+                }
+            }
+            // The result of a formula cell, quiet, at the right.
+            if is_formula && let Some(result) = result_preview(app) {
+                let pf = theme::ui_font(12.0);
+                let g = ui.painter().layout_no_wrap(format!("= {result}"), pf, rest);
+                let room = (right - fx_rect.right()) * 0.35;
+                if g.size().x < room {
+                    right -= 8.0;
+                    ui.painter().galley(pos2(right - g.size().x, cy - g.size().y / 2.0), g.clone(), rest);
+                    right -= g.size().x;
+                }
+            }
+
+            // The formula field fills the middle, as tall as the bar.
+            let field = Rect::from_min_max(pos2(fx_rect.right() + 2.0, row.top()), pos2((right - 8.0).max(fx_rect.right() + 40.0), row.bottom()));
+            let pad_y = ((ONE_LINE - row_h) / 2.0).max(4.0);
+            let inner = Rect::from_min_max(field.min + vec2(6.0, pad_y), field.max - vec2(0.0, pad_y - 1.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+            let id = egui::Id::unique("gridcraft.formula_bar");
+            // A spill child shows its anchor's formula muted and read-only.
+            let read_only = active_spill_anchor(app).is_some();
+            let info = if app.editor.is_some() {
+                editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
+            } else {
+                // Show the active cell's content; clicking starts editing in the bar.
+                let text = active_input(app);
+                let color = if read_only { t.text_disabled } else { t.text };
+                let galley = if text.starts_with('=') && !read_only {
+                    let spans: Vec<(usize, usize, usize)> = formula_refs(&text).iter().map(|r| (r.0, r.1, r.4)).collect();
+                    let mut job = highlight_formula(&text, &font, color, &spans, &t, false);
+                    job.wrap.max_width = inner.width();
+                    child.ctx().fonts_mut(|f| f.layout_job(job))
+                } else {
+                    child.painter().layout(text, font.clone(), color, inner.width())
+                };
+                let lines = galley.rows.len();
+                // Each cell's view starts at its top: the offset is kept per cell, not per bar.
+                let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));
+                egui::ScrollArea::vertical().id_salt(id.with(("view", shown))).max_height(inner.height()).auto_shrink([false, true]).show(
+                    &mut child,
+                    |ui| {
+                        if ui.add(egui::Label::new(galley).sense(Sense::click())).clicked() && !read_only {
+                            app.begin_edit(None, true);
+                        }
+                    },
+                );
+                if !read_only && ui.interact(field, id.with("click"), Sense::click()).clicked() {
+                    app.begin_edit(None, true);
+                }
+                EditorInfo { lines, caret: None }
+            };
+            layout.field = field;
+            layout.lines = info.lines.max(1);
+            layout.visible_lines = ((inner.height() / row_h).floor() as usize).max(1);
+            layout.caret = info.caret;
+            // Rounded top corners against the window.
+            crate::widgets::card_frame(ui.painter(), row, &t, true);
         });
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
+}
+
+/// The active formula cell's value as the sheet shows it, for the bar's result preview.
+fn result_preview(app: &SheetApp) -> Option<String> {
+    let d = app.session.active()?;
+    let sh = d.wb.active()?;
+    let c = d.selection.active;
+    sh.cell(c)?.formula.as_ref()?;
+    let text = crate::grid::shown_text(&d.wb, sh, c);
+    (!text.is_empty()).then_some(text)
+}
+
+/// The code font formulas are shown in (JetBrains Mono when installed).
+pub fn formula_font(size: f32) -> FontId {
+    FontId::new(size, egui::FontFamily::Name(theme::MONO.into()))
+}
+
+/// A formula laid out with syntax colours: each reference in its outline colour (`refs` are
+/// byte spans with their colour index), function names in the accent, strings, numbers and
+/// TRUE/FALSE in the code colours, operators and brackets quieter than names and values.
+pub fn highlight_formula(
+    s: &str,
+    font: &FontId,
+    base: egui::Color32,
+    refs: &[(usize, usize, usize)],
+    t: &Tokens,
+    on_sheet: bool,
+) -> egui::text::LayoutJob {
+    // On the sheet the colours are the light palette's (the sheet stays white).
+    let pal = if on_sheet { Tokens::light() } else { *t };
+    let dim = base.lerp_to_gamma(pal.window, 0.4);
+    let mut job = egui::text::LayoutJob::default();
+    let mut push = |text: &str, color: egui::Color32| {
+        if !text.is_empty() {
+            job.append(text, 0.0, egui::TextFormat::simple(font.clone(), color));
+        }
+    };
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    let mut plain_from = 0usize;
+    while i < s.len() {
+        if let Some(&(a, b, idx)) = refs.iter().find(|r| r.0 == i && r.1 > r.0 && s.is_char_boundary(r.1)) {
+            push(s.get(plain_from..a).unwrap_or(""), base);
+            push(s.get(a..b).unwrap_or(""), t.ref_color(idx, on_sheet));
+            i = b;
+            plain_from = b;
+            continue;
+        }
+        let c = bytes.get(i).copied().unwrap_or(b' ');
+        let start = i;
+        let (end, color) = if c == b'"' {
+            let mut j = i + 1;
+            while j < s.len() {
+                if bytes.get(j) == Some(&b'"') {
+                    if bytes.get(j + 1) == Some(&b'"') {
+                        j += 2;
+                        continue;
+                    }
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            (j.min(s.len()), Some(pal.syntax.string))
+        } else if c.is_ascii_digit() || (c == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+            let mut j = i;
+            while j < s.len() && bytes.get(j).is_some_and(|b| b.is_ascii_digit() || *b == b'.' || *b == b'%' || *b == b'E' || *b == b'e') {
+                j += 1;
+            }
+            (j, Some(pal.syntax.number))
+        } else if c.is_ascii_alphabetic() || c == b'_' {
+            let mut j = i;
+            while j < s.len() && bytes.get(j).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'.') {
+                j += 1;
+            }
+            let word = s.get(i..j).unwrap_or("");
+            let next = s.get(j..).unwrap_or("").trim_start().as_bytes().first().copied();
+            let color = if next == Some(b'(') {
+                Some(if on_sheet { Tokens::light().accent } else { pal.accent })
+            } else if word.eq_ignore_ascii_case("TRUE") || word.eq_ignore_ascii_case("FALSE") {
+                Some(pal.syntax.keyword)
+            } else {
+                None
+            };
+            (j, color)
+        } else if b"+-*/^&=<>,;:%(){}".contains(&c) {
+            (i + 1, Some(dim))
+        } else {
+            let w = s.get(i..).and_then(|r| r.chars().next()).map_or(1, char::len_utf8);
+            (i + w, None)
+        };
+        let end = if s.is_char_boundary(end) { end } else { s.len() };
+        if let Some(color) = color {
+            push(s.get(plain_from..start).unwrap_or(""), base);
+            push(s.get(start..end).unwrap_or(""), color);
+            plain_from = end;
+        }
+        i = end.max(start + 1);
+    }
+    push(s.get(plain_from..).unwrap_or(""), base);
+    job
 }
 
 /// Resolve ownership on every frame; never cache a spill range in presentation state.
@@ -187,20 +365,41 @@ fn active_input(app: &SheetApp) -> String {
     String::new()
 }
 
-/// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.
-fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
+/// Draws the cell name (the Name Box) left-centred on `left_center`: accent text at rest, a fill
+/// and chevron on hover (the chevron opens the name list), a solid accent pill while a cell is
+/// being edited (`edit_t` eases it). Typing a reference or name and Enter jumps there (or defines a
+/// new name); the Enter is consumed so the grid does not move down.
+fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens, left_center: egui::Pos2, edit_t: f32) -> Rect {
     let id = egui::Id::unique("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
-    let rect = Rect::from_min_size(ui.cursor().min, vec2(118.0, 24.0));
-    ui.painter().rect_filled(rect, 4.0, t.input_bg);
-    ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(6.0, 3.0), vec2(96.0, 18.0))));
+    let font = FontId::new(12.5, egui::FontFamily::Name(theme::MONO.into()));
+    let text_w = ui.painter().layout_no_wrap(text.clone(), font.clone(), t.text).size().x;
+    // 60 px at least; long names widen it (and push the fx glyph right).
+    let rect = Rect::from_min_size(pos2(left_center.x, left_center.y - 13.0), vec2((text_w + 8.0 + 22.0).clamp(60.0, 220.0), 26.0));
+    let id_hover = id.with("hover");
+    let hovered = ui.rect_contains_pointer(rect) || ui.memory(|m| m.has_focus(id));
+    let anim = if crate::widgets::animations_on(ui.ctx()) { 0.12 } else { 0.0 };
+    let hover_t = ui.ctx().animate_bool_with_time(id_hover, hovered, anim);
+    let hover_bg = t.hover;
+    if edit_t > 0.0 {
+        ui.painter().rect_filled(
+            rect.shrink2(vec2(0.0, 1.0)),
+            6.0,
+            hover_bg.gamma_multiply(hover_t * (1.0 - edit_t)).lerp_to_gamma(t.accent, edit_t),
+        );
+    } else if hover_t > 0.0 {
+        ui.painter().rect_filled(rect, 6.0, hover_bg.gamma_multiply(hover_t));
+    }
+    let on_accent = if t.dark { t.window } else { egui::Color32::WHITE };
+    let text_color = t.accent.lerp_to_gamma(on_accent, edit_t);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(8.0, 4.0), vec2(rect.width() - 30.0, 18.0))));
+    child.spacing_mut().interact_size.y = 18.0;
     // The box has no visible label of its own: screen readers and the strict accessibility check
     // need a name (egui 0.37 makes unnamed text inputs a test failure).
     let accessible_name = app.ui.language.tr("Name Box").to_string();
     let resp = child
-        .add(TextEdit::singleline(&mut text).id(id).frame(egui::Frame::NONE).font(theme::ui_font(13.0)).desired_width(96.0))
+        .add(TextEdit::singleline(&mut text).id(id).frame(egui::Frame::NONE).font(font).text_color(text_color).desired_width(rect.width() - 30.0))
         .accessible_name(accessible_name);
     if resp.gained_focus() {
         app.name_box = Some(shown.clone());
@@ -232,13 +431,15 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
         }
         app.name_box = None;
     }
-    ui.allocate_space(vec2(118.0, 24.0));
-    // Dropdown of names.
+    // Dropdown of names, behind the chevron that shows on hover.
     let names: Vec<String> =
         app.session.active().map(|d| d.wb.names.iter().filter(|n| !n.hidden).map(|n| n.name.clone()).collect()).unwrap_or_default();
-    let mb = Rect::from_min_size(pos2(rect.right() - 16.0, rect.top() + 4.0), vec2(14.0, 16.0));
-    icons::paint(ui.painter(), mb, Icon::Chevron, t.text_dim);
-    let r = ui.interact(mb, id.with("drop"), Sense::click());
+    let mb = Rect::from_min_size(pos2(rect.right() - 18.0, rect.center().y - 6.0), vec2(12.0, 12.0));
+    let chevron = t.text_dim.lerp_to_gamma(on_accent, edit_t).gamma_multiply(hover_t);
+    if hover_t > 0.0 {
+        icons::paint(ui.painter(), mb, Icon::Chevron, chevron);
+    }
+    let r = ui.interact(mb.expand(5.0), id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
             ui.label(egui::RichText::new("No names defined").italics());
@@ -305,19 +506,18 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
-        let mut job = egui::text::LayoutJob::default();
-        let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();
-        for (a, b, idx) in spans {
-            if a < pos || !s.is_char_boundary(a) || !s.is_char_boundary(b) {
-                continue;
-            }
-            job.append(s.get(pos..a).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
-            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), t.ref_color(idx, on_sheet)));
-            pos = b;
-        }
-        job.append(s.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
+        // A formula gets the code font and syntax colours (references, functions, strings,
+        // numbers, operators); other input keeps the editor's own font.
+        let mut job = if s.starts_with('=') {
+            let code = if on_sheet { font2.clone() } else { formula_font(font2.size.min(13.0)) };
+            highlight_formula(s, &code, cell_text_color, &spans, &t, on_sheet)
+        } else {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(s, 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
+            job
+        };
         job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
         ui.fonts_mut(|f| f.layout_job(job))
     };
@@ -829,16 +1029,15 @@ mod tests {
 
     #[test]
     fn one_line_fits_a_row_of_any_font() {
-        // macOS and Linux UI fonts: rows of 15 to 16 px keep Excel's 30 px bar.
-        assert_eq!(one_line(15.6), 30.0);
-        assert_eq!(one_line(16.0), 30.0);
-        // The Windows UI font's 17.28 px rows need more: the panel's and the field's margins take
-        // 12 px, and rounding to the pixel grid up to another one, so 30 px held only four rows
-        // of five (a tester's finding). Every counted line must fit in what is left.
+        // macOS and Linux UI fonts: rows of 15 to 16 px keep the 36 px bar.
+        assert_eq!(one_line(15.6), 36.0);
+        assert_eq!(one_line(16.0), 36.0);
+        // Larger rows (the Windows UI font's 17.28 px) must still fit every counted line in what
+        // the field's insets leave (a tester found a bar that held only four rows of five).
         for row_h in [17.0_f32, 17.28, 18.0, 20.0] {
             for lines in 1..=MAX_LINES {
                 let bar = one_line(row_h) + (lines - 1) as f32 * row_h;
-                let inner = bar - 13.0;
+                let inner = bar - 2.0 * ((ONE_LINE - row_h) / 2.0).max(4.0) + 1.0;
                 assert!((inner / row_h).floor() as usize >= lines, "{lines} lines of {row_h} px in a {bar} px bar");
             }
         }

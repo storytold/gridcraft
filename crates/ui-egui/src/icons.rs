@@ -1,12 +1,14 @@
 //! GridCraft's icon set, drawn in code on a 16×16 design grid (original artwork; see
-//! ATTRIBUTION.md). Large ribbon icons use the same drawings at 32×32 with accent colours.
+//! ATTRIBUTION.md). Ribbon commands draw the colorized design in `icons/colored.rs` (24-unit grid,
+//! 20 px on large buttons and 16 px on small ones) with the theme's icon colour roles
+//! (`Tokens::icon_inks`); other icons use Lucide or the drawings below.
 //! Accent and paper colours come from the theme tokens, so icons follow light and dark mode;
 //! icons placed on the sheet ([`paint_on_sheet`]) keep the light colours, as the sheet does.
 
 use egui::epaint::{CubicBezierShape, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
 
-use crate::theme::{Cat, Tokens};
+use crate::theme::{Cat, IconRole, Tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -63,6 +65,10 @@ pub enum Icon {
     Check,
     Fx,
     Plus,
+    /// Increase Font Size: an A with an up arrow.
+    FontGrow,
+    /// Decrease Font Size: an A with a down arrow.
+    FontShrink,
     Left,
     Right,
     Normal,
@@ -80,6 +86,8 @@ pub enum Icon {
     Shapes,
     Link,
     Comment,
+    /// The title bar's Comments pane button: a plain speech bubble, no colour.
+    CommentsPane,
     Note,
     TextBox,
     Symbol,
@@ -154,6 +162,84 @@ pub enum Icon {
     RunTo,
     /// Stop: a square.
     StopSquare,
+    // Ribbon commands that only the colorized design draws (`icons/colored.rs`); each used to
+    // borrow another command's icon.
+    DeleteCells,
+    InsertIcons,
+    ChartStatistic,
+    ChartHierarchy,
+    Slicer,
+    HeaderFooter,
+    SelectObjects,
+    PenBlue,
+    PenBlack,
+    PenRed,
+    Highlighter,
+    DrawEraser,
+    InkToShape,
+    PaperSize,
+    Breaks,
+    PrintTitles,
+    FnFinancial,
+    FnLogical,
+    FnText,
+    FnDateTime,
+    FnLookup,
+    FnMathTrig,
+    FnMore,
+    DefineName,
+    UseInFormula,
+    CreateFromSelection,
+    TraceDependents,
+    RemoveArrows,
+    ShowFormulas,
+    ErrorCheck,
+    EvaluateFormula,
+    WatchWindow,
+    CalcNow,
+    CalcSheet,
+    GetData,
+    SortCustom,
+    ClearFilter,
+    Reapply,
+    AdvancedFilter,
+    FlashFill,
+    WhatIf,
+    Forecast,
+    ShowDetail,
+    HideDetail,
+    OutlineSettings,
+    DataAnalysis,
+    Solver,
+    WorkbookStats,
+    Accessibility,
+    DeleteComment,
+    PrevComment,
+    NextComment,
+    ShowComments,
+    ProtectSheet,
+    ProtectWorkbook,
+    AllowEditRanges,
+    Zoom100,
+    ZoomSelection,
+    NewWindow,
+    ArrangeAll,
+    SwitchWindows,
+    RunMacro,
+    CommandPalette,
+    AgentControl,
+    ActionJournal,
+    CheckUpdates,
+    AboutApp,
+    ResizeTable,
+    ConvertToRange,
+    ChartElement,
+    SwitchRowCol,
+    SelectData,
+    ChangeChartType,
+    FormatPane,
+    ChartTitle,
+    DeleteChart,
 }
 
 struct G<'a> {
@@ -168,18 +254,20 @@ impl G<'_> {
     }
     fn line(&self, pts: &[(f32, f32)], c: Color32, w: f32) {
         let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
-        self.p.add(PathShape::line(v, PathStroke::new(w * self.s.clamp(1.0, 2.0), c)));
+        self.p.add(PathShape::line(v, PathStroke::new(w * self.s.clamp(1.0, 1.4), c)));
     }
     fn stroke(&self, pts: &[(f32, f32)], c: Color32) {
-        self.line(pts, c, 1.15);
+        self.line(pts, c, 1.3);
     }
     fn rect(&self, x: f32, y: f32, w: f32, h: f32, fill: Option<Color32>, stroke: Option<Color32>) {
         let r = Rect::from_min_size(self.pt(x, y), vec2(w * self.s, h * self.s));
+        // Softly rounded corners and a stroke that scales with the icon (1.3 px at 16 px).
+        let radius = (1.6 * self.s).min(w.min(h) * self.s / 2.0);
         if let Some(f) = fill {
-            self.p.rect_filled(r, 1.0, f);
+            self.p.rect_filled(r, radius, f);
         }
         if let Some(c) = stroke {
-            self.p.rect_stroke(r, 1.0, Stroke::new(1.0, c), egui::StrokeKind::Inside);
+            self.p.rect_stroke(r, radius, Stroke::new(1.3 * self.s.clamp(1.0, 1.4), c), egui::StrokeKind::Inside);
         }
     }
     fn poly(&self, pts: &[(f32, f32)], fill: Color32) {
@@ -191,7 +279,7 @@ impl G<'_> {
             self.p.circle_filled(self.pt(x, y), r * self.s, f);
         }
         if let Some(c) = stroke {
-            self.p.circle_stroke(self.pt(x, y), r * self.s, Stroke::new(1.0, c));
+            self.p.circle_stroke(self.pt(x, y), r * self.s, Stroke::new(1.3 * self.s.clamp(1.0, 1.4), c));
         }
     }
     fn text(&self, x: f32, y: f32, t: &str, size: f32, c: Color32, style: (bool, bool)) {
@@ -221,6 +309,19 @@ impl Palette {
         Palette { paper: t.paper, cat: t.cat, recording: t.recording }
     }
 
+    /// The chrome's icons: line drawings in the text colour whose one meaningful part takes the
+    /// accent (where the older set used blue), so the toolbar reads as one family.
+    fn chrome(t: &Tokens) -> Palette {
+        let mut cat = t.cat;
+        if let Some(b) = cat.get_mut(Cat::Blue as usize) {
+            *b = t.accent;
+        }
+        if let Some(g) = cat.get_mut(Cat::Green as usize) {
+            *g = t.accent;
+        }
+        Palette { paper: t.paper, cat, recording: t.recording }
+    }
+
     fn cat(&self, c: Cat) -> Color32 {
         self.cat.get(c as usize).copied().unwrap_or(Color32::GRAY)
     }
@@ -242,9 +343,26 @@ pub fn fallback_for_symbol(c: char) -> Option<Icon> {
     }
 }
 
-/// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
+/// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette. Icons
+/// with a colorized ribbon design draw it in full colour when `c` is the text ink; in any other
+/// colour they keep their line drawing (menus, panes and notices tint icons with meaning).
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
-    paint_with(p, rect, icon, c, &Palette::of(&Tokens::get(p.ctx())));
+    let t = Tokens::get(p.ctx());
+    if paint_design(p, rect, icon, c, &t, false) {
+        return;
+    }
+    paint_with(p, rect, icon, c, &Palette::chrome(&t));
+}
+
+/// Draws a ribbon button's `icon`: its colorized design, in full colour when `c` is the text ink
+/// on an enabled button, else in `c` alone (disabled, or tinted by the caller) so the state still
+/// reads. Icons without a design fall back to [`paint`].
+pub fn paint_ribbon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
+    let t = Tokens::get(p.ctx());
+    if paint_design(p, rect, icon, c, &t, true) {
+        return;
+    }
+    paint_with(p, rect, icon, c, &Palette::chrome(&t));
 }
 
 /// Draws `icon` on the sheet, which stays white in both themes, so with the light palette.
@@ -254,6 +372,16 @@ pub fn paint_on_sheet(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
 
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with palette `pal`.
 fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
+    if icon == Icon::Fx {
+        // A drawn f-hook with a crossbar and a small x (original; 16-unit grid, 1.4 px strokes).
+        paint_paths(p, rect, 16.0, &FX_PATHS, 1.4, c);
+        return;
+    }
+    if let Some(name) = lucide_name(icon)
+        && paint_lucide(p, rect, name, c)
+    {
+        return;
+    }
     let side = rect.width().min(rect.height());
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
     let g = G { p, r, s: side / 16.0 };
@@ -267,12 +395,9 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
     let yellow = pal.cat(Cat::Amber);
     match icon {
         Icon::Paste => {
-            g.rect(3.0, 2.5, 9.0, 12.0, Some(yellow), None);
-            g.rect(5.0, 1.5, 5.0, 2.5, Some(pal.cat(Cat::Slate)), None);
-            g.rect(6.5, 6.0, 7.5, 9.0, Some(paper), Some(c));
-            for y in [8.5, 10.5, 12.5] {
-                g.stroke(&[(8.0, y), (12.5, y)], light);
-            }
+            g.rect(2.5, 2.5, 9.5, 11.5, None, Some(c));
+            g.rect(5.0, 1.5, 4.5, 2.5, Some(paper), Some(c));
+            g.rect(6.5, 6.5, 7.5, 8.0, Some(pal.wash(Cat::Green)), Some(green));
         }
         Icon::Cut => {
             g.circle(5.0, 12.0, 2.0, None, Some(c));
@@ -285,9 +410,9 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.rect(6.0, 5.5, 7.5, 9.0, Some(paper), Some(c));
         }
         Icon::Brush => {
-            g.rect(3.0, 2.0, 10.0, 4.0, Some(yellow), Some(c));
-            g.stroke(&[(8.0, 6.0), (8.0, 8.5), (5.0, 8.5), (5.0, 10.0)], c);
-            g.rect(4.0, 10.0, 2.0, 4.5, Some(c), None);
+            g.rect(2.5, 2.0, 10.0, 4.5, None, Some(c));
+            g.stroke(&[(12.5, 4.2), (14.0, 4.2), (14.0, 8.5), (7.0, 8.5), (7.0, 10.0)], c);
+            g.rect(5.8, 10.0, 2.6, 4.5, Some(green), None);
         }
         Icon::Bold => g.text(8.0, 8.5, "B", 12.0, c, (true, false)),
         Icon::Italic => g.text(8.0, 8.5, "I", 12.0, c, (false, true)),
@@ -382,60 +507,56 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.poly(&[(7.0, 12.0), (5.2, 10.6), (5.2, 13.4)], blue);
         }
         Icon::CondFormat => {
-            g.rect(2.0, 2.0, 12.0, 12.0, Some(paper), Some(light));
-            g.rect(3.0, 3.5, 4.0, 2.5, Some(red), None);
-            g.rect(3.0, 7.0, 7.0, 2.5, Some(yellow), None);
-            g.rect(3.0, 10.5, 10.0, 2.5, Some(blue), None);
+            g.rect(1.5, 2.0, 13.0, 12.0, None, Some(c));
+            g.rect(4.0, 4.6, 5.5, 1.8, Some(green), None);
+            g.rect(4.0, 7.2, 8.0, 1.8, Some(pal.wash(Cat::Green).gamma_multiply(2.2)), None);
+            g.rect(4.0, 9.8, 3.5, 1.8, Some(orange), None);
         }
         Icon::FormatTable => {
-            g.rect(2.0, 2.5, 12.0, 11.0, Some(paper), Some(light));
-            g.rect(2.0, 2.5, 12.0, 3.0, Some(blue), None);
-            g.rect(2.0, 8.0, 12.0, 2.5, Some(pal.wash(Cat::Blue)), None);
-            g.stroke(&[(6.0, 2.5), (6.0, 13.5)], light);
-            g.stroke(&[(10.0, 2.5), (10.0, 13.5)], light);
+            g.rect(1.5, 2.5, 13.0, 4.0, Some(green), None);
+            g.rect(1.5, 2.5, 13.0, 11.5, None, Some(c));
+            g.stroke(&[(1.5, 10.0), (14.5, 10.0)], c);
+            g.stroke(&[(6.0, 6.5), (6.0, 14.0)], c);
+            g.stroke(&[(10.0, 6.5), (10.0, 14.0)], c);
         }
         Icon::CellStyles => {
-            g.rect(2.0, 3.0, 12.0, 4.5, Some(pal.wash(Cat::Green)), Some(light));
-            g.rect(2.0, 8.5, 12.0, 4.5, Some(pal.wash(Cat::Red)), Some(light));
-            g.stroke(&[(4.0, 5.2), (9.0, 5.2)], green);
-            g.stroke(&[(4.0, 10.7), (9.0, 10.7)], red);
+            g.rect(1.5, 2.5, 13.0, 5.0, Some(pal.wash(Cat::Green)), Some(green));
+            g.rect(1.5, 8.8, 13.0, 5.0, Some(pal.wash(Cat::Red)), Some(red));
         }
         Icon::Insert | Icon::Delete | Icon::Format => {
-            g.rect(2.0, 3.0, 12.0, 10.0, Some(paper), Some(light));
-            g.stroke(&[(2.0, 6.5), (14.0, 6.5)], light);
-            g.stroke(&[(2.0, 10.0), (14.0, 10.0)], light);
-            g.stroke(&[(6.0, 3.0), (6.0, 13.0)], light);
+            g.rect(2.0, 2.0, 12.0, 12.0, None, Some(c));
             match icon {
                 Icon::Insert => {
-                    g.rect(6.0, 6.5, 8.0, 3.5, Some(pal.wash(Cat::Blue)), Some(blue));
-                    g.line(&[(1.0, 8.2), (4.5, 8.2)], green, 1.6);
-                    g.line(&[(2.75, 6.5), (2.75, 10.0)], green, 1.6);
+                    g.stroke(&[(2.0, 8.0), (14.0, 8.0)], c);
+                    g.line(&[(8.0, 4.8), (8.0, 11.2)], green, 1.5);
                 }
                 Icon::Delete => {
-                    g.line(&[(8.0, 6.0), (13.0, 11.0)], red, 1.6);
-                    g.line(&[(13.0, 6.0), (8.0, 11.0)], red, 1.6);
+                    g.line(&[(5.8, 5.8), (10.2, 10.2)], red, 1.5);
+                    g.line(&[(10.2, 5.8), (5.8, 10.2)], red, 1.5);
                 }
                 _ => {
-                    g.rect(6.0, 6.5, 8.0, 3.5, Some(pal.wash(Cat::Blue)), None);
+                    g.stroke(&[(2.0, 6.0), (14.0, 6.0)], c);
+                    g.stroke(&[(6.0, 6.0), (6.0, 14.0)], c);
                 }
             }
         }
         Icon::Sum => g.text(8.0, 8.0, "Σ", 13.0, c, (false, false)),
         Icon::FillDown => {
-            g.rect(4.0, 2.0, 8.0, 12.0, Some(paper), Some(light));
-            g.stroke(&[(8.0, 4.0), (8.0, 11.0)], blue);
-            g.poly(&[(5.5, 9.5), (10.5, 9.5), (8.0, 13.0)], blue);
+            g.stroke(&[(8.0, 2.5), (8.0, 11.0)], c);
+            g.stroke(&[(5.0, 8.2), (8.0, 11.2), (11.0, 8.2)], c);
+            g.line(&[(3.0, 13.8), (13.0, 13.8)], green, 1.5);
         }
         Icon::Eraser => {
-            g.poly(&[(2.0, 10.0), (8.0, 4.0), (12.0, 8.0), (6.0, 14.0)], red.gamma_multiply(0.55));
-            g.poly(&[(8.0, 4.0), (10.5, 1.5), (14.5, 5.5), (12.0, 8.0)], red);
+            g.stroke(&[(9.5, 2.5), (13.5, 6.5), (7.5, 12.5), (4.0, 12.5), (2.5, 11.0), (9.5, 2.5)], c);
+            g.stroke(&[(6.0, 6.0), (10.0, 10.0)], c);
+            g.stroke(&[(8.0, 13.8), (13.5, 13.8)], c);
         }
         Icon::SortFilter => {
-            g.text(4.5, 4.5, "A", 6.0, c, (false, false));
-            g.text(4.5, 11.5, "Z", 6.0, c, (false, false));
-            g.stroke(&[(8.0, 3.0), (8.0, 13.0)], blue);
-            g.poly(&[(6.5, 11.0), (9.5, 11.0), (8.0, 13.5)], blue);
-            g.poly(&[(10.0, 3.0), (15.0, 3.0), (13.0, 7.5), (13.0, 12.0), (12.0, 11.0), (12.0, 7.5)], light);
+            g.stroke(&[(1.8, 10.0), (4.0, 2.5), (6.2, 10.0)], c);
+            g.stroke(&[(2.6, 7.4), (5.4, 7.4)], c);
+            g.stroke(&[(8.5, 2.5), (14.5, 2.5), (12.2, 6.0), (12.2, 10.0), (10.8, 11.0), (10.8, 6.0), (8.5, 2.5)], c);
+            g.line(&[(4.0, 11.5), (4.0, 15.0)], green, 1.4);
+            g.line(&[(2.6, 13.6), (4.0, 15.0), (5.4, 13.6)], green, 1.4);
         }
         Icon::Find | Icon::Search | Icon::Zoom => {
             g.circle(6.5, 6.5, 4.0, None, Some(c));
@@ -491,6 +612,9 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(3.0, 8.0), (13.0, 8.0)], c, 1.3);
         }
         Icon::Minus => g.line(&[(3.0, 8.0), (13.0, 8.0)], c, 1.3),
+        // Drawn from Lucide's a-arrow-up / a-arrow-down; this is the text fallback.
+        Icon::FontGrow => g.text(8.0, 8.0, "A+", 10.0, c, (false, false)),
+        Icon::FontShrink => g.text(8.0, 8.0, "A-", 10.0, c, (false, false)),
         Icon::Normal | Icon::Gridlines | Icon::Sheet => {
             g.rect(2.0, 2.5, 12.0, 11.0, None, Some(c));
             g.stroke(&[(6.0, 2.5), (6.0, 13.5)], c);
@@ -551,7 +675,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.rect(2.0, 8.0, 6.0, 4.0, None, Some(c));
             g.rect(8.0, 4.0, 6.0, 4.0, None, Some(c));
         }
-        Icon::Comment | Icon::Note => {
+        Icon::Comment | Icon::CommentsPane | Icon::Note => {
             g.poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (2.0, 11.0)], if icon == Icon::Note { pal.wash(Cat::Amber) } else { paper });
             g.line(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (7.0, 11.0), (4.0, 14.0), (4.0, 11.0), (2.0, 11.0), (2.0, 3.0)], c, 1.1);
         }
@@ -795,6 +919,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
         }
         Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
+        // The design-only icons are drawn by `paint_design`.
+        _ => {}
     }
 }
 
@@ -872,5 +998,937 @@ fn paint_alignment(g: &G<'_>, icon: Icon, c: Color32, light: Color32, blue: Colo
         if icon == Icon::IndentDec {
             g.poly(&[(5.0, 6.0), (2.0, 8.0), (5.0, 10.0)], blue);
         }
+    }
+}
+
+mod lucide;
+
+/// The Lucide drawing used for `icon`, when Lucide has one (the spreadsheet-specific icons —
+/// borders, cell styles, number formats — stay drawn in code above).
+fn lucide_name(icon: Icon) -> Option<&'static str> {
+    Some(match icon {
+        Icon::Paste => "clipboard-paste",
+        Icon::Cut => "scissors",
+        Icon::Copy => "copy",
+        Icon::Brush => "paintbrush",
+        Icon::Bold => "bold",
+        Icon::Italic => "italic",
+        Icon::Underline => "underline",
+        Icon::Strike => "strikethrough",
+        Icon::Fill => "paint-bucket",
+        Icon::FontColor => "baseline",
+        Icon::Borders => "square-dashed-bottom",
+        Icon::BorderAll => "grid-2x2",
+        Icon::BorderNone => "square-dashed",
+        Icon::BorderOutside => "square",
+        Icon::Merge => "table-cells-merge",
+        Icon::Orientation => "rotate-ccw-square",
+        Icon::Currency => "dollar-sign",
+        Icon::AlignLeft => "align-left",
+        Icon::AlignCenter => "align-center",
+        Icon::AlignRight => "align-right",
+        Icon::IndentDec => "indent-decrease",
+        Icon::IndentInc => "indent-increase",
+        Icon::Wrap => "wrap-text",
+        Icon::Percent => "percent",
+        Icon::Sum => "sigma",
+        Icon::FillDown => "arrow-down-to-line",
+        Icon::Eraser => "eraser",
+        Icon::Find | Icon::Search => "search",
+        Icon::Zoom => "zoom-in",
+        Icon::Undo => "undo-2",
+        Icon::Redo => "redo-2",
+        Icon::Save => "save",
+        Icon::Home => "house",
+        Icon::More => "ellipsis",
+        Icon::Chevron => "chevron-down",
+        Icon::ChevronUp => "chevron-up",
+        Icon::Close => "x",
+        Icon::Check => "check",
+        Icon::Plus => "plus",
+        Icon::FontGrow => "a-arrow-up",
+        Icon::FontShrink => "a-arrow-down",
+        Icon::Minus => "minus",
+        Icon::Left => "chevron-left",
+        Icon::Right => "chevron-right",
+        Icon::Table => "table",
+        Icon::PivotTable => "table-2",
+        Icon::Chart => "chart-column",
+        Icon::ChartBar => "chart-bar",
+        Icon::ChartLine => "chart-line",
+        Icon::ChartPie => "chart-pie",
+        Icon::ChartScatter => "chart-scatter",
+        Icon::Picture => "image",
+        Icon::Shapes => "shapes",
+        Icon::Link => "link",
+        Icon::Comment | Icon::CommentsPane => "message-square",
+        Icon::Note => "sticky-note",
+        Icon::TextBox => "text-cursor-input",
+        Icon::Symbol => "omega",
+        Icon::Sparkline => "activity",
+        Icon::Checkbox => "square-check",
+        Icon::Function => "square-function",
+        Icon::Name => "tag",
+        Icon::Calc => "calculator",
+        Icon::Filter => "filter",
+        Icon::SortAsc => "arrow-down-a-z",
+        Icon::SortDesc => "arrow-down-z-a",
+        Icon::Duplicates => "copy-x",
+        Icon::TextColumns => "columns-3",
+        Icon::Validation => "shield-check",
+        Icon::Group => "group",
+        Icon::Ungroup => "ungroup",
+        Icon::Lock => "lock",
+        Icon::Spell => "spell-check",
+        Icon::Freeze => "snowflake",
+        Icon::Gridlines => "grid-3x3",
+        Icon::Theme => "palette",
+        Icon::Paper => "file",
+        Icon::Script => "square-terminal",
+        Icon::Pen => "pen",
+        Icon::Share => "share",
+        Icon::Settings => "settings",
+        Icon::Appearance => "contrast",
+        Icon::Sheet => "sheet",
+        Icon::SheetList => "list",
+        Icon::Book => "book-open",
+        Icon::Folder => "folder",
+        Icon::Header => "panel-top",
+        Icon::Footer => "panel-bottom",
+        Icon::PageNumber => "hash",
+        Icon::Calendar => "calendar",
+        Icon::Clock => "clock",
+        Icon::Back => "arrow-left",
+        Icon::NewFile => "file-plus",
+        Icon::OpenFolder => "folder-open",
+        Icon::Info => "info",
+        Icon::Print => "printer",
+        Icon::Record => "circle-dot",
+        Icon::Collapse => "minimize-2",
+        Icon::Expand => "maximize-2",
+        Icon::Play => "play",
+        Icon::StopSquare => "square",
+        _ => return None,
+    })
+}
+
+/// One flattened stroke of a Lucide icon on its 24×24 grid, and whether it closes.
+type Polyline = (Vec<(f32, f32)>, bool);
+
+/// The Lucide icons, parsed and flattened once.
+fn lucide_shapes(name: &str) -> Option<&'static [Polyline]> {
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, Vec<Polyline>>> = std::sync::OnceLock::new();
+    let map =
+        CACHE.get_or_init(|| lucide::ICONS.iter().map(|(n, paths)| (*n, paths.iter().flat_map(|d| flatten_path(d)).map(dedupe).collect())).collect());
+    map.get(name).map(Vec::as_slice)
+}
+
+/// Drops repeated points (a closed path that ends on its start, curve steps that do not move):
+/// a zero-length segment makes egui's mitred join spike far outside the icon.
+fn dedupe((pts, closed): Polyline) -> Polyline {
+    let mut v: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if v.last().is_none_or(|q: &(f32, f32)| (q.0 - p.0).abs() + (q.1 - p.1).abs() > 0.05) {
+            v.push(p);
+        }
+    }
+    if closed && v.len() > 2 && v.first().zip(v.last()).is_some_and(|(a, b)| (a.0 - b.0).abs() + (a.1 - b.1).abs() <= 0.05) {
+        v.pop();
+    }
+    (v, closed)
+}
+
+const FX_PATHS: [&str; 3] =
+    ["M3.5 13.25c1.4 0 2.05-.75 2.2-2.1l.75-6.3C6.6 3.5 7.3 2.75 8.75 2.75", "M4.25 6.75h3.75", "M9.75 8.5l3.5 4.25M13.25 8.5l-3.5 4.25"];
+
+/// Draws SVG path data drawn on a `grid`-unit square into `rect`, with round caps and joins; the
+/// stroke is `width` at 16 px and scales with the icon.
+fn paint_paths(p: &Painter, rect: Rect, grid: f32, paths: &[&str], width: f32, c: Color32) {
+    let side = rect.width().min(rect.height());
+    let s = side / grid;
+    let origin = rect.center() - vec2(side / 2.0, side / 2.0);
+    let w = (width * side / 16.0).clamp(1.0, 2.2);
+    for d in paths {
+        for (pts, closed) in flatten_path(d) {
+            let v: Vec<Pos2> = pts.iter().map(|(x, y)| origin + vec2(x * s, y * s)).collect();
+            if v.len() < 2 {
+                continue;
+            }
+            let stroke = PathStroke::new(w, c);
+            p.add(if closed { PathShape::closed_line(v.clone(), stroke) } else { PathShape::line(v.clone(), stroke) });
+            for q in &v {
+                p.circle_filled(*q, w / 2.0, c);
+            }
+        }
+    }
+}
+
+/// Draws a Lucide icon in `rect`, its 2 px strokes scaled to the icon size (1.33 px at 16 px).
+fn paint_lucide(p: &Painter, rect: Rect, name: &str, c: Color32) -> bool {
+    let Some(shapes) = lucide_shapes(name) else { return false };
+    let side = rect.width().min(rect.height());
+    let s = side / 24.0;
+    let origin = rect.center() - vec2(side / 2.0, side / 2.0);
+    let width = (2.0 * s).clamp(1.0, 1.7);
+    for (pts, closed) in shapes {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| origin + vec2(x * s, y * s)).collect();
+        if v.len() < 2 {
+            if let Some(dot) = v.first() {
+                p.circle_filled(*dot, width / 2.0, c);
+            }
+            continue;
+        }
+        let stroke = PathStroke::new(width, c);
+        p.add(if *closed { PathShape::closed_line(v.clone(), stroke) } else { PathShape::line(v.clone(), stroke) });
+        // Round line caps and joins, as Lucide draws them.
+        for q in v.iter().skip(usize::from(*closed)).step_by(1) {
+            p.circle_filled(*q, width / 2.0, c);
+        }
+    }
+    true
+}
+
+/// A tiny SVG path-data parser (M L H V C S Q T A Z, absolute and relative) that flattens curves
+/// and arcs into polylines. Malformed data ends the path early instead of failing.
+fn flatten_path(d: &str) -> Vec<Polyline> {
+    let mut toks: Vec<Tok> = Vec::new();
+    let mut num = String::new();
+    let flush = |num: &mut String, toks: &mut Vec<Tok>| {
+        if !num.is_empty() {
+            if let Ok(v) = num.parse::<f32>() {
+                toks.push(Tok::Num(v));
+            }
+            num.clear();
+        }
+    };
+    let mut prev = ' ';
+    for ch in d.chars() {
+        match ch {
+            'a'..='z' | 'A'..='Z' if ch != 'e' && ch != 'E' => {
+                flush(&mut num, &mut toks);
+                toks.push(Tok::Cmd(ch));
+            }
+            '-' if !(prev == 'e' || prev == 'E') => {
+                flush(&mut num, &mut toks);
+                num.push(ch);
+            }
+            '.' if num.contains('.') && !num.contains('e') => {
+                flush(&mut num, &mut toks);
+                num.push(ch);
+            }
+            ',' | ' ' | '\n' | '\t' => flush(&mut num, &mut toks),
+            _ => num.push(ch),
+        }
+        prev = ch;
+    }
+    flush(&mut num, &mut toks);
+
+    let mut out: Vec<Polyline> = Vec::new();
+    let mut cur: Vec<(f32, f32)> = Vec::new();
+    let (mut x, mut y, mut sx, mut sy) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let mut last_ctrl: Option<(f32, f32)> = None;
+    let mut cmd = 'M';
+    let mut i = 0;
+    let nums = |i: &mut usize, n: usize| -> Option<Vec<f32>> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            match toks.get(*i) {
+                Some(Tok::Num(f)) => v.push(*f),
+                _ => return None,
+            }
+            *i += 1;
+        }
+        Some(v)
+    };
+    loop {
+        match toks.get(i) {
+            None => break,
+            Some(Tok::Cmd(c)) => {
+                cmd = *c;
+                i += 1;
+                if cmd == 'Z' || cmd == 'z' {
+                    if cur.len() > 1 {
+                        out.push((std::mem::take(&mut cur), true));
+                    } else {
+                        cur.clear();
+                    }
+                    x = sx;
+                    y = sy;
+                    last_ctrl = None;
+                    continue;
+                }
+            }
+            Some(Tok::Num(_)) => {}
+        }
+        let rel = cmd.is_ascii_lowercase();
+        let (ox, oy) = if rel { (x, y) } else { (0.0, 0.0) };
+        match cmd.to_ascii_uppercase() {
+            'M' => {
+                let Some(v) = nums(&mut i, 2) else { break };
+                if cur.len() > 1 {
+                    out.push((std::mem::take(&mut cur), false));
+                }
+                cur.clear();
+                x = ox + v[0];
+                y = oy + v[1];
+                sx = x;
+                sy = y;
+                cur.push((x, y));
+                cmd = if rel { 'l' } else { 'L' };
+                last_ctrl = None;
+            }
+            'L' => {
+                let Some(v) = nums(&mut i, 2) else { break };
+                x = ox + v[0];
+                y = oy + v[1];
+                cur.push((x, y));
+                last_ctrl = None;
+            }
+            'H' => {
+                let Some(v) = nums(&mut i, 1) else { break };
+                x = if rel { x + v[0] } else { v[0] };
+                cur.push((x, y));
+                last_ctrl = None;
+            }
+            'V' => {
+                let Some(v) = nums(&mut i, 1) else { break };
+                y = if rel { y + v[0] } else { v[0] };
+                cur.push((x, y));
+                last_ctrl = None;
+            }
+            'C' | 'S' => {
+                let smooth = cmd.eq_ignore_ascii_case(&'S');
+                let Some(v) = nums(&mut i, if smooth { 4 } else { 6 }) else { break };
+                let (c1, c2, end) = if smooth {
+                    let c1 = last_ctrl.map_or((x, y), |(cx, cy)| (2.0 * x - cx, 2.0 * y - cy));
+                    (c1, (ox + v[0], oy + v[1]), (ox + v[2], oy + v[3]))
+                } else {
+                    ((ox + v[0], oy + v[1]), (ox + v[2], oy + v[3]), (ox + v[4], oy + v[5]))
+                };
+                for k in 1..=12 {
+                    let t = k as f32 / 12.0;
+                    let u = 1.0 - t;
+                    let px = u * u * u * x + 3.0 * u * u * t * c1.0 + 3.0 * u * t * t * c2.0 + t * t * t * end.0;
+                    let py = u * u * u * y + 3.0 * u * u * t * c1.1 + 3.0 * u * t * t * c2.1 + t * t * t * end.1;
+                    cur.push((px, py));
+                }
+                last_ctrl = Some(c2);
+                (x, y) = end;
+            }
+            'Q' | 'T' => {
+                let smooth = cmd.eq_ignore_ascii_case(&'T');
+                let Some(v) = nums(&mut i, if smooth { 2 } else { 4 }) else { break };
+                let (c, end) = if smooth {
+                    (last_ctrl.map_or((x, y), |(cx, cy)| (2.0 * x - cx, 2.0 * y - cy)), (ox + v[0], oy + v[1]))
+                } else {
+                    ((ox + v[0], oy + v[1]), (ox + v[2], oy + v[3]))
+                };
+                for k in 1..=10 {
+                    let t = k as f32 / 10.0;
+                    let u = 1.0 - t;
+                    cur.push((u * u * x + 2.0 * u * t * c.0 + t * t * end.0, u * u * y + 2.0 * u * t * c.1 + t * t * end.1));
+                }
+                last_ctrl = Some(c);
+                (x, y) = end;
+            }
+            'A' => {
+                let Some(v) = nums(&mut i, 7) else { break };
+                let end = (ox + v[5], oy + v[6]);
+                arc_points(&mut cur, (x, y), (v[0], v[1]), v[2], v[3] != 0.0, v[4] != 0.0, end);
+                (x, y) = end;
+                last_ctrl = None;
+            }
+            _ => break,
+        }
+    }
+    if !cur.is_empty() {
+        out.push((cur, false));
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+enum Tok {
+    Cmd(char),
+    Num(f32),
+}
+
+/// Appends the points of an SVG elliptical arc (endpoint form) after `from`.
+fn arc_points(out: &mut Vec<(f32, f32)>, from: (f32, f32), radii: (f32, f32), rot_deg: f32, large: bool, sweep: bool, to: (f32, f32)) {
+    let (mut rx, mut ry) = (radii.0.abs(), radii.1.abs());
+    if rx < 1e-4 || ry < 1e-4 || (from.0 - to.0).abs() + (from.1 - to.1).abs() < 1e-5 {
+        out.push(to);
+        return;
+    }
+    let phi = rot_deg.to_radians();
+    let (sin, cos) = phi.sin_cos();
+    let dx = (from.0 - to.0) / 2.0;
+    let dy = (from.1 - to.1) / 2.0;
+    let x1 = cos * dx + sin * dy;
+    let y1 = -sin * dx + cos * dy;
+    let lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
+    if lambda > 1.0 {
+        let k = lambda.sqrt();
+        rx *= k;
+        ry *= k;
+    }
+    let num = (rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1).max(0.0);
+    let den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
+    let mut coef = if den > 0.0 { (num / den).sqrt() } else { 0.0 };
+    if large == sweep {
+        coef = -coef;
+    }
+    let cx1 = coef * rx * y1 / ry;
+    let cy1 = -coef * ry * x1 / rx;
+    let cx = cos * cx1 - sin * cy1 + (from.0 + to.0) / 2.0;
+    let cy = sin * cx1 + cos * cy1 + (from.1 + to.1) / 2.0;
+    let angle = |ux: f32, uy: f32, vx: f32, vy: f32| (ux * vy - uy * vx).atan2(ux * vx + uy * vy);
+    let th1 = angle(1.0, 0.0, (x1 - cx1) / rx, (y1 - cy1) / ry);
+    let mut dth = angle((x1 - cx1) / rx, (y1 - cy1) / ry, (-x1 - cx1) / rx, (-y1 - cy1) / ry);
+    if !sweep && dth > 0.0 {
+        dth -= std::f32::consts::TAU;
+    } else if sweep && dth < 0.0 {
+        dth += std::f32::consts::TAU;
+    }
+    let steps = ((dth.abs() / std::f32::consts::TAU) * 40.0).ceil().clamp(2.0, 40.0) as usize;
+    for k in 1..=steps {
+        let t = th1 + dth * k as f32 / steps as f32;
+        let (st, ct) = t.sin_cos();
+        out.push((cx + cos * rx * ct - sin * ry * st, cy + sin * rx * ct + cos * ry * st));
+    }
+}
+
+mod colored;
+
+/// The colorized design drawn for `icon` (a key of `colored::ICONS`), when it has one. `large`
+/// picks the large-button variant where the design draws one (AutoSum).
+fn design_key(icon: Icon, large: bool) -> Option<&'static str> {
+    Some(match icon {
+        // Home
+        Icon::Paste => "paste",
+        Icon::Cut => "cut",
+        Icon::Copy => "copy",
+        Icon::Brush => "painter",
+        Icon::FontGrow => "grow",
+        Icon::FontShrink => "shrink",
+        Icon::Bold => "bold",
+        Icon::Italic => "italic",
+        Icon::Underline => "underline",
+        Icon::Strike => "strike",
+        Icon::Borders => "borders",
+        Icon::Fill => "fillColor",
+        Icon::FontColor => "fontColor",
+        Icon::AlignTop => "alignTop",
+        Icon::AlignMiddle => "alignMiddle",
+        Icon::AlignBottom => "alignBottom",
+        Icon::Orientation => "orientation",
+        Icon::Wrap => "wrap",
+        Icon::AlignLeft => "alignLeft",
+        Icon::AlignCenter => "alignCenter",
+        Icon::AlignRight => "alignRight",
+        Icon::IndentDec => "indentDec",
+        Icon::IndentInc => "indentInc",
+        Icon::Merge => "merge",
+        Icon::Currency => "accounting",
+        Icon::Percent => "percent",
+        Icon::Comma => "comma",
+        Icon::DecInc => "decInc",
+        Icon::DecDec => "decDec",
+        Icon::CondFormat => "condFormat",
+        Icon::FormatTable => "formatTable",
+        Icon::CellStyles => "cellStyles",
+        Icon::Insert => "insertCells",
+        Icon::DeleteCells => "deleteCells",
+        Icon::Format => "formatCells",
+        Icon::Sum if large => "autosumL",
+        Icon::Sum => "autosum",
+        Icon::FillDown => "fill",
+        Icon::Eraser => "clear",
+        Icon::SortFilter => "sortFilter",
+        Icon::Find => "find",
+        // Insert
+        Icon::PivotTable => "pivot",
+        Icon::Table => "table",
+        Icon::Picture => "pictures",
+        Icon::Shapes => "shapes",
+        Icon::InsertIcons => "icons",
+        Icon::Chart => "recCharts",
+        Icon::ChartBar => "colBar",
+        Icon::ChartLine => "lineArea",
+        Icon::ChartPie => "pie",
+        Icon::ChartScatter => "scatter",
+        Icon::ChartStatistic => "statistic",
+        Icon::ChartHierarchy => "hierarchy",
+        Icon::Slicer => "slicer",
+        Icon::Sparkline => "sparklines",
+        Icon::Checkbox => "checkbox",
+        Icon::Link => "link",
+        Icon::Comment => "comment",
+        Icon::TextBox => "textBox",
+        Icon::HeaderFooter => "headerFooter",
+        Icon::Symbol => "symbol",
+        // Draw
+        Icon::SelectObjects => "select",
+        Icon::PenBlue => "penBlue",
+        Icon::PenBlack => "penBlack",
+        Icon::PenRed => "penRed",
+        Icon::Highlighter => "highlighter",
+        Icon::DrawEraser => "eraser",
+        Icon::InkToShape => "inkToShape",
+        // Page Layout
+        Icon::Theme => "themes",
+        Icon::Margins => "margins",
+        Icon::Orient => "orient",
+        Icon::PaperSize => "size",
+        Icon::PrintArea => "printArea",
+        Icon::Breaks => "breaks",
+        Icon::PrintTitles => "printTitles",
+        Icon::SheetRtl => "rtl",
+        // Formulas
+        Icon::Function => "insertFunction",
+        Icon::FnFinancial => "financial",
+        Icon::FnLogical => "logical",
+        Icon::FnText => "text",
+        Icon::FnDateTime => "dateTime",
+        Icon::FnLookup => "lookup",
+        Icon::FnMathTrig => "mathTrig",
+        Icon::FnMore => "moreFunctions",
+        Icon::Name => "nameManager",
+        Icon::DefineName => "defineName",
+        Icon::UseInFormula => "useInFormula",
+        Icon::CreateFromSelection => "createFromSel",
+        Icon::Trace => "tracePrec",
+        Icon::TraceDependents => "traceDep",
+        Icon::RemoveArrows => "removeArrows",
+        Icon::ShowFormulas => "showFormulas",
+        Icon::ErrorCheck => "errorCheck",
+        Icon::EvaluateFormula => "evaluate",
+        Icon::WatchWindow => "watchWindow",
+        Icon::Calc => "calcOptions",
+        Icon::CalcNow => "calcNow",
+        Icon::CalcSheet => "calcSheet",
+        // Data
+        Icon::GetData => "getData",
+        Icon::SortAsc => "sortAZ",
+        Icon::SortDesc => "sortZA",
+        Icon::SortCustom => "sort",
+        Icon::Filter => "filter",
+        Icon::ClearFilter => "clearFilter",
+        Icon::Reapply => "reapply",
+        Icon::AdvancedFilter => "advanced",
+        Icon::TextColumns => "textToColumns",
+        Icon::FlashFill => "flashFill",
+        Icon::Duplicates => "removeDup",
+        Icon::Validation => "validation",
+        Icon::WhatIf => "whatIf",
+        Icon::Forecast => "forecast",
+        Icon::Group => "group",
+        Icon::Ungroup => "ungroup",
+        Icon::Subtotal => "subtotal",
+        Icon::ShowDetail => "showDetail",
+        Icon::HideDetail => "hideDetail",
+        Icon::OutlineSettings => "outlineSettings",
+        Icon::DataAnalysis => "dataAnalysis",
+        Icon::Solver => "solver",
+        // Review
+        Icon::Spell => "spelling",
+        Icon::WorkbookStats => "wbStats",
+        Icon::Accessibility => "accessibility",
+        Icon::DeleteComment => "deleteComment",
+        Icon::PrevComment => "previous",
+        Icon::NextComment => "next",
+        Icon::ShowComments => "showComments",
+        Icon::Note => "notes",
+        Icon::ProtectSheet => "protectSheet",
+        Icon::ProtectWorkbook => "protectWorkbook",
+        Icon::AllowEditRanges => "allowEdit",
+        // View
+        Icon::Normal => "normal",
+        Icon::PageBreak => "pageBreakPreview",
+        Icon::PageLayout => "pageLayoutView",
+        Icon::Zoom => "zoom",
+        Icon::Zoom100 => "zoom100",
+        Icon::ZoomSelection => "zoomSel",
+        Icon::NewWindow => "newWindow",
+        Icon::ArrangeAll => "arrangeAll",
+        Icon::Freeze => "freeze",
+        Icon::SwitchWindows => "switchWindows",
+        // Automate
+        Icon::Script => "macros",
+        Icon::Record => "record",
+        Icon::Relative => "relative",
+        Icon::Macro => "newMacro",
+        Icon::RunMacro => "run",
+        Icon::CommandPalette => "cmdPalette",
+        Icon::AgentControl => "agentControl",
+        Icon::ActionJournal => "journal",
+        Icon::CheckUpdates => "updates",
+        Icon::AboutApp => "about",
+        // Table and chart tools
+        Icon::ResizeTable => "resizeTable",
+        Icon::ConvertToRange => "convertToRange",
+        Icon::ChartElement => "addChartElement",
+        Icon::SwitchRowCol => "switchRowCol",
+        Icon::SelectData => "selectData",
+        Icon::ChangeChartType => "changeChartType",
+        Icon::FormatPane => "formatPane",
+        Icon::ChartTitle => "editChartTitle",
+        Icon::DeleteChart => "deleteChart",
+        _ => return None,
+    })
+}
+
+/// Whether `icon` exists only as a colorized design (no line drawing to fall back to).
+fn design_only(icon: Icon) -> bool {
+    // The design-only variants close the enum, from `DeleteCells` on.
+    icon as u32 >= Icon::DeleteCells as u32
+}
+
+/// Whether `c` is the text ink of the current theme or of one of the built-in themes.
+/// The opacity the ribbon's tab-switch fade draws at this frame (1 when not fading). A
+/// colorized icon below it belongs to a disabled control; at it, the icon keeps its colours.
+pub fn set_ribbon_fade(ctx: &egui::Context, a: f32) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("icons.ribbon_fade"), a));
+}
+
+fn is_ink(c: Color32, t: &Tokens) -> bool {
+    c == t.text || c == Tokens::light().text || c == Tokens::dark().text || c == Tokens::dark_green().text
+}
+
+/// Draws `icon`'s colorized design when it has one and the call wants it; false otherwise.
+fn paint_design(p: &Painter, rect: Rect, icon: Icon, c: Color32, t: &Tokens, ribbon: bool) -> bool {
+    let large = rect.width().min(rect.height()) >= 18.0;
+    let Some(key) = design_key(icon, large) else { return false };
+    // Disabled controls draw at a lowered opacity; a fading ribbon tab lowers it for every
+    // control, so only opacity below the fade's counts as disabled.
+    let fade = p.ctx().data(|d| d.get_temp::<f32>(egui::Id::unique("icons.ribbon_fade"))).unwrap_or(1.0);
+    let full = is_ink(c, t) && p.opacity() >= fade - 0.001;
+    if !full && !ribbon && !design_only(icon) {
+        return false;
+    }
+    let Some(els) = design_shapes(key) else { return false };
+    let inks = t.icon_inks();
+    let color = |role: IconRole| -> Color32 {
+        if full || role == IconRole::Paper {
+            inks.get(role)
+        } else if role.is_soft() {
+            c.gamma_multiply(0.25)
+        } else if role == IconRole::Dim {
+            c.gamma_multiply(0.6)
+        } else {
+            c
+        }
+    };
+    paint_colored(p, rect, els, large, &color);
+    true
+}
+
+/// One element of a colorized icon with its path flattened (24-unit grid).
+struct DesignEl {
+    fill: Option<IconRole>,
+    stroke: Option<IconRole>,
+    width: Option<f32>,
+    dash: Option<(f32, f32)>,
+    paths: Vec<Polyline>,
+}
+
+/// The colorized designs, parsed and flattened once.
+fn design_shapes(key: &str) -> Option<&'static [DesignEl]> {
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, Vec<DesignEl>>> = std::sync::OnceLock::new();
+    let map = CACHE.get_or_init(|| {
+        colored::ICONS
+            .iter()
+            .map(|(k, els)| {
+                let v = els
+                    .iter()
+                    .map(|e| DesignEl {
+                        fill: e.fill,
+                        stroke: e.stroke,
+                        width: e.width,
+                        dash: e.dash,
+                        paths: flatten_path(e.d).into_iter().map(dedupe).collect(),
+                    })
+                    .collect();
+                (*k, v)
+            })
+            .collect()
+    });
+    map.get(key).map(Vec::as_slice)
+}
+
+/// Paints a colorized design into `rect`: fills then strokes per element, in element order, with
+/// round caps and joins. Strokes are 1.8 grid units on large (20 px) icons and 2 on small ones; a
+/// width override applies as is on large icons and 0.2 wider on small ones.
+fn paint_colored(p: &Painter, rect: Rect, els: &[DesignEl], large: bool, color: &dyn Fn(IconRole) -> Color32) {
+    let side = rect.width().min(rect.height());
+    let s = side / 24.0;
+    let origin = rect.center() - vec2(side / 2.0, side / 2.0);
+    let feather = 1.0 / p.ctx().pixels_per_point().max(0.1);
+    let map = |pts: &[(f32, f32)]| -> Vec<Pos2> { pts.iter().map(|(x, y)| origin + vec2(x * s, y * s)).collect() };
+    for el in els {
+        if let Some(role) = el.fill {
+            let c = color(role);
+            for (pts, _) in &el.paths {
+                fill_polygon(p, map(pts), c, feather);
+            }
+        }
+        if let Some(role) = el.stroke {
+            let c = color(role);
+            let units = match (el.width, large) {
+                (Some(w), true) => w,
+                (Some(w), false) => w + 0.2,
+                (None, true) => 1.8,
+                (None, false) => 2.0,
+            };
+            let width = units * s;
+            for (pts, closed) in &el.paths {
+                let v = map(pts);
+                match el.dash {
+                    Some((on, off)) => stroke_dashed(p, &v, *closed, on * s, off * s, width, c),
+                    None => stroke_round(p, v, *closed, width, c),
+                }
+            }
+        }
+    }
+}
+
+/// Strokes a polyline with round caps and joins.
+fn stroke_round(p: &Painter, v: Vec<Pos2>, closed: bool, width: f32, c: Color32) {
+    let r = width / 2.0;
+    match v.len() {
+        0 => return,
+        1 => {
+            if let Some(q) = v.first() {
+                p.circle_filled(*q, r, c);
+            }
+            return;
+        }
+        _ => {}
+    }
+    // Round joins where the path turns, round caps at the ends of an open path.
+    let n = v.len();
+    let mut dots: Vec<Pos2> = Vec::new();
+    for (i, q) in v.iter().enumerate() {
+        let prev = if i > 0 {
+            v.get(i - 1)
+        } else if closed {
+            v.last()
+        } else {
+            None
+        };
+        let next = if i + 1 < n {
+            v.get(i + 1)
+        } else if closed {
+            v.first()
+        } else {
+            None
+        };
+        let corner = match (prev, next) {
+            (Some(a), Some(b)) => (*q - *a).normalized().dot((*b - *q).normalized()) < 0.97,
+            _ => true,
+        };
+        if corner {
+            dots.push(*q);
+        }
+    }
+    let stroke = PathStroke::new(width, c);
+    p.add(if closed { PathShape::closed_line(v, stroke) } else { PathShape::line(v, stroke) });
+    for q in dots {
+        p.circle_filled(q, r, c);
+    }
+}
+
+/// Strokes a polyline with a dash pattern of `on`/`off` lengths; dashes have round caps, and a
+/// near-zero dash is a round dot.
+fn stroke_dashed(p: &Painter, v: &[Pos2], closed: bool, on: f32, off: f32, width: f32, c: Color32) {
+    if on + off <= 0.01 {
+        return;
+    }
+    let mut pts: Vec<Pos2> = v.to_vec();
+    if closed && let Some(first) = v.first() {
+        pts.push(*first);
+    }
+    // Walk the path, switching between dash and gap at the pattern's lengths.
+    let mut drawing = true;
+    let mut left = on;
+    let mut dash: Vec<Pos2> = pts.first().copied().into_iter().collect();
+    for seg in pts.windows(2) {
+        let (Some(a), Some(b)) = (seg.first(), seg.get(1)) else { continue };
+        let len = a.distance(*b);
+        let mut at = 0.0;
+        while len - at > left {
+            at += left;
+            let q = *a + (*b - *a) * (at / len.max(1e-6));
+            if drawing {
+                dash.push(q);
+                stroke_round(p, std::mem::take(&mut dash), false, width, c);
+                left = off;
+            } else {
+                dash = vec![q];
+                left = on;
+            }
+            drawing = !drawing;
+        }
+        left -= len - at;
+        if drawing {
+            dash.push(*b);
+        }
+    }
+    if drawing && dash.len() > 1 {
+        stroke_round(p, dash, false, width, c);
+    }
+}
+
+/// Fills a closed polygon (the path closes implicitly, as SVG fills do): convex ones as egui convex
+/// shapes, concave ones ear-clipped into an anti-aliased mesh.
+fn fill_polygon(p: &Painter, mut v: Vec<Pos2>, c: Color32, feather: f32) {
+    if v.len() > 2 && v.first().zip(v.last()).is_some_and(|(a, b)| a.distance(*b) < 0.01) {
+        v.pop();
+    }
+    if v.len() < 3 {
+        return;
+    }
+    // Clockwise on screen (y down), the winding egui feathers outward.
+    if signed_area(&v) < 0.0 {
+        v.reverse();
+    }
+    if is_convex(&v) {
+        p.add(PathShape::convex_polygon(v, c, Stroke::NONE));
+        return;
+    }
+    let tris = ear_clip(&v);
+    let n = v.len();
+    let mut mesh = egui::Mesh::default();
+    // Inner ring in the colour, outer ring transparent, half a feather either side of the edge.
+    let normals: Vec<egui::Vec2> = (0..n)
+        .map(|i| {
+            let (Some(a), Some(q), Some(b)) = (v.get((i + n - 1) % n), v.get(i), v.get((i + 1) % n)) else { return egui::Vec2::ZERO };
+            let n1 = (*q - *a).normalized().rot90() * -1.0;
+            let n2 = (*b - *q).normalized().rot90() * -1.0;
+            let m = (n1 + n2).normalized();
+            let k = m.dot(n1).max(0.3);
+            m / k
+        })
+        .collect();
+    for (q, nm) in v.iter().zip(&normals) {
+        mesh.colored_vertex(*q - *nm * feather / 2.0, c);
+    }
+    for (q, nm) in v.iter().zip(&normals) {
+        mesh.colored_vertex(*q + *nm * feather / 2.0, Color32::TRANSPARENT);
+    }
+    for (a, b, d) in tris {
+        mesh.add_triangle(a, b, d);
+    }
+    let n = n as u32;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        mesh.add_triangle(i, j, n + i);
+        mesh.add_triangle(j, n + j, n + i);
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
+
+/// Twice the signed area (positive when clockwise on screen, y pointing down).
+fn signed_area(v: &[Pos2]) -> f32 {
+    let n = v.len();
+    (0..n).filter_map(|i| Some((v.get(i)?, v.get((i + 1) % n)?))).map(|(a, b)| a.x * b.y - b.x * a.y).sum()
+}
+
+fn cross(o: Pos2, a: Pos2, b: Pos2) -> f32 {
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+}
+
+/// Whether a clockwise polygon is convex (never turns the other way, within a small tolerance).
+fn is_convex(v: &[Pos2]) -> bool {
+    let n = v.len();
+    (0..n).all(|i| match (v.get(i), v.get((i + 1) % n), v.get((i + 2) % n)) {
+        (Some(a), Some(b), Some(c)) => cross(*a, *b, *c) >= -1e-3,
+        _ => true,
+    })
+}
+
+/// Ear-clipping triangulation of a simple clockwise polygon, as index triples. Falls back to a fan
+/// for what it cannot clip (degenerate input), so it always ends.
+fn ear_clip(v: &[Pos2]) -> Vec<(u32, u32, u32)> {
+    let mut idx: Vec<usize> = (0..v.len()).collect();
+    let mut out = Vec::with_capacity(v.len().saturating_sub(2));
+    let at = |i: usize| v.get(i).copied().unwrap_or(Pos2::ZERO);
+    let mut guard = v.len() * v.len() + 8;
+    while idx.len() > 3 && guard > 0 {
+        guard -= 1;
+        let m = idx.len();
+        let mut clipped = false;
+        for k in 0..m {
+            let (Some(&ia), Some(&ib), Some(&ic)) = (idx.get((k + m - 1) % m), idx.get(k), idx.get((k + 1) % m)) else { continue };
+            let (a, b, c) = (at(ia), at(ib), at(ic));
+            if cross(a, b, c) <= 1e-6 {
+                continue;
+            }
+            let inside = idx.iter().any(|&j| {
+                if j == ia || j == ib || j == ic {
+                    return false;
+                }
+                let q = at(j);
+                cross(a, b, q) >= 0.0 && cross(b, c, q) >= 0.0 && cross(c, a, q) >= 0.0
+            });
+            if inside {
+                continue;
+            }
+            out.push((ia as u32, ib as u32, ic as u32));
+            idx.remove(k);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            break;
+        }
+    }
+    // The last triangle, or a fan over whatever could not be clipped.
+    if let Some(&first) = idx.first() {
+        for w in idx.windows(2).skip(1) {
+            if let (Some(&b), Some(&c)) = (w.first(), w.get(1)) {
+                out.push((first as u32, b as u32, c as u32));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_colorized_design_parses_and_every_mapping_names_one() {
+        for (key, _) in colored::ICONS {
+            let els = design_shapes(key).unwrap_or_default();
+            assert!(!els.is_empty() && els.iter().all(|e| !e.paths.is_empty()), "{key} has no shapes");
+        }
+        // Every key `design_key` returns is a design.
+        let src = include_str!("icons.rs");
+        let body = src.split("fn design_key(").nth(1).and_then(|s| s.split("\nfn design_only").next()).unwrap_or_default();
+        let keys: Vec<&str> = body.split("=> \"").skip(1).filter_map(|s| s.split('"').next()).collect();
+        assert!(keys.len() > 150);
+        for k in keys {
+            assert!(design_shapes(k).is_some(), "no design named {k}");
+        }
+    }
+
+    #[test]
+    fn ear_clipping_covers_a_concave_polygon() {
+        // An L shape, clockwise on screen: six corners, four triangles, area 3.
+        let v = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(2.0, 1.0), pos2(2.0, 2.0), pos2(0.0, 2.0)];
+        assert!(signed_area(&v) > 0.0 && !is_convex(&v));
+        let tris = ear_clip(&v);
+        assert_eq!(tris.len(), 4);
+        let at = |i: u32| v.get(i as usize).copied().unwrap_or(Pos2::ZERO);
+        let area: f32 = tris.iter().map(|&(a, b, c)| cross(at(a), at(b), at(c)) / 2.0).sum();
+        assert!((area - 3.0).abs() < 1e-4, "{area}");
+    }
+
+    #[test]
+    fn design_only_icons_close_the_enum() {
+        assert!(design_only(Icon::DeleteCells) && design_only(Icon::DeleteChart));
+        assert!(!design_only(Icon::StopSquare) && !design_only(Icon::Paste));
     }
 }

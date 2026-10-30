@@ -8,7 +8,10 @@ use serde_json::json;
 
 use crate::{DocState, Session};
 
-pub const SAMPLES: &[(&str, &str)] = &[("budget", "Household Budget"), ("sales", "Quarterly Sales Dashboard"), ("grades", "Gradebook")];
+mod showcase;
+
+pub const SAMPLES: &[(&str, &str)] =
+    &[("showcase", "Coffee Roastery Dashboard"), ("budget", "Household Budget"), ("sales", "Quarterly Sales Dashboard"), ("grades", "Gradebook")];
 
 pub fn title(name: &str) -> String {
     SAMPLES.iter().find(|(n, _)| *n == name).map(|(_, t)| t.to_string()).unwrap_or_else(|| "Sample".into())
@@ -22,6 +25,7 @@ pub fn build(name: &str) -> Option<Workbook> {
         sh.name = match name {
             "budget" => "Budget".into(),
             "sales" => "Sales".into(),
+            "showcase" => "Dashboard".into(),
             "grades" => "Grades".into(),
             _ => return None,
         };
@@ -30,6 +34,7 @@ pub fn build(name: &str) -> Option<Workbook> {
     let ok = match name {
         "budget" => budget(&mut s),
         "sales" => sales(&mut s),
+        "showcase" => showcase::showcase(&mut s),
         "grades" => grades(&mut s),
         _ => false,
     };
@@ -65,16 +70,21 @@ fn sales(s: &mut Session) -> bool {
         ["Online", 72410, 81630, 95220, 112840],
     ]);
     let mut ok = run(s, "range.setValues", json!({"range": "B4", "values": rows}));
+    // A green theme: its accents colour the doughnut's slices (North … Online), darkest for the
+    // largest share.
+    ok &= run(
+        s,
+        "pageLayout.themeColors",
+        json!({"colors": ["#FFFFFF", "#000000", "#E8E8E8", "#1F2321", "#A7D6BA", "#CFE8D9", "#6FBF92", "#2E9A62", "#DDE3DF", "#0E6B38", "#107C41", "#5F6661"]}),
+    );
     ok &= run(s, "range.setValues", json!({"range": "B2", "values": [["Quarterly Sales Dashboard"]]}));
-    ok &= run(s, "home.cellStyle", json!({"range": "B2", "name": "Title"}));
     ok &= run(s, "range.setValues", json!({"range": "B3", "values": [["Fiscal year 2026 · all figures in USD"]]}));
-    ok &= run(s, "home.cellStyle", json!({"range": "B3", "name": "Explanatory Text"}));
     for r in 5..=10 {
         ok &= run(s, "cell.set", json!({"cell": format!("G{r}"), "input": format!("=SUM(C{r}:F{r})")}));
         ok &= run(s, "cell.set", json!({"cell": format!("H{r}"), "input": format!("=F{r}/C{r}-1")}));
-        ok &= run(s, "insert.sparkline", json!({"range": format!("C{r}:F{r}"), "location": format!("I{r}"), "type": "line", "markers": true}));
+        ok &= run(s, "insert.sparkline", json!({"range": format!("C{r}:F{r}"), "location": format!("I{r}"), "type": "line"}));
     }
-    ok &= run(s, "insert.table", json!({"range": "B4:I10", "style": "TableStyleMedium2", "name": "Sales"}));
+    ok &= run(s, "insert.table", json!({"range": "B4:I10", "style": "TableStyleLight1", "name": "Sales"}));
     ok &= run(s, "table.totalRow", json!({"table": "Sales", "on": true}));
     for col in ["Q1", "Q2", "Q3", "Q4", "Total"] {
         ok &= run(s, "table.totalFunction", json!({"table": "Sales", "column": col, "function": "sum"}));
@@ -83,20 +93,54 @@ fn sales(s: &mut Session) -> bool {
     ok &= run(s, "table.totalFunction", json!({"table": "Sales", "column": "Trend", "function": "none"}));
     ok &= run(s, "home.numberFormat", json!({"range": "C5:G11", "code": "\"$\"#,##0"}));
     ok &= run(s, "home.numberFormat", json!({"range": "H5:H11", "code": "0.0%"}));
-    ok &= run(s, "home.conditionalFormat", json!({"range": "G5:G10", "rule": {"type": "dataBar", "color": "#5B9BD5"}}));
+    ok &= run(s, "home.conditionalFormat", json!({"range": "G5:G10", "rule": {"type": "dataBar", "color": "#CDE8D7", "gradient": false}}));
     ok &= run(s, "home.conditionalFormat", json!({"range": "H5:H10", "rule": {"type": "iconSet", "set": "3Arrows"}}));
-    ok &= run(s, "home.columnWidth", json!({"cols": "A:A", "width": 20}));
-    ok &= run(s, "home.columnWidth", json!({"cols": "B:B", "width": 132}));
-    ok &= run(s, "home.columnWidth", json!({"cols": "C:G", "width": 84}));
-    ok &= run(s, "home.columnWidth", json!({"cols": "H:I", "width": 76}));
+    // The sheet's look: Inter at 12 pt on 32.5 px rows (26 on screen), a quiet title, and the table's own soft
+    // green header and banding laid over its style (explicit formatting wins over a table style).
+    ok &= run(s, "home.fontName", json!({"range": "A1:Q40", "name": "Inter"}));
+    ok &= run(s, "home.fontSize", json!({"range": "A1:Q40", "size": 12}));
+    ok &= run(s, "home.rowHeight", json!({"rows": "1:40", "height": 32.5}));
+    ok &= run(s, "home.alignMiddle", json!({"range": "A1:Q40"}));
+    ok &= run(s, "home.fontSize", json!({"range": "B2", "size": 19}));
+    ok &= run(s, "home.bold", json!({"range": "B2", "on": true}));
+    ok &= run(s, "home.fontColor", json!({"range": "B2", "color": "#1F2321"}));
+    ok &= run(s, "home.fontColor", json!({"range": "B3", "color": "#7A817C"}));
+    ok &= run(s, "home.fillColor", json!({"range": "B4:I4", "color": "#E6F2EB"}));
+    ok &= run(s, "home.fontColor", json!({"range": "B4:I4", "color": "#0E4F2B"}));
+    ok &= run(s, "home.borders", json!({"range": "B4:I4", "preset": "bottom", "style": "medium", "color": "#107C41"}));
+    for r in [5, 7, 9] {
+        ok &= run(s, "home.fillColor", json!({"range": format!("B{r}:I{r}"), "color": "#FFFFFF"}));
+    }
+    for r in [6, 8, 10] {
+        ok &= run(s, "home.fillColor", json!({"range": format!("B{r}:I{r}"), "color": "#F6FAF7"}));
+    }
+    ok &= run(s, "home.columnWidth", json!({"cols": "A:A", "width": 30}));
+    ok &= run(s, "home.columnWidth", json!({"cols": "B:B", "width": 150}));
+    ok &= run(s, "home.columnWidth", json!({"cols": "C:F", "width": 120}));
+    ok &= run(s, "home.columnWidth", json!({"cols": "G:G", "width": 130}));
+    ok &= run(s, "home.columnWidth", json!({"cols": "H:H", "width": 115}));
+    ok &= run(s, "home.columnWidth", json!({"cols": "I:I", "width": 138}));
     ok &= run(s, "selection.set", json!({"range": "B4:F10"}));
-    ok &= run(s, "insert.chart", json!({"type": "column", "title": "Revenue by Region", "at": "K3", "width": 460, "height": 270}));
+    ok &= run(s, "insert.chart", json!({"type": "column", "title": "Revenue by Region", "at": "J2", "width": 640, "height": 362}));
+    ok &= run(s, "chart.addElement", json!({"element": "legend", "position": "top"}));
+    // One green ramp, light to dark from Q1 to Q4.
+    ok &= run(s, "chart.changeColors", json!({"colors": ["#B7DCC6", "#6FBF92", "#2E9A62", "#0E6B38"]}));
     ok &= run(s, "selection.set", json!({"range": "B4:B10"}));
     // Pie of totals.
-    ok &=
-        run(s, "insert.chart", json!({"range": "B4:B10", "type": "pie", "title": "Share of Annual Total", "at": "K19", "width": 460, "height": 260}));
+    ok &= run(
+        s,
+        "insert.chart",
+        json!({"range": "B4:B10", "type": "doughnut", "title": "Share of Annual Total", "at": "J14", "width": 640, "height": 285}),
+    );
+    ok &= run(s, "chart.addElement", json!({"element": "legend", "position": "right"}));
     if let Ok(d) = s.doc_mut() {
         let wb = Arc::make_mut(&mut d.wb);
+        // Trend lines in the accent green.
+        if let Some(sh) = wb.sheet_mut(0) {
+            for sp in &mut sh.sparklines {
+                sp.color = gridcraft_model::Color::Rgb(0x107C41);
+            }
+        }
         if let Some(sh) = wb.sheet_mut(0)
             && let Some(c) = sh.charts.last_mut()
         {
@@ -121,9 +165,11 @@ fn sales(s: &mut Session) -> bool {
     ok &= run(s, "cell.set", json!({"cell": "C17", "input": "=SUM(F5:F10)/SUM(C5:C10)-1"}));
     ok &= run(s, "home.numberFormat", json!({"range": "C15", "code": "\"$\"#,##0"}));
     ok &= run(s, "home.numberFormat", json!({"range": "C16:C17", "code": "0.0%"}));
-    ok &= run(s, "home.bold", json!({"range": "B14:B17", "on": true}));
-    ok &= run(s, "home.borders", json!({"range": "B14:C17", "preset": "outside"}));
-    ok &= run(s, "home.fillColor", json!({"range": "B14:C17", "color": "#F2F7FC"}));
+    ok &= run(s, "home.fontColor", json!({"range": "B14:B17", "color": "#5F6661"}));
+    ok &= run(s, "home.bold", json!({"range": "C14:C17", "on": true}));
+    ok &= run(s, "home.fontColor", json!({"range": "C17", "color": "#107C41"}));
+    ok &= run(s, "home.borders", json!({"range": "B14:C17", "preset": "outside", "color": "#CFD6D1"}));
+    ok &= run(s, "home.borders", json!({"range": "B14:C16", "preset": "insideHorizontal", "color": "#ECEEEC"}));
     ok &= run(s, "review.newNote", json!({"cell": "H4", "text": "Q4 vs Q1 growth for each region."}));
     ok &= run(s, "selection.set", json!({"cell": "B2"}));
     ok

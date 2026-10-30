@@ -2,12 +2,12 @@ use super::controls::{act, control_keytip, keytip, menu_items, sep};
 use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
-    let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
+    let gd = big_button(ui, Icon::GetData, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
-    sep(ui);
+    sep(ui, "Get Data");
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);
         control_keytip(app, ui, &__k, "data.sortAscending");
@@ -20,7 +20,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "data.sortDescending", json!({}));
         }
     });
-    let __k = big_button(ui, Icon::SortFilter, "Sort", "Custom Sort", false);
+    let __k = big_button(ui, Icon::SortCustom, "Sort", "Custom Sort", false);
     control_keytip(app, ui, &__k, "dialog:sort");
     if __k.clicked() {
         app.open_dialog("sort", json!({}));
@@ -31,29 +31,29 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "data.filter", json!({}));
     }
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::Eraser, "Clear", "Clear Filter", false);
+        let __k = small_button(ui, Icon::ClearFilter, "Clear", "Clear Filter", false);
         control_keytip(app, ui, &__k, "data.clearFilter");
         if __k.clicked() {
             act(app, "data.clearFilter", json!({}));
         }
-        let __k = small_button(ui, Icon::Redo, "Reapply", "Reapply", false);
+        let __k = small_button(ui, Icon::Reapply, "Reapply", "Reapply", false);
         control_keytip(app, ui, &__k, "data.reapply");
         if __k.clicked() {
             act(app, "data.reapply", json!({}));
         }
-        let __k = small_button(ui, Icon::Filter, "Advanced", "Advanced Filter", false);
+        let __k = small_button(ui, Icon::AdvancedFilter, "Advanced", "Advanced Filter", false);
         control_keytip(app, ui, &__k, "dialog:advancedFilter");
         if __k.clicked() {
             app.open_dialog("advancedFilter", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Sort & Filter");
     let __k = big_button(ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", false);
     control_keytip(app, ui, &__k, "dialog:textToColumns");
     if __k.clicked() {
         app.open_dialog("textToColumns", json!({}));
     }
-    let __k = big_button(ui, Icon::FillDown, "Flash\nFill", "Flash Fill", false);
+    let __k = big_button(ui, Icon::FlashFill, "Flash\nFill", "Flash Fill", false);
     control_keytip(app, ui, &__k, "edit.flashFill");
     if __k.clicked() {
         act(app, "edit.flashFill", json!({}));
@@ -78,8 +78,8 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    sep(ui);
-    let wi = big_button(ui, Icon::Calc, "What-If\nAnalysis", "What-If Analysis", true);
+    sep(ui, "Data Tools");
+    let wi = big_button(ui, Icon::WhatIf, "What-If\nAnalysis", "What-If Analysis", true);
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["dialog:goalSeek", "data.scenarioManager", "data.dataTable"])
     {
@@ -96,10 +96,10 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    if big_button(ui, Icon::ChartLine, "Forecast\nSheet", "Forecast Sheet", false).clicked() {
+    if big_button(ui, Icon::Forecast, "Forecast\nSheet", "Forecast Sheet", false).clicked() {
         app.open_dialog("forecastSheet", json!({}));
     }
-    sep(ui);
+    sep(ui, "Forecast");
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::Group, "Group", "Group", false);
         control_keytip(app, ui, &__k, "data.group");
@@ -118,22 +118,22 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Plus, "Show Detail", "Show Detail", false).clicked() {
+        if small_button(ui, Icon::ShowDetail, "Show Detail", "Show Detail", false).clicked() {
             act(app, "data.showDetail", json!({}));
         }
-        if small_button(ui, Icon::Minus, "Hide Detail", "Hide Detail", false).clicked() {
+        if small_button(ui, Icon::HideDetail, "Hide Detail", "Hide Detail", false).clicked() {
             act(app, "data.hideDetail", json!({}));
         }
-        if small_button(ui, Icon::Settings, "Settings", "Outline Settings", false).clicked() {
+        if small_button(ui, Icon::OutlineSettings, "Settings", "Outline Settings", false).clicked() {
             app.open_dialog("outlineSettings", json!({}));
         }
     });
-    sep(ui);
-    if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
+    sep(ui, "Outline");
+    if big_button(ui, Icon::DataAnalysis, "Data\nAnalysis", "Data Analysis", false).clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
-    sep(ui);
-    if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
+    sep(ui, "Analysis");
+    if big_button(ui, Icon::Solver, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }
 }

@@ -984,7 +984,7 @@ fn union_series_references() {
 #[test]
 fn box_and_stock_charts_honour_the_gridlines_flag() {
     // Horizontal full-width lines in the gridline colour are the value-axis gridlines.
-    let grid: Rgba = [217, 217, 217, 255];
+    let grid: Rgba = [0xE6, 0xE8, 0xE6, 255];
     let is_grid = |p: &Prim| match p {
         Prim::Line { color, pts, .. } => *color == grid && pts.len() == 2 && pts[0][1] == pts[1][1] && pts[1][0] - pts[0][0] > 200.0,
         _ => false,

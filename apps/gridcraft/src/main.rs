@@ -199,6 +199,7 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        thumbnail_dir: if prefs_enabled() { config_dir().map(|d| d.join("thumbnails")) } else { None },
         ..Default::default()
     }
 }

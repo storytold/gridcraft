@@ -93,6 +93,13 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     (Look { style, fill, text_color }, cfl)
 }
 
+/// The text a cell shows on the sheet, unnarrowed (the formula bar's result preview).
+pub(crate) fn shown_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
+    let v = sh.value(c);
+    let st = wb.styles.get(sh.style_id(c));
+    display_text(wb, sh, c, &v, st, 100_000.0, 7.0).0
+}
+
 /// Text for a value with General narrowing to the available width.
 pub(super) fn display_text(
     wb: &Workbook,

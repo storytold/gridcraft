@@ -372,7 +372,7 @@ fn base_tool_definitions() -> Vec<Value> {
             "new_workbook",
             "New workbook",
             "Create a new workbook and make it active: blank, or a built-in sample (\"budget\", \"sales\", \"grades\").",
-            obj(json!({"sample": enumeration("Sample workbook", &["budget", "sales", "grades"])}), &[]),
+            obj(json!({"sample": enumeration("Sample workbook", &["showcase", "budget", "sales", "grades"])}), &[]),
             false,
         ),
         tool(

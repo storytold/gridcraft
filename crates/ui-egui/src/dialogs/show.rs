@@ -1,7 +1,7 @@
 use super::about::about;
 use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
-use super::command_search::command_search;
+use super::command_search;
 use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
@@ -129,16 +129,25 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
         return;
     }
+    // The command palette is an overlay of its own, not a window.
+    if d.name == "commandSearch" {
+        let open = command_search::palette(app, ctx, &mut d);
+        if app.ui_window() != home || app.dialog.is_some() {
+            // What it ran switched windows or opened a dialog of its own: that takes over.
+            return;
+        }
+        app.dialog = if open { Some(d) } else { d.back.take().map(|b| *b) };
+        return;
+    }
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
     let mut open = true;
-    let mut win_open = true;
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -147,22 +156,27 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
-    let window = egui::Window::new(app.ui.language.tr(&d.title))
+    let title = app.ui.language.tr(&d.title).to_owned();
+    let window = egui::Window::new(title.clone())
         .id(egui::Id::unique("dialog").with(&d.name))
+        .title_bar(false)
+        .frame(crate::widgets::dialog_frame(ctx))
         .collapsible(false)
         .resizable(false)
         .default_width(width)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
-        .open(&mut win_open);
+        .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0));
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
     window.show(ctx, |ui| {
-            ui.set_min_width(width - 20.0);
+            ui.set_min_width(width - 44.0);
+            if crate::widgets::dialog_header(ui, &title) {
+                open = false;
+            }
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
@@ -177,7 +191,6 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
-                "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
@@ -315,15 +328,28 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
-                    ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    let title = d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook");
+                    ui.add(egui::Label::new(egui::RichText::new(format!("Do you want to save the changes you made to {title}?")).color(t.text_dim)).wrap());
+                    ui.add_space(16.0);
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
-                        for (label, answer) in
-                            [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
-                        {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
-                                open = false;
+                        let mut answer = None;
+                        if crate::widgets::dialog_button(ui, "Don't Save", false).clicked() {
+                            answer = Some(crate::SaveAnswer::DontSave);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::widgets::dialog_button(ui, "Save", true).clicked() {
+                                answer = Some(crate::SaveAnswer::Save);
                             }
+                            if crate::widgets::dialog_button(ui, "Cancel", false).clicked() {
+                                answer = Some(crate::SaveAnswer::Cancel);
+                            }
+                        });
+                        if let Some(answer) = answer
+                            && app.answer_save_changes(answer, quitting, ui.ctx())
+                        {
+                            open = false;
                         }
                     });
                 }
@@ -375,7 +401,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
+    if ctx.input(|i| i.key_pressed(Key::Escape)) {
         open = false;
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
@@ -436,18 +462,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
 }
 
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
-    ui.add_space(8.0);
+    ui.add_space(14.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
-            let t = crate::theme::Tokens::get(ui.ctx());
-            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
+            let ok = crate::widgets::dialog_button(ui, lang.tr("OK"), true);
             if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 *confirm = true;
             }
-            if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
+            if crate::widgets::dialog_button(ui, lang.tr("Cancel"), false).clicked() {
                 *open = false;
             }
         })
@@ -539,7 +564,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         {
                             d.values.insert(key.into(), json!(s));
                         }
-                        ui.checkbox(&mut d.show_password, lang.tr("Show password"));
+                        crate::widgets::checkbox(ui, &mut d.show_password, lang.tr("Show password"));
                     });
                 }
                 Field::Number { key, label } => {
@@ -584,7 +609,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                 }
                 Field::Check { key, label } => {
                     let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                    if ui.checkbox(&mut b, lang.tr(label)).changed() {
+                    if crate::widgets::checkbox(ui, &mut b, lang.tr(label)).changed() {
                         d.values.insert(key.into(), json!(b));
                     }
                 }

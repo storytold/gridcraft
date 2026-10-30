@@ -40,7 +40,7 @@ fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
 }
 
 fn confirm(h: &mut egui_kittest::Harness<'static, SheetApp>) {
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(6);
 }
 

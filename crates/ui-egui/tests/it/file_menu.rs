@@ -565,7 +565,7 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
         h.run_steps(3);
         h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), serde_json::json!(path));
         h.run_steps(2);
-        h.get_by_label("   OK   ").click();
+        h.get_by_label("OK").click();
         h.run_steps(3);
     };
     let name = format!("gridcraft-save-copy-{}", std::process::id());

@@ -33,16 +33,16 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "formulas.autoSum", json!({}));
     }
     egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
-    for (label, cat, cid) in [
-        ("Financial", "Financial", "formulas.financial"),
-        ("Logical", "Logical", "formulas.logical"),
-        ("Text", "Text", "formulas.text"),
-        ("Date &\nTime", "DateTime", "formulas.dateTime"),
-        ("Lookup &\nReference", "Lookup", "formulas.lookup"),
-        ("Math &\nTrig", "MathTrig", "formulas.mathTrig"),
-        ("More\nFunctions", "Statistical", "formulas.moreFunctions"),
+    for (icon, label, cat, cid) in [
+        (Icon::FnFinancial, "Financial", "Financial", "formulas.financial"),
+        (Icon::FnLogical, "Logical", "Logical", "formulas.logical"),
+        (Icon::FnText, "Text", "Text", "formulas.text"),
+        (Icon::FnDateTime, "Date &\nTime", "DateTime", "formulas.dateTime"),
+        (Icon::FnLookup, "Lookup &\nReference", "Lookup", "formulas.lookup"),
+        (Icon::FnMathTrig, "Math &\nTrig", "MathTrig", "formulas.mathTrig"),
+        (Icon::FnMore, "More\nFunctions", "Statistical", "formulas.moreFunctions"),
     ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
+        let r = big_button(ui, icon, label, label, true);
         control_keytip(app, ui, &r, cid);
         let forced_c = invoke(app, cid);
         egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
@@ -56,7 +56,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                         let name =
                             app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet())).unwrap_or(n);
                         let desc = crate::formula_locale::description(n, locale, app.ui.language).unwrap_or_default();
-                        if ui.button(name).on_hover_text(desc).clicked() {
+                        if crate::widgets::menu_row(ui, None, name, None).on_hover_text(desc).clicked() {
                             app.run_or_alert("formulas.insertFunction", json!({"name": n}));
                             ui.close();
                         }
@@ -65,19 +65,19 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     }
-    sep(ui);
+    sep(ui, "Function Library");
     let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
     control_keytip(app, ui, &__k, "dialog:nameManager");
     if __k.clicked() {
         app.open_dialog("nameManager", json!({}));
     }
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::Name, "Define Name", "Define Name", false);
+        let __k = small_button(ui, Icon::DefineName, "Define Name", "Define Name", false);
         control_keytip(app, ui, &__k, "dialog:defineName");
         if __k.clicked() {
             app.open_dialog("defineName", json!({}));
         }
-        let use_in = small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true);
+        let use_in = small_button(ui, Icon::UseInFormula, "Use in Formula", "Use in Formula", true);
         anchor_keytip(app, ui, &use_in, &["dialog:pasteName"]);
         egui::Popup::menu(&use_in).show(|ui| {
             // The menu lists the names Paste Names lists; clicking one runs `formulas.useInFormula`, which puts it at the caret.
@@ -99,61 +99,61 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                 }
             };
             for n in names.iter() {
-                if ui.button(n).clicked() {
+                if crate::widgets::menu_row(ui, None, n, None).clicked() {
                     app.run_or_alert("formulas.useInFormula", json!({"name": n}));
                 }
             }
             if !names.is_empty() {
-                ui.separator();
+                crate::widgets::menu_gap(ui);
             }
-            if ui.button(app.ui.language.tr("Paste Names…")).clicked() {
+            if crate::widgets::menu_row(ui, None, app.ui.language.tr("Paste Names…"), None).clicked() {
                 app.open_dialog("pasteName", json!({}));
             }
         });
-        let __k = small_button(ui, Icon::Table, "Create from Selection", "Create from Selection", false);
+        let __k = small_button(ui, Icon::CreateFromSelection, "Create from Selection", "Create from Selection", false);
         control_keytip(app, ui, &__k, "formulas.createFromSelection");
         if __k.clicked() {
             act(app, "formulas.createFromSelection", json!({}));
         }
     });
-    sep(ui);
+    sep(ui, "Defined Names");
     ui.vertical(|ui| {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
             app.grid.trace = crate::grid::Trace::new(app, r);
         }
-        if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
+        if small_button(ui, Icon::TraceDependents, "Trace Dependents", "Trace Dependents", false).clicked()
             && let Ok(r) = app.run("formulas.traceDependents", json!({}))
         {
             app.grid.trace = crate::grid::Trace::new(app, r);
         }
-        if small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false).clicked() {
+        if small_button(ui, Icon::RemoveArrows, "Remove Arrows", "Remove Arrows", false).clicked() {
             app.grid.trace = None;
         }
     });
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas", false);
+        let __k = small_button(ui, Icon::ShowFormulas, "Show Formulas", "Show Formulas", false);
         control_keytip(app, ui, &__k, "formulas.showFormulas");
         if __k.clicked() {
             act(app, "formulas.showFormulas", json!({}));
         }
-        let (ec, ec_arrow) = small_split_button(ui, Icon::Validation, "Error Checking", "Error Checking");
+        let (ec, ec_arrow) = small_split_button(ui, Icon::ErrorCheck, "Error Checking", "Error Checking");
         control_keytip(app, ui, &ec, "dialog:errorChecking");
         if ec.clicked() {
             app.open_dialog("errorChecking", json!({}));
         }
         egui::Popup::menu(&ec_arrow).show(|ui| {
             let lang = app.ui.language;
-            if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
+            if crate::widgets::menu_row(ui, None, &format!("{}…", lang.tr("Error Checking")), None).clicked() {
                 app.open_dialog("errorChecking", json!({}));
             }
             let circular = circular_references(app);
             ui.add_enabled_ui(!circular.is_empty(), |ui| {
-                ui.menu_button(lang.tr("Circular References"), |ui| {
+                crate::widgets::menu_submenu(ui, None, lang.tr("Circular References"), |ui| {
                     egui::ScrollArea::vertical().id_salt("circular_references").max_height(400.0).show(ui, |ui| {
                         for (sheet, cell, label) in circular {
-                            if ui.button(label).clicked() {
+                            if crate::widgets::menu_row(ui, None, &label, None).clicked() {
                                 act(app, "selection.set", json!({"range": cell, "sheet": sheet}));
                                 app.grid.ensure_visible = true;
                             }
@@ -162,16 +162,16 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                 });
             });
         });
-        let __k = small_button(ui, Icon::Calc, "Evaluate Formula", "Evaluate Formula", false);
+        let __k = small_button(ui, Icon::EvaluateFormula, "Evaluate Formula", "Evaluate Formula", false);
         control_keytip(app, ui, &__k, "dialog:evaluateFormula");
         if __k.clicked() {
             app.open_dialog("evaluateFormula", json!({}));
         }
     });
-    if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
+    if big_button(ui, Icon::WatchWindow, "Watch\nWindow", "Watch Window", false).clicked() {
         app.grid.pane = Some("watch".into());
     }
-    sep(ui);
+    sep(ui, "Formula Auditing");
     let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["formulas.calculationOptions"]) {
         keytip(app, ui, sequence, co.rect.center_bottom());
@@ -188,12 +188,12 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false);
+        let __k = small_button(ui, Icon::CalcNow, "Calculate Now", "Calculate Now (F9)", false);
         control_keytip(app, ui, &__k, "formulas.calculateNow");
         if __k.clicked() {
             act(app, "formulas.calculateNow", json!({}));
         }
-        let __k = small_button(ui, Icon::Sheet, "Calculate Sheet", "Calculate Sheet (⇧F9)", false);
+        let __k = small_button(ui, Icon::CalcSheet, "Calculate Sheet", "Calculate Sheet (⇧F9)", false);
         control_keytip(app, ui, &__k, "formulas.calculateSheet");
         if __k.clicked() {
             act(app, "formulas.calculateSheet", json!({}));

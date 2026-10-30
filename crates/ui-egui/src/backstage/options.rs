@@ -43,13 +43,17 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
         let current = match mode {
             "system" => "System",
             "dark" => "Dark",
+            "darkGreen" => "Dark Green",
+            "omarchy" => "Omarchy",
             _ => "Light",
         };
         craft_ui::ComboBox::from_id_salt("backstage_theme")
             .width(160.0)
             .selected_text(lang.tr(current))
             .show_ui(ui, |ui| {
-                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                for (value, label) in
+                    [("system", "System"), ("light", "Light"), ("dark", "Dark"), ("darkGreen", "Dark Green"), ("omarchy", "Omarchy")]
+                {
                     if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
                         app.run_or_alert("view.theme", json!({"mode": value}));
                     }

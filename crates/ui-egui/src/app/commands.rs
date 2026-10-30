@@ -158,18 +158,28 @@ impl SheetApp {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
                 self.ui.dark = p.get("on").and_then(Json::as_bool).unwrap_or(!current);
                 self.ui.system_theme = false;
+                self.ui.palette.clear();
                 Ok(json!({"on": self.ui.dark}))
             }
             "view.theme" => {
                 match p.get("mode").and_then(Json::as_str) {
-                    Some("system") => self.ui.system_theme = true,
+                    Some("system") => {
+                        self.ui.system_theme = true;
+                        self.ui.palette.clear();
+                    }
                     Some(mode @ ("light" | "dark")) => {
                         self.ui.dark = mode == "dark";
                         self.ui.system_theme = false;
+                        self.ui.palette.clear();
                     }
-                    _ => return Some(Err("theme mode must be system, light, or dark".into())),
+                    Some(mode @ ("darkGreen" | "omarchy")) => self.ui.palette = mode.to_string(),
+                    _ => return Some(Err("theme mode must be system, light, dark, darkGreen or omarchy".into())),
                 }
                 Ok(json!({"mode": self.ui.theme_mode()}))
+            }
+            "view.darkSheet" => {
+                self.ui.dark_sheet = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.dark_sheet);
+                Ok(json!({"on": self.ui.dark_sheet}))
             }
             "view.animations" => {
                 self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);

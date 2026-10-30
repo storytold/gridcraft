@@ -7,7 +7,7 @@ use crate::SheetApp;
 pub use crate::code_editor::{Lang, code_editor};
 use crate::i18n;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Cat, Tokens};
+use crate::theme::{self, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
@@ -60,12 +60,207 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let t = Tokens::get(ui.ctx());
     if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, 4.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
+        ui.painter().rect_filled(rect, 6.0, t.pressed);
+    } else if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        ui.painter().rect_filled(rect, 6.0, fill);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    icons::paint_ribbon(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
     resp.on_hover_text(tip_text(ui, tip))
+}
+
+/// Whether interface animations are on (View › Animations), as the app last published it.
+pub fn animations_on(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("gridcraft.animations"))).unwrap_or(true)
+}
+
+/// A hover fill that fades in and out over a short time instead of snapping (instant when
+/// animations are off). `None` when nothing should be painted.
+pub fn hover_fill(ui: &Ui, id: egui::Id, hovered: bool, color: Color32) -> Option<Color32> {
+    let a = if animations_on(ui.ctx()) { ui.ctx().animate_bool_with_time(id.with("hover"), hovered, 0.09) } else { f32::from(u8::from(hovered)) };
+    (a > 0.0).then(|| color.gamma_multiply(a))
+}
+
+/// Height of one row in a dropdown or popup menu.
+pub const MENU_ROW_H: f32 = 30.0;
+/// The narrowest a menu row is drawn, so short menus still read as a card.
+const MENU_ROW_MIN_W: f32 = 200.0;
+/// A menu row's corner radius, and the spaces of its icon column.
+const MENU_ROW_RADIUS: f32 = 8.0;
+const MENU_PAD_X: f32 = 8.0;
+const MENU_ICON: f32 = 16.0;
+const MENU_ICON_GAP: f32 = 10.0;
+
+/// One row of a dropdown menu, the File view's way: a 16 px icon column (left blank when the
+/// command has no icon, so labels stay aligned), the label in the interface face at 12.5 px, and
+/// the shortcut right-aligned in dim text. Hover and keyboard focus fill the row with a soft
+/// rounded highlight.
+pub fn menu_row(ui: &mut Ui, icon: Option<Icon>, label: &str, shortcut: Option<&str>) -> Response {
+    menu_row_with(ui, label, shortcut, false, |p, r, ink| {
+        if let Some(icon) = icon {
+            icons::paint(p, r, icon, ink);
+        }
+    })
+}
+
+/// [`menu_row`] with its own drawing in the icon column (a border diagram, a colour sample);
+/// `lead` gets the painter, the 16 px slot and the ink colour. `submenu` adds the chevron of an
+/// item that opens a further menu.
+pub fn menu_row_with(ui: &mut Ui, label: &str, shortcut: Option<&str>, submenu: bool, lead: impl FnOnce(&egui::Painter, Rect, Color32)) -> Response {
+    let t = Tokens::get(ui.ctx());
+    // Rows touch: the hover fill is the only thing that separates them.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let enabled = ui.is_enabled();
+    let ink = if enabled { t.text } else { t.text_disabled };
+    let label_g = ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(12.5), ink);
+    let keys_g =
+        shortcut.map(|s| ui.painter().layout_no_wrap(s.to_string(), theme::ui_font(11.5), if enabled { t.text_dim } else { t.text_disabled }));
+    let trailing = keys_g.as_ref().map_or(0.0, |g| g.size().x + 28.0).max(if submenu { 26.0 } else { 0.0 });
+    let w = (MENU_PAD_X + MENU_ICON + MENU_ICON_GAP + label_g.size().x + trailing + MENU_PAD_X + 4.0).max(MENU_ROW_MIN_W);
+    let (rect, resp) = ui.allocate_at_least(vec2(w, MENU_ROW_H), Sense::click());
+    let lit = resp.hovered() || resp.has_focus();
+    if enabled && resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, MENU_ROW_RADIUS, t.pressed);
+    } else if enabled && let Some(fill) = hover_fill(ui, resp.id, lit, t.hover) {
+        ui.painter().rect_filled(rect, MENU_ROW_RADIUS, fill);
+    }
+    let slot = Rect::from_center_size(pos2(rect.left() + MENU_PAD_X + MENU_ICON / 2.0, rect.center().y), vec2(MENU_ICON, MENU_ICON));
+    lead(ui.painter(), slot, ink);
+    let text_x = rect.left() + MENU_PAD_X + MENU_ICON + MENU_ICON_GAP;
+    ui.painter().galley(pos2(text_x, rect.center().y - label_g.size().y / 2.0), label_g, ink);
+    if let Some(g) = keys_g {
+        ui.painter().galley(pos2(rect.right() - MENU_PAD_X - 2.0 - g.size().x, rect.center().y - g.size().y / 2.0), g, t.text_dim);
+    }
+    if submenu {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.right() - MENU_PAD_X - 5.0, rect.center().y), vec2(11.0, 11.0)),
+            Icon::Right,
+            t.text_dim,
+        );
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    resp
+}
+
+/// A menu row that opens a submenu on hover or click (Conditional Formatting › Data Bars).
+pub fn menu_submenu<R>(ui: &mut Ui, icon: Option<Icon>, label: &str, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let resp = menu_row_with(ui, label, None, true, |p, r, ink| {
+        if let Some(icon) = icon {
+            icons::paint(p, r, icon, ink);
+        }
+    });
+    egui::containers::menu::SubMenu::new().show(ui, &resp, content).map(|r| r.inner)
+}
+
+/// The space between groups of menu rows: a 7 px gap with a hairline so faint it reads as air.
+pub fn menu_gap(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (r, _) = ui.allocate_exact_size(vec2(1.0, 7.0), Sense::hover());
+    let row = ui.min_rect();
+    let y = r.center().y.round() + 0.5;
+    ui.painter()
+        .line_segment([pos2(row.left() + MENU_PAD_X, y), pos2(row.right() - MENU_PAD_X, y)], Stroke::new(1.0, t.ribbon_border.gamma_multiply(0.7)));
+}
+
+/// A small dim heading over a group in a menu or gallery (Theme Colors, Light).
+pub fn menu_heading(ui: &mut Ui, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(MENU_PAD_X - 2.0);
+        ui.label(egui::RichText::new(tr(ui, text)).font(theme::ui_font(11.5)).color(t.text_dim));
+    });
+    ui.add_space(2.0);
+}
+
+/// A palette swatch's size, the space between swatches, and the row's inset from the card edge.
+const SWATCH: egui::Vec2 = vec2(18.0, 18.0);
+const SWATCH_GAP: f32 = 5.0;
+const SWATCH_INSET: f32 = 3.0;
+
+/// One row of palette swatches, inset to line up with the menu rows' icons.
+fn swatch_row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = SWATCH_GAP;
+        ui.add_space(SWATCH_INSET);
+        add(ui);
+        ui.add_space(SWATCH_INSET);
+    });
+}
+
+/// A rounded colour swatch in a palette, with a ring in the accent colour when hovered or
+/// highlighted from the keyboard. `hairline` outlines light colours so they read on the card.
+fn swatch(ui: &mut Ui, color: Color32, highlighted: bool, size: egui::Vec2) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    let p = ui.painter();
+    p.rect_filled(r, 4.0, color);
+    // Pale colours on a pale card (and dark ones on a dark card) get an edge so they stay visible.
+    let card = t.menu_bg;
+    if theme::contrast(color, card) < 1.35 {
+        p.rect_stroke(r, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    }
+    hover_ring(ui, resp.id, r, 4.0, resp.hovered() || highlighted);
+    resp
+}
+
+/// The ring around a hovered gallery tile or swatch: a hair of card colour, then the accent,
+/// following the tile's `radius`. It fades in and out with the hover (instant without animations).
+pub fn hover_ring(ui: &Ui, id: egui::Id, r: Rect, radius: f32, on: bool) {
+    let t = Tokens::get(ui.ctx());
+    let a = if animations_on(ui.ctx()) { ui.ctx().animate_bool_with_time(id.with("ring"), on, 0.08) } else { f32::from(u8::from(on)) };
+    if a > 0.0 {
+        let p = ui.painter();
+        p.rect_stroke(r.expand(1.0), radius + 1.0, Stroke::new(1.5, t.menu_bg.gamma_multiply(a)), StrokeKind::Outside);
+        p.rect_stroke(r.expand(2.5), radius + 2.5, Stroke::new(1.5, t.accent.gamma_multiply(a)), StrokeKind::Outside);
+    }
+}
+
+/// The sheet card's edge: a hairline with 10 px rounded corners on top (`top`) or at the bottom,
+/// the corners outside the curve painted back in the window colour so the content under them
+/// (the grid) reads as clipped to the card.
+pub fn card_frame(p: &egui::Painter, r: Rect, t: &Tokens, top: bool) {
+    const R: f32 = 10.0;
+    let corners: [(egui::Pos2, f32, f32); 2] =
+        if top { [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0)] } else { [(r.left_bottom(), 1.0, -1.0), (r.right_bottom(), -1.0, -1.0)] };
+    for (c, sx, sy) in corners {
+        // The wedge between the corner and the quarter circle.
+        let mut pts = vec![c, pos2(c.x + sx * R, c.y)];
+        for k in 0..=8 {
+            let a = std::f32::consts::FRAC_PI_2 * k as f32 / 8.0;
+            pts.push(pos2(c.x + sx * (R - R * a.sin()), c.y + sy * (R - R * a.cos())));
+        }
+        pts.push(pos2(c.x, c.y + sy * R));
+        p.add(egui::Shape::Path(egui::epaint::PathShape { points: pts, closed: true, fill: t.window, stroke: egui::epaint::PathStroke::NONE }));
+    }
+    // No outline: the card reads by its fill against the window.
+}
+
+/// The fill of a dropdown box in the ribbon: a touch off the card's white, so the box reads as a
+/// field without a heavy border.
+pub fn field_fill(t: &Tokens) -> Color32 {
+    t.input_bg.lerp_to_gamma(t.window, 0.35)
+}
+
+/// A ribbon dropdown box (Font, Number Format): its value on the left and a chevron on the right,
+/// in a softly rounded field. Returns the click response the dropdown anchors to.
+pub fn combo_box(ui: &mut Ui, text: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
+    let border = if resp.hovered() { t.input_border } else { t.ribbon_border };
+    ui.painter().rect_filled(rect, 6.0, field_fill(&t));
+    ui.painter().rect_stroke(rect, 6.0, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    let font = crate::theme::ui_font(12.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, t.text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width - 34.0);
+    let galley = ui.painter().layout_job(job);
+    let pos = pos2(rect.left() + 9.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(pos, galley, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.right() - 13.0, rect.center().y), vec2(12.0, 12.0)), Icon::Chevron, t.text_dim);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, text));
+    resp
 }
 
 /// A button for a character the interface inserts (the Symbol gallery). When the current font set
@@ -82,34 +277,162 @@ pub fn glyph_button(ui: &mut Ui, ch: char, tip: &str) -> Response {
     ui.button(label).on_hover_text(tip_text(ui, tip))
 }
 
+/// A ribbon checkbox: a 14 px rounded square that fills with the accent and a white tick when on,
+/// with the label in the UI font beside it. Behaves like `Ui::checkbox` (toggles on click, marks the
+/// response changed, carries the checked state for assistive technology).
+pub fn checkbox(ui: &mut Ui, on: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let enabled = ui.is_enabled();
+    let text_color = if enabled { t.text } else { t.text_disabled };
+    let galley = label.into().into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let size = vec2(14.0 + 7.0 + galley.size().x + 4.0, 22.0f32.max(galley.size().y));
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let text = galley.text().to_string();
+    let checked = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, checked, &text));
+    let p = ui.painter();
+    if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        p.rect_filled(rect.expand2(vec2(4.0, 0.0)), 6.0, fill);
+    }
+    let bx = Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), vec2(14.0, 14.0));
+    let on_t = ui.ctx().animate_bool_with_time(resp.id.with("on"), checked, if animations_on(ui.ctx()) { 0.12 } else { 0.0 });
+    if on_t > 0.0 {
+        let fill = if enabled { t.accent } else { t.text_disabled };
+        p.rect_filled(bx, 4.0, t.input_bg.lerp_to_gamma(fill, on_t));
+    } else {
+        p.rect_filled(bx, 4.0, t.input_bg);
+    }
+    if on_t < 1.0 {
+        let border = if resp.hovered() && enabled { t.text_dim } else { t.input_border };
+        p.rect_stroke(bx, 4.0, Stroke::new(1.0, border.gamma_multiply(1.0 - on_t)), StrokeKind::Inside);
+    }
+    if on_t > 0.0 {
+        // Dark ink on the bright dark-theme accent, white on the deep light-theme one.
+        let tick = if t.dark { t.window } else { Color32::WHITE }.gamma_multiply(on_t);
+        let pts = [pos2(bx.left() + 3.5, bx.center().y + 0.2), pos2(bx.left() + 6.0, bx.bottom() - 4.0), pos2(bx.right() - 3.3, bx.top() + 4.2)];
+        p.line_segment([pts[0], pts[1]], Stroke::new(1.6, tick));
+        p.line_segment([pts[1], pts[2]], Stroke::new(1.6, tick));
+        p.circle_filled(pts[1], 0.8, tick);
+    }
+    p.galley(pos2(bx.right() + 7.0, rect.center().y - galley.size().y / 2.0), galley, text_color);
+    resp
+}
+
 /// A toggle-able small button (e.g. Bold) showing a checked state.
 pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+    // As tall as the row it sits in: 26 px in a two-row group, 18 in a three-row stack.
+    let h = ui.spacing().interact_size.y.clamp(SMALL_H, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, h), Sense::click());
     let t = Tokens::get(ui.ctx());
     if on {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
         ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
+    } else if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        ui.painter().rect_filled(rect, 4.0, fill);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_ribbon(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
     resp.on_hover_text(tip_text(ui, tip))
 }
 
-/// Large ribbon button: 32px icon over a one- or two-line label.
+/// Large ribbon buttons' icon size and the icon's centre below the button top.
+const BIG_ICON: f32 = 20.0;
+/// Height of a large ribbon button (the streamlined ribbon's 56 px controls row).
+const BIG_H: f32 = 56.0;
+/// Height of a row in a three-row stack of small buttons.
+const SMALL_H: f32 = 18.0;
+
+/// Where a large button's icon centre sits: higher when its label takes two lines.
+fn big_icon_y(lines: usize) -> f32 {
+    if lines > 1 { 14.0 } else { 19.0 }
+}
+
+/// Shorter labels for the ribbon's large buttons, by their full (English) name; the full name
+/// stays the tooltip and the accessible name.
+const SHORT_LABELS: &[(&str, &str)] = &[
+    ("Get Data (Text/CSV)", "Import"),
+    ("Remove Duplicates", "Dedupe"),
+    ("Data Validation", "Validation"),
+    ("Text to Columns", "Split\nText"),
+    ("What-If Analysis", "What-If"),
+    ("Forecast Sheet", "Forecast"),
+    ("Data Analysis", "Analysis"),
+    ("Recommended Charts", "Charts"),
+    ("Header & Footer", "Header"),
+    ("Insert Function", "Function"),
+    ("Name Manager", "Names"),
+    ("Watch Window", "Watch"),
+    ("Calculation Options", "Calculation"),
+    ("Lookup & Reference", "Lookup"),
+    ("More Functions", "More"),
+    ("Workbook Statistics", "Statistics"),
+    ("Check Accessibility", "Accessibility"),
+    ("New Comment", "Comment"),
+    ("Show Comments", "Comments"),
+    ("Delete Comment", "Delete"),
+    ("Protect Sheet", "Protect"),
+    ("Protect Workbook", "Lock\nBook"),
+    ("Allow Edit Ranges", "Edit\nRanges"),
+    ("Page Break Preview", "Page\nBreaks"),
+    ("Zoom to Selection", "Fit"),
+    ("New Window", "Window"),
+    ("Arrange All", "Arrange"),
+    ("Freeze Panes", "Freeze"),
+    ("Switch Windows", "Switch"),
+    ("Print Titles", "Titles"),
+    ("Sheet Right-to-Left", "Right to\nLeft"),
+    ("Select Objects", "Select"),
+    ("Command Palette", "Commands"),
+    ("Agent Control", "Agents"),
+    ("Action Journal", "Journal"),
+    ("Check for Updates…", "Updates"),
+    ("About GridCraft", "About"),
+    ("Run Macro", "Run"),
+    ("Resize Table", "Resize"),
+    ("Convert to Range", "To Range"),
+    ("Insert Slicer", "Slicer"),
+    ("Add Chart Element", "Elements"),
+    ("Switch Row/Column", "Switch"),
+    ("Change Chart Type", "Type"),
+    ("Edit Chart Title", "Title"),
+    ("Delete Chart", "Delete"),
+];
+
+/// The label a large button shows: its short form in English, the translation otherwise.
+fn shown_label(ui: &Ui, label: &str) -> String {
+    let full = label.replace('\n', " ");
+    if crate::i18n::current(ui.ctx()) == crate::i18n::Language::En
+        && let Some((_, short)) = SHORT_LABELS.iter().find(|(f, _)| *f == full)
+    {
+        return (*short).to_string();
+    }
+    tr(ui, label).to_string()
+}
+
+/// Large ribbon button: 20 px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let label = tr(ui, label);
+    let full = tr(ui, label).replace('\n', " ");
+    let shown = shown_label(ui, label);
+    let label = shown.as_str();
     let (lines, w) = big_label(ui, label, dropdown);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, BIG_H), Sense::click());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 5.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 5.0, t.hover);
+    } else if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        ui.painter().rect_filled(rect, 5.0, fill);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    icons::paint_ribbon(
+        ui.painter(),
+        Rect::from_center_size(pos2(rect.center().x, rect.top() + big_icon_y(lines.len())), vec2(BIG_ICON, BIG_ICON)),
+        icon,
+        t.text,
+    );
     paint_big_label(ui, rect, &lines, dropdown);
-    let name = label.replace('\n', " ");
+    let name = full;
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     resp.on_hover_text(tip_text(ui, tip))
@@ -120,10 +443,12 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
 /// and "<label> options".
 pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
-    let label = tr(ui, label);
+    let full = tr(ui, label).replace('\n', " ");
+    let shown = shown_label(ui, label);
+    let label = shown.as_str();
     let (lines, w) = big_label(ui, label, true);
-    let (rect, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
-    let split = rect.top() + 38.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(w, BIG_H), Sense::hover());
+    let split = rect.top() + big_icon_y(lines.len()) + 13.0;
     let main_rect = Rect::from_min_max(rect.min, pos2(rect.right(), split));
     let arrow_rect = Rect::from_min_max(pos2(rect.left(), split), rect.max);
     let main = ui.interact(main_rect, ui.scope_id().with((label, "big-split-main")), Sense::click());
@@ -137,9 +462,14 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
             ui.painter().rect_filled(r, 5.0, t.pressed);
         }
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    icons::paint_ribbon(
+        ui.painter(),
+        Rect::from_center_size(pos2(rect.center().x, rect.top() + big_icon_y(lines.len())), vec2(BIG_ICON, BIG_ICON)),
+        icon,
+        t.text,
+    );
     paint_big_label(ui, rect, &lines, true);
-    let name = label.replace('\n', " ");
+    let name = full;
     let enabled = ui.is_enabled();
     main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options")));
@@ -154,21 +484,30 @@ const BIG_ARROW: f32 = 10.0;
 fn big_label(ui: &Ui, label: &str, dropdown: bool) -> (Vec<std::sync::Arc<egui::Galley>>, f32) {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
+    // One line, unless it would be long (then the button stays narrow with two), or a dropdown's
+    // arrow follows a second line.
+    let joined = label.replace('\n', " ");
+    let joined_w = ui.painter().layout_no_wrap(joined.clone(), font.clone(), t.text).size().x;
+    let label = if dropdown || joined_w > 60.0 { label } else { joined.as_str() };
     let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
-    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
+    // No caret: a button with a menu shows it when clicked.
+    let _ = (dropdown, BIG_ARROW);
+    let arrow_space = 0.0;
     let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
-    (lines, (text_w + 12.0).max(44.0))
+    (lines, (text_w + 12.0).max(48.0))
 }
 
 /// Paints a big button's label lines in `rect`, with the dropdown arrow beside the last one.
 fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], dropdown: bool) {
     let t = Tokens::get(ui.ctx());
-    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
+    // No caret: a button with a menu shows it when clicked.
+    let _ = (dropdown, BIG_ARROW);
+    let arrow_space = 0.0;
     for (i, line) in lines.iter().enumerate() {
-        let has_arrow = dropdown && i + 1 == lines.len();
+        let has_arrow = false;
         let line_w = line.size().x + if has_arrow { arrow_space } else { 0.0 };
         let left = rect.center().x - line_w / 2.0;
-        let y = rect.top() + 46.0 + i as f32 * 13.0;
+        let y = if lines.len() > 1 { rect.top() + 33.0 + i as f32 * 14.0 } else { rect.top() + 43.0 };
         ui.painter().galley(pos2(left, y - line.size().y / 2.0), line.clone(), t.text);
         if has_arrow {
             icons::paint(
@@ -184,28 +523,22 @@ fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let font = theme::ui_font(12.5);
+    let font = theme::ui_font(12.0);
     let label = tr(ui, label);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
-    let w = 24.0 + tw + if dropdown { 12.0 } else { 0.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 23.0), Sense::click());
+    let w = 24.0 + tw;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, SMALL_H), Sense::click());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
+    } else if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        ui.painter().rect_filled(rect, 4.0, fill);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_ribbon(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
     if !label.is_empty() {
         ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
     }
-    if dropdown {
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(rect.right() - 7.0, rect.center().y + 1.0), vec2(10.0, 10.0)),
-            Icon::Chevron,
-            t.text_dim,
-        );
-    }
+    // No caret: the menu opens on click.
+    let _ = dropdown;
     // The accessible name is the label, or the tooltip for an icon-only button.
     let name = if label.is_empty() { tr(ui, tip) } else { label };
     let enabled = ui.is_enabled();
@@ -217,18 +550,18 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
 /// accessible role is a checkbox, selected while `on`.
 pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let font = theme::ui_font(12.5);
+    let font = theme::ui_font(12.0);
     let label = tr(ui, label);
     let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 23.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, SMALL_H), Sense::click());
     if on || resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
         ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
+    } else if let Some(fill) = hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        ui.painter().rect_filled(rect, 4.0, fill);
     }
     let color = if ui.is_enabled() { t.text } else { t.text_disabled };
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, color);
+    icons::paint_ribbon(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, color);
     ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, color);
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, label));
@@ -239,7 +572,8 @@ pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: 
 /// Returns (main clicked, arrow response).
 pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str) -> (bool, Response) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
+    // The arrow half is narrow: its caret shows only under the pointer.
+    let (rect, _) = ui.allocate_exact_size(vec2(34.0, 24.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
@@ -248,11 +582,18 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
+    let icon_rect = Rect::from_center_size(main.center(), vec2(16.0, 16.0));
+    icons::paint_ribbon(ui.painter(), icon_rect, icon, t.text);
     if let Some(c) = accent {
-        ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
+        // The current colour over the icon's own colour bar (24-unit grid: x 2.5..21.5, y 19..22.5).
+        let s = icon_rect.width() / 24.0;
+        let bar = Rect::from_min_max(icon_rect.min + vec2(2.5 * s, 19.0 * s), icon_rect.min + vec2(21.5 * s, 22.5 * s));
+        ui.painter().rect_filled(bar, s, c);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    // The arrow half shows its caret only under the pointer.
+    if m.hovered() || a.hovered() {
+        icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    }
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
@@ -260,10 +601,10 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
 /// action, the arrow at the right opens a menu. Returns (main response, arrow response).
 pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
-    let font = theme::ui_font(12.5);
+    let font = theme::ui_font(12.0);
     let label = tr(ui, label);
     let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 11.0, SMALL_H), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(24.0 + tw, rect.height()));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
@@ -281,9 +622,16 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
         }
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_ribbon(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
     ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    if m.hovered() || a.hovered() {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)),
+            Icon::Chevron,
+            t.text_dim,
+        );
+    }
     let tip = tip_text(ui, tip);
     (m.on_hover_text(tip.clone()), a.on_hover_text(tip))
 }
@@ -457,46 +805,45 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
         });
         ui.data_mut(|d| d.remove_temp::<Option<(usize, usize)>>(pal_id));
     }
-    if ui.button(none_label).clicked() {
+    let danger = t.danger;
+    let none_lead = move |p: &egui::Painter, r: Rect, ink: Color32| {
+        // An empty swatch struck through: no colour.
+        let sw = r.shrink(1.0);
+        p.rect_stroke(sw, 3.0, Stroke::new(1.0, ink.gamma_multiply(0.6)), StrokeKind::Inside);
+        p.line_segment([sw.left_bottom() + vec2(2.5, -2.5), sw.right_top() + vec2(-2.5, 2.5)], Stroke::new(1.2, danger));
+    };
+    if menu_row_with(ui, tr(ui, none_label), None, false, none_lead).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    menu_heading(ui, "Theme Colors");
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
-    egui::Grid::new(ui.scope_id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
-        for (row, tint) in tints.iter().enumerate() {
+    for (row, tint) in tints.iter().enumerate() {
+        // The theme colours themselves, then their tints and shades a little apart below.
+        ui.add_space(match row {
+            0 => 0.0,
+            1 => SWATCH_GAP + 3.0,
+            _ => SWATCH_GAP,
+        });
+        swatch_row(ui, |ui| {
             for (col, &i) in order.iter().enumerate() {
                 let base = theme_colors.get(i).copied().unwrap_or(0);
                 let rgb = [(base >> 16) as u8, (base >> 8) as u8, base as u8];
                 let c = gridcraft_engine::model::style::apply_tint(rgb, *tint);
-                let col32 = Color32::from_rgb(c[0], c[1], c[2]);
-                let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
-                ui.painter().rect_filled(r, 1.0, col32);
-                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-                if resp.hovered() || cur == Some((row, col)) {
-                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
-                }
-                if resp.clicked() {
+                if swatch(ui, Color32::from_rgb(c[0], c[1], c[2]), cur == Some((row, col)), SWATCH).clicked() {
                     picked = Some(theme_hex(base, *tint));
                 }
             }
-            ui.end_row();
-        }
-    });
-    ui.label(egui::RichText::new("Standard Colors").small());
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+        });
+    }
+    menu_heading(ui, "Standard Colors");
+    swatch_row(ui, |ui| {
         for (col, hex) in std_hex.iter().enumerate() {
             let c = gridcraft_engine::model::Color::from_hex(hex)
                 .and_then(|c| c.resolve(&Default::default()))
                 .map(theme::color32)
                 .unwrap_or(Color32::BLACK);
-            let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
-            ui.painter().rect_filled(r, 1.0, c);
-            if resp.hovered() || cur == Some((ROWS - 1, col)) {
-                ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
-            }
-            if resp.clicked() {
+            if swatch(ui, c, cur == Some((ROWS - 1, col)), SWATCH).clicked() {
                 picked = Some(hex.to_string());
             }
         }
@@ -504,27 +851,21 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     // Recent Colors: the custom colours picked below, newest first.
     let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
     if !recent.is_empty() {
-        ui.label(egui::RichText::new("Recent Colors").small());
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+        menu_heading(ui, "Recent Colors");
+        swatch_row(ui, |ui| {
             for hex in &recent {
                 let c = parse_hex(hex).map_or(Color32::BLACK, |c| Color32::from_rgb(c[0], c[1], c[2]));
-                let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
-                ui.painter().rect_filled(r, 1.0, c);
-                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
-                if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
-                }
-                if resp.on_hover_text(hex).clicked() {
+                if swatch(ui, c, false, SWATCH).on_hover_text(hex).clicked() {
                     picked = Some(hex.clone());
                 }
             }
         });
     }
+    ui.add_space(6.0);
     if more_colors {
-        ui.separator();
+        menu_gap(ui);
     }
-    if more_colors && ui.button("More Colors…").clicked() {
+    if more_colors && menu_row(ui, Some(Icon::Theme), tr(ui, "More Colors…"), None).clicked() {
         let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
         more = Some(MoreColors::new(start));
     }
@@ -572,27 +913,77 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     picked
 }
 
+/// The card every dialog is drawn in: the menu colour, 14 px corners, a hairline and a soft, wide
+/// shadow, with 20 px of padding (the title row and the buttons sit inside it).
+pub fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    let t = Tokens::get(ctx);
+    egui::Frame::new()
+        .fill(t.menu_bg)
+        .corner_radius(14)
+        .stroke(Stroke::new(1.0, t.ribbon_border))
+        .shadow(egui::epaint::Shadow { offset: [0, 12], blur: 40, spread: 0, color: t.shadow })
+        .inner_margin(egui::Margin { left: 22, right: 22, top: 18, bottom: 18 })
+}
+
+/// A dialog's title row: the title in bold on the left and a quiet close icon on the right, with
+/// no band behind either. Returns true when the close icon was clicked.
+pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut closed = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)).color(t.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            closed = icon_button(ui, Icon::Close, t.text_dim, "Close", vec2(24.0, 24.0)).clicked();
+        });
+    });
+    ui.add_space(10.0);
+    closed
+}
+
+/// A dialog button: 30 px tall with 8 px corners. The primary one is the accent colour; the
+/// others are a soft field that lifts on hover, with no outline.
+pub fn dialog_button(ui: &mut Ui, label: &str, primary: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(13.0);
+    let ink = if primary { t.on_accent } else { t.text };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, ink);
+    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 32.0).max(72.0), 30.0), Sense::click());
+    let rest = if primary { t.accent } else { t.hover };
+    let fill =
+        if resp.is_pointer_button_down_on() || resp.hovered() || resp.has_focus() { if primary { t.accent_dark } else { t.pressed } } else { rest };
+    ui.painter().rect_filled(rect, 8.0, fill);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(2.0), 10.0, Stroke::new(1.5, t.accent), StrokeKind::Outside);
+    }
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, ink);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    resp
+}
+
 /// Draws the modal warning/error message; OK, Enter or Esc clears it and restores editor focus when an edit exists.
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
     let msg = app.ui.language.tr_error(&msg);
     let mut close = false;
-    egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
-        ui.set_width(380.0);
-        ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-            let t = Tokens::get(ui.ctx());
-            ui.painter().circle_filled(r.center(), 16.0, t.warning);
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), t.on_warning);
+    egui::Modal::new(egui::Id::unique("message_box")).frame(dialog_frame(ctx)).show(ctx, |ui| {
+        ui.set_width(360.0);
+        let t = Tokens::get(ui.ctx());
+        ui.horizontal_top(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+            ui.painter().circle_filled(r.center(), 14.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(17.0), t.on_warning);
+            ui.add_space(6.0);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title).strong());
-                ui.add(egui::Label::new(msg).wrap());
+                ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)).color(t.text));
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(egui::RichText::new(msg).color(t.text_dim)).wrap());
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(16.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if dialog_button(ui, "OK", true).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
         });
@@ -639,35 +1030,38 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     };
     let mut dismiss = false;
     let mut action: Option<(String, String)> = None;
-    egui::Panel::top("notice_bar").frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
-        // Bottom border as a 1px strip spanning the bar.
-        let bar = ui.max_rect();
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, border), StrokeKind::Inside);
-        ui.horizontal_centered(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-            icons::paint(
-                ui.painter(),
-                r,
-                match notice.kind {
-                    crate::NoticeKind::Warning => Icon::Lock,
-                    crate::NoticeKind::Info => Icon::Note,
-                },
-                border,
-            );
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
-                    dismiss = true;
-                }
-                if let Some((label, dialog)) = &notice.action
-                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
-                {
-                    action = Some((label.clone(), dialog.clone()));
-                }
+    egui::Panel::top("notice_bar").show_separator_line(false).frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 0))).show(
+        ui,
+        |ui| {
+            // Bottom border as a 1px strip spanning the bar.
+            let bar = ui.max_rect();
+            ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, border), StrokeKind::Inside);
+            ui.horizontal_centered(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                icons::paint(
+                    ui.painter(),
+                    r,
+                    match notice.kind {
+                        crate::NoticeKind::Warning => Icon::Lock,
+                        crate::NoticeKind::Info => Icon::Note,
+                    },
+                    border,
+                );
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
+                        dismiss = true;
+                    }
+                    if let Some((label, dialog)) = &notice.action
+                        && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+                    {
+                        action = Some((label.clone(), dialog.clone()));
+                    }
+                });
             });
-        });
-    });
+        },
+    );
     if let Some((_, dialog)) = action {
         app.open_dialog(&dialog, serde_json::json!({}));
     }

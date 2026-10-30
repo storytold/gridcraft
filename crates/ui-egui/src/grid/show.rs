@@ -3,11 +3,11 @@ use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
-use super::interact::{interact, paint_freeze_handles};
+use super::interact::{col_edge, freeze_handles, interact, paint_freeze_handles, row_edge};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
 use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
-use super::tables::{TableHeading, paint_filter_button, table_headings};
+use super::tables::{TableHeading, paint_filter_button, table_field_hints, table_headings};
 use super::{
     Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
     StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
@@ -139,12 +139,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
     // The selection outline glides to a new selection. It stays on its cells when Animations is
     // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
-    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
-    // a gliding outline trails the pointer and reads as lag.
+    // A click moves it at once, as in Excel; a drag that extends a range eases its far edges.
     let outline = selection_outline(app, ui, &geo, sh, &sel, place, now);
     app.grid.geo = Some(geo.clone());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, t.grid_bg);
+    // In a dark theme the sheet follows it (its colours are mapped once painted, below).
+    let dark_sheet = super::dark_sheet::paint_background(&painter, rect, &t, app.ui.dark_sheet);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
     let mirror_from = painter.add(egui::Shape::Noop);
     let mut cf = CfCache::new();
@@ -191,12 +191,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if geo.paper.is_some() {
         crate::paper_view::paint_headers_footers(app, ui, &painter, &geo, &wb, sh);
     }
-    // Headers.
-    if sh.show_headings {
-        let headings = table_headings(&geo, sh, sel.active);
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
-        paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
-    }
+    super::dark_sheet::finish(&painter, mirror_from.0, dark_sheet, &t);
+    paint_heading_chrome(app, ui.ctx(), &painter, &geo, sh, &sel, &quads, dark_sheet);
     crate::outline::paint(&painter, &geo, sh, &t);
     if geo.rtl {
         let mirror_to = painter.add(egui::Shape::Noop);
@@ -207,11 +203,34 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
     let track_x = vertical_scroll_track(available, rect, rtl);
+    update_scrollbar_fade(app, ui.ctx(), place, Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), now);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
     ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     update_clipboard_repaint(app, ui, now);
+}
+
+/// Wakes the scrollbars on a scroll or when the pointer comes near one, and fades them when idle.
+fn update_scrollbar_fade(app: &mut SheetApp, ctx: &egui::Context, place: (u64, usize), vtrack: Rect, now: f64) {
+    const NEAR: f32 = 28.0;
+    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    let near = pointer.is_some_and(|at| vtrack.expand(NEAR).contains(at) || app.grid.hscroll.is_some_and(|h| h.expand(NEAR).contains(at)));
+    let animate = super::animating(app, ctx);
+    let scroll = app.view().scroll;
+    match app.grid.scrollbars.frame(place, scroll, near, now, animate) {
+        Some(wait) if wait <= 0.0 => ctx.request_repaint(),
+        Some(wait) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait.clamp(0.0, 10.0))),
+        None => {}
+    }
+}
+
+/// A scrollbar thumb's colour: brighter while hovered or dragged, faded with the scrollbars.
+fn thumb_color(app: &SheetApp, resp: &egui::Response, t: &Tokens) -> Color32 {
+    // A shade of the surface it sits on (the sheet card), so it takes the palette's hue.
+    let base = t.ribbon.lerp_to_gamma(t.text, if resp.hovered() || resp.dragged() { 0.42 } else { 0.22 });
+    let alpha = if resp.hovered() || resp.dragged() { 1.0 } else { app.grid.scrollbars.alpha };
+    base.gamma_multiply(alpha.clamp(0.0, 1.0))
 }
 
 fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
@@ -245,7 +264,11 @@ fn selection_outline(
     place: (u64, usize),
     now: f64,
 ) -> Rect {
-    let pointer_selecting = ui.input(|i| i.pointer.any_down());
+    // Dragging out a range is the exception: its far edges ease after the pointer, which reads as
+    // the range growing rather than lagging (the click that starts it still lands at once).
+    let anchored = app.grid.last_active.replace(sel.active) == Some(sel.active);
+    let extending = anchored && app.grid.drag == Drag::Select && !sel.is_single_cell();
+    let pointer_selecting = ui.input(|i| i.pointer.any_down()) && !extending;
     let outline = app.grid.glide.frame(crate::selection_glide::Frame {
         place,
         range: sel.current(),
@@ -253,7 +276,7 @@ fn selection_outline(
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
+        animate: super::animating(app, ui.ctx()) && !pointer_selecting,
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
@@ -398,22 +421,124 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     if geo.fr > 0 && geo.fc > 0 {
         quads.push((fr_rows, fr_cols, Rect::from_min_max(geo.cells.min, split)));
     }
+    let hint = shows_empty_hint(app, wb, sh);
     for (rows, cols, clip) in &quads {
         if rows.0 > rows.1 || cols.0 > cols.1 {
             continue;
         }
         let p = painter.with_clip_rect(*clip);
         paint_quadrant(QuadrantPaint { painter: &p, geo, workbook: wb, sheet_index: si, sheet: sh, rows: *rows, cols: *cols, cf, tokens: t });
-        paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
-    }
-    // Freeze lines.
-    if geo.fr > 0 {
-        painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, Color32::from_gray(150)));
-    }
-    if geo.fc > 0 {
-        painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, Color32::from_gray(150)));
+        if hint && rows.0 == 0 && cols.0 == 0 && !app.thumbnail_mode {
+            paint_empty_hint(&p, geo, sh);
+        }
+        if !app.thumbnail_mode {
+            paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
+        }
     }
     quads
+}
+
+/// The placeholder cell A1 shows in a brand-new blank workbook.
+pub(crate) const EMPTY_HINT: &str = "Type anything, or press = to start a formula";
+
+/// A brand-new blank workbook: no cell on any sheet holds anything, nothing sits on the sheet, and
+/// nothing is being typed. Then A1 shows [`EMPTY_HINT`].
+pub(crate) fn shows_empty_hint(app: &SheetApp, wb: &Workbook, sh: &Sheet) -> bool {
+    app.editor.is_none()
+        && sh.view == gridcraft_engine::model::SheetViewMode::Normal
+        && sh.charts.is_empty()
+        && sh.images.is_empty()
+        && sh.shapes.is_empty()
+        && sh.tables.is_empty()
+        && sh.merges.is_empty()
+        && wb.sheets.iter().all(|s| s.cells.is_empty())
+}
+
+/// Paints [`EMPTY_HINT`] in A1 in the dim text colour, running on over the empty cells beside it.
+fn paint_empty_hint(p: &Painter, geo: &Geo, sh: &Sheet) {
+    let a1 = geo.cell_rect(sh, gridcraft_engine::core::CellRef::new(0, 0));
+    if !a1.is_finite() || a1.width() <= 0.0 || a1.height() <= 0.0 {
+        return;
+    }
+    let size = (11.0 * geo.z / DISPLAY_SCALE).clamp(6.0, 44.0);
+    let text = crate::i18n::current(p.ctx()).tr(EMPTY_HINT);
+    let pad = 3.0 * (geo.z / DISPLAY_SCALE).max(0.5);
+    // The sheet is painted in its light colours (a dark sheet maps them afterwards).
+    p.text(pos2(a1.left() + pad, a1.center().y), Align2::LEFT_CENTER, text, theme::ui_font(size), Tokens::light().text_dim);
+}
+
+/// The frozen panes' shadow, then the headings with their Table names, resize hover and freeze
+/// handles. Painted after the dark-sheet mapping, which would turn a dark shadow into a light haze.
+#[allow(clippy::too_many_arguments)]
+fn paint_heading_chrome(
+    app: &SheetApp,
+    ctx: &egui::Context,
+    painter: &Painter,
+    geo: &Geo,
+    sh: &Sheet,
+    sel: &gridcraft_engine::Selection,
+    quads: &[PaneQuad],
+    dark_sheet: bool,
+) {
+    let t = Tokens::get(ctx);
+    if geo.paper.is_none() {
+        paint_freeze_shadows(&painter.with_clip_rect(geo.cells), geo, if dark_sheet { t.shadow } else { Tokens::light().shadow });
+    }
+    if sh.show_headings {
+        let headings = table_headings(geo, sh, sel.active);
+        let hints = table_field_hints(geo, sh, sel.active);
+        paint_headers(painter, geo, sh, sel, &t, quads, (&headings, &hints));
+        paint_resize_hover(app, ctx, painter, geo, sh, &t);
+        paint_freeze_handles(painter, geo, sh, &app.grid.drag, &t);
+    }
+}
+
+/// Frozen panes are marked by a soft shadow cast onto the scrolling cells, a little deeper once
+/// cells have scrolled under them.
+fn paint_freeze_shadows(painter: &Painter, geo: &Geo, color: Color32) {
+    let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
+    if geo.fr > 0 {
+        let depth = if geo.scroll.y > 0.0 { 1.0 } else { 0.6 };
+        let band = Rect::from_min_max(pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y + FREEZE_SHADOW));
+        painter.add(freeze_shadow(band, false, color.gamma_multiply(depth)));
+    }
+    if geo.fc > 0 {
+        let depth = if geo.scroll.x > 0.0 { 1.0 } else { 0.6 };
+        let band = Rect::from_min_max(pos2(split.x, geo.cells.top()), pos2(split.x + FREEZE_SHADOW, geo.cells.bottom()));
+        painter.add(freeze_shadow(band, true, color.gamma_multiply(depth)));
+    }
+}
+
+/// How far the frozen panes' shadow reaches into the scrolling cells (points).
+const FREEZE_SHADOW: f32 = 6.0;
+
+/// A shadow over `band` fading from `color` at its top edge (its left edge when `across`) to
+/// nothing at the other.
+pub(super) fn freeze_shadow(band: Rect, across: bool, color: Color32) -> egui::Shape {
+    let mut mesh = egui::Mesh::default();
+    if !band.is_finite() || !band.is_positive() {
+        return egui::Shape::Noop;
+    }
+    // Two steps of fade read as a soft falloff rather than a linear smear.
+    let steps = [(0.0, 1.0), (0.35, 0.45), (1.0, 0.0)];
+    for (along, strength) in steps {
+        let c = color.gamma_multiply(strength);
+        let (a, b) = if across {
+            let x = band.left() + band.width() * along;
+            (pos2(x, band.top()), pos2(x, band.bottom()))
+        } else {
+            let y = band.top() + band.height() * along;
+            (pos2(band.left(), y), pos2(band.right(), y))
+        };
+        mesh.colored_vertex(a, c);
+        mesh.colored_vertex(b, c);
+    }
+    for i in 0..(steps.len() as u32 - 1) {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 3, k + 2);
+    }
+    egui::Shape::mesh(mesh)
 }
 
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
@@ -438,9 +563,10 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     let thumb_h = (track.height() * visible / (extent + visible)).clamp(24.0_f32.min(track.height()), track.height());
     let travel = track.height() - thumb_h;
     let thumb_top = track.top() + if extent > 0.0 { travel * (scroll / extent).clamp(0.0, 1.0) } else { 0.0 };
-    let thumb = Rect::from_min_size(pos2(track.left() + 3.0, thumb_top), vec2((track.width() - 6.0).max(0.0), thumb_h));
-    ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    let thumb = Rect::from_min_size(pos2(track.center().x - 3.0, thumb_top), vec2(6.0_f32.min(track.width()), thumb_h));
+    ui.painter().rect_filled(track, 0.0, t.sheet_bg(app.ui.dark_sheet));
+    // A slim, rounded thumb; the whole track still takes clicks and drags.
+    ui.painter().rect_filled(thumb, 3.0, thumb_color(app, &resp, t));
     let mut next = scroll;
     if resp.dragged() && travel > 0.0 {
         next += resp.drag_delta().y / travel * extent;
@@ -494,9 +620,10 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     // A right-to-left sheet scrolls towards the left, so its thumb starts at the right end.
     let dir = if geo.rtl { -1.0 } else { 1.0 };
     let thumb_left = if geo.rtl { track.right() - thumb_w - offset } else { track.left() + offset };
-    let thumb = Rect::from_min_size(pos2(thumb_left, track.top() + 3.0), vec2(thumb_w, (track.height() - 6.0).max(0.0)));
-    ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    let thumb = Rect::from_min_size(pos2(thumb_left, track.center().y - 3.0), vec2(thumb_w, 6.0_f32.min(track.height())));
+    ui.painter().rect_filled(track, 0.0, t.sheet_bg(app.ui.dark_sheet));
+    // A slim, rounded thumb; the whole track still takes clicks and drags.
+    ui.painter().rect_filled(thumb, 3.0, thumb_color(app, &resp, t));
     let mut next = scroll;
     if resp.dragged() && travel > 0.0 {
         next += dir * resp.drag_delta().x / travel * extent;
@@ -529,7 +656,7 @@ pub(crate) fn paint_headers(
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
     quads: &[PaneQuad],
-    headings: &[TableHeading],
+    (headings, hints): (&[TableHeading], &[(u32, String)]),
 ) {
     let font = theme::ui_font(heading_font_size(geo.z));
     // The headers' own area: inside the outline bands.
@@ -562,10 +689,19 @@ pub(crate) fn paint_headers(
                 let x = geo.x(sh, c);
                 let cr = Rect::from_min_size(pos2(x, top.top()), vec2(w, top.height()));
                 if col_sel(c) {
-                    pc.rect_filled(cr, 0.0, if full_col(c) { t.header_all_bg } else { t.header_sel_bg });
+                    // A selected heading is marked by its accent text and edge; only a whole row or column
+                    // selected fills it.
+                    if full_col(c) {
+                        pc.rect_filled(cr, 0.0, t.header_sel_bg);
+                    }
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
                 }
-                pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
+                // A short tick between letters instead of a full-height rule.
+                let inset = (cr.height() * 0.3).round();
+                pc.line_segment(
+                    [pos2(cr.right() - 0.5, cr.top() + inset), pos2(cr.right() - 0.5, cr.bottom() - inset)],
+                    Stroke::new(1.0, t.separator),
+                );
                 let (before, after) = hidden_around(c, |i| sh.col_width(i));
                 for x in [before.then_some(cr.left()), after.then_some(cr.right())].into_iter().flatten() {
                     for dx in [-1.5, 1.5] {
@@ -584,9 +720,15 @@ pub(crate) fn paint_headers(
                             paint_filter_button(&pc, b, h.filtered);
                         }
                     }
-                    None => {
-                        pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
-                    }
+                    None => match hints.iter().find(|(hc, _)| *hc == c) {
+                        Some((_, name)) => {
+                            let dim = if col_sel(c) { t.header_sel_text } else { t.text_dim };
+                            paint_field_hint(&pc, cr, &col_to_letters(c), name, &font, (color, dim));
+                        }
+                        None => {
+                            pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                        }
+                    },
                 }
             }
         }
@@ -603,10 +745,14 @@ pub(crate) fn paint_headers(
                 let y = geo.y(sh, rr);
                 let cr = Rect::from_min_size(pos2(left.left(), y), vec2(left.width(), h));
                 if row_sel(rr) {
-                    pr.rect_filled(cr, 0.0, if full_row(rr) { t.header_all_bg } else { t.header_sel_bg });
+                    // A selected heading is marked by its accent text and edge; only a whole row or column
+                    // selected fills it.
+                    if full_row(rr) {
+                        pr.rect_filled(cr, 0.0, t.header_sel_bg);
+                    }
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));
                 }
-                pr.line_segment([pos2(cr.left() + 3.0, cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.header_line));
+                pr.line_segment([pos2(cr.left(), cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.separator));
                 let (before, after) = hidden_around(rr, |i| sh.row_height(i));
                 for y in [before.then_some(cr.top()), after.then_some(cr.bottom())].into_iter().flatten() {
                     for dy in [-1.5, 1.5] {
@@ -621,14 +767,78 @@ pub(crate) fn paint_headers(
     // Corner (select all) and edges.
     let corner = Rect::from_min_max(r.min, geo.cells.min);
     p.rect_filled(corner, 0.0, t.header_bg);
-    let tri = vec![
-        pos2(corner.right() - 3.0, corner.top() + 5.0),
-        pos2(corner.right() - 3.0, corner.bottom() - 3.0),
-        pos2(corner.left() + 7.0, corner.bottom() - 3.0),
-    ];
-    p.add(egui::Shape::convex_polygon(tri, Color32::from_gray(190), Stroke::NONE));
-    p.line_segment([pos2(r.left(), geo.cells.top() - 0.5), pos2(r.right(), geo.cells.top() - 0.5)], Stroke::new(1.0, t.header_line));
-    p.line_segment([pos2(geo.cells.left() - 0.5, r.top()), pos2(geo.cells.left() - 0.5, r.bottom())], Stroke::new(1.0, t.header_line));
+    // Select All: a small, faint corner triangle that darkens under the pointer.
+    let hot = p.ctx().input(|i| i.pointer.hover_pos()).is_some_and(|at| corner.contains(geo.mirror_pos(at)));
+    let size = (corner.height() * 0.45).clamp(6.0, 10.0);
+    let tip = pos2(corner.right() - 4.0, corner.bottom() - 4.0);
+    let tri = vec![pos2(tip.x, tip.y - size), tip, pos2(tip.x - size, tip.y)];
+    p.add(egui::Shape::convex_polygon(tri, if hot { t.text_dim } else { t.separator }, Stroke::NONE));
+    // The headers' own fill marks their edge against the cells: no extra rule along either side.
+}
+
+/// A column heading with its Table field name beside the letters ("C  Region"), the name a step
+/// smaller and dimmer. A name too long for the column is cut with an ellipsis; with no room for a
+/// few of its letters the heading shows only the column letters.
+fn paint_field_hint(p: &Painter, cell: Rect, letters: &str, name: &str, font: &egui::FontId, (ink, dim): (Color32, Color32)) {
+    let letter = p.layout_no_wrap(letters.to_owned(), font.clone(), ink);
+    let gap = (font.size * 0.45).round();
+    let room = cell.width() - 10.0 - letter.size().x - gap;
+    if room < font.size * 2.0 {
+        p.text(cell.center(), Align2::CENTER_CENTER, letters, font.clone(), ink);
+        return;
+    }
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), egui::FontId::new(font.size * 0.9, font.family.clone()), dim);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+    let field = p.layout_job(job);
+    let total = letter.size().x + gap + field.size().x;
+    let x = cell.center().x - total / 2.0;
+    let y = cell.center().y;
+    p.galley(pos2(x, y - letter.size().y / 2.0), letter, ink);
+    p.galley(pos2(x + total - field.size().x, y - field.size().y / 2.0), field, dim);
+}
+
+/// A thin accent line on the column or row heading edge under the pointer (the one a drag would
+/// resize), and on the edge being dragged, carried faintly down (or across) the cells as a guide.
+fn paint_resize_hover(app: &SheetApp, ctx: &egui::Context, p: &Painter, geo: &Geo, sh: &Sheet, t: &Tokens) {
+    let line = Stroke::new(2.0, t.accent);
+    let guide = Stroke::new(1.0, t.accent.gamma_multiply(0.5));
+    let col_line = |x: f32, guided: bool| {
+        p.line_segment([pos2(x, geo.head_top() + 2.0), pos2(x, geo.cells.top() - 1.0)], line);
+        if guided {
+            p.line_segment([pos2(x, geo.cells.top()), pos2(x, geo.cells.bottom())], guide);
+        }
+    };
+    let row_line = |y: f32, guided: bool| {
+        p.line_segment([pos2(geo.head_left() + 2.0, y), pos2(geo.cells.left() - 1.0, y)], line);
+        if guided {
+            p.line_segment([pos2(geo.cells.left(), y), pos2(geo.cells.right(), y)], guide);
+        }
+    };
+    match app.grid.drag {
+        Drag::ResizeCol { col, .. } => return col_line(geo.x(sh, col) + sh.col_width(col) * geo.z, true),
+        Drag::ResizeRow { row, .. } => return row_line(geo.y(sh, row) + sh.row_height(row) * geo.z, true),
+        Drag::None => {}
+        _ => return,
+    }
+    let Some(at) = ctx.input(|i| i.pointer.hover_pos()).map(|at| geo.mirror_pos(at)) else { return };
+    if !geo.rect.contains(at) || ctx.input(|i| i.pointer.any_down()) {
+        return;
+    }
+    let (freeze_cols, freeze_rows) = freeze_handles(geo);
+    if freeze_cols.contains(at) || freeze_rows.contains(at) {
+        return;
+    }
+    if at.y < geo.cells.top() && at.y >= geo.head_top() && at.x >= geo.cells.left() {
+        if let Some((_, x)) = col_edge(geo, sh, at.x) {
+            col_line(x, false);
+        }
+    } else if at.x < geo.cells.left()
+        && at.x >= geo.head_left()
+        && at.y >= geo.cells.top()
+        && let Some((_, y)) = row_edge(geo, sh, at.y)
+    {
+        row_line(y, false);
+    }
 }
 
 /// Whether the line before / after visible line `i` is hidden (zero size), so its header edges

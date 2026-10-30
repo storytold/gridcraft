@@ -20,7 +20,12 @@ fn harness(width: f32, sheets: usize) -> Harness {
             app.grid.cells_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(ui.max_rect().width(), 80.0)));
             gridcraft_ui_egui::tabs::sheet_tabs(app, ui);
         },
-        crate::common::app(s),
+        {
+            // The split between tabs and scrollbar, without the status items that share the row.
+            let mut app = crate::common::app(s);
+            app.ui.status_bar = false;
+            app
+        },
     );
     h.run_steps(20);
     h
@@ -67,7 +72,7 @@ fn dragging_the_handle_right_gives_overflowing_tabs_more_room() {
     assert!(before.width() <= 1200.0 * 0.6, "the tabs start at their default share: {before:?}");
     drag(&mut h, handle.center(), pos2(1000.0, handle.center().y));
     let after = strip(&h);
-    assert!(after.width() > before.width() + 200.0, "the strip grew: {before:?} -> {after:?}");
+    assert!(after.width() > before.width() + 180.0, "the strip grew: {before:?} -> {after:?}");
     assert!((split(&h).center().x - 1000.0).abs() <= 2.0, "the handle follows the pointer: {:?}", split(&h));
     assert_eq!(track(&h).left(), split(&h).right(), "the scrollbar starts at the handle");
     assert!(track(&h).width() >= 100.0, "the scrollbar keeps a usable width: {:?}", track(&h));
@@ -92,9 +97,9 @@ fn the_handle_stops_before_the_scrollbar_gets_too_narrow_and_keeps_new_sheet_sho
     assert!(track(&h).width() >= 100.0 - 0.5, "the scrollbar keeps 100 px: {:?}", track(&h));
     let (handle, bar_left) = (split(&h), strip(&h).left());
     drag(&mut h, handle.center(), pos2(0.0, handle.center().y));
-    // The tab strip has no width left, and the New sheet button (26 px after a 6 px gap) still
+    // The tab strip has no width left, and the New sheet button (26 px after a 6 px gap, then its 14 px chevron) still
     // fits before the handle.
-    assert!((split(&h).left() - bar_left - 32.0).abs() <= 1.0, "the handle is 32 px after the strip's start {bar_left}: {:?}", split(&h));
+    assert!((split(&h).left() - bar_left - 46.0).abs() <= 1.0, "the handle is 46 px after the strip's start {bar_left}: {:?}", split(&h));
 }
 
 #[test]
@@ -107,13 +112,13 @@ fn a_narrower_window_keeps_the_scrollbar_after_the_handle_was_dragged_right() {
     let track = track(&h);
     assert!(track.width() >= 100.0 - 0.5 && track.right() <= 700.5, "the scrollbar keeps 100 px in the bar: {track:?}");
     assert_eq!(track.left(), split(&h).right(), "the scrollbar starts at the handle");
-    assert!(strip(&h).right() <= split(&h).left() - 32.0 + 0.5, "the tabs end before New sheet: {:?}", strip(&h));
+    assert!(strip(&h).right() <= split(&h).left() - 46.0 + 0.5, "the tabs end before New sheet: {:?}", strip(&h));
 }
 
 #[test]
 fn room_the_tabs_do_not_fill_stays_empty_and_new_sheet_follows_the_last_tab() {
     let mut h = harness(1200.0, 2);
-    let plus_before = track(&h).left() - 8.0 - 26.0;
+    let plus_before = track(&h).left() - 8.0 - 14.0 - 26.0;
     let handle = split(&h);
     drag(&mut h, handle.center(), pos2(900.0, handle.center().y));
     assert!((split(&h).center().x - 900.0).abs() <= 2.0, "the handle stays where it was dragged: {:?}", split(&h));

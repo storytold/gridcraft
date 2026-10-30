@@ -1,9 +1,65 @@
-use super::{Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
+use super::{Icon, Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
-pub(super) fn sep(ui: &mut Ui) {
+/// Height of the controls row in the ribbon card; group captions sit below it.
+pub(super) const GROUP_H: f32 = 62.0;
+/// Height of a caption line under each group. Groups carry no visible caption (their names stay
+/// in the code and for assistive technology), so the line takes no room.
+pub(super) const CAPTION_H: f32 = 0.0;
+
+/// Pitch of a two-row group (Font, Alignment, Number): each row is `ROW_H` tall with its controls
+/// centred, and the pair sits centred in the group.
+const ROW_H: f32 = 26.0;
+const ROW_GAP: f32 = 4.0;
+
+/// Lays out a two-row group: rows built with `ui.horizontal` inside get the design's 32 px pitch
+/// and the pair is centred vertically in the card.
+pub(crate) fn two_rows<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.vertical(|ui| {
+        ui.spacing_mut().interact_size.y = ROW_H;
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        ui.add_space(((GROUP_H - 2.0 * ROW_H - ROW_GAP) / 2.0).max(0.0));
+        add(ui)
+    })
+    .inner
+}
+
+fn group_start_id() -> egui::Id {
+    egui::Id::unique("ribbon_group_start")
+}
+
+/// Marks where the first group of a tab begins, so the captions can be centred under their groups.
+pub(super) fn begin_groups(ui: &Ui) {
+    let x = ui.cursor().min.x;
+    ui.ctx().data_mut(|d| d.insert_temp(group_start_id(), x));
+}
+
+/// Paints `caption` centred under the group that spans from the last group start to `end`.
+fn paint_caption(ui: &Ui, caption: &str, end: f32) {
+    if CAPTION_H <= 0.0 {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
-    ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
+    let start = ui.ctx().data(|d| d.get_temp::<f32>(group_start_id())).unwrap_or(end);
+    let top = ui.min_rect().top();
+    let label = crate::i18n::current(ui.ctx()).tr(caption);
+    let center = pos2((start + end) / 2.0, top + GROUP_H + CAPTION_H / 2.0 + 1.0);
+    ui.painter().text(center, egui::Align2::CENTER_CENTER, label, theme::ui_font(11.0), t.text_dim);
+}
+
+/// Ends a ribbon group: its caption under it and a separator line before the next group.
+pub(crate) fn sep(ui: &mut Ui, caption: &str) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(13.0, GROUP_H), Sense::hover());
+    paint_caption(ui, caption, r.left());
+    let bottom = r.top() + GROUP_H + CAPTION_H;
+    ui.painter().line_segment([pos2(r.center().x, r.top() + 4.0), pos2(r.center().x, bottom - 2.0)], Stroke::new(1.0, t.separator));
+    ui.ctx().data_mut(|d| d.insert_temp(group_start_id(), r.right()));
+}
+
+/// Ends a tab's last group: its caption, without a separator after it.
+pub(super) fn end_group(ui: &mut Ui, caption: &str) {
+    let end = ui.min_rect().right();
+    paint_caption(ui, caption, end);
 }
 
 pub(super) fn active_style(app: &SheetApp) -> Style {
@@ -265,14 +321,94 @@ fn combo_popup(
     result
 }
 
+/// The icon a menu item shows in its icon column: the command's own ribbon icon where it has one.
+pub(super) fn menu_icon(id: &str, p: &serde_json::Value) -> Option<Icon> {
+    let has = |key: &str| p.get(key).is_some();
+    Some(match id {
+        "edit.paste" | "dialog:pasteSpecial" => Icon::Paste,
+        "edit.pasteSpecial" if has("link") => Icon::Link,
+        "edit.pasteSpecial" if has("transpose") => Icon::Orientation,
+        "edit.pasteSpecial" => match p.get("what").and_then(serde_json::Value::as_str) {
+            Some("formulas") => Icon::Fx,
+            Some("formats") => Icon::Brush,
+            _ => Icon::Paste,
+        },
+        "home.underline" if p.get("style").and_then(serde_json::Value::as_str) != Some("double") => Icon::Underline,
+        "home.mergeCenter" => Icon::Merge,
+        "dialog:insertCells" | "home.insertRows" | "home.insertColumns" => Icon::Insert,
+        "home.insertSheet" => Icon::Sheet,
+        "dialog:deleteCells" | "home.deleteRows" | "home.deleteColumns" | "home.deleteSheet" => Icon::DeleteCells,
+        "dialog:formatCells" if p.get("tab").is_none() => Icon::Format,
+        "dialog:protectSheet" => Icon::ProtectSheet,
+        "home.lockCell" => Icon::Lock,
+        "dialog:renameSheet" | "dialog:moveSheet" => Icon::Sheet,
+        "edit.fillDown" => Icon::FillDown,
+        "edit.flashFill" => Icon::FlashFill,
+        "edit.clearAll" | "edit.clearContents" => Icon::Eraser,
+        "edit.clearFormats" => Icon::Brush,
+        "edit.clearComments" => Icon::DeleteComment,
+        "edit.clearHyperlinks" => Icon::Link,
+        "data.sortAscending" => Icon::SortAsc,
+        "data.sortDescending" => Icon::SortDesc,
+        "dialog:sort" => Icon::SortCustom,
+        "data.filter" => Icon::Filter,
+        "data.clearFilter" => Icon::ClearFilter,
+        "data.reapply" => Icon::Reapply,
+        "dialog:find" => Icon::Find,
+        "home.clearRules" => Icon::Eraser,
+        "dialog:dataValidation" => Icon::Validation,
+        "dialog:goalSeek" | "data.scenarioManager" | "data.dataTable" => Icon::WhatIf,
+        "view.freezePanes" | "view.freezeTopRow" | "view.freezeFirstColumn" => Icon::Freeze,
+        "pageLayout.printArea" if !has("clear") => Icon::PrintArea,
+        "pageLayout.breaks" if has("insert") => Icon::Breaks,
+        "dialog:pageSetup" => Icon::Margins,
+        "dialog:comment" => Icon::Note,
+        "review.showAllNotes" => Icon::ShowComments,
+        _ => return None,
+    })
+}
+
+/// The keyboard shortcut a menu item shows at its right: one GridCraft binds for that exact
+/// command, written for this platform as the ribbon tooltips write them.
+pub(super) fn menu_shortcut(id: &str, p: &serde_json::Value) -> Option<&'static str> {
+    let plain = p.as_object().is_none_or(|o| o.is_empty());
+    let mac = cfg!(target_os = "macos");
+    let pick = |m: &'static str, other: &'static str| Some(if mac { m } else { other });
+    match id {
+        "edit.paste" => pick("⌘V", "Ctrl+V"),
+        "dialog:find" if p.get("replace").is_some() => pick("⌘H", "Ctrl+H"),
+        "dialog:find" => pick("⌘F", "Ctrl+F"),
+        "dialog:goTo" => pick("⌘G", "Ctrl+G"),
+        "dialog:formatCells" if plain => pick("⌘1", "Ctrl+1"),
+        "edit.fillDown" => pick("⌘D", "Ctrl+D"),
+        "edit.fillRight" => pick("⌘R", "Ctrl+R"),
+        "edit.flashFill" => pick("⌘E", "Ctrl+E"),
+        "edit.clearContents" => Some("Delete"),
+        "data.filter" => pick("⌘⇧F", "Ctrl+Shift+L"),
+        "home.hideRows" => pick("⌘9", "Ctrl+9"),
+        "home.hideColumns" => pick("⌘0", "Ctrl+0"),
+        "home.unhideRows" => pick("⌘⇧9", "Ctrl+Shift+9"),
+        "home.unhideColumns" => pick("⌘⇧0", "Ctrl+Shift+0"),
+        "home.underline" if p.get("style").and_then(serde_json::Value::as_str) == Some("single") => pick("⌘U", "Ctrl+U"),
+        _ => None,
+    }
+}
+
+/// A shortcut the interface fonts can draw (a host without a macOS symbol face gets the
+/// spelled-out keys rather than tofu).
+pub(super) fn drawable_shortcut(ui: &Ui, keys: &str) -> String {
+    if keys.chars().any(|c| theme::symbol_fallback(c).is_some()) { theme::available_text(ui, keys) } else { keys.to_string() }
+}
+
 pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json::Value)]) {
     for (label, id, p) in items {
         if *label == "-" {
-            ui.separator();
+            crate::widgets::menu_gap(ui);
             continue;
         }
         let lang = app.ui.language;
-        let response = ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
+        let keys = menu_shortcut(id, p).map(|k| drawable_shortcut(ui, k));
+        let response = crate::widgets::menu_row(ui, menu_icon(id, p), lang.tr(label), keys.as_deref());
         if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
             keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
         }
@@ -300,5 +436,33 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod menu_decoration_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn menu_items_show_only_shortcuts_gridcraft_binds_for_that_exact_command() {
+        assert!(menu_shortcut("edit.fillDown", &json!({})).is_some());
+        if !cfg!(target_os = "macos") {
+            assert_eq!(menu_shortcut("dialog:find", &json!({"replace": true})), Some("Ctrl+H"));
+            assert_eq!(menu_shortcut("dialog:formatCells", &json!({})), Some("Ctrl+1"));
+        }
+        // Format Cells opened on a tab is not what Ctrl+1 does.
+        assert_eq!(menu_shortcut("dialog:formatCells", &json!({"tab": "Alignment"})), None);
+        assert_eq!(menu_shortcut("home.underline", &json!({"style": "double"})), None);
+        assert_eq!(menu_shortcut("pageLayout.margins", &json!({"preset": "wide"})), None);
+    }
+
+    #[test]
+    fn menu_items_take_their_commands_icons() {
+        assert_eq!(menu_icon("data.sortAscending", &json!({})), Some(Icon::SortAsc));
+        assert_eq!(menu_icon("edit.pasteSpecial", &json!({"what": "formulas"})), Some(Icon::Fx));
+        assert_eq!(menu_icon("edit.pasteSpecial", &json!({"what": "all", "link": true})), Some(Icon::Link));
+        assert_eq!(menu_icon("home.insertSheet", &json!({})), Some(Icon::Sheet));
+        assert_eq!(menu_icon("edit.goToSpecial", &json!({"kind": "notes"})), None);
     }
 }

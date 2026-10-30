@@ -2,9 +2,14 @@ use serde_json::json;
 
 use super::*;
 
+/// A new workbook on Excel's 15pt (20 px) rows, which the page arithmetic below is written for.
 fn s() -> Session {
     let mut s = Session::new();
     s.new_workbook();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    for sh in wb.sheets.iter_mut() {
+        std::sync::Arc::make_mut(sh).default_row_height = gridcraft_model::DEFAULT_ROW_HEIGHT;
+    }
     s
 }
 fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
