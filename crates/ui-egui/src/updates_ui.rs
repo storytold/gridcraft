@@ -2,7 +2,6 @@
 //! offers the new release: Update and Restart (direct self-update), Download or Later. The flow
 //! itself is `craft_update::updater::Updater`.
 
-use craft_update::suite::GRIDCRAFT;
 use craft_update::updater::{Action, Status, Updater};
 
 use crate::SheetApp;
@@ -19,7 +18,7 @@ pub(crate) struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&GRIDCRAFT, VERSION), startup: false, manual: false }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false }
     }
 }
 

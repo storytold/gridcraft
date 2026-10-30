@@ -413,8 +413,20 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
+                    // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        text(ui, egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));
+                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        let resp = ui.add(
+                            egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
+                                .selectable(false)
+                                .sense(Sense::click()),
+                        );
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(app.ui.language.tr("Click to copy"));
+                        if resp.clicked() {
+                            ui.ctx().copy_text(value);
+                        }
+                        // The label senses clicks, so it also has to open the statistics menu on right-click.
+                        resp.context_menu(|ui| status_bar_menu(app, ui));
                         ui.add_space(10.0);
                     }
                 });

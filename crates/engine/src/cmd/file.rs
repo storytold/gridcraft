@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -191,7 +191,11 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = crate::io::save_bytes(&wb, &target)?;
+    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        crate::io::csv_values_bytes(&wb)?
+    } else {
+        crate::io::save_bytes(&wb, &target)?
+    };
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
 }

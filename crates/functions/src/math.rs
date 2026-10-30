@@ -695,6 +695,16 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("MROUND", 2, 2, MathTrig, S, "MROUND(number, multiple)", "Rounds a number to the nearest multiple.", mround),
         f!("CEILING", 2, 2, Compatibility, S, "CEILING(number, significance)", "Rounds a number up to a multiple of significance.", ceiling),
         f!(
+            "ECMA.CEILING",
+            2,
+            2,
+            Compatibility,
+            S,
+            "ECMA.CEILING(number, significance)",
+            "Rounds a number up to a multiple of significance.",
+            ceiling
+        ),
+        f!(
             "CEILING.MATH",
             1,
             3,
