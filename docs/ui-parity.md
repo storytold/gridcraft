@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (Data › Filter refused inside a PivotTable report, #2045; earlier: AutoSum over a selected row puts its total to the right; macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -190,6 +190,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Data › Filter (and Ctrl+Shift+L) no longer puts a sheet AutoFilter over a PivotTable report: it is refused with "Filter isn't available in a PivotTable report.", as in Excel. Such an AutoFilter listed "Grand Total" as a value and hid report rows while the total kept counting them (#2045). An AutoFilter already over a report takes no new criteria but can still be cleared or turned off, and typing under an AutoFilter no longer grows it into a report. Ranges beside the report filter as before |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |

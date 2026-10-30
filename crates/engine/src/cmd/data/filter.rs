@@ -40,12 +40,25 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
             Ok(json!({"filter": false}))
         });
     }
-    install_filter(s, p)
+    install_filter(s, p, "data.filter")
+}
+
+/// As in Excel, a PivotTable report filters through its own fields: a sheet AutoFilter over it
+/// would list "Grand Total" as a value and hide report rows behind the PivotTable's back (#2045).
+fn refuse_over_pivot(s: &Session, sheet: usize, r: RangeRef, id: &str) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| over_pivot(sh, r)) {
+        return Err(EngineError::Disabled(id.into(), "Filter isn't available in a PivotTable report.".into()));
+    }
+    Ok(())
+}
+
+fn over_pivot(sh: &Sheet, r: RangeRef) -> bool {
+    sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&r)))
 }
 
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
-fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
-    let (sheet, mut r) = data_target(s, p, "data.filter")?;
+fn install_filter(s: &mut Session, p: &Json, id: &str) -> Result<Json> {
+    let (sheet, mut r) = data_target(s, p, id)?;
     // A selected header row filters the data below it (#201).
     if p.get("range").is_none() && r.height() == 1 {
         let d = s.doc()?;
@@ -55,6 +68,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
             r = RangeRef::new(r.start, CellRef::new(below, r.end.col));
         }
     }
+    refuse_over_pivot(s, sheet, r, id)?;
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![] });
         Ok(json!({"filter": true, "range": r.a1()}))
@@ -68,10 +82,15 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let af = match &sh.autofilter {
         Some(a) => a.clone(),
         None => {
-            install_filter(s, &json!({}))?;
+            install_filter(s, &json!({}), "data.filterBy")?;
             s.doc()?.wb.sheet(sheet).and_then(|sh| sh.autofilter.clone()).ok_or_else(|| EngineError::Other("no filter".into()))?
         }
     };
+    // An AutoFilter already over a report (from an older session or a file) can still be cleared.
+    let clear = bool_param(p, "clear").unwrap_or(false);
+    if !clear {
+        refuse_over_pivot(s, sheet, af.range, "data.filterBy")?;
+    }
     let col = match col_param(p.get("column"), af.range.start.col) {
         Some(c) => c,
         // A number too large to be a column is outside the filter range, not a missing parameter.
@@ -82,7 +101,7 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.filterBy", "column outside the filter range"));
     }
     let off = col - af.range.start.col;
-    let crit = if bool_param(p, "clear").unwrap_or(false) {
+    let crit = if clear {
         None
     } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
         Some(FilterCriterion::Values {
@@ -163,7 +182,8 @@ fn filter_blank(v: &Value) -> bool {
 }
 
 /// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
-/// A table's own filter is left to the table, and a row typed after a blank row does not count.
+/// A table's own filter is left to the table, a row typed after a blank row does not count, and the
+/// range never grows into a PivotTable report (#2045).
 /// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
 pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
@@ -175,6 +195,9 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
+    if over_pivot(sh, grown) {
+        return;
+    }
     if let Some(af) = sh.autofilter.as_mut() {
         af.range = grown;
     }

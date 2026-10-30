@@ -1013,3 +1013,58 @@ fn detail_cells_are_the_cells_show_details_takes() {
     let pt = &d.wb.active().unwrap().pivots[0];
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
 }
+
+#[test]
+fn sheet_filter_is_refused_over_a_report() {
+    // #2045: Data > Filter over the report listed "Grand Total" as a value and hid report rows.
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let inside = CellRef::new(r.start.row + 1, r.start.col).a1();
+    s.execute("selection.set", json!({"cell": inside})).unwrap();
+    assert!(matches!(s.execute("data.filter", json!({})), Err(crate::EngineError::Disabled(..))));
+    assert!(matches!(s.execute("data.filter", json!({"range": r.a1()})), Err(crate::EngineError::Disabled(..))));
+    assert!(
+        matches!(s.execute("data.filterBy", json!({"column": 0, "values": ["East"]})), Err(crate::EngineError::Disabled(id, _)) if id == "data.filterBy")
+    );
+    assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
+    assert_eq!(val(&s, &CellRef::new(r.end.row, r.start.col + 1).a1()), Value::Number(TOTAL));
+    // Cells beside the report still filter.
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["a"], ["b"]]})).unwrap();
+    assert!(s.execute("data.filter", json!({"range": "H1:H3"})).is_ok());
+}
+
+#[test]
+fn an_autofilter_already_over_a_report_takes_no_new_criteria() {
+    // A sheet AutoFilter saved over a report before #2045 can be cleared, but filters nothing new.
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let sheet = s.doc().unwrap().wb.active_sheet();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(sheet).unwrap().autofilter =
+        Some(gridcraft_model::AutoFilter { range: r, criteria: vec![] });
+    let col = r.start.col;
+    assert!(
+        matches!(s.execute("data.filterBy", json!({"column": col, "values": ["East"]})), Err(crate::EngineError::Disabled(id, _)) if id == "data.filterBy")
+    );
+    assert!(s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().unwrap().criteria.is_empty());
+    assert!(s.execute("data.filterBy", json!({"column": col, "clear": true})).is_ok());
+}
+
+#[test]
+fn an_autofilter_does_not_grow_into_a_report_below_it() {
+    // Typing beside a report in the row under an AutoFilter would pull the report's row into it (#2045).
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"destination": "Sheet1!J10", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let (top, below) = (CellRef::new(r.start.row - 2, 7), CellRef::new(r.start.row - 1, r.start.col));
+    s.execute("range.setValues", json!({"range": top.a1(), "values": [["Name", "Qty", "x"], ["a", 1, 2]]})).unwrap();
+    let af = gridcraft_core::RangeRef::new(top, below).a1();
+    s.execute("data.filter", json!({"range": af})).unwrap();
+    s.execute("cell.set", json!({"cell": CellRef::new(r.start.row, 7).a1(), "input": "b"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().map(|a| a.range.a1()), Some(af));
+}
