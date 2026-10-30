@@ -2112,8 +2112,8 @@ fn median_large_values_recalculate_dependents() {
     t.set("A2", "1.6e308");
     t.set("B1", "=MEDIAN(A1:A2)");
     t.set("B2", "=AGGREGATE(12,0,A1:A2)");
-    t.set("C1", "=B1/1e308");
-    t.set("C2", "=B2/1e308");
+    t.set("C1", "=B1/(1E307*10)");
+    t.set("C2", "=B2/(1E307*10)");
     for cell in ["B1", "B2"] {
         assert!((t.num(cell) / 1e308 - 1.3).abs() < 1e-14);
     }
