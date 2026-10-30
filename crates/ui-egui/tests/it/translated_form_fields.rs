@@ -121,3 +121,18 @@ fn command_search_matches_translated_and_english_labels() {
         assert!(dialog.query_all_by_label_contains(shown).next().is_some(), "{typed}: no result showing {shown}");
     }
 }
+
+#[test]
+fn command_search_lists_every_menu_match() {
+    // "accueil" matches every Home command through the menu path: more than one screenful, all reachable.
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    h.input_mut().events.push(egui::Event::Text("accueil".into()));
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::End);
+    h.run_steps(2);
+    let last = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
+    assert!(last >= 40, "Ctrl+End reached result {last}");
+}

@@ -25,22 +25,28 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     // ("accueil" lists the Home commands). Case and accents are ignored.
     let lang = app.ui.language;
     let q = fold(&d.search);
-    let cmds: Vec<(String, String, String)> = app
+    // Label and id matches first, then commands found only through their menu path. No cap: there
+    // are a few hundred commands, and a broad query ("accueil") must still list them all.
+    let mut cmds: Vec<(u8, String, String, String)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .map(|c| {
+        .filter_map(|c| {
             let shown = shown_label(lang, c.label, &c.menu);
             let menu = c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ");
-            (c, shown, menu)
+            let rank = if q.is_empty() || fold(&shown).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q) {
+                0
+            } else if fold(&menu).contains(&q) {
+                1
+            } else {
+                return None;
+            };
+            Some((rank, c.id.to_string(), shown, menu))
         })
-        .filter(|(c, shown, menu)| {
-            q.is_empty() || fold(shown).contains(&q) || fold(menu).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q)
-        })
-        .map(|(c, shown, menu)| (c.id.to_string(), shown, menu))
-        .take(40)
         .collect();
+    cmds.sort_by_key(|(rank, ..)| *rank);
+    let cmds: Vec<(String, String, String)> = cmds.into_iter().map(|(_, id, shown, menu)| (id, shown, menu)).collect();
 
     let last = cmds.len().saturating_sub(1);
 
