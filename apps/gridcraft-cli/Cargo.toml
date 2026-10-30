@@ -6,6 +6,10 @@ license.workspace = true
 description = "GridCraft command line: inspect, convert, evaluate, script and serve MCP without a window"
 publish = false
 
+[features]
+# ODBC data sources (needs the system ODBC driver manager to link: unixODBC on Linux).
+odbc = ["gridcraft-datasource/odbc"]
+
 [lints]
 workspace = true
 
@@ -16,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-mcp = { workspace = true }
+gridcraft-datasource = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).

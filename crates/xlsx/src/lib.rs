@@ -18,6 +18,7 @@ mod chartex;
 mod controls;
 mod crypto;
 mod csv;
+mod db_queries;
 mod drawing;
 mod feature_bags;
 mod fmla;

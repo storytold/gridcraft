@@ -210,7 +210,9 @@ pub(super) fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
 
 pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     let replace = bool_param(p, "replace").unwrap_or(false);
-    edit(s, |cx| {
+    // Database tables first: PivotTables may summarise them.
+    let db = super::super::database::refresh_all(s, bool_param(p, "trust") == Some(true))?;
+    let mut r = edit(s, |cx| {
         let mut n = 0;
         let mut errors = vec![];
         for si in 0..cx.wb.sheets.len() {
@@ -225,7 +227,18 @@ pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
         }
         cx.structural = n > 0;
         Ok(json!({"refreshed": n, "errors": errors}))
-    })
+    })?;
+    r["refreshed"] = json!(r["refreshed"].as_u64().unwrap_or(0) + db.refreshed as u64);
+    if let Some(e) = r["errors"].as_array_mut() {
+        e.extend(db.errors);
+    }
+    if !db.need_password.is_empty() {
+        r["needPassword"] = json!(db.need_password);
+    }
+    if !db.need_trust.is_empty() {
+        r["needTrust"] = json!(db.need_trust);
+    }
+    Ok(r)
 }
 
 pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {

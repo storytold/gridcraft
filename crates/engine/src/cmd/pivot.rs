@@ -183,7 +183,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refresh All",
             ["Data", "Queries & Connections"],
             Some("Cmd+Alt+F5"),
-            "{replace?} refreshes every PivotTable → {refreshed, errors}",
+            "{replace?, trust?: true enables the workbook's database queries read from the file} refreshes every database table, then every PivotTable → {refreshed, errors, needPassword?, needTrust?}",
             has_doc,
             refresh_all
         ),

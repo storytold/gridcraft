@@ -61,6 +61,13 @@ fn stdout_failed(e: std::io::Error) -> ! {
     std::process::exit(1);
 }
 
+/// A session with the database drivers (`data.fromDatabase`).
+fn session() -> Session {
+    let mut s = Session::new();
+    s.data_source = Some(gridcraft_datasource::provider());
+    s
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
@@ -166,13 +173,13 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 }
 
 fn open(path: &str) -> Result<Session, String> {
-    let mut s = Session::new();
+    let mut s = session();
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
 
 fn blank() -> Session {
-    let mut s = Session::new();
+    let mut s = session();
     s.new_workbook();
     s
 }
@@ -418,7 +425,7 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
-            let mut s = Session::new();
+            let mut s = session();
             exec(&mut s, "file.new", json!({"sample": name}))?;
             s
         }
@@ -465,7 +472,7 @@ fn run(args: &[String]) -> Result<(), String> {
 fn commands(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search"], &["json"])?;
     let q = a.opt("search").or(a.positional.first().map(String::as_str)).map(str::to_ascii_lowercase);
-    let s = Session::new();
+    let s = session();
     let list: Vec<_> = s
         .commands()
         .into_iter()
@@ -504,7 +511,7 @@ fn functions(args: &[String]) -> Result<(), String> {
     if let Some(c) = a.opt("category") {
         p["category"] = json!(c);
     }
-    let mut s = Session::new();
+    let mut s = session();
     let v = exec(&mut s, "formulas.functions", p)?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -540,7 +547,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
-                    let mut s = Session::new();
+                    let mut s = session();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
                     s
                 }
