@@ -6,6 +6,7 @@ use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
+use super::import_text::{import_params, import_text};
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
@@ -47,6 +48,7 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "importText" => v = import_params(d),
         "textToColumns" => {
             let mut delims = Vec::new();
             for (k, c) in [("tab", "\t"), ("semicolon", ";"), ("comma", ","), ("space", " ")] {
@@ -137,6 +139,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
+        "importText" => 760.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -176,6 +179,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "importText" => import_text(app, ui, &mut d, &mut confirm, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
