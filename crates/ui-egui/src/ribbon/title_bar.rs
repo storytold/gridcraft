@@ -36,15 +36,13 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let ch = TITLE_CONTROL_H;
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
-        // Dragging the empty title area moves the window.
-        let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
-        if bg.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-        if bg.double_clicked() {
-            let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-        }
+        // The empty title area moves the window when dragged and follows the system's title-bar
+        // double-click setting. Its controls keep their own clicks: on macOS AppKit moved and
+        // zoomed the window for presses on them (a double-click on Undo or Redo zoomed it,
+        // #2546), so the window is not movable while the pointer is on one (`sync_movable`).
+        // In the browser there is no window to move or maximize.
+        #[cfg(not(target_arch = "wasm32"))]
+        craft_window::title_bar::empty_area(ui, rect);
         ui.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
             // AutoSave toggle (saves after each change when the workbook has a file).
@@ -163,6 +161,14 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
         });
     });
+    // macOS: AppKit may move (and on a double-click, zoom) the window only from the empty area.
+    #[cfg(target_os = "macos")]
+    {
+        let id = egui::Id::unique("gridcraft_title_bar_movable");
+        let mut applied = ui.ctx().data(|d| d.get_temp::<Option<bool>>(id)).flatten();
+        craft_window::title_bar::sync_movable(ui.ctx(), &mut applied);
+        ui.ctx().data_mut(|d| d.insert_temp(id, applied));
+    }
 }
 
 /// Lay out the title truncated to fit `max_w` together with the unsaved marker (when `dirty`).
