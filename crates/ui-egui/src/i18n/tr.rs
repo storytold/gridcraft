@@ -384,6 +384,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Giriş",
         "Edit" => "Düzenle",
         "Point" => "İşaretle",
+        "End Mode" => "Son Modu",
         "Calculate" => "Hesapla",
         "Select destination and press Enter or choose Paste" => "Hedefi seçip Enter tuşuna basın veya Yapıştır'ı seçin",
         "General" => "Genel",

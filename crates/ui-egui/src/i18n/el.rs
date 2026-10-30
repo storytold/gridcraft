@@ -370,6 +370,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Εισαγωγή",
         "Edit" => "Επεξεργασία",
         "Point" => "Κατάδειξη",
+        "End Mode" => "Λειτουργία End",
         "Calculate" => "Υπολογισμός",
         "Select destination and press Enter or choose Paste" => "Επιλέξτε προορισμό και πατήστε Enter ή επιλέξτε Επικόλληση",
         "General" => "Γενικά",

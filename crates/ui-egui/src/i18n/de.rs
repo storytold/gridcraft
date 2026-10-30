@@ -402,6 +402,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Eingeben",
         "Edit" => "Bearbeiten",
         "Point" => "Zeigen",
+        "End Mode" => "Endmodus",
         "Calculate" => "Berechnen",
         "Select destination and press Enter or choose Paste" => "Ziel auswählen und die Eingabetaste drücken oder „Einfügen“ wählen",
         "General" => "Standard",

@@ -214,6 +214,8 @@ pub struct GridState {
     pub list_picker: Option<CellRef>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
+    /// End mode (Excel's End key): the next arrow key jumps to the edge of the data region.
+    pub end_mode: bool,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).

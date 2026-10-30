@@ -290,6 +290,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Entrée",
         "Edit" => "Modifier",
         "Point" => "Point",
+        "End Mode" => "Mode Fin",
         "Calculate" => "Calculer",
         "Select destination and press Enter or choose Paste" => "Sélectionnez la destination et appuyez sur Entrée ou choisissez Coller",
         "General" => "Standard",

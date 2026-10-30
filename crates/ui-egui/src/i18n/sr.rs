@@ -280,6 +280,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Unos",
         "Edit" => "Uređivanje",
         "Point" => "Pokaži",
+        "End Mode" => "Režim End",
         "Calculate" => "Izračunavanje",
         "Select destination and press Enter or choose Paste" => "Izaberi odredište i pritisni Enter ili izaberi Nalepi",
         "General" => "Opšte",

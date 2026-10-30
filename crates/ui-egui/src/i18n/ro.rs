@@ -275,6 +275,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Enter",
         "Edit" => "Editare",
         "Point" => "Punct",
+        "End Mode" => "Modul End",
         "Calculate" => "Calcul",
         "Select destination and press Enter or choose Paste" => "Selectați destinația și apăsați Enter sau alegeți Lipire",
         "General" => "General",

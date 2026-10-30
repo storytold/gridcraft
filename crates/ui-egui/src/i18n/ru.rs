@@ -277,6 +277,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Ввод",
         "Edit" => "Изменение",
         "Point" => "Указание",
+        "End Mode" => "Режим End",
         "Calculate" => "Вычисление",
         "Select destination and press Enter or choose Paste" => "Выберите место вставки и нажмите Enter или выберите «Вставить»",
         "General" => "Общий",

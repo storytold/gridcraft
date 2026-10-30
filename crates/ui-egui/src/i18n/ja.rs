@@ -285,6 +285,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Enter", "入力"),
     ("Edit", "編集"),
     ("Point", "ポイント"),
+    ("End Mode", "エンドモード"),
     ("Calculate", "計算"),
     ("Select destination and press Enter or choose Paste", "貼り付け先を選び、Enter キーを押すか [貼り付け] を選びます"),
     ("General", "標準"),

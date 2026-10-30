@@ -399,6 +399,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Zadat",
         "Edit" => "Úpravy",
         "Point" => "Výběr odkazu",
+        "End Mode" => "Režim End",
         "Calculate" => "Přepočítat",
         "Select destination and press Enter or choose Paste" => "Vyberte cíl a stiskněte Enter nebo zvolte Vložit",
         "General" => "Obecný",

@@ -114,7 +114,7 @@ impl KeyTips {
                         self.held.retain(|held| held != key);
                     } else if *repeat && (self.prefix.is_some() || self.held.contains(key)) {
                         handled = true;
-                    } else if *key == Key::F10 && modifiers.is_none() {
+                    } else if (*key == Key::F10 && modifiers.is_none()) || (*key == Key::F6 && !modifiers.alt) {
                         self.toggle();
                         handled = true;
                     } else if self.prefix.is_some() && !matches!(key, Key::ShiftLeft | Key::ShiftRight) {
