@@ -106,3 +106,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.luigiPinna]
+real_name = "Luigi Pinna"
+sync_github_name = true

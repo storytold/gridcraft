@@ -303,3 +303,56 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
 }
+
+fn replace_a1(text: &str, params: Json) -> (Json, Value) {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    let r = s.execute("edit.replace", params).unwrap();
+    (r, s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)))
+}
+
+#[test]
+fn replace_with_wildcards_folds_case_as_find_does() {
+    // Find lowercases the whole text, where a final Σ becomes ς. Replace folded char by char
+    // (Σ to σ), so it skipped a cell Find had found.
+    let (r, v) = replace_a1("ΚΑΛΟΣ", json!({"what": "λ?ς", "with": "X"}));
+    assert_eq!(r["replaced"], json!(1));
+    assert_eq!(v, Value::text("ΚΑX"));
+}
+
+#[test]
+fn replace_with_wildcards_replaces_the_matched_text() {
+    // #2108: Replace counted a wildcard match, then replaced the pattern text literally, so
+    // the cell kept its text. The expected results are Excel 365's, measured in #1455: a `*`
+    // takes as few characters as it can, except a trailing `*`, which takes the rest.
+    for (text, what, with, want) in [
+        ("hello world", "h*o", "X", "X world"),
+        ("hello world", "l*", "X", "heX"),
+        ("xaxbyazb", "a?b", "X", "xXyX"),
+        ("a*b*c", "~*", "+", "a+b+c"),
+        ("\u{130}stanbul", "?", "_", "________"),
+        ("10.0.0.1, fe80::1", ",*", "", "10.0.0.1"),
+    ] {
+        let (r, v) = replace_a1(text, json!({"what": what, "with": with}));
+        assert_eq!(r["replaced"], json!(1), "{what} in {text}");
+        assert_eq!(v, Value::text(want), "{what} in {text}");
+    }
+}
+
+#[test]
+fn wildcard_replace_scans_past_a_start_that_fails_before_its_star() {
+    // `a` at 0 fails on `b` before the star is reached, so the scan goes on; `a*b` at 2 finds
+    // no `b` after its star, so no later start can match and the scan stops.
+    assert_eq!(replace_wildcard("ac abc", "ab*c", "X", false).as_deref(), Some("ac X"));
+    assert_eq!(replace_wildcard("ab a a", "a*b", "X", false).as_deref(), Some("X a a"));
+    assert_eq!(replace_wildcard("aaaa", "a*b", "X", false), None);
+}
+
+#[test]
+fn wildcard_replace_follows_match_case() {
+    let (_, v) = replace_a1("Hello hello", json!({"what": "h?llo", "with": "X"}));
+    assert_eq!(v, Value::text("X X"));
+    let (_, v) = replace_a1("Hello hello", json!({"what": "h?llo", "with": "X", "matchCase": true}));
+    assert_eq!(v, Value::text("Hello X"));
+}
