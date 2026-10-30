@@ -99,7 +99,7 @@ fn open_wrapped_column(hidden: bool, width: Option<f32>, custom_height: bool) ->
 #[test]
 fn imported_wrapped_rows_use_hidden_columns_stored_width() {
     let mut heights = Vec::new();
-    for width in [None, Some(56.0), Some(120.0)] {
+    for width in [None, Some(56.0), Some(80.0), Some(120.0)] {
         let visible = open_wrapped_column(false, width, false);
         let hidden = open_wrapped_column(true, width, false);
         let expected = visible.doc().unwrap().wb.active().unwrap().row_height(0);
@@ -109,14 +109,15 @@ fn imported_wrapped_rows_use_hidden_columns_stored_width() {
         assert!(sh.cols.get(&1).unwrap().hidden, "fitting must not unhide the column");
         heights.push(expected);
     }
-    assert!(heights[1] > heights[2], "a narrow stored width must wrap onto more lines than a wide one");
+    assert_eq!(heights[0], heights[2], "an absent stored width must use the sheet default");
+    assert!(heights[1] > heights[3], "a narrow stored width must wrap onto more lines than a wide one");
 }
 
 /// Explicit AutoFit includes hidden text, releases custom height and restores it on undo.
 #[test]
 fn explicit_row_autofit_uses_hidden_columns_stored_or_default_width() {
     let mut heights = Vec::new();
-    for width in [None, Some(56.0), Some(120.0)] {
+    for width in [None, Some(56.0), Some(80.0), Some(120.0)] {
         let mut fitted = Vec::new();
         for hidden in [false, true] {
             let mut s = Session::new();
@@ -138,7 +139,8 @@ fn explicit_row_autofit_uses_hidden_columns_stored_or_default_width() {
         assert_eq!(fitted[0], fitted[1], "hidden and visible columns must have the same AutoFit wrap width: {width:?}");
         heights.push(fitted[0]);
     }
-    assert!(heights[1] > heights[2], "AutoFit must use the stored width when present");
+    assert_eq!(heights[0], heights[2], "an absent stored width must use the sheet default");
+    assert!(heights[1] > heights[3], "AutoFit must use the stored width when present");
 }
 
 /// Opening a workbook preserves custom row heights whether the wrapped column is hidden or visible.
