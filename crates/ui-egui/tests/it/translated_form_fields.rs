@@ -42,7 +42,7 @@ fn notes_with_a_pipe_show_in_full() {
 }
 
 #[test]
-fn chart_legend_positions_are_translated() {
+fn chart_format_pane_is_translated() {
     let mut h = harness();
     let session = &mut h.state_mut().session;
     session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
@@ -53,13 +53,27 @@ fn chart_legend_positions_are_translated() {
     h.state_mut().selected_chart = Some(chart["chart"].as_u64().unwrap() as u32);
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Légende").click();
-    h.run_steps(2);
-    for english in ["Legend|None", "Bottom", "Top", "Left", "Right"] {
-        let translated = Language::Fr.tr(english);
-        assert!(h.query_all_by_label(translated).next().is_some(), "no {translated}");
-    }
-    for english in ["None", "Bottom", "Top", "Left", "Right"] {
-        assert!(h.query_all_by_label(english).next().is_none(), "{english} is untranslated");
+    // One section at a time: open together they overflow the pane and the clipped widgets leave the tree.
+    let sections: [(&str, &[&str]); 7] = [
+        ("Chart Title", &[]),
+        ("Chart Type", &["Stacked Column", "Doughnut"]),
+        ("Legend", &["Legend|None", "Bottom", "Top", "Left", "Right"]),
+        ("Elements", &["Data Labels", "Gridlines", "Horizontal axis title:"]),
+        ("Series", &["Fill…"]),
+        ("Colors & Layout", &["Colorful", "Monochromatic", "Accent1", "Layout {n}"]),
+        ("Size", &[]),
+    ];
+    let triangle = egui::accesskit::Role::DisclosureTriangle;
+    for (section, labels) in sections {
+        h.get_by_role_and_label(triangle, Language::Fr.tr(section)).click();
+        h.run_steps(2);
+        for english in labels {
+            let translated = Language::Fr.tr(english).replace("{n}", "1");
+            assert!(h.query_all_by_label(&translated).next().is_some(), "{section}: no {translated}");
+            let english = english.rsplit_once('|').map_or(*english, |(_, label)| label).replace("{n}", "1");
+            assert!(h.query_all_by_label(&english).next().is_none(), "{section}: {english} is untranslated");
+        }
+        h.get_by_role_and_label(triangle, Language::Fr.tr(section)).click();
+        h.run_steps(2);
     }
 }
