@@ -4,7 +4,7 @@ use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
-use super::database::{db_import_params, from_database};
+use super::database::{db_import_params, from_database, run_confirmed, stop_waiting, wait_row};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
@@ -370,6 +370,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
+            wait_row(app, ui, &mut d);
         });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
@@ -396,9 +397,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
-        match app.run(cmd, params) {
+    let ran = run_confirmed(app, &mut d, &mut confirm);
+    if let Some(result) = ran {
+        match result {
             Ok(r) => {
                 open = false;
                 if d.name == "solver" {
@@ -421,8 +422,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
-    } else if confirm {
+    } else if confirm && d.command.is_none() {
         open = false;
+    }
+    if !open {
+        stop_waiting(app, &d);
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new

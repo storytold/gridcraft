@@ -23,6 +23,7 @@ pub mod code_editor;
 pub mod control;
 mod craft_fonts_policy;
 pub mod credits;
+mod db_jobs;
 pub mod dialogs;
 pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -301,12 +302,23 @@ pub struct SheetApp {
     /// The update check, the startup prompt and a running self-update (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,
+    /// Database requests running in the background (see [`db_jobs`]).
+    db_jobs: Option<db_jobs::DbJobs>,
+    /// A database command from the ribbon, a keytip or command search, or a dialog's, waiting
+    /// for its answers.
+    db_waiting: Option<db_jobs::Waiting>,
 }
 
-/// Data › Refresh All: database tables, then PivotTables. Failures are listed in one message.
+/// Data › Refresh All: database tables, then PivotTables, with the database requests in the
+/// background.
 pub(crate) fn refresh_all(app: &mut SheetApp) {
+    app.run_db_or_alert("data.refreshAll", serde_json::json!({}));
+}
+
+/// Shows what Refresh All did: failures in one message, else a count.
+pub(crate) fn refresh_all_result(app: &mut SheetApp, r: Result<serde_json::Value, String>) {
     let title = app.ui.language.tr("Refresh All").to_string();
-    match app.run("data.refreshAll", serde_json::json!({})) {
+    match r {
         Ok(r) => {
             let errors: Vec<String> = r["errors"]
                 .as_array()

@@ -70,6 +70,12 @@ pub struct DbTable {
     pub truncated: bool,
 }
 
+/// The error a [`DataSource`] returns for a request it has started in the background (the
+/// desktop app, so the window keeps drawing). The command fails with it before changing
+/// anything; the host runs the same command again once the answer is in, and the source then
+/// returns it at once.
+pub const PENDING: &str = "Waiting for the database…";
+
 /// Runs a query. Implementations must honour `max_rows` and `timeout_secs` and never panic.
 pub type DataSource = Arc<dyn Fn(&DbRequest) -> Result<DbTable, String> + Send + Sync>;
 
@@ -134,12 +140,13 @@ pub fn redact(connection: &str) -> String {
     {
         return format!("{scheme}://{user}:***@{host}");
     }
-    // Key-value form (ODBC `PWD=…;`, libpq `password=… `): blank out each secret value.
+    // Key-value form (ODBC `PWD=…;`, libpq `password=… `, URL query `?password=…&`): blank out
+    // each secret value.
     let lower = connection.to_ascii_lowercase();
     let mut out = String::with_capacity(connection.len());
     let mut i = 0;
     while i < connection.len() {
-        let hit = ["pwd=", "password="].iter().find(|k| lower[i..].starts_with(**k) && (i == 0 || lower[..i].ends_with([';', ' ', '\t'])));
+        let hit = ["pwd=", "password="].iter().find(|k| lower[i..].starts_with(**k) && (i == 0 || lower[..i].ends_with([';', ' ', '\t', '?', '&'])));
         match hit {
             Some(k) => {
                 out.push_str(&connection[i..i + k.len()]);

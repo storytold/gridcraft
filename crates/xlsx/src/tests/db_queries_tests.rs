@@ -63,3 +63,37 @@ fn no_part_without_queries() {
     let pkg = String::from_utf8_lossy(&bytes);
     assert!(!pkg.contains("gridcraftDbQueries"));
 }
+
+#[test]
+fn queries_take_free_part_names_next_to_kept_custom_xml() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::parse("A1").unwrap(), Value::text("id"));
+    sh.set_value(CellRef::parse("A2").unwrap(), Value::Number(1.0));
+    sh.tables.push(table(7, "Orders", "A1:A2"));
+    wb.db_queries = vec![query(7)];
+    // Another tool's custom XML that happens to use the same part name, kept from the source file.
+    let other = b"<?xml version=\"1.0\"?><other xmlns=\"urn:example:other\">kept</other>".to_vec();
+    wb.preserved = Some(std::sync::Arc::new(preserved::Preserved {
+        rels: vec![preserved::PreservedRel {
+            id: "rId90".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml".into(),
+            target: "customXml/gridcraftDbQueries.xml".into(),
+            external: false,
+        }],
+        parts: vec![preserved::PreservedPart {
+            name: "customXml/gridcraftDbQueries.xml".into(),
+            content_type: "application/xml".into(),
+            data: other.into(),
+            rels: vec![],
+        }],
+        ..Default::default()
+    }));
+    let bytes = write_xlsx(&wb).expect("saving must not fail on a duplicate part name");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let tid = back.sheet(0).unwrap().tables[0].id;
+    assert_eq!(back.db_queries, vec![DbQuery { table_id: tid, ..query(7) }]);
+    let kept = back.preserved.as_ref().map(|p| p.parts.iter().map(|x| x.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
+    assert!(kept.iter().any(|n| n == "customXml/gridcraftDbQueries.xml"), "the other part is kept: {kept:?}");
+    assert!(write_xlsx(&back).is_ok());
+}

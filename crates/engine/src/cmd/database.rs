@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "From Database",
             ["Data", "Get & Transform Data"],
             None,
-            "{driver: postgres|mysql|sqlite|odbc, connection: URL, file path or ODBC connection string (no password), query: SQL | table + schema? + columns?: [names] (blank = all), user?, password?, sheet?: new sheet name, maxRows?: 1..1048575, timeout?: seconds 1..3600} → imports the result into a new sheet as a table that Data › Refresh runs again",
+            "{driver: postgres|mysql|sqlite|odbc, connection: URL, file path or ODBC connection string (no password; TLS: PostgreSQL `sslmode=disable|prefer|require|verify-ca|verify-full`, MySQL `ssl-mode=DISABLED|PREFERRED|REQUIRED|VERIFY_CA|VERIFY_IDENTITY`, default prefer), query: SQL | table + schema? + columns?: [names] (blank = all), user?, password?, sheet?: new sheet name, maxRows?: 1..1048575, timeout?: seconds 1..3600} → imports the result into a new sheet as a table that Data › Refresh runs again",
             has_doc,
             from_database
         ),
@@ -391,14 +391,21 @@ fn ask_trust(s: &mut Session, tname: &str) -> Result<()> {
     Ok(())
 }
 
-/// Runs `q` again and replaces the data of its table. A query read from a file and not yet
-/// trusted asks the host first and returns `{needTrust: true}`; without a needed password, asks
-/// for one and returns `{needPassword: true}`.
-fn refresh_query(s: &mut Session, q: &DbQuery, tname: &str, password: Option<&str>) -> Result<Json> {
+/// What refreshing a query needs before it can run.
+enum Ready {
+    /// Its connection and row limit.
+    Run(Conn, usize),
+    /// An answer from the user first (the host was asked); the command's response.
+    Ask(Json),
+}
+
+/// Checks that `q` may run: a query read from a file and not yet trusted asks the host first
+/// (`{needTrust: true}`), and so does one without a password it needs (`{needPassword: true}`).
+fn ready(s: &mut Session, q: &DbQuery, tname: &str, password: Option<&str>) -> Result<Ready> {
     const ID: &str = "data.refresh";
     if !q.trusted {
         ask_trust(s, tname)?;
-        return Ok(json!({"table": tname, "needTrust": true}));
+        return Ok(Ready::Ask(json!({"table": tname, "needTrust": true})));
     }
     let mut params = json!({"driver": q.driver, "connection": q.connection, "user": q.user});
     if let Some(pw) = password.filter(|x| !x.is_empty()) {
@@ -410,11 +417,30 @@ fn refresh_query(s: &mut Session, q: &DbQuery, tname: &str, password: Option<&st
             "dbPassword".into(),
             json!({"table": tname, "connection": crate::datasource::redact(&q.connection), "user": q.user}),
         ));
-        return Ok(json!({"table": tname, "needPassword": true}));
+        return Ok(Ready::Ask(json!({"table": tname, "needPassword": true})));
     }
-    let max_rows = q.max_rows.unwrap_or(DEFAULT_MAX_ROWS).clamp(1, DEFAULT_MAX_ROWS);
-    let result = run_op(s, &c, DbOp::Query, q.query.clone(), max_rows, q.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS))?;
-    refill(s, q.table_id, tname, &result, max_rows)
+    Ok(Ready::Run(c, q.max_rows.unwrap_or(DEFAULT_MAX_ROWS).clamp(1, DEFAULT_MAX_ROWS)))
+}
+
+fn fetch(s: &Session, q: &DbQuery, c: &Conn, max_rows: usize) -> Result<DbTable> {
+    run_op(s, c, DbOp::Query, q.query.clone(), max_rows, q.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS))
+}
+
+/// The error of a request the data source is still running in the background.
+fn is_pending(e: &EngineError) -> bool {
+    matches!(e, EngineError::Other(m) if m == crate::datasource::PENDING)
+}
+
+/// Runs `q` again and replaces the data of its table, or asks the host for what it needs first
+/// (see [`ready`]).
+fn refresh_query(s: &mut Session, q: &DbQuery, tname: &str, password: Option<&str>) -> Result<Json> {
+    match ready(s, q, tname, password)? {
+        Ready::Ask(r) => Ok(r),
+        Ready::Run(c, max_rows) => {
+            let result = fetch(s, q, &c, max_rows)?;
+            refill(s, q.table_id, tname, &result, max_rows)
+        }
+    }
 }
 
 /// Replaces a table's header and data with `table`, growing or shrinking it from its top-left
@@ -514,13 +540,19 @@ pub(crate) struct RefreshAll {
 }
 
 /// Refreshes every database query of the workbook (Data › Refresh All). `trust` enables the
-/// queries read from the file first; without it, they wait and the host is asked once.
+/// queries read from the file first; without it, they wait and the host is asked once. Every
+/// query runs before any table changes, so a request still running in the background
+/// ([`crate::datasource::PENDING`]) fails the command with nothing changed (and the other
+/// requests started meanwhile).
 pub(crate) fn refresh_all(s: &mut Session, trust: bool) -> Result<RefreshAll> {
     if trust {
         trust_queries(s)?;
     }
     let queries = s.doc()?.wb.db_queries.clone();
+    let asked_before = s.ui_requests.len();
     let mut out = RefreshAll { refreshed: 0, errors: vec![], need_password: vec![], need_trust: vec![] };
+    let mut fetched = vec![];
+    let mut pending = false;
     for q in queries {
         let Some(tname) = s.doc()?.wb.sheets.iter().flat_map(|sh| sh.tables.iter()).find(|t| t.id == q.table_id).map(|t| t.name.clone()) else {
             continue;
@@ -536,8 +568,8 @@ pub(crate) fn refresh_all(s: &mut Session, trust: bool) -> Result<RefreshAll> {
             continue;
         }
         let asked = s.ui_requests.len();
-        match refresh_query(s, &q, &tname, None) {
-            Ok(r) if r.get("needPassword").is_some() => {
+        match ready(s, &q, &tname, None) {
+            Ok(Ready::Ask(_)) => {
                 // Ask for one password at a time (and not while the trust question is open);
                 // after it, Refresh All carries on.
                 if out.need_password.is_empty() && out.need_trust.is_empty() {
@@ -549,6 +581,19 @@ pub(crate) fn refresh_all(s: &mut Session, trust: bool) -> Result<RefreshAll> {
                 }
                 out.need_password.push(tname);
             }
+            Ok(Ready::Run(c, max_rows)) => match fetch(s, &q, &c, max_rows) {
+                Err(e) if is_pending(&e) => pending = true,
+                r => fetched.push((q, tname, max_rows, r)),
+            },
+            Err(e) => out.errors.push(json!({"table": tname, "error": e.to_string()})),
+        }
+    }
+    if pending {
+        s.ui_requests.truncate(asked_before);
+        return Err(EngineError::Other(crate::datasource::PENDING.into()));
+    }
+    for (q, tname, max_rows, r) in fetched {
+        match r.and_then(|t| refill(s, q.table_id, &tname, &t, max_rows)) {
             Ok(_) => out.refreshed += 1,
             Err(e) => out.errors.push(json!({"table": tname, "error": e.to_string()})),
         }
@@ -867,6 +912,8 @@ mod tests {
         for (driver, connection) in [
             ("postgres", "postgres://u:secret@h/db"),
             ("postgres", "host=h user=u password=secret"),
+            ("postgres", "postgres://u@h/db?password=secret"),
+            ("postgres", "postgres://u@h/db?sslmode=disable&password=secret"),
             ("odbc", "DSN=sales;UID=u;PWD=secret"),
             ("sqlite", "\\\\attacker\\share\\x.db"),
             ("sqlite", "//attacker/share/x.db"),
@@ -892,5 +939,35 @@ mod tests {
         ] {
             s.execute("data.fromDatabase", json!({"driver": driver, "connection": connection, "query": "select 1"})).unwrap();
         }
+    }
+
+    #[test]
+    fn a_request_still_running_changes_nothing() {
+        let (mut s, next, seen) = swappable();
+        *next.lock().unwrap() = ints(&["a"], &[&[1]]);
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "q1", "sheet": "One"})).unwrap();
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "q2", "sheet": "Two"})).unwrap();
+        let sheets = s.active().unwrap().wb.sheets.len();
+        let undo = s.active().unwrap().undo.len();
+        // The host answers "still running" to every request.
+        let inner = s.data_source.clone().unwrap();
+        s.data_source = Some(Arc::new(|_: &DbRequest| Err(crate::datasource::PENDING.to_string())));
+        *next.lock().unwrap() = ints(&["a"], &[&[1], &[2]]);
+        for (id, p) in [
+            ("data.refreshAll", json!({})),
+            ("data.refresh", json!({})),
+            ("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "q3"})),
+        ] {
+            let e = s.execute(id, p).unwrap_err();
+            assert_eq!(e.to_string(), crate::datasource::PENDING, "{id}");
+        }
+        assert_eq!(s.active().unwrap().wb.sheets.len(), sheets);
+        assert_eq!(s.active().unwrap().undo.len(), undo, "no table changed");
+        assert!(s.take_ui_requests().is_empty());
+        // The answers are in: the same command runs to the end.
+        s.data_source = Some(inner);
+        let r = s.execute("data.refreshAll", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 2);
+        assert_eq!(seen.lock().unwrap().len(), 4);
     }
 }

@@ -6,10 +6,20 @@ use odbc_api::buffers::TextRowSet;
 use odbc_api::parameter::VarCharArray;
 use odbc_api::{ConnectionOptions, Cursor, DataType, ResultSetMetadata};
 
-/// Rows fetched per round trip.
+/// Rows fetched per round trip, at most.
 const BATCH: usize = 1000;
 /// Longest text read from one value; longer values are cut.
 const MAX_STR: usize = 32_767;
+/// Memory the fetch buffer may take: wide rows (many `NVARCHAR(MAX)` or `TEXT` columns, each
+/// read up to `MAX_STR`) fetch fewer rows per round trip instead of growing it.
+const BUFFER_BYTES: usize = 64 << 20;
+
+/// Rows per fetch for columns whose longest text is `lens` (`None` = unbounded).
+fn batch_size(lens: impl IntoIterator<Item = Option<usize>>) -> usize {
+    // Each value: its text, a terminating zero and a length indicator.
+    let row: usize = lens.into_iter().map(|l| l.unwrap_or(MAX_STR).min(MAX_STR) + 1 + 8).sum();
+    (BUFFER_BYTES / row.max(1)).clamp(1, BATCH)
+}
 
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let env = odbc_api::environment().map_err(|e| format!("ODBC: {e}"))?;
@@ -60,7 +70,15 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
         columns.push(cursor.col_name(c).map_err(|e| format!("ODBC: {e}"))?);
         types.push(cursor.col_data_type(c).unwrap_or(DataType::Unknown));
     }
-    let buffer = TextRowSet::for_cursor(BATCH, &mut cursor, Some(MAX_STR)).map_err(|e| format!("ODBC: {e}"))?;
+    let mut lens = Vec::with_capacity(types.len());
+    for (c, ty) in (1..=n).zip(&types) {
+        let len = match ty.utf8_len() {
+            Some(l) => Some(l),
+            None => cursor.col_display_size(c).map_err(|e| format!("ODBC: {e}"))?,
+        };
+        lens.push(len.map(std::num::NonZeroUsize::get));
+    }
+    let buffer = TextRowSet::for_cursor(batch_size(lens), &mut cursor, Some(MAX_STR)).map_err(|e| format!("ODBC: {e}"))?;
     let mut rows = cursor.bind_buffer(buffer).map_err(|e| format!("ODBC: {e}"))?;
     let mut table = DbTable { columns, rows: Vec::new(), truncated: false };
     'fetch: while let Some(batch) = rows.fetch().map_err(|e| format!("ODBC: {e}"))? {
@@ -102,6 +120,15 @@ fn value(s: &str, ty: &DataType) -> DbValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_rows_fetch_fewer_rows() {
+        assert_eq!(batch_size([Some(10), Some(50)]), BATCH);
+        // Thirty unbounded columns: about 1 GB at 1,000 rows, so fewer rows per fetch.
+        let n = batch_size(std::iter::repeat_n(None, 30));
+        assert!(n < BATCH && n * 30 * (MAX_STR + 9) <= BUFFER_BYTES, "{n}");
+        assert_eq!(batch_size(std::iter::repeat_n(None, 100_000)), 1);
+    }
 
     #[test]
     fn braced_escapes() {
