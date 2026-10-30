@@ -180,12 +180,17 @@ impl PassHost<'_> {
         }
     }
 
+    /// `k`'s result in this pass, if it has one.
+    fn known(&mut self, k: Key) -> Option<Value> {
+        let v = self.results.get(&k)?.clone();
+        if self.iterate && self.tainted.contains(&k) {
+            self.taint = true;
+        }
+        Some(v)
+    }
+
     fn compute(&mut self, k: Key) -> Value {
-        if let Some(v) = self.results.get(&k) {
-            let v = v.clone();
-            if self.iterate && self.tainted.contains(&k) {
-                self.taint = true;
-            }
+        if let Some(v) = self.known(k) {
             return v;
         }
         let Some(expr) = self.exprs.get(&k) else {
@@ -424,7 +429,11 @@ impl Host for PassHost<'_> {
     }
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
         let k = (sheet, c);
-        if self.pending.contains(&k) || self.results.contains_key(&k) {
+        // Most reads are of formulas already calculated in this pass: one lookup for those.
+        if let Some(v) = self.known(k) {
+            return v;
+        }
+        if self.pending.contains(&k) {
             return self.compute(k);
         }
         // A cell covered by a spill computed in this pass.
