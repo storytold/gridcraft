@@ -1170,3 +1170,31 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }
+
+#[test]
+/// File › Options › "After pressing Enter, move selection" sets where Enter goes (#2930).
+fn enter_follows_the_after_pressing_enter_option() {
+    let mut h = harness(blank());
+    let active = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().selection.active.a1();
+    h.state_mut().session.run("selection.set", json!({"cell": "B2"})).unwrap();
+    h.state_mut().session.run("options.enterDirection", json!({"direction": "right"})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C2", "Enter moves right");
+    key(&mut h, Key::Enter, Modifiers::SHIFT);
+    assert_eq!(active(&h), "B2", "Shift+Enter goes the other way");
+    text(&mut h, "5");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::Number(5.0));
+    assert_eq!(active(&h), "C2", "entering a cell moves right too");
+
+    h.state_mut().session.run("options.enterDirection", json!({"move": false})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C2", "with the move off Enter stays put");
+    text(&mut h, "7");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "C2"), Value::Number(7.0));
+    assert_eq!(active(&h), "C2", "and enters the cell without moving");
+    assert!(h.state().editor.is_none());
+}

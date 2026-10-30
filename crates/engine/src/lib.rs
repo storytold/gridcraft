@@ -411,6 +411,20 @@ impl Default for StatusBarStats {
     }
 }
 
+impl Prefs {
+    /// Where Enter moves the selection after entering a cell, as (rows, columns): (1, 0) is down,
+    /// (0, 0) stays put. An unknown direction (a hand-edited prefs.json) moves down.
+    pub fn enter_step(&self) -> (i64, i64) {
+        match self.enter_direction.as_str() {
+            "none" => (0, 0),
+            "right" => (0, 1),
+            "up" => (-1, 0),
+            "left" => (0, -1),
+            _ => (1, 0),
+        }
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {

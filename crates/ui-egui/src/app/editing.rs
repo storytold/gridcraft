@@ -183,7 +183,11 @@ impl SheetApp {
     }
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
+    /// (0, 0) stays put: Enter with "After pressing Enter, move selection" turned off.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
+        if dr == 0 && dc == 0 {
+            return;
+        }
         let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());
         // Any other move (arrows, clicks, another sheet) leaves the selection off the cell the
         // last Tab landed on, which ends the run.
