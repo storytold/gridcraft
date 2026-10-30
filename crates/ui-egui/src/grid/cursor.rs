@@ -1,5 +1,5 @@
 use super::geo::Geo;
-use super::interact::{OBJECT_RESIZE_RADIUS, col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
+use super::interact::{OBJECT_RESIZE_RADIUS, col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, ref_hit, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
@@ -53,7 +53,8 @@ fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-        Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+        Drag::Object { resize: true, .. } | Drag::Ref { anchor: Some(_), .. } => Some(CursorIcon::ResizeNwSe),
+        Drag::Ref { anchor: None, .. } => Some(CursorIcon::Move),
     }
 }
 
@@ -81,6 +82,8 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
         ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
     } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
         header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
+    } else if let Some(Drag::Ref { anchor, .. }) = in_cells.then(|| ref_hit(app, geo, sh, p)).flatten() {
+        ctx.set_cursor_icon(if anchor.is_some() { CursorIcon::ResizeNwSe } else { CursorIcon::Move });
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.grid.drag == Drag::None && !pointer.any_down() {
