@@ -13,6 +13,27 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// Bounds uncharged index traversal between persistent refusal/cancellation checkpoints.
+const SCAN_CHUNK: usize = 256;
+
+/// Charges actual index entries in bounded chunks, including keys outside a rectangular
+/// range that lie inside its row-major key interval. Unmetered hosts skip this counting pass.
+fn charge_scan(hook: Option<&crate::WorkHook>, mut entries: impl Iterator) -> bool {
+    let Some(hook) = hook else { return true };
+    loop {
+        if !hook.charge(0) {
+            return false;
+        }
+        let count = entries.by_ref().take(SCAN_CHUNK).count();
+        if count == 0 {
+            return true;
+        }
+        if !hook.charge(count as u64) {
+            return false;
+        }
+    }
+}
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -64,12 +85,52 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    pub(super) work: Option<crate::WorkHook>,
+    simulation: Option<crate::SimulationHook>,
 }
 
 impl<'a> PassHost<'a> {
+    /// Copies only the intersection of newly calculated arrays and the requested rectangle.
+    /// Each array lookup and intersecting copy is charged; no temporary full-spill expansion
+    /// is allocated. Iterative-calculation taint follows the same intersections as before.
+    fn overlay_spills(&mut self, sheet: usize, range: RangeRef, width: usize, out: &mut [Value]) -> bool {
+        for (anchor, array) in &self.spills {
+            if self.work.as_ref().is_some_and(|hook| !hook.charge(1)) {
+                return false;
+            }
+            if anchor.0 != sheet {
+                continue;
+            }
+            let end = CellRef::new(
+                anchor.1.row.saturating_add((array.rows as u32).saturating_sub(1)),
+                anchor.1.col.saturating_add((array.cols as u32).saturating_sub(1)),
+            );
+            let Some(overlap) = RangeRef::new(anchor.1, end).intersection(&range) else { continue };
+            if self.work.as_ref().is_some_and(|hook| !hook.charge(overlap.count())) {
+                return false;
+            }
+            self.taint |= self.iterate && self.tainted.contains(anchor);
+            for (offset, cell) in overlap.iter().enumerate() {
+                if offset.is_multiple_of(SCAN_CHUNK) && self.work.as_ref().is_some_and(|hook| !hook.charge(0)) {
+                    return false;
+                }
+                if cell != anchor.1 {
+                    let i = (cell.row - range.start.row) as usize * width + (cell.col - range.start.col) as usize;
+                    if let Some(slot) = out.get_mut(i) {
+                        *slot = array.get((cell.row - anchor.1.row) as usize, (cell.col - anchor.1.col) as usize).cloned().unwrap_or_default();
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Captures the current host policy once for a recalculation pass and its native kernels.
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
         PassHost {
             wb,
+            work: crate::WorkHook::current(),
+            simulation: crate::SimulationHook::current(),
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
             pending: exprs.keys().copied().collect(),
@@ -393,6 +454,10 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 }
 
 impl Host for PassHost<'_> {
+    /// Propagates the same work policy through native calls, broadcasts and formula evaluation.
+    fn charge_work(&mut self, units: u64) -> bool {
+        self.work.as_ref().is_none_or(|hook| hook.charge(units))
+    }
     fn workbook(&self) -> &Workbook {
         self.wb
     }
@@ -441,7 +506,11 @@ impl Host for PassHost<'_> {
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
+    /// Reserves rectangular materialization work before allocating values, including blanks.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        if !self.charge_work(range.count()) {
+            return vec![Value::Error(CellError::Num)];
+        }
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
@@ -456,7 +525,13 @@ impl Host for PassHost<'_> {
                 *slot = cell.value.clone();
             }
         }
-        for (c, v) in sh.spill.range(range.start..=range.end) {
+        if !charge_scan(self.work.as_ref(), sh.spill.range(range.start..=range.end)) {
+            return vec![Value::Error(CellError::Num)];
+        }
+        for (offset, (c, v)) in sh.spill.range(range.start..=range.end).enumerate() {
+            if offset.is_multiple_of(SCAN_CHUNK) && self.work.as_ref().is_some_and(|hook| !hook.charge(0)) {
+                return vec![Value::Error(CellError::Num)];
+            }
             if range.contains(*c) {
                 let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
                 if let Some(slot) = out.get_mut(i)
@@ -472,50 +547,24 @@ impl Host for PassHost<'_> {
                 *slot = v;
             }
         }
-        if !self.spills.is_empty() {
-            let new: Vec<(usize, Value)> = self
-                .spills
-                .iter()
-                .filter(|(a, _)| a.0 == sheet)
-                .flat_map(|(a, arr)| {
-                    let mut v = Vec::new();
-                    for r in 0..arr.rows {
-                        for cc in 0..arr.cols {
-                            let c = CellRef::new(a.1.row.saturating_add(r as u32), a.1.col.saturating_add(cc as u32));
-                            if c != a.1 && range.contains(c) {
-                                v.push((
-                                    (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize,
-                                    arr.get(r, cc).cloned().unwrap_or_default(),
-                                ));
-                            }
-                        }
-                    }
-                    v
-                })
-                .collect();
-            // Iterating: an array spilled by a formula that read a previous value.
-            if self.iterate
-                && self.spills.iter().any(|(a, arr)| {
-                    let end = CellRef::new(
-                        a.1.row.saturating_add((arr.rows as u32).saturating_sub(1)),
-                        a.1.col.saturating_add((arr.cols as u32).saturating_sub(1)),
-                    );
-                    a.0 == sheet && self.tainted.contains(a) && RangeRef::new(a.1, end).intersects(&range)
-                })
-            {
-                self.taint = true;
-            }
-            for (i, v) in new {
-                if let Some(slot) = out.get_mut(i) {
-                    *slot = v;
-                }
-            }
+        if !self.overlay_spills(sheet, range, w, &mut out) {
+            return vec![Value::Error(CellError::Num)];
         }
         out
     }
+    /// Charges stored cells and spill traversal without billing virtual whole-column blanks.
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
+        // Sparse aggregations must charge the work they visit, not millions of virtual blanks.
+        if !self.charge_work(1) {
+            f(&Value::Error(CellError::Num));
+            return true;
+        }
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
+        if !charge_scan(self.work.as_ref(), sh.cells.iter_range(range)) || !charge_scan(self.work.as_ref(), sh.spill.range(range.start..=range.end)) {
+            f(&Value::Error(CellError::Num));
+            return true;
+        }
         // Formula cells first, in row-major order like `range_values`: reading one calculates it
         // and the pass remembers the value, so the walk below gets the same value again without
         // this method holding any.
@@ -526,8 +575,17 @@ impl Host for PassHost<'_> {
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
         // produced some): leave such blocks to `range_values`.
-        if self.spills.keys().any(|a| a.0 == sheet) || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c)) {
+        if self.spills.keys().any(|a| a.0 == sheet) {
             return false;
+        }
+        for (offset, (cell, _)) in sh.spill.range(range.start..=range.end).enumerate() {
+            if offset.is_multiple_of(SCAN_CHUNK) && self.work.as_ref().is_some_and(|hook| !hook.charge(0)) {
+                f(&Value::Error(CellError::Num));
+                return true;
+            }
+            if range.contains(*cell) {
+                return false;
+            }
         }
         for (c, cell) in sh.cells.iter_range(range) {
             let go = if cell.formula.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
@@ -552,5 +610,63 @@ impl Host for PassHost<'_> {
         x ^= x >> 27;
         *self.rng = x;
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Uses the pass-captured simulation host rather than calc's unrelated volatile RNG.
+    fn simulation(&mut self, sheet: usize, cell: CellRef, request: crate::SimulationRequest<'_>) -> Option<Value> {
+        self.simulation.as_ref().map(|hook| hook.sample(crate::SimulationSite { sheet, cell }, request))
+    }
+}
+
+#[cfg(test)]
+mod spill_work_tests {
+    use std::{cell::Cell, sync::Arc};
+
+    use super::{Array, CellError, CellRef, HashMap, Host, PassHost, RangeRef, SCAN_CHUNK, Value, Workbook, charge_scan};
+    use crate::WorkHook;
+
+    /// A refused chunk cannot scan the rest of a large row-major interval.
+    #[test]
+    fn index_scan_stops_within_one_chunk_on_refusal() {
+        let seen = Cell::new(0usize);
+        let hook = WorkHook::new(|units| units < SCAN_CHUNK as u64);
+        let entries = (0..1_000_000).inspect(|_| seen.set(seen.get() + 1));
+        assert!(!charge_scan(Some(&hook), entries));
+        assert_eq!(seen.get(), SCAN_CHUNK);
+        assert!(!charge_scan(Some(&hook), (0..1_000_000).inspect(|_| seen.set(seen.get() + 1))));
+        assert_eq!(seen.get(), SCAN_CHUNK);
+    }
+
+    /// A tiny read of a new 10k-row spill copies and charges only its intersection.
+    #[test]
+    fn same_pass_spill_intersection_is_bounded_and_preserves_taint() {
+        let hook = WorkHook::new(|units| units <= 2);
+        let _scope = hook.enter().unwrap();
+        let wb = Workbook::new();
+        let exprs = HashMap::default();
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        let anchor = (0, CellRef::new(0, 25));
+        host.spills.insert(anchor, Arc::new(Array::column((0..10_000).map(|i| Value::Number(i as f64)).collect())));
+        host.iterate = true;
+        host.tainted.insert(anchor);
+        let range = RangeRef::new(CellRef::new(9998, 25), CellRef::new(9999, 25));
+        assert_eq!(host.range_values(0, range), vec![Value::Number(9998.0), Value::Number(9999.0)]);
+        assert!(host.taint);
+        assert!(hook.charge(0));
+    }
+
+    /// Refusal at the same-pass array lookup is terminal even for an unrelated small range.
+    #[test]
+    fn same_pass_spill_lookup_observes_work_refusal() {
+        let hook = WorkHook::new(|units| units != 1);
+        let _scope = hook.enter().unwrap();
+        let wb = Workbook::new();
+        let exprs = HashMap::default();
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        host.spills.insert((0, CellRef::new(1000, 25)), Arc::new(Array::column(vec![Value::Number(7.0); 10_000])));
+        assert_eq!(host.range_values(0, RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 0))), vec![Value::Error(CellError::Num)]);
+        assert!(!hook.charge(0));
     }
 }

@@ -221,6 +221,10 @@ fn n_or_div0(x: f64) -> Value {
 struct FnHost;
 
 impl gridcraft_functions::Ctx for FnHost {
+    /// Statistical helpers honor an enclosing analysis policy without depending on its engine type.
+    fn charge_work(&mut self, units: u64) -> bool {
+        gridcraft_calc::WorkHook::current().is_none_or(|hook| hook.charge(units))
+    }
     fn date_system(&self) -> DateSystem {
         DateSystem::D1900
     }
@@ -233,7 +237,7 @@ impl gridcraft_functions::Ctx for FnHost {
 }
 
 /// Calls a worksheet function on numeric arguments (and `cumulative` flags as booleans).
-fn call(name: &str, args: &[Value]) -> Value {
+pub(super) fn call(name: &str, args: &[Value]) -> Value {
     let Some(spec) = gridcraft_functions::lookup(name) else { return Value::Error(CellError::Name) };
     if args.iter().any(|a| a.as_f64().is_some_and(|v| !v.is_finite())) {
         return Value::Error(CellError::Num);

@@ -79,16 +79,21 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
-    // Replace an untouched blank Book1 like Excel does.
+    // Someone else may have made the file: its active content asks before it runs.
+    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
+    // Construction recalculates untrusted formulas. Refuse before replacing a blank or
+    // publishing any document/window; the command's workbook snapshot cannot undo either.
+    if !gridcraft_calc::WorkHook::allowed() {
+        return Err(crate::EngineError::Other("Opening stopped by its calculation work limit; existing documents were preserved.".into()));
+    }
+    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+        doc.content_kind = Some(crate::io::FileKind::Xlsx);
+    }
+    // Replace an untouched blank Book1 like Excel does, only after successful preparation.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
     {
         s.close_document(0);
-    }
-    // Someone else may have made the file: its active content asks before it runs.
-    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
-        doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
@@ -263,4 +268,57 @@ fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.close_window(id);
     Ok(json!({"closed": true, "document": true}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A rejected import cannot replace a blank, publish a partial document or alter windows.
+    #[test]
+    fn refused_open_preserves_empty_blank_and_existing_sessions() {
+        let mut source = Session::new();
+        source.new_workbook();
+        source.execute("cell.set", json!({"cell":"A1","input":"=SUM(1,2,3)"})).unwrap();
+        let bytes = gridcraft_xlsx::write_xlsx(&source.doc().unwrap().wb).unwrap();
+        let params = json!({"name":"bounded.xlsx","base64":crate::io::base64_encode(&bytes)});
+        for count in 0..=2 {
+            let mut session = Session::new();
+            for _ in 0..count {
+                session.new_workbook();
+            }
+            if count == 2 {
+                session.execute("cell.set", json!({"cell":"B1","input":"42"})).unwrap();
+                session.execute("cell.set", json!({"cell":"B1","input":"43"})).unwrap();
+                session.execute("edit.undo", json!({})).unwrap();
+            }
+            let windows = session.window_list();
+            let counters = (session.active, session.active_window, session.next_window, session.activation);
+            let journal = session.journal.clone();
+            let docs =
+                session.docs.iter().map(|d| (d.uid, d.wb.clone(), d.selection.clone(), d.revision, d.undo.len(), d.redo.len())).collect::<Vec<_>>();
+            {
+                let meter = crate::workload::Meter::ordinary();
+                meter.set_limit(1).unwrap();
+                let _scope = meter.hook().enter().unwrap();
+                assert!(session.execute("file.open", params.clone()).is_err());
+                assert!(meter.check().is_err());
+            }
+            assert_eq!(session.window_list(), windows);
+            assert_eq!((session.active, session.active_window, session.next_window, session.activation), counters);
+            assert_eq!(session.journal, journal);
+            assert_eq!(session.docs.len(), docs.len());
+            for (actual, (uid, wb, selection, revision, undo, redo)) in session.docs.iter().zip(docs) {
+                assert_eq!(actual.uid, uid);
+                assert!(Arc::ptr_eq(&actual.wb, &wb));
+                assert_eq!(actual.selection, selection);
+                assert_eq!(actual.revision, revision);
+                assert_eq!((actual.undo.len(), actual.redo.len()), (undo, redo));
+            }
+            session.execute("file.open", params.clone()).unwrap();
+            assert_eq!(session.docs.len(), if count < 2 { 1 } else { count + 1 });
+            assert_eq!(session.doc().unwrap().wb.active().unwrap().value(gridcraft_core::CellRef::default()).as_f64(), Some(6.));
+        }
+    }
 }

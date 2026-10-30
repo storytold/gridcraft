@@ -60,7 +60,8 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             _ => dynamic = true,
         },
         Expr::Call(n, _)
-            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
+            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO")
+                || gridcraft_functions::lookup(n).is_some_and(|spec| spec.volatile) =>
         {
             dynamic = true
         }

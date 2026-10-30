@@ -182,6 +182,9 @@ The MCP server offers tools such as `read_range`, `write_range`, `set_cell`, `ev
 pointer and keyboard input, dialogs and screenshots. See [`docs/mcp.md`](docs/mcp.md),
 [`docs/cli.md`](docs/cli.md) and [`docs/control-protocol.md`](docs/control-protocol.md).
 
+Generic [Monte Carlo simulation and a sample-derived tornado](docs/monte-carlo.md) are available
+under Data → Monte Carlo and through `execute_command` → `data.monteCarlo`.
+
 ## Architecture
 
 GridCraft is an engine-first Cargo workspace with enforced layering (`cargo xtask layers`). The

@@ -4,6 +4,15 @@ use super::{
 };
 
 impl SheetApp {
+    /// Uses cooperative execution for Monte Carlo dialogs while preserving synchronous callers
+    /// and existing action-recording/undo-group semantics.
+    pub(crate) fn run_dialog_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if id == "data.monteCarlo" && self.session.can_background_analysis() {
+            self.run("analysis.start", json!({"command":id,"params":params,"autoAdvance":true}))
+        } else {
+            self.run(id, params)
+        }
+    }
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let r = self.run_command(id, params);
@@ -114,7 +123,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {

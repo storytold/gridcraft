@@ -196,18 +196,44 @@ fn value_json(v: &Value) -> Json {
 pub(crate) struct Trial {
     base: Workbook,
     calc: Calc,
+    pub(crate) meter: crate::workload::Meter,
 }
 
 impl Trial {
+    /// Copies source calculation state while retaining the open workbook shared work bank.
     pub(crate) fn new(d: &DocState) -> Trial {
         let mut base = (*d.wb).clone();
         // What-if analysis always recalculates, even in manual mode.
         base.calc.mode = CalcMode::Automatic;
-        Trial { base, calc: d.calc.clone() }
+        let meter = crate::workload::Meter::new(d.analysis_budget.clone());
+        let calc = d.calc.clone();
+        Trial { base, calc, meter }
+    }
+
+    /// Charges preparation/evaluation work before execution and remembers any terminal failure.
+    pub(crate) fn charge(&mut self, units: u64) -> Result<()> {
+        self.meter.charge(units)
+    }
+
+    /// Checks the persistent meter, even when a formula handled the numeric failure itself.
+    pub(crate) fn check(&self) -> Result<()> {
+        self.meter.check()?;
+        if !gridcraft_calc::WorkHook::allowed() {
+            return Err(EngineError::Other("Analysis stopped by its shared work limit or cancellation.".into()));
+        }
+        Ok(())
+    }
+
+    /// Iterative solvers stop once work/cancellation fails instead of retrying the same point.
+    pub(crate) fn stopped(&self) -> bool {
+        self.check().is_err()
     }
 
     /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
-    pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
+    pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Result<Vec<Value>> {
+        let units = self.calc.formula_count().saturating_add(sets.len()).saturating_add(reads.len()).saturating_add(1) as u64;
+        self.charge(units)?;
+        let _scope = self.meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter analysis work scope.".into()))?;
         let mut wb = self.base.clone();
         let mut keys = Vec::with_capacity(sets.len());
         for (si, c, v) in sets {
@@ -218,7 +244,8 @@ impl Trial {
             }
         }
         self.calc.cells_changed(&mut wb, &keys);
-        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
+        self.check()?;
+        Ok(reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect())
     }
 }
 
@@ -316,6 +343,7 @@ pub(crate) fn seek(x0: f64, f: &mut dyn FnMut(f64) -> f64, max_iter: u32, tol: f
     done(&best, it)
 }
 
+/// Searches isolated trials and commits the candidate only if no terminal work error occurred.
 fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.goalSeek";
     let (ssi, set) = cell_arg(s, p, "set", CMD)?;
@@ -336,9 +364,15 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
     let mut trial = Trial::new(d);
     let mut f = |x: f64| -> f64 {
-        trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
+        trial
+            .run(&[(csi, chg, Value::number(x))], &[(ssi, set)])
+            .ok()
+            .and_then(|v| v.first().and_then(Value::as_f64))
+            .map(|v| v - target)
+            .unwrap_or(f64::NAN)
     };
     let r = seek(x0, &mut f, max_iter, tol);
+    trial.check()?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
@@ -354,6 +388,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
 
 const MAX_TABLE_CELLS: u64 = 100_000;
 
+/// Evaluates table substitutions under one persistent meter before writing the complete table.
 fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.dataTable";
     let (si, r) = range_arg(s, p, "range", CMD)?;
@@ -385,7 +420,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
             let reads: Vec<(usize, CellRef)> = (c0 + 1..=r.end.col).map(|c| (si, CellRef::new(r0, c))).collect();
             for row in r0 + 1..=r.end.row {
                 let v = sh.value(CellRef::new(row, c0));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
+                let vals = trial.run(&[(isi, ic, v)], &reads)?;
                 for (k, val) in vals.into_iter().enumerate() {
                     out.push((CellRef::new(row, c0 + 1 + k as u32), val));
                 }
@@ -396,7 +431,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
             let reads: Vec<(usize, CellRef)> = (r0 + 1..=r.end.row).map(|row| (si, CellRef::new(row, c0))).collect();
             for col in c0 + 1..=r.end.col {
                 let v = sh.value(CellRef::new(r0, col));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
+                let vals = trial.run(&[(isi, ic, v)], &reads)?;
                 for (k, val) in vals.into_iter().enumerate() {
                     out.push((CellRef::new(r0 + 1 + k as u32, col), val));
                 }
@@ -409,7 +444,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
                 let cv = sh.value(CellRef::new(row, c0));
                 for col in c0 + 1..=r.end.col {
                     let rv = sh.value(CellRef::new(r0, col));
-                    let vals = trial.run(&[(rsi, rc, rv), (csi, cc, cv.clone())], &reads);
+                    let vals = trial.run(&[(rsi, rc, rv), (csi, cc, cv.clone())], &reads)?;
                     out.push((CellRef::new(row, col), vals.into_iter().next().unwrap_or_default()));
                 }
             }

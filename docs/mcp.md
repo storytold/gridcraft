@@ -35,6 +35,9 @@ JSON config (`.mcp.json`, Claude Desktop, other clients):
 Use `"args": ["mcp", "--connect", "7979"]` for the desktop app, or `["mcp", "--in", "/path/book.xlsx"]` to start
 with a file open.
 
+A seeded, model-independent [Monte Carlo simulation and conditional tornado](monte-carlo.md)
+is available through `execute_command` → `data.monteCarlo`.
+
 ## Tools
 
 | Tool | Arguments | Does |

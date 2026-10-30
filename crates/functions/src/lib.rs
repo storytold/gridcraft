@@ -73,12 +73,14 @@ pub(crate) mod info;
 pub(crate) mod lift;
 pub(crate) mod lookup;
 pub(crate) mod math;
+pub(crate) mod monte_carlo;
 pub(crate) mod special;
 pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
 
 pub use ets::Timeline;
+pub use monte_carlo::SimulationRequest;
 pub use stat::{aggregate_values, aggregate_values_k};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
@@ -102,6 +104,20 @@ impl Arg {
 
 /// Services a function may need from the host.
 pub trait Ctx {
+    /// Charges conservative work units before native calculation or allocation. Returning false
+    /// stops the call with `#NUM!`. Budgeted hosts must latch refusals through the logical run,
+    /// including zero-unit checks and formula error handling. This cooperative checkpoint does not interrupt an indivisible native operation.
+    /// The default preserves existing hosts without imposing an engine dependency.
+    fn charge_work(&mut self, _units: u64) -> bool {
+        true
+    }
+    /// Requests a seeded simulation service from the embedding host. `None` means that no
+    /// Monte Carlo trial is active; the default never creates an RNG or imports engine policy.
+    /// An active host must latch [`SimulationRequest::Invalid`] through the trial, so formula
+    /// error handling cannot turn an invalid stochastic model into a successful simulation.
+    fn simulation(&mut self, _request: SimulationRequest<'_>) -> Option<Value> {
+        None
+    }
     fn date_system(&self) -> DateSystem;
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
@@ -206,6 +222,7 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
         let mut v: Vec<FnSpec> = Vec::new();
         for list in [
             math::specs(),
+            monte_carlo::specs(),
             stat::specs(),
             ets::specs(),
             text::specs(),
@@ -255,7 +272,14 @@ pub fn all() -> &'static [FnSpec] {
 /// Calls a function with array lifting applied. Wrong arity gives `#VALUE!`.
 pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
+        if spec.name.starts_with("MC.") {
+            let _ = ctx.simulation(SimulationRequest::Invalid);
+        }
         return Value::Error(CellError::Value);
+    }
+    let input_work = args.iter().fold(1u64, |units, arg| units.saturating_add(lift::value_work(&arg.value)));
+    if !ctx.charge_work(input_work) {
+        return Value::Error(CellError::Num);
     }
     lift::call_lifted(spec, args, ctx)
 }

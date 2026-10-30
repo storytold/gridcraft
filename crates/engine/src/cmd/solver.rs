@@ -161,6 +161,7 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
 
 // ---------------------------------------------------------------- command
 
+/// Solves within the shared trial budget and checks terminal failure before publishing edits.
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let active = d.wb.active_sheet();
@@ -213,6 +214,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let Solve { outcome, not_linear, evo_end } =
         optimise(&mut ev, &model, model.goal, &x0, Bounds { lo: &prob.lo, hi: &prob.hi, integer: &prob.integer }, gap);
+    ev.trial.check()?;
     let (status, message, solution) = match outcome {
         _ if not_linear => ("notLinear", "The model isn't linear in the variable cells, so Simplex LP can't solve it. Try GRG Nonlinear.", None),
         Outcome::Solved(x, _, true) if model.method == Method::Evolutionary => match evo_end {
@@ -243,6 +245,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         ev.budget = ev.budget.saturating_add(1);
         ev.eval(x).map(|p| p.f)
     });
+    ev.trial.check()?;
     let mut values = serde_json::Map::new();
     if let Some(x) = &solution {
         for (c, v) in model.vars.iter().zip(x) {

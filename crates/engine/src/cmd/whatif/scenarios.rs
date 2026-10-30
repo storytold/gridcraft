@@ -189,6 +189,7 @@ pub(super) fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"deleted": removed.name}))
 }
 
+/// Builds the scenario report from fallible isolated trials, preserving source assumptions.
 pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.scenarioSummary";
     let d = s.doc()?;
@@ -232,7 +233,7 @@ pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
             let sets: Vec<(usize, CellRef, Value)> = m.iter().map(|(c, v)| (si, *c, v.clone())).collect();
             trial.run(&sets, &reads)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let fmt_of = |c: CellRef| d.wb.styles.get(sh.style_id(c)).num_fmt.clone();
     let changing_fmts: Vec<_> = changing.iter().map(|c| fmt_of(*c)).collect();
     let result_fmts: Vec<_> = results.iter().map(|c| fmt_of(*c)).collect();
