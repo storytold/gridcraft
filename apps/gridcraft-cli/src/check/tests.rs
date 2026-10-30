@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_engine::model::Formula;
 
+use super::package::{CORE_PROPERTIES, core_properties, diff_core_properties};
 use super::*;
 
 #[test]
@@ -423,7 +424,8 @@ fn json_schema_keys() {
             "comments",
             "hyperlinks",
             "pivots",
-            "package"
+            "package",
+            "properties"
         ])
     );
     assert_eq!(keys(&f["roundTrip"]["categories"]["values"]), set(&["equal", "diffs", "examples"]));
@@ -447,4 +449,66 @@ fn json_schema_keys() {
         ])
     );
     assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
+}
+
+/// A one-sheet package whose `docProps/core.xml` holds `props` (inside `<cp:coreProperties>`).
+fn book_with_core(props: &str) -> Vec<u8> {
+    let core = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">{props}</cp:coreProperties>"#
+    );
+    zip_of(&[
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#,
+        ),
+        ("docProps/core.xml", &core),
+        (
+            "xl/workbook.xml",
+            r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
+        ),
+    ])
+}
+
+const ALL_CORE_PROPERTIES: &str = r#"<dc:title>Title &amp; more</dc:title><dc:subject>Subject</dc:subject><dc:creator>Author A</dc:creator><cp:keywords>k1; k2</cp:keywords><dc:description>Description</dc:description><cp:lastModifiedBy>Author B</cp:lastModifiedBy><cp:lastPrinted>2025-06-01T08:00:00Z</cp:lastPrinted><dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2025-06-30T17:45:00Z</dcterms:modified><cp:category>Configuration</cp:category><cp:contentStatus>Draft</cp:contentStatus><cp:revision>7</cp:revision><cp:version>1.0</cp:version><dc:identifier>id-1</dc:identifier><dc:language>en-US</dc:language>"#;
+
+#[test]
+fn round_trip_keeps_every_core_property() {
+    let r = check_bytes("props.xlsx", &book_with_core(ALL_CORE_PROPERTIES), &Options::default());
+    assert_eq!(r.error, None);
+    let props = r.round_trip.categories.iter().find(|c| c.name == "properties").unwrap();
+    assert_eq!((props.diffs, &props.examples), (0, &vec![]), "{:?}", r.round_trip);
+    assert_eq!(core_properties(&book_with_core(ALL_CORE_PROPERTIES)).unwrap().len(), CORE_PROPERTIES.len());
+}
+
+#[test]
+fn a_core_property_lost_or_changed_is_reported() {
+    let source = book_with_core(ALL_CORE_PROPERTIES);
+    let written = book_with_core(
+        &ALL_CORE_PROPERTIES
+            .replace(r#"<dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created>"#, "")
+            .replace("<cp:lastModifiedBy>Author B</cp:lastModifiedBy>", "<cp:lastModifiedBy>Someone</cp:lastModifiedBy>")
+            .replace("<cp:category>Configuration</cp:category>", "<cp:category></cp:category>"),
+    );
+    let c = diff_core_properties(&source, &written, 20);
+    assert_eq!(
+        c.examples,
+        ["property cp:lastModifiedBy changed: \"Author B\" → \"Someone\"", "property dcterms:created lost", "property cp:category lost",]
+    );
+    // A property the source doesn't set, or a source with no core part, isn't a difference.
+    assert_eq!(diff_core_properties(&book_with_core(""), &written, 20).diffs, 0);
+    assert_eq!(diff_core_properties(&zip_of(&[("a.xml", "<a/>")]), &written, 20).diffs, 0);
+    // The output losing its whole core part is reported property by property.
+    assert_eq!(diff_core_properties(&source, &zip_of(&[("a.xml", "<a/>")]), 20).diffs, CORE_PROPERTIES.len());
 }

@@ -87,14 +87,40 @@ pub struct DefinedName {
     pub hidden: bool,
 }
 
+/// Document properties (`docProps/core.xml`, plus Manager, Company and HyperlinkBase from
+/// `docProps/app.xml`). Values are
+/// kept as the file stores them; the dates are W3CDTF text such as `2024-01-15T09:30:00Z`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct DocProps {
     pub title: String,
     pub subject: String,
     pub author: String,
     pub company: String,
+    pub manager: String,
+    pub hyperlink_base: String,
     pub keywords: String,
     pub description: String,
+    /// `cp:lastModifiedBy`.
+    pub last_modified_by: String,
+    /// `dcterms:created`.
+    pub created: String,
+    /// `dcterms:modified`.
+    pub modified: String,
+    /// `cp:lastPrinted`.
+    pub last_printed: String,
+    /// `cp:category`.
+    pub category: String,
+    /// `cp:contentStatus` (Status).
+    pub content_status: String,
+    /// `cp:revision`.
+    pub revision: String,
+    /// `cp:version`.
+    pub version: String,
+    /// `dc:identifier`.
+    pub identifier: String,
+    /// `dc:language`.
+    pub language: String,
 }
 
 /// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the

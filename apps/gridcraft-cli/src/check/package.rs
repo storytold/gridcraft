@@ -329,3 +329,109 @@ fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str,
         buf.clear();
     }
 }
+
+/// The `docProps/core.xml` properties GridCraft keeps (`DocProps`), as Excel writes them.
+pub(super) const CORE_PROPERTIES: [&str; 15] = [
+    "dc:title",
+    "dc:subject",
+    "dc:creator",
+    "cp:keywords",
+    "dc:description",
+    "cp:lastModifiedBy",
+    "cp:lastPrinted",
+    "dcterms:created",
+    "dcterms:modified",
+    "cp:category",
+    "cp:contentStatus",
+    "cp:revision",
+    "cp:version",
+    "dc:identifier",
+    "dc:language",
+];
+
+/// The `properties` category: every property of [`CORE_PROPERTIES`] the source sets must come back
+/// with the same text. `property dcterms:created lost`, `property cp:lastModifiedBy changed: "A" → "B"`.
+pub(super) fn diff_core_properties(source: &[u8], written: &[u8], max: usize) -> Category {
+    let mut d = Diffs::new("properties", max);
+    match (core_properties(source), core_properties(written)) {
+        (Ok(before), Ok(after)) => {
+            for name in CORE_PROPERTIES {
+                let local = name.rsplit(':').next().unwrap_or(name);
+                let Some(was) = before.get(local).filter(|v| !v.is_empty()) else { continue };
+                match after.get(local).filter(|v| !v.is_empty()) {
+                    None => d.push(|| format!("property {name} lost")),
+                    Some(now) if now != was => {
+                        let quoted = |v: &String| serde_json::to_string(v).unwrap_or_default();
+                        d.push(|| format!("property {name} changed: {} → {}", quoted(was), quoted(now)))
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        // An unreadable source part has nothing to compare; an unreadable written one is a loss.
+        (Ok(before), Err(e)) if !before.is_empty() => d.push(|| format!("core properties unreadable after the save: {e}")),
+        _ => {}
+    }
+    d.done()
+}
+
+/// The text of each element under the root of the package's core-properties part (found through
+/// `_rels/.rels`), by local name. Empty when the package has none.
+pub(super) fn core_properties(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    use quick_xml::events::Event;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
+    let names = zip_names(&mut zip);
+    let find = |key: &str| names.iter().find(|n| part_key(n) == key).cloned();
+    let Some(rels) = find("_rels/.rels") else { return Ok(BTreeMap::new()) };
+    let rels = xml_elements(&read_zip_part(&mut zip, &rels)?)?;
+    let target = rels
+        .iter()
+        .find(|(e, a)| e == "Relationship" && attr(a, "Type").is_some_and(|t| t.ends_with("/core-properties")))
+        .and_then(|(_, a)| attr(a, "Target"));
+    let Some(name) = target.and_then(|t| find(&part_key(&resolve_target("", t)))) else { return Ok(BTreeMap::new()) };
+    let xml = read_zip_part(&mut zip, &name)?;
+    let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+    let (mut buf, mut out, mut depth, mut current) = (Vec::new(), BTreeMap::new(), 0usize, None::<String>);
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| format!("{name}: invalid XML: {e}"))? {
+            Event::Start(e) => {
+                depth += 1;
+                if depth == 2 {
+                    let local = String::from_utf8_lossy(local_name(e.name().as_ref())).into_owned();
+                    out.entry(local.clone()).or_insert_with(String::new);
+                    current = Some(local);
+                }
+            }
+            Event::End(_) => {
+                if depth == 2 {
+                    current = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Text(t) => {
+                if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
+                    v.push_str(&t.xml_content(quick_xml::XmlVersion::Explicit1_0).map_err(|e| format!("{name}: {e}"))?);
+                }
+            }
+            Event::GeneralRef(r) => {
+                if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
+                    let named = match r.as_ref() {
+                        b"amp" => Some('&'),
+                        b"lt" => Some('<'),
+                        b"gt" => Some('>'),
+                        b"quot" => Some('"'),
+                        b"apos" => Some('\''),
+                        _ => None,
+                    };
+                    if let Some(c) = r.resolve_char_ref().ok().flatten().or(named) {
+                        v.push(c);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
+}

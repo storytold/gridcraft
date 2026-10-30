@@ -1,5 +1,5 @@
 use super::calc::formula_text;
-use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
+use super::package::{REBUILT_KINDS, diff_core_properties, relationship_kinds, validate_package};
 use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
 // ---------------------------------------------------------------- round trip
@@ -29,6 +29,7 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
     };
     let mut categories = diff_workbooks(wb, &back, opts);
     categories.push(package.done());
+    categories.push(diff_core_properties(source, &bytes, opts.max_report));
     RoundTrip { error: None, categories }
 }
 

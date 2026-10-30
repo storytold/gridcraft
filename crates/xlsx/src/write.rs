@@ -375,17 +375,31 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         ("dc:creator", &p.author),
         ("cp:keywords", &p.keywords),
         ("dc:description", &p.description),
+        ("cp:lastModifiedBy", &p.last_modified_by),
+        ("cp:revision", &p.revision),
+        ("cp:lastPrinted", &p.last_printed),
+        ("dcterms:created", &p.created),
+        ("dcterms:modified", &p.modified),
+        ("cp:category", &p.category),
+        ("dc:identifier", &p.identifier),
+        ("cp:contentStatus", &p.content_status),
+        ("dc:language", &p.language),
+        ("cp:version", &p.version),
     ] {
         if !v.is_empty() {
-            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
+            // The schema types the Dublin Core dates by attribute (`xsi:type`), not by element.
+            let ty = if tag.starts_with("dcterms:") { " xsi:type=\"dcterms:W3CDTF\"" } else { "" };
+            let _ = write!(core, "<{tag}{ty}>{}</{tag}>", esc(v));
         }
     }
     core.push_str("</cp:coreProperties>");
     out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
     let mut app = String::from(XML_DECL);
     app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
-    if !p.company.is_empty() {
-        let _ = write!(app, "<Company>{}</Company>", esc(&p.company));
+    for (tag, value) in [("Manager", &p.manager), ("Company", &p.company), ("HyperlinkBase", &p.hyperlink_base)] {
+        if !value.is_empty() {
+            let _ = write!(app, "<{tag}>{}</{tag}>", esc(value));
+        }
     }
     app.push_str("</Properties>");
     out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
