@@ -1,6 +1,11 @@
 //! An in-process engine session that answers the engine-level control-channel methods itself.
 
-use gridcraft_engine::{Session, Target};
+use std::sync::Arc;
+
+use gridcraft_engine::{
+    Session, Target,
+    file_access::{self, AutomationRoots},
+};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
@@ -12,6 +17,7 @@ with `gridcraft-cli mcp --connect 7979`";
 /// Headless backend: a [`Session`] with one blank workbook to start with.
 pub struct Headless {
     pub session: Session,
+    roots: Option<Arc<AutomationRoots>>,
 }
 
 impl Default for Headless {
@@ -25,17 +31,23 @@ impl Headless {
     pub fn new() -> Self {
         let mut session = Session::new();
         session.new_workbook();
-        Self { session }
+        Self { session, roots: None }
     }
 
     /// A session wrapping an existing one (e.g. with a file already open).
     pub fn with_session(session: Session) -> Self {
-        Self { session }
+        Self { session, roots: None }
+    }
+
+    /// Apply read/write roots to every command, including generic and nested dispatch.
+    pub fn with_automation_roots(mut self, roots: Option<Arc<AutomationRoots>>) -> Self {
+        self.roots = roots;
+        self
     }
 
     fn execute(&mut self, target: Target, id: &str, params: Value) -> Result<Value, String> {
         // Programmatic calls never open dialogs; anything a command queued for a UI is dropped.
-        self.session.execute_headless_in(target, id, params).map_err(|e| e.to_string())
+        file_access::confine(self.roots.as_ref(), || self.session.execute_headless_in(target, id, params)).map_err(|e| e.to_string())
     }
 
     fn commands(&self, params: &Value) -> Value {
@@ -99,6 +111,13 @@ impl Backend for Headless {
     }
 
     fn describe(&self) -> String {
-        "headless (in-process engine, no window)".to_string()
+        match &self.roots {
+            None => "headless (in-process engine, no window; unrestricted filesystem)".to_string(),
+            Some(roots) => format!(
+                "headless (read root: {}; write root: {})",
+                roots.read_root().map(|p| p.display().to_string()).unwrap_or_else(|| "none".into()),
+                roots.write_root().map(|p| p.display().to_string()).unwrap_or_else(|| "none".into())
+            ),
+        }
     }
 }
