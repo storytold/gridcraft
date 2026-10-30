@@ -440,7 +440,7 @@ impl Dialog {
                     Choice {
                         key: "operation",
                         label: "Operation",
-                        options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
+                        options: vec![("none", "Paste Special|None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },

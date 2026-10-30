@@ -810,6 +810,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Έντονη γραφή",
         "Italic" => "Πλάγια γραφή",
         "None" => "Κανένα",
+        "Paste Special|None" => "Κανένα",
         "Single" => "Μονή",
         "Double" => "Διπλή",
         "Single Accounting" => "Μονή λογιστική υπογράμμιση",

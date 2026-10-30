@@ -707,6 +707,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Negrito",
         "Italic" => "Itálico",
         "None" => "Nenhum",
+        "Paste Special|None" => "Nenhum",
         "Single" => "Simples",
         "Double" => "Duplo",
         "Single Accounting" => "Simples (Contábil)",

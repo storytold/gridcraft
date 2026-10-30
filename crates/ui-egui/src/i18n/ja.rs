@@ -712,6 +712,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Bold", "太字"),
     ("Italic", "斜体"),
     ("None", "なし"),
+    ("Paste Special|None", "なし"),
     ("Single", "下線"),
     ("Double", "二重下線"),
     ("Single Accounting", "会計 (一重)"),

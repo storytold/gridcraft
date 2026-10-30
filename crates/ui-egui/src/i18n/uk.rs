@@ -689,6 +689,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Bold",
         "Italic" => "Italic",
         "None" => "None",
+        "Paste Special|None" => "None",
         "Single" => "Single",
         "Double" => "Double",
         "Single Accounting" => "Single Accounting",

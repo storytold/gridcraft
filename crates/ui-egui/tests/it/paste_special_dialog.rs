@@ -54,3 +54,14 @@ fn paste_link_pastes_references_at_once() {
     assert_eq!(c1["value"], json!(2.0));
     assert!(c1["formula"].as_str().is_some_and(|f| f.contains("A1")), "{c1}");
 }
+
+#[test]
+fn french_shows_the_dialog_translated_and_none_as_the_operation() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.run_steps(3);
+    for label in ["Formules (F)", "Commentaires et notes (C)", "Valeurs et formats de nombre", "Aucune", "Ignorer les cellules vides", "Transposer (E)", "Coller avec liaison", "Annuler"] {
+        assert!(h.query_by_label(label).is_some(), "no {label}");
+    }
+    assert!(h.query_by_label("None").is_none());
+}
