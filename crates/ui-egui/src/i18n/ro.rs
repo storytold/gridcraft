@@ -5,6 +5,7 @@
 //! usual in Romanian software ("Salvare", "Inserare…") and messages address the user formally.
 //! An AI-assisted draft (Claude) for a Romanian-speaking contributor, pending native-speaker review.
 
+/// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Lipire",
@@ -152,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Eliminare săgeți",
         "Show Formulas" => "Afișare formule",
         "Error Checking" => "Verificare erori",
+        "Circular References" => "Referințe circulare",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",
@@ -207,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Examinare\nsfârșituri de pagină",
         "Page\nLayout" => "Aspect\npagină",
         "Formula Bar" => "Bară de formule",
+        "Name Box" => "Casetă de nume",
+        "Cell Editor" => "Editor de celule",
+        "Font Size" => "Dimensiune font",
         "Gridlines" => "Linii de grilă",
         "Headings" => "Titluri",
         "Zoom" => "Zoom",
@@ -304,6 +309,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Întunecată",
         "Sheet Options|View" => "Vizualizare",
         "Print" => "Imprimare",
+        "Print What" => "Ce imprimați",
         "Click to add data" => "Faceți clic pentru a adăuga date",
         "Add header" => "Adăugare antet",
         "Add footer" => "Adăugare subsol",
@@ -329,6 +335,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Salt la antet",
         "Different First Page" => "Prima pagină diferită",
         "Different Odd & Even Pages" => "Pagini pare și impare diferite",
+        "Scale with Document" => "Scalare cu documentul",
+        "Align with Page Margins" => "Aliniere la marginile paginii",
         "Go to Footer" => "Salt la subsol",
         "Ruler" => "Riglă",
         "File" => "Fișier",
@@ -761,6 +769,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut" => "Inel",
         "Area" => "Arie",
         "Stacked Area" => "Arie stivuită",
+        "100% Stacked Area" => "Arie 100% stivuită",
         "Scatter" => "Dispersie",
         "Scatter with Lines" => "Dispersie cu linii",
         "Radar" => "Radar",
@@ -1005,7 +1014,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print job submitted: {receipt}" => "Lucrarea de imprimare a fost trimisă: {receipt}",
         "Print failed: {error}" => "Imprimarea a eșuat: {error}",
         "Print failed: the printing worker stopped." => "Imprimarea a eșuat: procesul de imprimare s-a oprit.",
-        "Options|Editing" => "Editing",
+        "Options|Editing" => "Editare",
+        "Duplicate" => "Duplicare",
+        "Rename" => "Redenumire",
+        "Product Information" => "Informații despre produs",
+        "Tab Color" => "Culoare filă",
+        "Select All Sheets" => "Selectare toate foile",
+        "Fit selection" => "Încadrare selecție",
+        "All sheets" => "Toate foile",
+        "Version" => "Versiune",
+        "Unhide…" => "Reafișare…",
+        "Platform" => "Platformă",
+        "Unprotect Sheet…" => "Deprotejare foaie…",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Salvare automată: salvează după fiecare modificare (registrele salvate într-un fișier)"
+        }
+        "Licence" => "Licență",
+        "Account" => "Cont",
+        "No Color" => "Fără culoare",
+        "Move or Copy…" => "Mutare sau copiere…",
+        "Number Stored as Text" => "Număr stocat ca text",
+        "Select Data…" => "Selectare date…",
+        "Convert to Number" => "Conversie în număr",
+        "Format Chart Area…" => "Formatare zonă diagramă…",
+        "Error checking options" => "Opțiuni de verificare a erorilor",
+        "Paste formulas that refer to the copied cells" => "Lipire formule care fac referire la celulele copiate",
+        "Record Macro" => "Înregistrare macrocomandă",
+        "Stop Recording" => "Oprire înregistrare",
+        "Use Relative References" => "Utilizare referințe relative",
+        "Run\nMacro" => "Rulare macrocomandă",
+        "Macros…" => "Macrocomenzi…",
+        "Recording" => "Înregistrare",
+        "New Macro" => "Macrocomandă nouă",
+        "Show" => "Afișare",
         _ => return None,
     })
 }

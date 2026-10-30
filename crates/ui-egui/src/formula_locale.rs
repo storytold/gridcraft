@@ -105,13 +105,6 @@ fn split_signature(signature: &str) -> Option<(&str, Vec<&str>)> {
     Some((head, if inner.is_empty() { Vec::new() } else { inner.split(", ").collect() }))
 }
 
-/// The catalog names of a signature's arguments (`number` for `[number2]`), without `...`; the
-/// function help tables are checked against them.
-#[cfg(test)]
-pub(crate) fn argument_names(signature: &str) -> Vec<&str> {
-    split_signature(signature).map(|(_, args)| args.into_iter().map(argument_name).filter(|name| *name != "...").collect()).unwrap_or_default()
-}
-
 /// `[number2]` -> `number`. A bracket can open or close on its own (SWITCH's
 /// `[default_or_value2, result2]`, LAMBDA's `[parameter1, ...]`).
 fn argument_name(arg: &str) -> &str {

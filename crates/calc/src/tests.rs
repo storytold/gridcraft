@@ -191,6 +191,81 @@ fn index_area_number_overflow() {
     }
 }
 
+/// INDEX with one index, as observed in Excel: a 2-D reference needs both indexes (#REF!), a
+/// column array gives a 1×1 array (TYPE 64), a row array or 1-D reference gives one value.
+#[test]
+fn index_with_one_index() {
+    let mut t = T::new();
+    for (i, v) in [10, 20, 30].iter().enumerate() {
+        t.set(&format!("A{}", i + 1), &v.to_string());
+    }
+    let mut k = 1;
+    for r in 5..=7 {
+        for col in ["A", "B", "C"] {
+            t.set(&format!("{col}{r}"), &k.to_string());
+            k += 1;
+        }
+    }
+    for (row, (formula, expected)) in [
+        // Column arrays keep Excel's 1×1 array; row arrays and explicit columns give a value.
+        ("=INDEX({10;20;30},2)", 20.0),
+        ("=TYPE(INDEX({10;20;30},2))", 64.0),
+        ("=TYPE(INDEX(SEQUENCE(3),2))", 64.0),
+        ("=TYPE(INDEX({10;20;30},2,1))", 1.0),
+        ("=TYPE(INDEX({10,20,30},2))", 1.0),
+        ("=TYPE(INDEX(INDEX({10;20;30},2),1))", 1.0),
+        ("=SUM(INDEX({10;20;30},2))", 20.0),
+        // 1-D references with one index are single-cell references.
+        ("=TYPE(INDEX(A1:A3,2))", 1.0),
+        ("=SUM(INDEX(A1:A3,1):INDEX(A1:A3,3))", 60.0),
+        ("=SUM(INDEX((A1:A3,A5:C7),2))", 20.0),
+        // A 2-D array with one index is the row.
+        ("=SUM(INDEX({1,2;3,4},2))", 7.0),
+        ("=SUM(INDEX({1,2;3,4},0))", 10.0),
+        // A 2-D reference with an empty (not omitted) column argument is the row.
+        ("=SUM(INDEX(A5:C7,2,))", 15.0),
+        ("=SUM(INDEX(A5:C7,2,,1))", 15.0),
+        ("=COLUMNS(INDEX((A1:A3,A5:C7),2,,2))", 3.0),
+        ("=INDEX(A5:C7,2,2)", 5.0),
+        // A 2-D reference with one index is #REF!, and the error carries through.
+        ("=TYPE(INDEX(A5:C7,2))", 16.0),
+        ("=ISREF(INDEX(A5:C7,2))", 0.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = format!("J{}", row * 4 + 1);
+        t.set(&at, formula);
+        let got = match t.get(&at) {
+            Value::Bool(b) => f64::from(u8::from(b)),
+            v => v.as_f64().unwrap_or_else(|| panic!("{formula} = {v:?}")),
+        };
+        assert_eq!(got, *expected, "{formula}");
+    }
+    for formula in [
+        "=INDEX(A5:C7,2)",
+        "=INDEX(A5:C7,0)",
+        "=INDEX(A5:C7,1.9)",
+        "=INDEX(A5:C7,)",
+        "=INDEX(A5:B6,1)",
+        "=INDEX(A5:C7,2)+1",
+        "=SUM(INDEX(A5:C7,{1;2}))",
+        "=ROWS(INDEX(INDEX(A5:C7,2),3))",
+        "=SUM(A5:INDEX(A5:C7,2))",
+        "=SUM(INDEX(A5:C7,2):C7)",
+    ] {
+        t.set("L1", formula);
+        assert_eq!(t.get("L1"), Value::Error(CellError::Ref), "{formula}");
+    }
+    t.set("L1", "=INDEX(A5:C7,{1;2})");
+    assert_eq!([t.get("L1"), t.get("L2")], [Value::Error(CellError::Ref), Value::Error(CellError::Ref)]);
+    t.set("L1", "=IFERROR(INDEX(A5:C7,2),\"e\")");
+    assert_eq!(t.get("L1"), Value::from("e"));
+    // A bad position is still #VALUE!.
+    t.set("L1", "=INDEX(A5:C7,\"x\")");
+    assert_eq!(t.get("L1"), Value::Error(CellError::Value));
+}
+
 #[test]
 fn errors_and_cycles() {
     let mut t = T::new();
@@ -309,6 +384,32 @@ fn circular_references_without_iterative_calculation() {
     assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
 }
 
+/// The list of circular references keeps the loops that a recalculation of other cells does not
+/// reach, and drops a loop once a constant is typed over one of its cells.
+#[test]
+fn circular_references_stay_listed_until_the_loop_is_removed() {
+    let mut t = T::new();
+    t.set("A1", "=A1+1");
+    t.set("B1", "=B2");
+    t.set("B2", "=B1");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    t.set("D4", "7");
+    t.set("D5", "=D4*2");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("A1", "5");
+    assert!(!t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("B2", "3");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+    // In manual calculation only the edited formulas are evaluated; a constant typed over the listed cell removes it.
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("C1", "=C1+1");
+    assert_eq!(t.calc.circular, vec![(0, c("C1"))]);
+    t.set("C1", "1");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+}
+
 #[test]
 fn date_text_coerces_in_the_workbook_date_system() {
     for (sys, serial) in [(gridcraft_core::DateSystem::D1900, 1462.0), (gridcraft_core::DateSystem::D1904, 0.0)] {
@@ -327,6 +428,149 @@ fn date_text_coerces_in_the_workbook_date_system() {
         assert_eq!(t.num("E1"), serial, "{sys:?}");
         assert_eq!(t.num("F1"), serial, "{sys:?}");
     }
+}
+
+/// Lookups compare numbers exactly while `=` and the criteria functions compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004, `=100+1E-14` is 100.00000000000001).
+#[test]
+fn lookups_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        ("A1", "=0.1+0.2"),
+        ("A2", "0.3"),
+        ("A3", "=100+1E-14"),
+        ("A4", "100"),
+        ("A5", "=1E15+0.5"),
+        ("A6", "1E15"),
+        // Ascending 0.1, 0.3+e, 0.5 and the same descending.
+        ("B1", "0.1"),
+        ("B2", "=0.1+0.2"),
+        ("B3", "0.5"),
+        ("C1", "0.5"),
+        ("C2", "=0.1+0.2"),
+        ("C3", "0.1"),
+        // 0.3 next to 0.3+e, ascending and descending.
+        ("D1", "0.3"),
+        ("D2", "=0.1+0.2"),
+        ("D3", "0.7"),
+        ("E1", "0.7"),
+        ("E2", "=0.1+0.2"),
+        ("E3", "0.3"),
+        ("G1", "=0.1+0.2"),
+        ("H1", "x"),
+        ("G2", "row2"),
+        // The bisection probes 0.3 first and must not run on into 0.3+e.
+        ("J1", "0.1"),
+        ("J2", "0.2"),
+        ("J3", "0.3"),
+        ("J4", "=0.1+0.2"),
+        ("J5", "0.4"),
+        ("K1", "a"),
+        ("K2", "b"),
+        ("K3", "c"),
+        ("K4", "d"),
+        ("K5", "e"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let na = Value::Error(CellError::NA);
+    let cases: Vec<(&str, Value)> = vec![
+        // `=` and friends stay at 15 digits.
+        ("=A1=A2", Value::Bool(true)),
+        ("=A3=A4", Value::Bool(true)),
+        ("=A5=A6", Value::Bool(true)),
+        ("=SWITCH(A1,0.3,\"hit\",\"miss\")", s("hit")),
+        // Exact match.
+        ("=MATCH(A1,A2:A2,0)", na.clone()),
+        ("=MATCH(A2,A1:A1,0)", na.clone()),
+        ("=VLOOKUP(A1,A2:A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(A1,A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,FALSE)", na.clone()),
+        ("=XLOOKUP(A1,A2:A2,A2:A2,\"nf\")", s("nf")),
+        ("=XMATCH(A1,A2:A2)", na.clone()),
+        ("=MATCH(0.1+0.2,{0.3},0)", na.clone()),
+        ("=MATCH(0.3,A1:A2,0)", n(2.0)),
+        ("=MATCH(A1,A1:A2,0)", n(1.0)),
+        ("=MATCH(0.3,INDEX(A1:A2,0),0)", n(2.0)),
+        ("=MATCH(100,A3:A3,0)", na.clone()),
+        ("=MATCH(1E15,A5:A5,0)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A2,{1;2},\"nf\",0,-1)", n(2.0)),
+        ("=XMATCH(A1,A1:A2,0,-1)", n(1.0)),
+        // Approximate match against a single entry.
+        ("=MATCH(0.3,A1:A1,1)", na.clone()),
+        ("=MATCH(0.3,A1:A1,-1)", n(1.0)),
+        ("=LOOKUP(0.3,A1:A1)", na.clone()),
+        ("=LOOKUP(0.3,A1:A1,G2)", na.clone()),
+        ("=VLOOKUP(0.3,A1:A1,1,TRUE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,TRUE)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",-1)", s("nf")),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",1)", n(e)),
+        ("=XMATCH(0.3,A1:A1,-1)", na.clone()),
+        ("=XMATCH(0.3,A1:A1,1)", n(1.0)),
+        ("=MATCH(100,A3:A3,1)", na.clone()),
+        ("=MATCH(A3,A4:A4,1)", n(1.0)),
+        // Approximate match in sorted lists.
+        ("=MATCH(0.3,B1:B3,1)", n(1.0)),
+        ("=MATCH(A1,B1:B3,1)", n(2.0)),
+        ("=MATCH(0.3,C1:C3,-1)", n(2.0)),
+        ("=MATCH(0.3,D1:D3,1)", n(1.0)),
+        ("=MATCH(A1,D1:D3,1)", n(2.0)),
+        ("=MATCH(0.3,E1:E3,-1)", n(3.0)),
+        ("=MATCH(A1,E1:E3,-1)", n(2.0)),
+        ("=MATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=MATCH(A1,J1:J5,1)", n(4.0)),
+        ("=MATCH(0.3,J1:J5,0)", n(3.0)),
+        ("=MATCH(A1,J1:J5,0)", n(4.0)),
+        ("=VLOOKUP(0.3,J1:K5,2,TRUE)", s("c")),
+        ("=VLOOKUP(A1,J1:K5,2,TRUE)", s("d")),
+        ("=LOOKUP(0.3,J1:J5,K1:K5)", s("c")),
+        ("=LOOKUP(A1,J1:J5,K1:K5)", s("d")),
+        // XLOOKUP / XMATCH match and search modes.
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",0,2)", s("nf")),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",-1,2)", n(0.1)),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",1,2)", n(e)),
+        ("=XMATCH(0.3,B1:B3,-1,2)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,1,2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,1,-2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,-1,-2)", n(3.0)),
+        ("=XMATCH(0.3,C1:C3,0,-2)", na.clone()),
+        ("=XMATCH(0.3,J1:J5,0,2)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,0,2)", n(4.0)),
+        ("=XMATCH(0.3,J1:J5,1,2)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,-1)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,-1)", n(4.0)),
+        ("=XMATCH(0.3,B1:B3,1)", n(2.0)),
+        ("=XMATCH(0.3,B1:B3,-1)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,0,-1)", na.clone()),
+        ("=XMATCH(0.3,D1:D3,1,-1)", n(1.0)),
+        // The criteria functions keep 15 digits.
+        ("=COUNTIF(A1:A1,0.3)", n(1.0)),
+        ("=COUNTIF(A1:A1,\"<0.3\")", n(0.0)),
+        ("=COUNTIF(A1:A1,\">0.3\")", n(0.0)),
+        ("=COUNTIF(A2:A2,A1)", n(1.0)),
+        ("=COUNTIFS(A1:A1,0.3)", n(1.0)),
+        ("=SUMIF(A1:A1,0.3)", n(e)),
+        ("=SUMIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=AVERAGEIF(A1:A1,0.3)", n(e)),
+        ("=MAXIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=COUNTIF(A3:A3,\">100\")", n(0.0)),
+        ("=COUNTIF(J1:J5,0.3)", n(2.0)),
+        ("=ROWS(FILTER(A1:A2,A1:A2=0.3))", n(2.0)),
+        ("=MATCH(TRUE,A1:A2=0.3,0)", n(1.0)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
@@ -350,6 +594,39 @@ fn lambda_helpers_check_shapes_and_parameters() {
     // A single value in an array is fine.
     t.set("A7", "=MAP({1,2},LAMBDA(x,SEQUENCE(1)*x))");
     assert_eq!(t.num("B7"), 2.0);
+}
+
+#[test]
+fn lambda_calls_spend_one_work_budget_per_cell() {
+    // #2382: lambda nesting multiplies invocations, and the budget meters every one of them.
+    // Exhaustion itself is tested on a mock host in `eval::fuel_tests` (burning the real 16M
+    // budget in a full recalc needs tens of millions of calls, far too slow for a unit test);
+    // here the same nested shape runs inside it: 6 × 9 ≈ 59k scalar REDUCE invocations.
+    let mut t = T::new();
+    t.set(
+        "A1",
+        "=LET(s,SEQUENCE(9),REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,a+v)))))))))))",
+    );
+    // The bodies are the same inner reduce, so every level sums to 45 while the invocation
+    // count multiplies by 9 per level (9, 81, 729, 6561, 59049 calls).
+    assert_eq!(t.num("A1"), 45.0);
+    t.set("A2", "=REDUCE(0,SEQUENCE(4000),LAMBDA(a,v,a+v))");
+    assert_eq!(t.num("A2"), 4000.0 * 4001.0 / 2.0);
+}
+
+#[test]
+fn accounting_negative_text_coerces() {
+    let mut t = T::new();
+    t.set("A1", "'$(1,234)");
+    t.set("B1", "=A1+0");
+    t.set("C1", "=VALUE(A1)");
+    t.set("D1", "=--\"$ (5)\"");
+    t.set("E1", "=\"(5)%\"*100");
+    t.set("F1", "=\"(-5)\"+0");
+    t.set("G1", "$(1,234)");
+    assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("E1")), (-1234.0, -1234.0, -5.0, -5.0));
+    assert_eq!(t.get("F1"), Value::Error(CellError::Value));
+    assert_eq!(t.num("G1"), -1234.0);
 }
 
 #[test]
@@ -772,6 +1049,100 @@ fn lambda_argument_count() {
     assert_eq!(t.num("A8"), 5.0);
     t.set("A9", "=LAMBDA(x,ISOMITTED(x))()");
     assert_eq!(t.get("A9"), Value::Bool(true));
+}
+
+#[test]
+fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
+    // 1 MiB is the main thread's stack on Windows, where commands, recalculation and file open run.
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let mut t = T::new();
+            t.wb.names.push(gridcraft_model::DefinedName {
+                name: "LOOP".into(),
+                scope: None,
+                formula: "LAMBDA(n,LOOP(n))".into(),
+                comment: String::new(),
+                hidden: false,
+            });
+            t.calc.rebuild(&t.wb);
+            let endless = "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))";
+            t.set("A1", endless);
+            t.set("A2", "=LOOP(1)");
+            t.set("A3", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+SUM(MAP({1},LAMBDA(v,me(me,n-1)))))),F(F,100000))");
+            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,131))");
+            let evaluated = crate::evaluate(&t.wb, 0, c("B1"), endless);
+            [t.get("A1"), t.get("A2"), t.get("A3"), evaluated, t.get("A4")]
+        })
+        .expect("spawn");
+    let [endless, endless_name, through_map, evaluated, countdown] = handle.join().expect("recursion must not overflow the stack");
+    assert_eq!(endless, Value::Error(CellError::Num));
+    assert_eq!(endless_name, Value::Error(CellError::Num));
+    assert_eq!(through_map, Value::Error(CellError::Num));
+    assert_eq!(evaluated, Value::Error(CellError::Num));
+    assert_eq!(countdown, Value::Number(131.0));
+}
+
+#[test]
+fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                let mut wb = Workbook::new();
+                wb.names.push(gridcraft_model::DefinedName {
+                    name: "CNT".into(),
+                    scope: None,
+                    formula: "LAMBDA(n,IF(n=0,0,1+CNT(n-1)))".into(),
+                    comment: String::new(),
+                    hidden: false,
+                });
+                // F(F,n) has n + 1 calls in progress at its deepest; W adds one more call per step.
+                let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
+                let wrapped = |n: u32| format!("=LET(W,LAMBDA(f,k,f(f,k)),F,LAMBDA(me,n,IF(n<=0,0,1+W(me,n-1))),F(F,{n}))");
+                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(run(64 << 20), small);
+}
+
+#[test]
+fn a_recursive_lambda_that_reads_another_cells_recursive_lambda_shares_the_stack() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                // Row-major order calculates A1 first, so each cell below is calculated on demand
+                // at the deepest call of the one above it.
+                let countdown = |then: &str| format!("=LET(F,LAMBDA(me,n,IF(n<=0,{then},1+me(me,n-1))),F(F,131))");
+                let mut wb = Workbook::new();
+                let sheet = wb.sheet_mut(0).expect("sheet");
+                for (at, f) in [
+                    ("A1", countdown("A2")),
+                    ("A2", countdown("A3")),
+                    ("A3", countdown("0")),
+                    ("B1", countdown("B2")),
+                    ("B2", "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))".to_string()),
+                ] {
+                    sheet.cells.set(c(at), Cell::formula(Formula::new(&f)));
+                }
+                let mut calc = Calc::new();
+                calc.recalc_all(&mut wb);
+                ["A1", "A2", "A3", "B1", "B2"].map(|at| wb.sheet(0).map(|s| s.value(c(at))).unwrap_or_default())
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    let num = Value::Error(CellError::Num);
+    assert_eq!(small, [Value::Number(393.0), Value::Number(262.0), Value::Number(131.0), num.clone(), num]);
+    assert_eq!(run(64 << 20), small);
 }
 
 #[test]
@@ -1513,6 +1884,91 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+#[test]
+fn analysis_toolpak_value_params_reject_multi_cell_references() {
+    // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
+    // than one cell, however the reference is formed, and lift array constants and computed arrays.
+    let mut t = T::new();
+    for (a, v) in [
+        ("A1", "45000"),
+        ("A2", "45031"),
+        ("A3", "45061"),
+        ("B1", "1"),
+        ("B2", "2"),
+        ("B3", "3"),
+        ("C2", "7"),
+        ("F1", "1"),
+        ("F2", "2"),
+        ("F3", "11"),
+    ] {
+        t.set(a, v);
+    }
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Dates".into(),
+        scope: None,
+        formula: "Sheet1!$A$1:$A$3".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let value = Value::Error(CellError::Value);
+    for f in [
+        "=EOMONTH(A1:A3,1)",
+        "=EOMONTH(A1,B1:B3)",
+        "=EDATE(A1:A3,1)",
+        "=SUMPRODUCT(EOMONTH(A1:A3,0))",
+        "=EOMONTH(INDEX(A1:A3,0,1),0)",
+        "=EOMONTH(OFFSET(A1,0,0,3,1),0)",
+        "=EOMONTH(IF(TRUE,A1:A3),0)",
+        "=EOMONTH(CHOOSE(1,A1:A3),0)",
+        "=LET(x,A1:A3,EOMONTH(x,0))",
+        "=EOMONTH(Dates,0)",
+        "=EOMONTH((A1,A2),0)",
+        "=EOMONTH(Z:Z,0)",
+        "=EOMONTH(A1:INDEX(A1:A3,3),0)",
+        "=WORKDAY(A1:A3,1)",
+        "=NETWORKDAYS(A1,A3:A4)",
+        "=YEARFRAC(A1,A3,B1:B2)",
+        "=WEEKNUM(A1,B1:B3)",
+        "=COUPDAYS(A1:A3,46000,2,0)",
+        "=DISC(A1,46000,98,100,B1:B3)",
+        "=BIN2DEC(B1:B3)",
+        "=ISEVEN(B1:B3)",
+    ] {
+        t.set("H5", f);
+        assert_eq!((t.get("H5"), t.get("H6")), (value.clone(), Value::Empty), "{f}");
+        t.set("H5", "");
+    }
+    // One-cell references, intersections, @ and the range parameters are fine.
+    for (f, want) in [
+        ("=EOMONTH(A1:A1,0)", 45016.0),
+        ("=EOMONTH(INDEX(A1:A3,2),0)", 45046.0),
+        ("=EOMONTH(OFFSET(A1,0,0,1,1),0)", 45016.0),
+        ("=EOMONTH(A1:A3 A2:C2,0)", 45046.0),
+        ("=EOMONTH(@A1:A3,0)", 45046.0),
+        ("=WORKDAY(A1,1,A1:A3)", 45001.0),
+        ("=XNPV(0,B1:B3,A1:A3)", 6.0),
+    ] {
+        t.set("H2", f);
+        assert_eq!(t.num("H2"), want, "{f}");
+        t.set("H2", "");
+    }
+    // Arrays that aren't references lift; so does the WORKDAY.INTL/NETWORKDAYS.INTL weekend.
+    for (f, below, right) in [
+        ("=EOMONTH(A1:A3+0,0)", Value::Number(45046.0), Value::Empty),
+        ("=EOMONTH(A1,{1,2})", Value::Empty, Value::Number(45077.0)),
+        ("=EOMONTH(TRANSPOSE(A1:A3),0)", Value::Empty, Value::Number(45046.0)),
+        ("=MAP(A1:A3,LAMBDA(x,EOMONTH(x,0)))", Value::Number(45046.0), Value::Empty),
+        ("=NETWORKDAYS.INTL(A1,A3+30,F1:F3)", Value::Number(66.0), Value::Empty),
+        ("=ISOWEEKNUM(A1:A3)", Value::Number(15.0), Value::Empty),
+        // The rejected reference adds no shape: a 2x1 array of #VALUE!.
+        ("=EOMONTH(A1:A3,{1;2})", value.clone(), Value::Empty),
+    ] {
+        t.set("H5", f);
+        assert_eq!((t.get("H6"), t.get("I5")), (below, right), "{f}");
+        t.set("H5", "");
+    }
+}
+
 /// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
 /// formula that reads it. Chains of thousands of such formulas, common in financial models, used
 /// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
@@ -1767,4 +2223,54 @@ fn a_dynamic_array_of_one_value_still_anchors_a_spill() {
     t.set("D1", "=1+1");
     t.set("E11", "=ROWS(D1#)");
     assert_eq!(t.get("E11"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn text_before_after_empty_instance_defaults_to_one() {
+    let mut t = T::new();
+    t.set("A1", "=TEXTBEFORE(\"Little Red Riding Hood\",\"red\",,1)");
+    assert_eq!(t.get("A1"), Value::Text("Little ".into()));
+    t.set("A2", "=TEXTAFTER(\"a-b\",\"-\",,,,\"nf\")");
+    assert_eq!(t.get("A2"), Value::Text("b".into()));
+    t.set("A3", "=TEXTAFTER(\"a-b\",\"x\",,,,\"nf\")");
+    assert_eq!(t.get("A3"), Value::Text("nf".into()));
+    t.set("A4", "=TEXTBEFORE(\"a-b\",\"-\",0)");
+    assert_eq!(t.get("A4"), Value::Error(CellError::Value));
+}
+
+#[test]
+fn loan_schedule_residue_keeps_excels_sign() {
+    // A synthetic monthly loan schedule: interest on the opening balance, principal = PMT - interest,
+    // each later period guarded by IF(p - SUM(principal so far) > 0, ...). After the 12th payment
+    // Excel is left with 2^-30 > 0, so it takes a 13th, tiny-interest period. That last bit comes
+    // from PMT; the old (1 + rate)^nper form left -2.8e-8 and returned "" instead.
+    let mut t = T::new();
+    t.set("B1", "4653300");
+    t.set("B2", "1");
+    t.set("B3", "0.141");
+    let col = |i: u8| char::from(b'A' + i).to_string();
+    t.set("C8", "=$B$1*($B$3/12)");
+    t.set("C7", "=PMT($B$3/12,$B$2*12,-$B$1)-C8");
+    t.set("D8", "=($B1-C7)*($B$3/12)");
+    t.set("D7", "=PMT($B$3/12,$B$2*12,-$B$1)-D8");
+    for i in 4..16 {
+        let (c, p) = (col(i), col(i - 1));
+        t.set(&format!("{c}8"), &format!("=IF($B1-SUM($C7:{p}7)>0,($B1-SUM($C7:{p}7))*($B$3/12),\"\")"));
+        t.set(&format!("{c}7"), &format!("=IF($B1-SUM($C7:{p}7)>0,PMT($B$3/12,$B$2*12,-$B$1)-{c}8,\"\")"));
+    }
+    t.set("N4", "=IF($B$1-SUM($C7:N7)>0,$B$1-SUM($C7:N7),\"\")");
+    // Excel's values (Value2) for the same synthetic inputs.
+    // The leftover (2^-30 in Excel) is 12 payments' worth of rounding, so a one-ULP libm difference
+    // moves it by as much as its own size: only its sign is checked, and the 13th period must exist.
+    let positive = |cell: &str| match t.get(cell) {
+        Value::Number(x) => assert!(x > 0.0 && x < 1e-6, "{cell}: {x}"),
+        other => panic!("{cell}: expected a small positive number, got {other:?}"),
+    };
+    positive("N4");
+    positive("O8");
+    match t.get("O7") {
+        Value::Number(x) => assert!((x - 418025.37230211904).abs() < 1e-3, "O7: {x}"),
+        other => panic!("O7: expected a number, got {other:?}"),
+    }
+    assert_eq!(t.get("P7"), Value::Text("".into()));
 }
