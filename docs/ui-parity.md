@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (inserted cells copy borders like Excel at the edge of a block; AutoSum over a selected row puts its total to the right; inserted cells inherit neighboring formats; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -63,6 +63,7 @@ this logic, with one undo step.
 | Data › Advanced Filter | dialog offers in-place or copy-to filtering, list and optional criteria ranges, and unique records; Alt+A,Q opens it (#1622). The engine's copy-to path clears only the result footprint and rejects worksheet overflow (#1031). |
 | Outline symbols for grouped rows / columns (band beside the headers, brackets, − / +, level buttons 1…n+1) | done (#373): clicks run `data.hideDetail` / `data.showDetail` / `data.showLevels`, frozen panes and right-to-left sheets included; Data › Outline › Settings (`data.outlineSettings`) puts summary rows above and summary columns left of their detail, saved as `outlinePr` (the dialog's Automatic styles check box and Apply Styles button are missing), View › Show Outline Symbols (Ctrl+8) hides the bands and is saved with the sheet, and a block of cells still groups rows without the Rows / Columns dialog |
 | Reorder selected whole columns by dragging their headers | done (10-11) |
+| Insert rows, columns and cells: the new cells take the formats of the row above or the column to the left (Format Same As Above) | done (10-12); borders follow Excel's boxed-list behaviour: the edge shared with the source cell is kept, the opposite and side edges only where the cell across the insert has them too (middle inserts keep all four, inserts below or right of a block keep only the shared edge); inserts in row 1 or column A, with nothing before them, stay unformatted (same in Excel 365); a default-format cell in a row with a whole-row format still gives the new cell the row format (Excel leaves it unformatted); no Insert Options button (Format Same As Below, Clear Formatting); the cap counts only newly stored styles; an insert needing more than 1,000,000 stored cells keeps only the row or column format and returns `formattingSkipped: true` and `formattingCellLimit` |
 | Freeze panes, split panes | freeze done; split to verify |
 | A Table's header names and filter buttons in the column headings once its header row scrolls away | done (#1423): with the active cell in the Table, as in Excel; the button opens the column's filter menu, the rest of the heading still selects the column. Plain AutoFilter ranges keep their letters (Excel does the same) |
 | Copy as HTML table for other apps | done (#36, 10-10) |
@@ -190,6 +191,9 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Inserted rows, columns and cells copy borders the way Excel does at the edge of a block: the edge shared with the source is kept, the opposite and side edges only where the cell across the insert has them too (observed in Excel 365 for rows and columns inserted in, below and right of a boxed list) |
+| 2026-10-13 | minor | Insert formatting cap counts only styles differing from inherited row/column formats; skipped formatting is observable in the command result |
+| 2026-10-12 | minor | Inserted rows, columns and cells take the formats of the cells above or to the left, like Excel's default Format Same As Above |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |

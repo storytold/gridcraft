@@ -251,10 +251,9 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
             let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
             s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
         }
-        s.execute(
-            "home.bold",
-            json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
-        )?;
+        // The total row takes the formats of the row above (it was inserted there); like Excel, only
+        // its label is made bold, not the amount cells.
+        s.execute("home.bold", json!({"sheet": sheet, "range": lbl, "on": true}))?;
         s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
         inserted += 1;
     }
@@ -262,6 +261,7 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let lbl = CellRef::new(last, group_col).a1();
     s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
     s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
+    s.execute("home.bold", json!({"sheet": sheet, "range": lbl, "on": true}))?;
     for c in &cols {
         let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;

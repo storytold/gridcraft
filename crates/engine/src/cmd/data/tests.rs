@@ -54,6 +54,28 @@ fn subtotal_puts_summary_rows_below_their_detail() {
 }
 
 #[test]
+fn subtotal_rows_take_the_formats_above_and_bold_only_the_label() {
+    // Excel 365 (Windows), @Harrison-Booth: total rows keep the fill, number format and borders of
+    // the row above; only the label cell ("East Total", "Grand Total") is bold.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["East", 10], ["East", 20], ["West", 30]]})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A2:B4", "color": "#FFF2CC"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B4", "code": "0.00"})).unwrap();
+    s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"]})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = wb.active().unwrap();
+    let style = |row: u32, col: u32| wb.styles.get(sh.style_id(CellRef::new(row, col)));
+    // East Total (row 4), West Total (row 6) and Grand Total (row 7).
+    for row in [3, 5, 6] {
+        assert!(style(row, 0).font.bold, "label in row {}", row + 1);
+        assert!(!style(row, 1).font.bold, "amount in row {}", row + 1);
+        assert_eq!(style(row, 1).fill, style(row - 1, 1).fill, "amount fill in row {}", row + 1);
+        assert_eq!(style(row, 1).num_fmt, style(row - 1, 1).num_fmt, "amount number format in row {}", row + 1);
+    }
+}
+
+#[test]
 fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {
     let mut s = Session::new();
     s.new_workbook();
