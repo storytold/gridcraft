@@ -121,7 +121,7 @@ pub(super) fn display_text(
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
-            Some(t) => (t, None, true, None),
+            Some(t) => (gridcraft_engine::numfmt::localize_general(t, gridcraft_engine::display::region()), None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }

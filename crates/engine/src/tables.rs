@@ -181,7 +181,8 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
         let value = sh.value(c);
         let text = match value.as_text() {
             Some(t) => t.to_string(),
-            None => crate::display::cell_text(&cx.wb, sh, c),
+            // A number names the column in en-US: the name is stored in the file.
+            None => crate::display::in_region(gridcraft_core::Region::EnUs, || crate::display::cell_text(&cx.wb, sh, c)),
         };
         // Headers hold constant text: a formula (or a spilled value) there becomes its text.
         let is_text = value.is_text() && sh.cell(c).is_some_and(|x| x.formula.is_none());

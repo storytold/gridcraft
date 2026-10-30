@@ -125,6 +125,13 @@ impl SheetApp {
     }
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
+    /// Switches the interface language and, with it, the region values are shown in.
+    fn set_language(&mut self, language: i18n::Language) -> Json {
+        self.ui.language = language;
+        gridcraft_engine::display::set_region(language.region());
+        json!({"language": language})
+    }
+
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
             "app.checkForUpdates" | "help.checkForUpdates" => {
@@ -189,21 +196,12 @@ impl SheetApp {
                 // `{"language": "ja"}`; `code` is accepted as an alias.
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
                 match i18n::Language::parse(code) {
-                    Some(l) => {
-                        self.ui.language = l;
-                        Ok(json!({"language": l}))
-                    }
+                    Some(l) => Ok(self.set_language(l)),
                     None => Err(format!("unknown language {code:?} (use one of {})", i18n::Language::code_list(", "))),
                 }
             }
-            "app.language.english" => {
-                self.ui.language = i18n::Language::En;
-                Ok(json!({"language": i18n::Language::En}))
-            }
-            "app.language.japanese" => {
-                self.ui.language = i18n::Language::Ja;
-                Ok(json!({"language": i18n::Language::Ja}))
-            }
+            "app.language.english" => Ok(self.set_language(i18n::Language::En)),
+            "app.language.japanese" => Ok(self.set_language(i18n::Language::Ja)),
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.
                 match p.get("page").and_then(Json::as_str).map(str::trim) {

@@ -1,5 +1,6 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
-//! scientific…), the General display format and the `TEXT()` worksheet function. en-US only.
+//! scientific…), the General display format and the `TEXT()` worksheet function. Codes are
+//! en-US; [`format_value_in`] shows them with a region's separators and short date.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -10,10 +11,11 @@ mod render;
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, DateSystem, Value};
+use gridcraft_core::{CellError, DateSystem, Region, Value};
 
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
+pub use render::localize_general;
 
 use parse::{SecKind, Section, Tok};
 use render::Out;
@@ -274,9 +276,9 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
+    fn format_number(&self, n: f64, sys: DateSystem, region: Region) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
+            text: localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), region),
             color: None,
             fill: None,
             numeric: true,
@@ -287,10 +289,10 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_default(), region))),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, region))
             }
             SecKind::Date => {
                 if minus {
@@ -299,7 +301,7 @@ impl NumberFormat {
                     render::render_date(sec, n.abs(), sys)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), region)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -322,18 +324,46 @@ impl NumberFormat {
     }
 }
 
-/// Formats a cell value for display.
+/// Formats a cell value for display (en-US).
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, Region::EnUs)
+}
+
+thread_local! {
+    // The region display text is shown in (the interface sets it from its language). Files,
+    // formulas, CSV and `TEXT()` stay en-US. Per thread: the interface thread sets it for itself,
+    // and every other thread (tests, scripts, servers) stays en-US.
+    static DISPLAY_REGION: std::cell::Cell<Region> = const { std::cell::Cell::new(Region::EnUs) };
+}
+
+/// Shows display text (cells, print, charts) in `region` from now on, on this thread.
+pub fn set_display_region(region: Region) {
+    let _ = DISPLAY_REGION.try_with(|r| r.set(region));
+}
+
+/// The region display text is shown in on this thread.
+pub fn display_region() -> Region {
+    DISPLAY_REGION.try_with(std::cell::Cell::get).unwrap_or_default()
+}
+
+/// Formats a cell value for display in `region`: its decimal and thousands separators, and its
+/// short date for the built-in short date formats (`m/d/yyyy`, `m/d/yyyy h:mm`).
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: Region) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) if region != Region::EnUs && fmt.is_date() => match builtin_id(fmt.code()) {
+            Some(14) => NumberFormat::parse_cached(region.short_date()).format_number(*n, sys, region).0,
+            Some(22) => NumberFormat::parse_cached(region.short_date_time()).format_number(*n, sys, region).0,
+            _ => fmt.format_number(*n, sys, region).0,
+        },
+        Value::Number(n) => fmt.format_number(*n, sys, region).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_in(first, fmt, sys, region),
         },
     }
 }
@@ -435,7 +465,8 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    // Formula results never depend on where the workbook is opened: TEXT stays en-US.
+    let (f, overflow) = fmt.format_number(n, sys, Region::EnUs);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 

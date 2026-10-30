@@ -185,6 +185,12 @@ impl Language {
         }
     }
 
+    /// The regional formats values show and are typed in: Spain's for the languages of Spain,
+    /// Ukraine's for Ukrainian, en-US for the rest.
+    pub fn region(self) -> gridcraft_engine::core::Region {
+        gridcraft_engine::core::Region::from_tag(self.code()).unwrap_or_default()
+    }
+
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }

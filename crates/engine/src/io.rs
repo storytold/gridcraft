@@ -300,7 +300,9 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
         {
             number.to_string()
         } else {
-            crate::display::value_text(wb, sh, c)
+            // Delimited files are read back by other programs: en-US, whatever the display region.
+            let style = wb.styles.get(sh.style_id(c));
+            crate::display::value_text_as_in(wb, &sh.value(c), style.num_fmt.as_str(), gridcraft_core::Region::EnUs)
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))
@@ -468,6 +470,11 @@ const HTML_EXPORT_MAX_CELLS: u64 = 4_000_000;
 /// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
 /// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
+    // A file: en-US like CSV and XLSX, whatever region the interface shows.
+    crate::display::in_region(gridcraft_core::Region::EnUs, || html_document(wb, sheet))
+}
+
+fn html_document(wb: &Workbook, sheet: usize) -> Result<String> {
     let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
     let fixed = !(sh.images.is_empty() && sh.charts.is_empty());
     let used = sh.used_range();

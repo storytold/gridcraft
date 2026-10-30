@@ -231,3 +231,39 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+
+/// The display region is per thread. Two apps on one thread, in Spanish and in English, each
+/// show values in their own region however their frames interleave, and a frame leaves the
+/// thread's region as it found it.
+#[test]
+fn apps_sharing_a_thread_show_values_in_their_own_region() {
+    use egui_kittest::kittest::Queryable as _;
+    use gridcraft_engine::core::Region;
+    use gridcraft_engine::display::{region, set_region};
+    let harness = |language: &str| {
+        let mut a = app();
+        a.run("cell.set", json!({"cell":"A1","input":"1234.5"})).unwrap();
+        a.run("app.language.set", json!({"language": language})).unwrap();
+        set_region(Region::EnUs);
+        crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            a,
+        )
+    };
+    let mut spanish = harness("es");
+    let mut english = harness("en");
+    for _ in 0..2 {
+        spanish.run_steps(2);
+        assert!(spanish.query_by_label("1234,5").is_some(), "Spanish formula bar");
+        assert_eq!(region(), Region::EnUs, "a Spanish frame leaves the thread in en-US");
+        english.run_steps(2);
+        assert!(english.query_by_label("1234.5").is_some(), "English formula bar");
+    }
+    set_region(Region::UkUa);
+    english.run_steps(1);
+    assert_eq!(region(), Region::UkUa);
+    set_region(Region::EnUs);
+}
