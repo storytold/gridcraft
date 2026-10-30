@@ -6,6 +6,9 @@ use super::*;
 use crate::testing::{agile_info, encrypt_agile, encrypt_standard, with_agile_header};
 
 const PASSWORD: &str = "Pass1234";
+/// 16 zero bytes (whole AES blocks), a stand-in for a real integrity field where the values
+/// can't be reached anyway (scheme errors, descriptor-parse damage).
+const HMAC_STUB: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
 
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
@@ -107,9 +110,9 @@ fn unsupported_schemes_are_named() {
     assert_eq!(unsupported(&rc4), "RC4");
     assert_eq!(unsupported(&[3, 0, 3, 0, 0, 0, 0, 0]), "Extensible");
     assert_eq!(unsupported(&[1, 0, 1, 0, 0, 0, 0, 0]), "version 1.1");
-    let des = agile_info(PASSWORD, 1000).replace("cipherAlgorithm=\"AES\"", "cipherAlgorithm=\"3DES\"");
+    let des = agile_info(PASSWORD, 1000, HMAC_STUB, HMAC_STUB).replace("cipherAlgorithm=\"AES\"", "cipherAlgorithm=\"3DES\"");
     assert_eq!(unsupported(&with_agile_header(&des)), "3DES");
-    let cert = agile_info(PASSWORD, 1000).replace("keyEncryptor/password", "keyEncryptor/certificate");
+    let cert = agile_info(PASSWORD, 1000, HMAC_STUB, HMAC_STUB).replace("keyEncryptor/password", "keyEncryptor/certificate");
     assert_eq!(unsupported(&with_agile_header(&cert)), "certificate");
 }
 
@@ -136,7 +139,7 @@ fn damaged_files_are_malformed_not_panics() {
         ragged[..8].copy_from_slice(&len.to_le_bytes());
         assert!(is_malformed(decrypt_streams(&info, &ragged, PASSWORD)));
     }
-    let xml = agile_info(PASSWORD, 1000);
+    let xml = agile_info(PASSWORD, 1000, HMAC_STUB, HMAC_STUB);
     let bad = |s: String| is_malformed(decrypt_streams(&with_agile_header(&s), &[0; 8], PASSWORD));
     assert!(bad(xml.replace("spinCount=\"1000\"", "spinCount=\"4000000000\"")));
     assert!(bad(xml.replace("saltValue=\"", "saltValue=\"*")));
@@ -154,4 +157,77 @@ fn non_ascii_passwords_hash_as_utf16le_like_msoffcrypto() {
         h,
         hex("2bca96ca0a7e8d88d9314a2eb1819a1ece94ff9ce34266ff82f891a88c4240c4c9f39c729b7c5c410c27fc8e2b7ad90d8c005eb68a603377b8a4ab858041c76a")
     );
+}
+
+#[test]
+fn hmac_matches_the_rfc2104_test_vectors() {
+    use crate::crypto::hmac as mac;
+    let h = |v: Vec<u8>| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    // RFC 2202 test case 1 (HMAC-SHA-1) and HMAC-SHA-256 vectors.
+    assert_eq!(h(mac(Hash::Sha1, &[0x0b; 20], b"Hi There")), "b617318655057264e28bc0b6fb378c8ef146be00");
+    assert_eq!(h(mac(Hash::Sha256, &[0x0b; 20], b"Hi There")), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    // RFC 4231 test case 5 (HMAC-SHA-256): a key longer than the block size is hashed first.
+    assert_eq!(
+        h(mac(Hash::Sha256, &[0xaa; 131], b"Test Using Larger Than Block-Size Key - Hash Key First")),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+    );
+}
+
+/// Strips the `<dataIntegrity …/>` element from an Agile descriptor.
+fn without_integrity(info: &[u8]) -> Vec<u8> {
+    let xml = std::str::from_utf8(&info[8..]).unwrap().to_string();
+    let start = xml.find("<dataIntegrity").unwrap();
+    let end = start + xml[start..].find("/>").unwrap() + 2;
+    let stripped = format!("{}{}", &xml[..start], &xml[end..]);
+    with_agile_header(&stripped)
+}
+
+#[test]
+fn integrity_is_required_and_enforced() {
+    let plain = payload(300);
+    let (info, package) = encrypt_agile(&plain, PASSWORD, 1000);
+    // An attacker can't just delete the integrity element to get the package verified.
+    assert!(matches!(decrypt_streams(&without_integrity(&info), &package, PASSWORD),
+                     Err(DecryptError::Malformed(m)) if m.contains("dataIntegrity")));
+    // An empty or ragged field is damage, not a pass.
+    for bad in [("encryptedHmacKey", ""), ("encryptedHmacKey", "AA=="), ("encryptedHmacValue", "")] {
+        let xml =
+            agile_info(PASSWORD, 1000, HMAC_STUB, HMAC_STUB).replace(&format!("{}=\"{HMAC_STUB}\"", bad.0), &format!("{}=\"{}\"", bad.0, bad.1));
+        let r = decrypt_streams(&with_agile_header(&xml), &package, PASSWORD);
+        assert!(matches!(r, Err(DecryptError::Malformed(_))), "{}=\"{}\"", bad.0, bad.1);
+    }
+}
+
+#[test]
+fn modified_ciphertext_fails_the_integrity_check() {
+    let plain = payload(300);
+    let (info, package) = encrypt_agile(&plain, PASSWORD, 1000);
+    // The correct password proves the verifier can't vouch for a modified package.
+    for at in [8usize, 100, package.len() - 5] {
+        let mut tampered = package.clone();
+        tampered[at] ^= 0x80;
+        assert!(
+            matches!(decrypt_streams(&info, &tampered, PASSWORD),
+                         Err(DecryptError::Malformed(m)) if m.contains("integrity")),
+            "byte {at}"
+        );
+    }
+    // And neither can the descriptor: a swapped integrity value is refused.
+    let xml = String::from_utf8_lossy(&info[8..]).to_string();
+    let at = xml.find("encryptedHmacValue=\"").unwrap() + "encryptedHmacValue=\"".len();
+    let mut xml: Vec<u8> = xml.into_bytes();
+    xml[at] ^= b'A' ^ b'B';
+    assert!(matches!(decrypt_streams(&with_agile_header(std::str::from_utf8(&xml).unwrap()), &package, PASSWORD), Err(DecryptError::Malformed(_))));
+}
+
+#[test]
+fn integrity_matches_the_stream_not_the_plaintext() {
+    // The MAC covers the whole EncryptedPackage stream, StreamSize field included: changing the
+    // stated size alone must fail, while the actual bytes round-trip.
+    let plain = payload(4200);
+    let (info, package) = encrypt_agile(&plain, PASSWORD, 1000);
+    let mut ours = package.clone();
+    ours[..8].copy_from_slice(&((plain.len() + 1) as u64).to_le_bytes());
+    assert!(matches!(decrypt_streams(&info, &ours, PASSWORD), Err(DecryptError::Malformed(m)) if m.contains("integrity")));
+    assert_eq!(decrypt_streams(&info, &package, PASSWORD).unwrap(), plain);
 }

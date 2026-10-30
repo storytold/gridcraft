@@ -26,6 +26,9 @@ const BLOCK: usize = 16;
 pub(crate) const BLOCK_VERIFIER_INPUT: [u8; 8] = [0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79];
 pub(crate) const BLOCK_VERIFIER_HASH: [u8; 8] = [0xD7, 0xAA, 0x0F, 0x6D, 0x30, 0x61, 0x34, 0x4E];
 pub(crate) const BLOCK_KEY: [u8; 8] = [0x14, 0x6E, 0x0B, 0xE7, 0xAB, 0xAC, 0xD0, 0xD6];
+/// The two dataIntegrity block keys ([MS-OFFCRYPTO] 2.3.4.14), one per HMAC field.
+pub(crate) const BLOCK_HMAC_KEY: [u8; 8] = [0x5F, 0xB2, 0xAD, 0x01, 0x0C, 0xB9, 0xE1, 0xF6];
+pub(crate) const BLOCK_HMAC_VALUE: [u8; 8] = [0xA0, 0x67, 0x7F, 0x02, 0xB2, 0x2C, 0x84, 0x33];
 
 /// The password key encryptor's URI (the other kind is certificate-based).
 pub(crate) const PASSWORD_ENCRYPTOR: &str = "http://schemas.microsoft.com/office/2006/keyEncryptor/password";
@@ -165,6 +168,14 @@ impl Hash {
             Hash::Sha512 => run::<sha2::Sha512>(parts),
         }
     }
+
+    /// The bytes the algorithm's compression function takes: 128 for SHA-384/512, else 64.
+    fn block_size(self) -> usize {
+        match self {
+            Hash::Sha384 | Hash::Sha512 => 128,
+            Hash::Sha1 | Hash::Sha256 => 64,
+        }
+    }
 }
 
 /// H0 = H(salt ‖ UTF-16LE(password)), then Hn = H(LE32(n - 1) ‖ Hn-1) for `spin` rounds.
@@ -182,6 +193,19 @@ pub(crate) fn derive(hash: Hash, a: &[u8], b: &[u8], len: usize) -> Vec<u8> {
     let mut k = hash.digest(&[a, b]);
     k.resize(len, 0x36);
     k
+}
+
+/// HMAC-SHA-`hash` ([RFC2104]), as Agile's dataIntegrity uses.
+pub(crate) fn hmac(hash: Hash, key: &[u8], message: &[u8]) -> Vec<u8> {
+    let bs = hash.block_size();
+    let mut k = key.to_vec();
+    if k.len() > bs {
+        k = hash.digest(&[&k]);
+    }
+    k.resize(bs, 0);
+    let pad = |x: u8| k.iter().map(|b| b ^ x).collect::<Vec<u8>>();
+    let inner = hash.digest(&[&pad(0x36), message]);
+    hash.digest(&[&pad(0x5C), &inner])
 }
 
 /// The Standard encryption key ([MS-OFFCRYPTO] 2.3.4.7): SHA-1 iterated 50,000 times, the
@@ -368,8 +392,9 @@ impl Params {
     }
 }
 
-/// What an Agile descriptor holds: the package's cipher, and the password key encryptor with its
-/// three encrypted values (verifier input, verifier hash, package key).
+/// What an Agile descriptor holds: the package's cipher, the password key encryptor with its
+/// three encrypted values (verifier input, verifier hash, package key), and the package's
+/// integrity pair, which Excel always writes and the reader requires.
 struct AgileDescriptor {
     key_data: Params,
     key: Params,
@@ -377,6 +402,8 @@ struct AgileDescriptor {
     verifier_input: Vec<u8>,
     verifier_hash: Vec<u8>,
     key_value: Vec<u8>,
+    hmac_key: Vec<u8>,
+    hmac_value: Vec<u8>,
 }
 
 /// `xml` is the XML encryption descriptor after the 8-byte version and reserved field.
@@ -395,6 +422,16 @@ fn agile_descriptor(xml: &[u8]) -> Result<AgileDescriptor, DecryptError> {
         return Err(malformed(format!("a spin count of {spin}, more than the {MAX_SPIN_COUNT} allowed")));
     }
     let field = |name: &str| base64(encryptor.attr(name).ok_or_else(|| malformed(format!("no {name}")))?);
+    // A descriptor without dataIntegrity can't prove its ciphertext is the one the password
+    // protects: the verifier only authenticates the key, not the package ([MS-OFFCRYPTO] 2.3.4.14).
+    let integrity = root.child("dataIntegrity").ok_or_else(|| malformed("no dataIntegrity"))?;
+    let hmac_field = |attr: &str| {
+        let v = base64(integrity.attr(attr).ok_or_else(|| malformed(format!("no {attr}")))?)?;
+        if v.is_empty() || v.len() % BLOCK != 0 {
+            return Err(malformed(format!("a whole-block {attr}")));
+        }
+        Ok(v)
+    };
     Ok(AgileDescriptor {
         key_data,
         key,
@@ -402,11 +439,14 @@ fn agile_descriptor(xml: &[u8]) -> Result<AgileDescriptor, DecryptError> {
         verifier_input: field("encryptedVerifierHashInput")?,
         verifier_hash: field("encryptedVerifierHashValue")?,
         key_value: field("encryptedKeyValue")?,
+        hmac_key: hmac_field("encryptedHmacKey")?,
+        hmac_value: hmac_field("encryptedHmacValue")?,
     })
 }
 
 fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptError> {
-    let AgileDescriptor { key_data, key, spin, verifier_input, verifier_hash, key_value } = agile_descriptor(xml)?;
+    let descriptor = agile_descriptor(xml)?;
+    let AgileDescriptor { key_data, key, spin, verifier_input, verifier_hash, key_value, hmac_key, hmac_value } = descriptor;
     let h = iterated_hash(key.hash, password, &key.salt, spin);
     let iv = key.iv(None);
     let field = |data: &[u8], block_key: &[u8]| -> Result<Vec<u8>, DecryptError> {
@@ -423,6 +463,18 @@ fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptE
     }
     let secret = field(&key_value, &BLOCK_KEY)?;
     let aes = Aes::new(secret.get(..key_data.key_len).ok_or_else(|| malformed("a short encryptedKeyValue"))?)?;
+    // Package integrity, [MS-OFFCRYPTO] 2.3.4.14: both HMAC fields are encrypted with the
+    // package key (the verifier above only authenticates the password), keyed by a random
+    // salt-size array, computed over the whole EncryptedPackage stream, StreamSize field included.
+    let mut mac_field = hmac_key;
+    aes.decrypt_cbc(&key_data.iv(Some(&BLOCK_HMAC_KEY)), &mut mac_field)?;
+    mac_field.truncate(key_data.salt.len());
+    let mut declared = hmac_value;
+    aes.decrypt_cbc(&key_data.iv(Some(&BLOCK_HMAC_VALUE)), &mut declared)?;
+    let mac = hmac(key_data.hash, &mac_field, package);
+    if declared.get(..mac.len()) != Some(mac.as_slice()) {
+        return Err(malformed("the decrypted data failed its integrity check"));
+    }
     let (size, data) = package_parts(package)?;
     let mut out = Vec::with_capacity(size);
     for (i, segment) in data.chunks(SEGMENT).enumerate() {

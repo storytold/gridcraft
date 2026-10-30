@@ -1,6 +1,6 @@
 //! Regenerate the keytip sequence table and its per-sequence test suite from `keytips.json`.
 //!
-//! `cargo xtask keytips`          regenerate the table + `tests/keytips_generated.rs`
+//! `cargo xtask keytips`          regenerate the table + `tests/it/keytips_generated.rs`
 //! `cargo xtask keytips --check`  fail if either generated file differs from the JSON source
 //!
 //! Requires the default `engine` feature: the generator probes the live command
@@ -10,12 +10,17 @@
 use std::fs;
 use std::path::Path;
 
-const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+/// "File" is not a ribbon tab: its sequence opens the Backstage view.
+const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
 /// Commands whose empty-params behaviour depends on the host machine (e.g. the
 /// system dictionary). These are never probed; their tests assert "invoked
 /// something observable" so the checked-in file stays byte-identical everywhere.
 const ENV_SENSITIVE: &[&str] = &["review.spelling"];
+
+/// Commands that the UI turns into a dialog when invoked menu-style with no params (the engine
+/// command itself errors without them). Never probed; their tests assert the dialog opens.
+const UI_DIALOG_COMMANDS: &[(&str, &str)] = &[("insert.recommendedCharts", "recommendedCharts")];
 
 /// Format generated source through `rustfmt` so the checked-in file matches
 /// the emitter byte-for-byte.
@@ -44,25 +49,35 @@ struct Entry {
     kind: String,
     target: String,
     pending: bool,
+    /// Fixed params as a compact JSON object (`params` in keytips.json), empty for none.
+    params: String,
     excel: String,
     note: String,
 }
 
+impl Entry {
+    /// The probe key: a command and the params its keytip passes.
+    fn probe_key(&self) -> String {
+        if self.params.is_empty() || self.params == "{}" { self.target.clone() } else { format!("{} {}", self.target, self.params) }
+    }
+}
+
 /// 0 = ran and journaled, 1 = ran without a journal step, 2 = errored (params
-/// missing, disabled, or environment-dependent).
+/// missing, disabled, or environment-dependent). Keyed by [`Entry::probe_key`].
 type Probe = std::collections::HashMap<String, u8>;
 
 #[cfg(feature = "engine")]
-fn probe_live_commands(ids: &[String]) -> Probe {
+fn probe_live_commands(calls: &[(String, String)]) -> Probe {
     use gridcraft_engine::Session;
     let mut map = Probe::new();
-    for id in ids {
-        if ENV_SENSITIVE.contains(&id.as_str()) {
+    for (id, params) in calls {
+        if ENV_SENSITIVE.contains(&id.as_str()) || UI_DIALOG_COMMANDS.iter().any(|(c, _)| c == id) {
             continue;
         }
+        let params = if params.is_empty() { serde_json::json!({}) } else { serde_json::from_str(params).unwrap_or_default() };
         let mut s = Session::new();
         s.new_workbook();
-        let status = match s.execute(id, serde_json::json!({})) {
+        let status = match s.execute(id, params.clone()) {
             Ok(_) => {
                 if s.journal.iter().any(|(jid, _)| jid == id) {
                     0
@@ -72,7 +87,8 @@ fn probe_live_commands(ids: &[String]) -> Probe {
             }
             Err(_) => 2,
         };
-        map.insert(id.clone(), status);
+        let key = if params.as_object().is_some_and(|o| !o.is_empty()) { format!("{id} {params}") } else { id.clone() };
+        map.insert(key, status);
     }
     map
 }
@@ -87,7 +103,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     {
         let json_path = root.join("crates/ui-egui/src/keytips/keytips.json");
         let table_path = root.join("crates/ui-egui/src/keytips/keytip_table/generated.rs");
-        let tests_path = root.join("crates/ui-egui/tests/keytips_generated.rs");
+        let tests_path = root.join("crates/ui-egui/tests/it/keytips_generated.rs");
         let source = fs::read_to_string(&json_path).map_err(|e| format!("read {}: {e}", json_path.display()))?;
         let (entries, probe) = parse_and_probe(&source)?;
         let generated =
@@ -132,6 +148,13 @@ fn parse_and_probe(source: &str) -> Result<(Vec<Entry>, Probe), String> {
         if pending && kind != "command" {
             return Err(format!("{at}: `pending` is only valid with kind `command`"));
         }
+        let params = match e.get("params") {
+            None => String::new(),
+            Some(v) if v.is_object() && matches!(kind.as_str(), "command" | "dialog") && !pending => {
+                serde_json::to_string(v).map_err(|e| format!("{at}: params: {e}"))?
+            }
+            Some(_) => return Err(format!("{at}: `params` must be a JSON object, on a non-pending command or dialog")),
+        };
         match kind.as_str() {
             "tab" => {
                 if target.is_empty() || !TABS.contains(&target.as_str()) {
@@ -163,6 +186,7 @@ fn parse_and_probe(source: &str) -> Result<(Vec<Entry>, Probe), String> {
             kind,
             target,
             pending,
+            params,
             excel: e.get("excel").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             note: e.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         });
@@ -170,10 +194,10 @@ fn parse_and_probe(source: &str) -> Result<(Vec<Entry>, Probe), String> {
     // JSON order is authoritative and curated: the first entry for a tab is its canonical
     // badge (legacy aliases come later), and groups stay together. Do not sort.
 
-    let live_ids: Vec<String> = entries
+    let live_calls: Vec<(String, String)> = entries
         .iter()
         .filter(|e| e.kind == "command" && !e.pending)
-        .map(|e| e.target.clone())
+        .map(|e| (e.target.clone(), e.params.clone()))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -187,7 +211,7 @@ fn parse_and_probe(source: &str) -> Result<(Vec<Entry>, Probe), String> {
             e.target.clone()
         })
         .collect();
-    let mut probe = probe_live_commands(&live_ids);
+    let mut probe = probe_live_commands(&live_calls);
     for id in landed {
         let mut s = gridcraft_engine::Session::new();
         s.new_workbook();
@@ -219,7 +243,9 @@ fn render_table(entries: &[Entry]) -> String {
         let value = match e.kind.as_str() {
             "tab" => format!("Entry::Tab({:?})", e.target),
             "command" if e.pending => format!("Entry::Finish(Action::Pending({:?}))", e.target),
+            "command" if !e.params.is_empty() => format!("Entry::Finish(Action::CommandWith({:?}, {:?}))", e.target, e.params),
             "command" => format!("Entry::Finish(Action::Command({:?}))", e.target),
+            "dialog" if !e.params.is_empty() => format!("Entry::Finish(Action::DialogWith({:?}, {:?}))", e.target, e.params),
             "dialog" => format!("Entry::Finish(Action::Dialog({:?}))", e.target),
             "control" => format!("Entry::Finish(Action::Control({:?}))", e.target),
             "continue" => "Entry::Continue".to_string(),
@@ -260,6 +286,10 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
     let mut out = String::from(HEADER);
     for e in entries {
         let body = match e.kind.as_str() {
+            "tab" if e.target == "File" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the File view\");\n    assert_eq!(h.state().keytips.prefix(), Some({seq:?}));",
+                seq = e.seq,
+            ),
             "tab" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().ui.ribbon_tab, {tab:?}, \"{seq} must switch to the {tab} tab\");",
                 seq = e.seq,
@@ -269,7 +299,14 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_none(), \"{seq} must not open a dialog\");\n    assert!(h.state().message.is_none(), \"{seq} must not open a message box\");\n    assert!(h.state().toast.is_none(), \"{seq} must not raise a toast\");\n    assert!(h.state().session.journal.is_empty(), \"{seq} must not journal\");",
                 seq = e.seq,
             ),
-            "command" => match probe.get(&e.target).copied().unwrap_or(2) {
+            "command" if UI_DIALOG_COMMANDS.iter().any(|(c, _)| *c == e.target) => {
+                let dialog = UI_DIALOG_COMMANDS.iter().find(|(c, _)| *c == e.target).map_or("", |(_, d)| d);
+                format!(
+                    "// The dialog previews chart types for the selected data, so the sheet needs some.\n    h.state_mut().session.execute(\"range.setValues\", serde_json::json!({{\"range\": \"A1\", \"values\": [[\"Fruit\", \"Sales\"], [\"Apples\", 5], [\"Pears\", 3]]}})).unwrap();\n    h.state_mut().session.execute(\"selection.set\", serde_json::json!({{\"range\": \"A1:B3\"}})).unwrap();\n    sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some({dialog:?}), \"{seq} must open the {dialog} dialog\");",
+                    seq = e.seq,
+                )
+            }
+            "command" => match probe.get(&e.probe_key()).copied().unwrap_or(2) {
                 0 => format!(
                     "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().session.journal.iter().any(|(id, _)| id == {id:?}), \"{seq} must journal {id}\");",
                     seq = e.seq,
@@ -328,18 +365,7 @@ use gridcraft_ui_egui::SheetApp;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = egui_kittest::Harness::builder()
-        .with_os(OperatingSystem::Nix)
-        .with_size(egui::vec2(1200.0, 800.0))
-        .build_ui_state(
-            |ui, app: &mut SheetApp| {
-                app.logic(ui.ctx());
-                app.ui(ui);
-            },
-            SheetApp::new(session, Default::default()),
-        );
-    h.run_steps(4);
-    h
+    crate::common::os_harness(session, OperatingSystem::Nix)
 }
 
 fn blank() -> Session {

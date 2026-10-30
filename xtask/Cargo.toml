@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | version | stats | ico"
+description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | i18n-report | version | stats | ico"
 
 [lints]
 workspace = true

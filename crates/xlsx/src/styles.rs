@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use gridcraft_model::style::Protection;
+use gridcraft_model::style::{DxfStated, Protection};
 use gridcraft_model::{
     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleProperty, Underline, VAlign, VertAlign,
     Workbook,
@@ -58,6 +58,9 @@ fn bool_prop(e: &El, name: &str) -> bool {
     e.child(name).is_some_and(|c| c.flag("val", true))
 }
 
+const DEFAULT_FONT_FAMILY: u8 = 2;
+const MAX_FONT_FAMILY: u8 = 14;
+
 pub fn read_font(e: &El, palette: &[u32]) -> Font {
     let mut f = Font::default();
     if let Some(n) = e.child("name").or_else(|| e.child("rFont")).and_then(|n| n.attr("val")) {
@@ -85,6 +88,13 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
             _ => VertAlign::Baseline,
         };
     }
+    f.charset = e.child("charset").and_then(|c| c.attr_u32("val")).and_then(|v| u8::try_from(v).ok());
+    f.family = e
+        .child("family")
+        .and_then(|c| c.attr_u32("val"))
+        .and_then(|v| u8::try_from(v).ok())
+        .filter(|v| *v <= MAX_FONT_FAMILY && *v != DEFAULT_FONT_FAMILY);
+    f.minor = e.child_val("scheme") == Some("minor");
     f.color = opt_color(e.child("color"), palette);
     // Text 1 (dk1) is what "automatic" font colour means in practice.
     if f.color == Color::Theme(1, 0) {
@@ -304,7 +314,8 @@ fn read_xf(xf: &El, fonts: &[Font], fills: &[Fill], borders: &[Borders], fmts: &
 
 /// `checkboxes`: for each `xfComplement` index, whether it is a checkbox (see
 /// [`crate::feature_bags::checkbox_complements`]); empty when the file has no feature property bags.
-pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
+/// `minor_font`: the theme's body font, which fonts with `<scheme val="minor"/>` follow.
+pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn {
     let mut palette: Vec<u32> = INDEXED.to_vec();
     if let Some(ix) = root.path(&["colors", "indexedColors"]) {
         let custom: Vec<u32> = ix
@@ -326,7 +337,13 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
             }
         }
     }
-    let fonts: Vec<Font> = root.child("fonts").map(|f| f.kids("font").map(|e| read_font(e, &palette)).collect()).unwrap_or_default();
+    // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
+    let body_font = |e: &El| {
+        let mut f = read_font(e, &palette);
+        f.minor |= f.name != minor_font;
+        f
+    };
+    let fonts: Vec<Font> = root.child("fonts").map(|f| f.kids("font").map(body_font).collect()).unwrap_or_default();
     let fills: Vec<Fill> = root.child("fills").map(|f| f.kids("fill").map(|e| read_fill(e, &palette, false)).collect()).unwrap_or_default();
     let borders: Vec<Borders> = root.child("borders").map(|f| f.kids("border").map(|e| read_border(e, &palette)).collect()).unwrap_or_default();
     let xfs =
@@ -343,87 +360,103 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
             }
         }
     }
-    let dxfs = root
-        .child("dxfs")
-        .map(|d| {
-            d.kids("dxf")
-                .map(|x| {
-                    let mut s = Style::default();
-                    if let Some(f) = x.child("font") {
-                        let f = read_font(f, &palette);
-                        s.font = f;
-                        if let Some(c) = x.child("font").and_then(|f| f.child("color")) {
-                            s.font.color = read_color(c, &palette);
-                        }
-                    }
-                    if let Some(n) = x.child("numFmt") {
-                        if let Some(code) = n.attr("formatCode") {
-                            s.num_fmt = NumFmt::new(code);
-                        } else if let Some(id) = n.attr_u32("numFmtId") {
-                            s.num_fmt = num_fmt_code(id, &fmts);
-                        }
-                    }
-                    if let Some(f) = x.child("fill") {
-                        s.fill = read_fill(f, &palette, true);
-                    }
-                    if let Some(b) = x.child("border") {
-                        s.borders = read_border(b, &palette);
-                    }
-                    if let Some(a) = x.child("alignment") {
-                        s.align = read_alignment(a);
-                    }
-                    if let Some(p) = x.child("protection") {
-                        s.protection = read_protection(p);
-                    }
-                    let mut set = s.differential_properties();
-                    if let Some(f) = x.child("font") {
-                        for (tag, property) in [
-                            ("name", StyleProperty::FontName),
-                            ("sz", StyleProperty::FontSize),
-                            ("b", StyleProperty::Bold),
-                            ("i", StyleProperty::Italic),
-                            ("u", StyleProperty::Underline),
-                            ("strike", StyleProperty::Strike),
-                            ("color", StyleProperty::FontColor),
-                            ("vertAlign", StyleProperty::FontVertical),
-                        ] {
-                            if f.child(tag).is_some() {
-                                set.insert(property);
-                            }
-                        }
-                    }
-                    if x.child("numFmt").is_some() {
-                        set.insert(StyleProperty::NumberFormat);
-                    }
-                    if x.child("fill").is_some() {
-                        set.insert(StyleProperty::Fill);
-                    }
-                    if let Some(b) = x.child("border") {
-                        for (tag, property) in [
-                            ("left", StyleProperty::LeftBorder),
-                            ("right", StyleProperty::RightBorder),
-                            ("top", StyleProperty::TopBorder),
-                            ("bottom", StyleProperty::BottomBorder),
-                        ] {
-                            if b.child(tag).is_some_and(|line| line.attr("style").is_some()) {
-                                set.insert(property);
-                            }
-                        }
-                        if b.flag("diagonalDown", false) {
-                            set.insert(StyleProperty::DiagonalDown);
-                        }
-                        if b.flag("diagonalUp", false) {
-                            set.insert(StyleProperty::DiagonalUp);
-                        }
-                    }
-                    s.specified = Some(set);
-                    s.normalize_differential();
-                    s
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
+}
+
+/// One differential format (`dxf`): the style it sets over a cell's own.
+fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+    let mut s = Style::default();
+    if let Some(e) = x.child("font") {
+        let f = read_font(e, palette);
+        // Differential fonts rarely name a face; unless stated, keep the default face and size.
+        let has_size = e.child("sz").and_then(|n| n.attr_f64("val")).is_some();
+        let has_name = e.child("name").and_then(|n| n.attr("val")).is_some();
+        let name = if has_name { f.name.clone() } else { s.font.name.clone() };
+        let size = if has_size { f.size } else { s.font.size };
+        let def = Font::default();
+        let st = &mut s.dxf_stated;
+        st.bold = e.child("b").is_some() && !f.bold;
+        st.italic = e.child("i").is_some() && !f.italic;
+        st.strike = e.child("strike").is_some() && !f.strike;
+        st.underline = e.child("u").is_some() && f.underline == Underline::None;
+        st.size = has_size && size == def.size;
+        st.name = has_name && name == def.name;
+        st.scheme = e.child_val("scheme").map(str::to_string);
+        // A differential font's scheme is in `dxf_stated`.
+        s.font = Font { name, size, minor: s.font.minor, ..f };
+        // Differential colors preserve an explicit theme reference, including Text 1.
+        if let Some(c) = e.child("color") {
+            s.font.color = read_color(c, palette);
+        }
+    }
+    if let Some(n) = x.child("numFmt") {
+        if let Some(code) = n.attr("formatCode") {
+            s.num_fmt = NumFmt::new(code);
+        } else if let Some(id) = n.attr_u32("numFmtId") {
+            s.num_fmt = num_fmt_code(id, fmts);
+        }
+    }
+    if let Some(f) = x.child("fill") {
+        s.fill = read_fill(f, palette, true);
+    }
+    if let Some(b) = x.child("border") {
+        s.borders = read_border(b, palette);
+    }
+    if let Some(a) = x.child("alignment") {
+        s.align = read_alignment(a);
+    }
+    if let Some(p) = x.child("protection") {
+        s.protection = read_protection(p);
+        s.dxf_stated.protection = s.protection == Protection::default();
+    }
+    s.specified = Some(dxf_properties(x, &s));
+    s.normalize_differential();
+    s
+}
+
+/// Records explicit defaults as well as non-default values in a differential format.
+fn dxf_properties(x: &El, style: &Style) -> std::collections::BTreeSet<StyleProperty> {
+    let mut set = style.differential_properties();
+    if let Some(font) = x.child("font") {
+        for (tag, property) in [
+            ("name", StyleProperty::FontName),
+            ("sz", StyleProperty::FontSize),
+            ("b", StyleProperty::Bold),
+            ("i", StyleProperty::Italic),
+            ("u", StyleProperty::Underline),
+            ("strike", StyleProperty::Strike),
+            ("color", StyleProperty::FontColor),
+            ("vertAlign", StyleProperty::FontVertical),
+        ] {
+            if font.child(tag).is_some() {
+                set.insert(property);
+            }
+        }
+    }
+    for (tag, property) in [("numFmt", StyleProperty::NumberFormat), ("fill", StyleProperty::Fill)] {
+        if x.child(tag).is_some() {
+            set.insert(property);
+        }
+    }
+    if let Some(border) = x.child("border") {
+        for (tags, property) in [
+            (["left", "start"], StyleProperty::LeftBorder),
+            (["right", "end"], StyleProperty::RightBorder),
+            (["top", "top"], StyleProperty::TopBorder),
+            (["bottom", "bottom"], StyleProperty::BottomBorder),
+        ] {
+            if border.child(tags[0]).or_else(|| border.child(tags[1])).is_some_and(|line| line.attr("style").is_some()) {
+                set.insert(property);
+            }
+        }
+        for (attribute, property) in [("diagonalDown", StyleProperty::DiagonalDown), ("diagonalUp", StyleProperty::DiagonalUp)] {
+            if border.flag(attribute, false) {
+                set.insert(property);
+            }
+        }
+    }
+    set
 }
 
 // ---------------------------------------------------------------- writing
@@ -442,19 +475,20 @@ pub fn color_attrs(c: &Color) -> String {
     }
 }
 
-/// `minor`: the font follows the theme's body font (`<scheme val="minor"/>`).
-fn font_xml(f: &Font, dxf: bool, minor: bool) -> String {
+/// `minor`: the font follows the theme's body font (`<scheme val="minor"/>`). `dxf`: a
+/// differential format's font, which writes only what it states.
+fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
+    let stated = dxf.cloned().unwrap_or_default();
     let mut s = String::from("<font>");
-    if f.bold {
-        s.push_str("<b/>");
-    }
-    if f.italic {
-        s.push_str("<i/>");
-    }
-    if f.strike {
-        s.push_str("<strike/>");
+    for (on, said, tag) in [(f.bold, stated.bold, "b"), (f.italic, stated.italic, "i"), (f.strike, stated.strike, "strike")] {
+        if on {
+            let _ = write!(s, "<{tag}/>");
+        } else if said {
+            let _ = write!(s, "<{tag} val=\"0\"/>");
+        }
     }
     match f.underline {
+        Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
         Underline::Single => s.push_str("<u/>"),
         Underline::Double => s.push_str("<u val=\"double\"/>"),
@@ -466,18 +500,30 @@ fn font_xml(f: &Font, dxf: bool, minor: bool) -> String {
         VertAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
         VertAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
     }
-    if !dxf {
+    let def = Font::default();
+    if dxf.is_none() || stated.size || f.size != def.size {
         let _ = write!(s, "<sz val=\"{}\"/>", num(f.size as f64));
     }
     if f.color != Color::Auto {
         let _ = write!(s, "<color {}/>", color_attrs(&f.color));
-    } else if !dxf {
+    } else if dxf.is_none() {
         s.push_str("<color theme=\"1\"/>");
     }
-    if !dxf {
-        let _ = write!(s, "<name val=\"{}\"/><family val=\"2\"/>", esc_attr(&f.name));
+    if dxf.is_none() {
+        let family = f.family.filter(|v| *v <= MAX_FONT_FAMILY).unwrap_or(DEFAULT_FONT_FAMILY);
+        let _ = write!(s, "<name val=\"{}\"/><family val=\"{family}\"/>", esc_attr(&f.name));
+        if let Some(charset) = f.charset {
+            let _ = write!(s, "<charset val=\"{charset}\"/>");
+        }
         if minor {
             s.push_str("<scheme val=\"minor\"/>");
+        }
+    } else {
+        if stated.name || f.name != def.name {
+            let _ = write!(s, "<name val=\"{}\"/>", esc_attr(&f.name));
+        }
+        if let Some(sc) = &stated.scheme {
+            let _ = write!(s, "<scheme val=\"{}\"/>", esc_attr(sc));
         }
     }
     s.push_str("</font>");
@@ -625,7 +671,10 @@ impl NumFmts {
 
 /// Serialize only the fields the rule overrides. Explicit off/none/automatic values survive.
 fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
-    use StyleProperty::*;
+    use StyleProperty::{
+        Bold, BottomBorder, DiagonalDown, DiagonalUp, Fill, FontColor, FontName, FontSize, FontVertical, Italic, LeftBorder, NumberFormat,
+        RightBorder, Strike, TopBorder, Underline,
+    };
     let fields = d.differential_properties();
     let has = |p| fields.contains(&p);
     let mut out = String::new();
@@ -661,6 +710,9 @@ fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
             VertAlign::Subscript => "subscript",
         };
         let _ = write!(font, "<vertAlign val=\"{value}\"/>");
+    }
+    if let Some(scheme) = &d.dxf_stated.scheme {
+        let _ = write!(font, "<scheme val=\"{}\"/>", esc_attr(scheme));
     }
     if !font.is_empty() {
         let _ = write!(out, "<font>{font}</font>");
@@ -703,8 +755,8 @@ fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
         let _ =
             write!(out, "<border diagonalDown=\"{}\" diagonalUp=\"{}\">{border}</border>", u8::from(has(DiagonalDown)), u8::from(has(DiagonalUp)));
     }
-    if let Some(p) = protection_xml(&d.protection) {
-        out.push_str(&p);
+    if d.dxf_stated.protection || d.protection != Protection::default() {
+        let _ = write!(out, "<protection locked=\"{}\" hidden=\"{}\"/>", u8::from(d.protection.locked), u8::from(d.protection.hidden));
     }
     out
 }
@@ -814,8 +866,9 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     }
     let _ = write!(s, "<fonts count=\"{}\">", fonts.len());
     for (i, f) in fonts.iter().enumerate() {
-        // A Normal font in the theme's body face follows the theme, as Excel writes it (#805).
-        s.push_str(&font_xml(f, false, i == 0 && f.name == wb.theme.minor_font));
+        // A Normal font in the theme's body face follows the theme, as Excel writes it (#805); so
+        // does every other body-face font that kept the scheme link (#2517).
+        s.push_str(&font_xml(f, None, (i == 0 || f.minor) && f.name == wb.theme.minor_font));
     }
     let _ = write!(s, "</fonts><fills count=\"{}\">", fills.len());
     for f in &fills {
@@ -846,6 +899,30 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
 mod differential_tests {
     use super::*;
 
+    /// Editing a custom style preserves the extra differential metadata imported by current main.
+    #[test]
+    fn custom_defaults_keep_imported_scheme_and_protection_across_saves() {
+        let xml = r#"<styleSheet><dxfs><dxf><font><b val="0"/><color theme="1"/><scheme val="minor"/></font><numFmt numFmtId="0" formatCode="General"/><border><start style="none"/></border><protection locked="1" hidden="0"/></dxf></dxfs></styleSheet>"#;
+        let mut style = read_styles(&crate::xml::parse(xml.as_bytes()).unwrap(), &[], gridcraft_model::DEFAULT_FONT).dxfs.remove(0);
+        assert!(style.sets(StyleProperty::Bold));
+        assert!(style.sets(StyleProperty::LeftBorder));
+        assert!(style.sets(StyleProperty::NumberFormat));
+        assert_eq!(style.font.color, Color::Theme(1, 0));
+        assert_eq!(style.dxf_stated.scheme.as_deref(), Some("minor"));
+        assert!(style.dxf_stated.protection);
+        let before = style.clone();
+        for _ in 0..3 {
+            style.normalize_differential();
+            let (xml, _) = write_styles(&Workbook::new(), &[style], &[]);
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let dxf = root.child("dxfs").unwrap().child("dxf").unwrap();
+            assert_eq!(dxf.child("font").unwrap().child_val("scheme"), Some("minor"));
+            assert_eq!(dxf.child("protection").unwrap().attr("locked"), Some("1"));
+            style = read_styles(&root, &[], gridcraft_model::DEFAULT_FONT).dxfs.remove(0);
+            assert_eq!(style, before);
+        }
+    }
+
     /// Checks schema child ordering and retained values when all differential sections coexist.
     #[test]
     fn differential_sections_follow_schema_order_and_round_trip() {
@@ -863,7 +940,7 @@ mod differential_tests {
             dxf.children.iter().map(|child| child.name.as_str()).collect::<Vec<_>>(),
             ["font", "numFmt", "fill", "alignment", "border", "protection"]
         );
-        let loaded = read_styles(&root, &[]).dxfs.remove(0);
+        let loaded = read_styles(&root, &[], gridcraft_model::DEFAULT_FONT).dxfs.remove(0);
         assert_eq!(loaded.font.bold, style.font.bold);
         assert_eq!(loaded.num_fmt, style.num_fmt);
         assert_eq!(loaded.fill, style.fill);

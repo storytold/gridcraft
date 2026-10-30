@@ -41,7 +41,7 @@ fn active_style(app: &SheetApp) -> Style {
     let Some(sheet) = doc.wb.active() else { return Style::default() };
     let at = doc.selection.active;
     match sheet.table_at(at) {
-        Some(table) => gridcraft_engine::tables::table_cell_style(&doc.wb, doc.wb.active_sheet, table, at),
+        Some(table) => gridcraft_engine::tables::table_cell_style(&doc.wb, doc.wb.active_sheet(), table, at),
         None => doc.wb.styles.get(sheet.style_id(at)).clone(),
     }
 }
@@ -104,11 +104,12 @@ fn translated_label<'a>(lang: crate::i18n::Language, label: &'a str, key: &'a st
 /// Draws a translated option list while preserving the unlocalized control ID and stored enum value.
 fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: &str, value: &mut T, options: &[(T, &str)], lang: crate::i18n::Language) {
     let label = options.iter().find(|(v, _)| v == value).map(|(_, n)| *n).unwrap_or("");
-    egui::ComboBox::from_id_salt(id).selected_text(lang.tr(label)).show_ui(ui, |ui| {
+    let response = craft_ui::ComboBox::from_id_salt(id).selected_text(lang.tr(label)).show_ui(ui, |ui| {
         for (v, name) in options {
             ui.selectable_value(value, *v, lang.tr(name));
         }
     });
+    response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), format!("{} value", lang.tr(id))));
 }
 
 /// Adds an inheritance checkbox for a conditional property and disables its controls while it is unset.
@@ -154,7 +155,7 @@ fn color(ui: &mut egui::Ui, value: &mut Color, theme: &gridcraft_engine::model::
         draft.text = hex(*value);
     }
     let response = ui.add(egui::TextEdit::singleline(&mut draft.text).desired_width(85.0));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), "Color hex"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), "Color hex"));
     if response.changed()
         && let Some(c) = Color::from_hex(&draft.text)
     {
@@ -184,252 +185,16 @@ pub(crate) fn options(
     specified: Option<&mut std::collections::BTreeSet<StyleProperty>>,
     drafts: &mut ColorDrafts,
 ) {
-    use StyleProperty::*;
-    let lang = app.ui.language;
     let conditional = specified.is_some();
     let mut unused = Default::default();
     let set = specified.unwrap_or(&mut unused);
     let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
-    let mut draw = |ui: &mut egui::Ui| {
-        match tab {
-            "Number" => {
-                let mut draw = |ui: &mut egui::Ui| {
-                    let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
-                    let mut code = style.num_fmt.as_str().to_string();
-                    ui.columns(2, |cols| {
-                        cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
-                        for name in [
-                            "General",
-                            "Number",
-                            "Currency",
-                            "Accounting",
-                            "Short Date",
-                            "Long Date",
-                            "Time",
-                            "Percentage",
-                            "Fraction",
-                            "Scientific",
-                            "Text",
-                        ] {
-                            let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
-                            let response = cols[0].selectable_label(code == c, lang.tr(name));
-                            if response.clicked() {
-                                code = c;
-                            }
-                        }
-                        cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                        let preview =
-                            app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
-                        cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
-                        cols[1].add_space(8.0);
-                        cols[1].label("Type (custom format code):");
-                        cols[1].text_edit_singleline(&mut code);
-                        for c in [
-                            "0",
-                            "0.00",
-                            "#,##0",
-                            "#,##0.00",
-                            "#,##0;[Red]-#,##0",
-                            "0%",
-                            "0.00%",
-                            "0.00E+00",
-                            "# ?/?",
-                            "m/d/yyyy",
-                            "d-mmm-yy",
-                            "mmmm d, yyyy",
-                            "h:mm AM/PM",
-                            "h:mm:ss",
-                            "[h]:mm:ss",
-                            "@",
-                        ] {
-                            if cols[1].small_button(c).clicked() {
-                                code = c.to_string();
-                            }
-                        }
-                    });
-                    style.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
-                };
-                if conditional {
-                    override_row(ui, set, true, NumberFormat, translated_label(lang, "Number format", "Number"), draw);
-                } else {
-                    draw(ui);
-                }
-            }
-            "Font" => {
-                override_row(ui, set, conditional, FontName, translated_label(lang, "Font family", "Font"), |ui| {
-                    egui::ComboBox::from_id_salt("family").selected_text(&style.font.name).show_ui(ui, |ui| {
-                        for family in crate::fonts::families() {
-                            ui.selectable_value(&mut style.font.name, family.clone(), family);
-                        }
-                    });
-                });
-                override_row(ui, set, conditional, FontSize, translated_label(lang, "Font size", "Size"), |ui| {
-                    ui.add(egui::DragValue::new(&mut style.font.size).range(1.0..=409.0).suffix(" pt"));
-                });
-                for (property, label, value) in [
-                    (Bold, "Bold", &mut style.font.bold),
-                    (Italic, "Italic", &mut style.font.italic),
-                    (Strike, "Strikethrough", &mut style.font.strike),
-                ] {
-                    override_row(ui, set, conditional, property, lang.tr(label), |ui| {
-                        choice(ui, label, value, &[(false, "Off"), (true, "On")], lang);
-                    });
-                }
-                override_row(ui, set, conditional, StyleProperty::Underline, lang.tr("Underline"), |ui| {
-                    choice(
-                        ui,
-                        "underline",
-                        &mut style.font.underline,
-                        &[
-                            (FontUnderline::None, "None"),
-                            (FontUnderline::Single, "Single"),
-                            (FontUnderline::Double, "Double"),
-                            (FontUnderline::SingleAccounting, "Single Accounting"),
-                            (FontUnderline::DoubleAccounting, "Double Accounting"),
-                        ],
-                        lang,
-                    );
-                });
-                override_row(ui, set, conditional, FontVertical, translated_label(lang, "Vertical position", "Normal"), |ui| {
-                    choice(
-                        ui,
-                        "vertical",
-                        &mut style.font.vert,
-                        &[(VertAlign::Baseline, "Normal"), (VertAlign::Superscript, "Superscript"), (VertAlign::Subscript, "Subscript")],
-                        lang,
-                    );
-                });
-                override_row(ui, set, conditional, FontColor, translated_label(lang, "Font color", "Color:"), |ui| {
-                    color(ui, &mut style.font.color, &theme, drafts.entry("font").or_default(), lang);
-                });
-            }
-            "Fill" => override_row(ui, set, conditional, Fill, lang.tr("Format Cells|Fill"), |ui| {
-                ui.vertical(|ui| {
-                    choice(
-                        ui,
-                        "pattern",
-                        &mut style.fill.pattern,
-                        &[
-                            (PatternType::None, "No fill"),
-                            (PatternType::Solid, "Solid"),
-                            (PatternType::Gray50, "50% gray"),
-                            (PatternType::Gray75, "75% gray"),
-                            (PatternType::Gray25, "25% gray"),
-                            (PatternType::Gray125, "12.5% gray"),
-                            (PatternType::Gray0625, "6.25% gray"),
-                            (PatternType::DarkHorizontal, "Dark horizontal"),
-                            (PatternType::DarkVertical, "Dark vertical"),
-                            (PatternType::DarkDown, "Dark down"),
-                            (PatternType::DarkUp, "Dark up"),
-                            (PatternType::DarkGrid, "Dark grid"),
-                            (PatternType::DarkTrellis, "Dark trellis"),
-                            (PatternType::LightHorizontal, "Light horizontal"),
-                            (PatternType::LightVertical, "Light vertical"),
-                            (PatternType::LightDown, "Light down"),
-                            (PatternType::LightUp, "Light up"),
-                            (PatternType::LightGrid, "Light grid"),
-                            (PatternType::LightTrellis, "Light trellis"),
-                        ],
-                        lang,
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label(lang.tr("Foreground"));
-                        color(ui, &mut style.fill.fg, &theme, drafts.entry("fillForeground").or_default(), lang);
-                    });
-                    if !matches!(style.fill.pattern, PatternType::None | PatternType::Solid) {
-                        ui.horizontal(|ui| {
-                            ui.label(lang.tr("Background"));
-                            color(ui, &mut style.fill.bg, &theme, drafts.entry("fillBackground").or_default(), lang);
-                        });
-                    }
-                });
-            }),
-            "Border" => {
-                let old_diagonal = style.borders.diag_down;
-                ui.horizontal(|ui| {
-                    if ui.button(lang.tr("Outline")).clicked() {
-                        for p in [LeftBorder, RightBorder, TopBorder, BottomBorder] {
-                            set.insert(p);
-                        }
-                        for line in [&mut style.borders.left, &mut style.borders.right, &mut style.borders.top, &mut style.borders.bottom] {
-                            if line.is_none() {
-                                line.style = BorderStyle::Thin;
-                            }
-                        }
-                    }
-                    if ui.button(lang.tr("No borders")).clicked() {
-                        for p in [LeftBorder, RightBorder, TopBorder, BottomBorder, DiagonalDown, DiagonalUp] {
-                            set.insert(p);
-                        }
-                        style.borders = Default::default();
-                    }
-                });
-                for (p, label, line) in [
-                    (LeftBorder, "Left", &mut style.borders.left),
-                    (RightBorder, "Right", &mut style.borders.right),
-                    (TopBorder, "Top", &mut style.borders.top),
-                    (BottomBorder, "Bottom", &mut style.borders.bottom),
-                    (DiagonalDown, "Diagonal down", &mut style.borders.diag_down),
-                    (DiagonalUp, "Diagonal up", &mut style.borders.diag_up),
-                ] {
-                    override_row(ui, set, conditional, p, lang.tr(label), |ui| {
-                        let styles = &[
-                            (BorderStyle::None, "None"),
-                            (BorderStyle::Thin, "Thin"),
-                            (BorderStyle::Medium, "Medium"),
-                            (BorderStyle::Thick, "Thick"),
-                            (BorderStyle::Dashed, "Dashed"),
-                            (BorderStyle::Dotted, "Dotted"),
-                            (BorderStyle::Double, "Double"),
-                            (BorderStyle::Hair, "Hair"),
-                            (BorderStyle::MediumDashed, "Medium dashed"),
-                            (BorderStyle::DashDot, "Dash dot"),
-                            (BorderStyle::MediumDashDot, "Medium dash dot"),
-                            (BorderStyle::DashDotDot, "Dash dot dot"),
-                            (BorderStyle::MediumDashDotDot, "Medium dash dot dot"),
-                            (BorderStyle::SlantDashDot, "Slant dash dot"),
-                        ];
-                        ui.vertical(|ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                for (style, name) in styles.iter().take(7) {
-                                    let response = ui.selectable_label(line.style == *style, lang.tr(&name.to_ascii_lowercase()));
-                                    response.widget_info(|| {
-                                        egui::WidgetInfo::labeled(
-                                            egui::WidgetType::SelectableLabel,
-                                            ui.is_enabled(),
-                                            format!("{} {}", lang.tr(label), lang.tr(&name.to_ascii_lowercase())),
-                                        )
-                                    });
-                                    if response.clicked() {
-                                        line.style = *style;
-                                    }
-                                }
-                                ui.menu_button(lang.tr("More styles"), |ui| {
-                                    for (style, name) in styles.iter().skip(7) {
-                                        if ui.selectable_value(&mut line.style, *style, lang.tr(name)).clicked() {
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(lang.tr("Color"));
-                                color(ui, &mut line.color, &theme, drafts.entry(label).or_default(), lang);
-                            });
-                        });
-                    });
-                }
-                // Both diagonal directions share a line style in XLSX.
-                if conditional && set.contains(&DiagonalDown) && set.contains(&DiagonalUp) {
-                    if style.borders.diag_down != old_diagonal {
-                        style.borders.diag_up = style.borders.diag_down;
-                    } else {
-                        style.borders.diag_down = style.borders.diag_up;
-                    }
-                }
-            }
-            _ => {}
-        }
+    let mut draw = |ui: &mut egui::Ui| match tab {
+        "Number" => number_options(app, ui, style, set, conditional),
+        "Font" => font_options(app, ui, style, set, conditional, drafts),
+        "Fill" => fill_options(app, ui, style, set, conditional, drafts),
+        "Border" => border_options(app, ui, style, set, conditional, drafts),
+        _ => {}
     };
     if !conditional && tab == "Number" {
         draw(ui);
@@ -438,6 +203,273 @@ pub(crate) fn options(
     }
     if !conditional && tab == "Border" {
         crate::border_preview::sample(ui, &style.borders, &theme);
+    }
+}
+
+/// Draws number categories, the sample, and a custom format code.
+fn number_options(app: &SheetApp, ui: &mut egui::Ui, style: &mut Style, set: &mut std::collections::BTreeSet<StyleProperty>, conditional: bool) {
+    use StyleProperty::NumberFormat;
+    let lang = app.ui.language;
+    let mut draw = |ui: &mut egui::Ui| {
+        let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
+        let mut code = style.num_fmt.as_str().to_string();
+        ui.columns(2, |cols| {
+            cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
+            for name in
+                ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
+            {
+                let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
+                let response = cols[0].selectable_label(code == c, lang.tr(name));
+                if response.clicked() {
+                    code = c;
+                }
+            }
+            cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
+            let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+            cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
+            cols[1].add_space(8.0);
+            let label = cols[1].label(lang.tr("Type (custom format code):"));
+            cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+            for c in [
+                "0",
+                "0.00",
+                "#,##0",
+                "#,##0.00",
+                "#,##0;[Red]-#,##0",
+                "0%",
+                "0.00%",
+                "0.00E+00",
+                "# ?/?",
+                "m/d/yyyy",
+                "d-mmm-yy",
+                "mmmm d, yyyy",
+                "h:mm AM/PM",
+                "h:mm:ss",
+                "[h]:mm:ss",
+                "@",
+            ] {
+                if cols[1].small_button(c).clicked() {
+                    code = c.to_string();
+                }
+            }
+        });
+        style.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
+    };
+    if conditional {
+        override_row(ui, set, true, NumberFormat, translated_label(lang, "Number format", "Number"), draw);
+    } else {
+        draw(ui);
+    }
+}
+
+/// Draws the shared font controls and conditional inheritance switches.
+fn font_options(
+    app: &SheetApp,
+    ui: &mut egui::Ui,
+    style: &mut Style,
+    set: &mut std::collections::BTreeSet<StyleProperty>,
+    conditional: bool,
+    drafts: &mut ColorDrafts,
+) {
+    use StyleProperty::{Bold, FontColor, FontName, FontSize, FontVertical, Italic, Strike};
+    let lang = app.ui.language;
+    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+    override_row(ui, set, conditional, FontName, translated_label(lang, "Font family", "Font"), |ui| {
+        let response = craft_ui::ComboBox::from_id_salt("family").selected_text(&style.font.name).show_ui(ui, |ui| {
+            for family in crate::fonts::families() {
+                ui.selectable_value(&mut style.font.name, family.clone(), family);
+            }
+        });
+        response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), lang.tr("Font family value")));
+    });
+    override_row(ui, set, conditional, FontSize, translated_label(lang, "Font size", "Size"), |ui| {
+        ui.add(egui::DragValue::new(&mut style.font.size).range(1.0..=409.0).suffix(" pt"));
+    });
+    for (property, label, value) in
+        [(Bold, "Bold", &mut style.font.bold), (Italic, "Italic", &mut style.font.italic), (Strike, "Strikethrough", &mut style.font.strike)]
+    {
+        override_row(ui, set, conditional, property, lang.tr(label), |ui| {
+            choice(ui, label, value, &[(false, "Off"), (true, "On")], lang);
+        });
+    }
+    override_row(ui, set, conditional, StyleProperty::Underline, lang.tr("Underline"), |ui| {
+        choice(
+            ui,
+            "underline",
+            &mut style.font.underline,
+            &[
+                (FontUnderline::None, "None"),
+                (FontUnderline::Single, "Single"),
+                (FontUnderline::Double, "Double"),
+                (FontUnderline::SingleAccounting, "Single Accounting"),
+                (FontUnderline::DoubleAccounting, "Double Accounting"),
+            ],
+            lang,
+        );
+    });
+    override_row(ui, set, conditional, FontVertical, translated_label(lang, "Vertical position", "Normal"), |ui| {
+        choice(
+            ui,
+            "vertical",
+            &mut style.font.vert,
+            &[(VertAlign::Baseline, "Normal"), (VertAlign::Superscript, "Superscript"), (VertAlign::Subscript, "Subscript")],
+            lang,
+        );
+    });
+    override_row(ui, set, conditional, FontColor, translated_label(lang, "Font color", "Color:"), |ui| {
+        color(ui, &mut style.font.color, &theme, drafts.entry("font").or_default(), lang);
+    });
+}
+
+/// Draws solid and patterned fills with independent foreground/background colors.
+fn fill_options(
+    app: &SheetApp,
+    ui: &mut egui::Ui,
+    style: &mut Style,
+    set: &mut std::collections::BTreeSet<StyleProperty>,
+    conditional: bool,
+    drafts: &mut ColorDrafts,
+) {
+    use StyleProperty::Fill;
+    let lang = app.ui.language;
+    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+    override_row(ui, set, conditional, Fill, lang.tr("Format Cells|Fill"), |ui| {
+        ui.vertical(|ui| {
+            choice(
+                ui,
+                "pattern",
+                &mut style.fill.pattern,
+                &[
+                    (PatternType::None, "No fill"),
+                    (PatternType::Solid, "Solid"),
+                    (PatternType::Gray50, "50% gray"),
+                    (PatternType::Gray75, "75% gray"),
+                    (PatternType::Gray25, "25% gray"),
+                    (PatternType::Gray125, "12.5% gray"),
+                    (PatternType::Gray0625, "6.25% gray"),
+                    (PatternType::DarkHorizontal, "Dark horizontal"),
+                    (PatternType::DarkVertical, "Dark vertical"),
+                    (PatternType::DarkDown, "Dark down"),
+                    (PatternType::DarkUp, "Dark up"),
+                    (PatternType::DarkGrid, "Dark grid"),
+                    (PatternType::DarkTrellis, "Dark trellis"),
+                    (PatternType::LightHorizontal, "Light horizontal"),
+                    (PatternType::LightVertical, "Light vertical"),
+                    (PatternType::LightDown, "Light down"),
+                    (PatternType::LightUp, "Light up"),
+                    (PatternType::LightGrid, "Light grid"),
+                    (PatternType::LightTrellis, "Light trellis"),
+                ],
+                lang,
+            );
+            ui.horizontal(|ui| {
+                ui.label(lang.tr("Foreground"));
+                color(ui, &mut style.fill.fg, &theme, drafts.entry("fillForeground").or_default(), lang);
+            });
+            if !matches!(style.fill.pattern, PatternType::None | PatternType::Solid) {
+                ui.horizontal(|ui| {
+                    ui.label(lang.tr("Background"));
+                    color(ui, &mut style.fill.bg, &theme, drafts.entry("fillBackground").or_default(), lang);
+                });
+            }
+        });
+    });
+}
+
+/// Draws border controls while keeping the two XLSX diagonal directions consistent.
+fn border_options(
+    app: &SheetApp,
+    ui: &mut egui::Ui,
+    style: &mut Style,
+    set: &mut std::collections::BTreeSet<StyleProperty>,
+    conditional: bool,
+    drafts: &mut ColorDrafts,
+) {
+    use StyleProperty::{BottomBorder, DiagonalDown, DiagonalUp, LeftBorder, RightBorder, TopBorder};
+    let lang = app.ui.language;
+    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+    let old_diagonal = style.borders.diag_down;
+    ui.horizontal(|ui| {
+        if ui.button(lang.tr("Outline")).clicked() {
+            for p in [LeftBorder, RightBorder, TopBorder, BottomBorder] {
+                set.insert(p);
+            }
+            for line in [&mut style.borders.left, &mut style.borders.right, &mut style.borders.top, &mut style.borders.bottom] {
+                if line.is_none() {
+                    line.style = BorderStyle::Thin;
+                }
+            }
+        }
+        if ui.button(lang.tr("No borders")).clicked() {
+            for p in [LeftBorder, RightBorder, TopBorder, BottomBorder, DiagonalDown, DiagonalUp] {
+                set.insert(p);
+            }
+            style.borders = Default::default();
+        }
+    });
+    for (p, label, line) in [
+        (LeftBorder, "Left", &mut style.borders.left),
+        (RightBorder, "Right", &mut style.borders.right),
+        (TopBorder, "Top", &mut style.borders.top),
+        (BottomBorder, "Bottom", &mut style.borders.bottom),
+        (DiagonalDown, "Diagonal down", &mut style.borders.diag_down),
+        (DiagonalUp, "Diagonal up", &mut style.borders.diag_up),
+    ] {
+        override_row(ui, set, conditional, p, lang.tr(label), |ui| {
+            let styles = &[
+                (BorderStyle::None, "None"),
+                (BorderStyle::Thin, "Thin"),
+                (BorderStyle::Medium, "Medium"),
+                (BorderStyle::Thick, "Thick"),
+                (BorderStyle::Dashed, "Dashed"),
+                (BorderStyle::Dotted, "Dotted"),
+                (BorderStyle::Double, "Double"),
+                (BorderStyle::Hair, "Hair"),
+                (BorderStyle::MediumDashed, "Medium dashed"),
+                (BorderStyle::DashDot, "Dash dot"),
+                (BorderStyle::MediumDashDot, "Medium dash dot"),
+                (BorderStyle::DashDotDot, "Dash dot dot"),
+                (BorderStyle::MediumDashDotDot, "Medium dash dot dot"),
+                (BorderStyle::SlantDashDot, "Slant dash dot"),
+            ];
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (style, name) in styles.iter().take(7) {
+                        let response = ui.selectable_label(line.style == *style, lang.tr(&name.to_ascii_lowercase()));
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::Role::Button,
+                                ui.is_enabled(),
+                                line.style == *style,
+                                format!("{} {}", lang.tr(label), lang.tr(&name.to_ascii_lowercase())),
+                            )
+                        });
+                        if response.clicked() {
+                            line.style = *style;
+                        }
+                    }
+                    ui.menu_button(lang.tr("More styles"), |ui| {
+                        for (style, name) in styles.iter().skip(7) {
+                            if ui.selectable_value(&mut line.style, *style, lang.tr(name)).clicked() {
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(lang.tr("Color"));
+                    color(ui, &mut line.color, &theme, drafts.entry(label).or_default(), lang);
+                });
+            });
+        });
+    }
+    // Both diagonal directions share a line style in XLSX.
+    if conditional && set.contains(&DiagonalDown) && set.contains(&DiagonalUp) {
+        if style.borders.diag_down != old_diagonal {
+            style.borders.diag_up = style.borders.diag_down;
+        } else {
+            style.borders.diag_down = style.borders.diag_up;
+        }
     }
 }
 
@@ -457,6 +489,7 @@ pub(crate) fn editor(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
     ui.separator();
     ui.weak(lang.tr("Checked properties override the cell format. Unchecked properties stay unchanged."));
+    let clear = ui.button(lang.tr("Clear custom formatting")).clicked();
     options(app, ui, &mut style, &d.tab, Some(&mut set), &mut d.color_drafts);
     ui.separator();
     let mut selected = Style::default();
@@ -466,9 +499,10 @@ pub(crate) fn editor(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Keep imported fields not exposed by the four conditional-format tabs.
     selected.align = patch.align;
     selected.protection = patch.protection;
+    selected.dxf_stated = patch.dxf_stated.clone();
     selected.specified = Some(set);
     preview(app, ui, &selected);
-    if ui.button(lang.tr("Clear custom formatting")).clicked() {
+    if clear {
         selected = Style::default();
         selected.specified = Some(Default::default());
     }
