@@ -90,6 +90,10 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.run_or_alert("app.checkForUpdates", json!({}));
     }
+    let __k = big_button(ui, Icon::Script, "Report an\nIssue…", "Open a new GitHub issue with the version and system filled in", false);
+    if __k.clicked() {
+        app.run_or_alert("help.reportIssue", json!({}));
+    }
     let __k = big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false);
     control_keytip(app, ui, &__k, "about");
     if __k.clicked() {

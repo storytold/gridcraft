@@ -79,6 +79,9 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        if id == "help.reportIssue" {
+            return crate::report_issue::run_menu(self);
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -131,6 +134,7 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "help.reportIssue" => Ok(crate::report_issue::run(self)),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {

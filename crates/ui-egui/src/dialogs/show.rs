@@ -184,6 +184,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
                 }
                 "about" => about(ui, &mut d),
+                "failedLink" => {
+                    let url = d.values.get("url").and_then(Json::as_str).unwrap_or_default();
+                    ui.label("Open this address in a browser to report the issue:");
+                    // Read-only: a `&str` can be selected but not edited, so Copy always copies the address shown.
+                    let mut shown = url;
+                    ui.add(egui::TextEdit::multiline(&mut shown).desired_width(f32::INFINITY).desired_rows(4));
+                    if ui.button("Copy").clicked() {
+                        ctx.copy_text(url.to_string());
+                    }
+                }
                 "journal" => {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         for (id, p) in app.session.journal.iter().rev().take(500) {

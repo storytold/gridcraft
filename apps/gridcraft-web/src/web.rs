@@ -229,10 +229,14 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             if let Some(w) = web_sys::window()
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
-                // With `noopener` the new browsing context can't hold a reference back to the
-                // editor window and navigate it while the user reads the linked page.
-                let _ = w.open_with_url_and_target(&url, "_blank,noopener");
+                // `None` means a pop-up blocker stopped it. The opener is cut at once so the new
+                // browsing context can't navigate the editor window while the user reads the page.
+                if let Ok(Some(opened)) = w.open_with_url_and_target(&url, "_blank") {
+                    let _ = opened.set_opener(&JsValue::NULL);
+                    return true;
+                }
             }
+            false
         })),
         inbox: Some(inbox),
         ..Default::default()

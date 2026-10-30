@@ -186,6 +186,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Contributors…", "dialog:about:Contributors", None),
                 ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
                 ("Join the ArtCraft Discord…", "url:https://discord.gg/artcraft", None),
+                ("Report an Issue…", "help.reportIssue", None),
             ],
         ),
     ]

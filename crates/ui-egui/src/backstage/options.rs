@@ -163,7 +163,7 @@ fn parse_max_change(text: &str, locale: gridcraft_engine::formula::FormulaLocale
 }
 
 /// The platform the app was built for, e.g. "macOS (aarch64)"; the web build reports "Web".
-pub(super) fn platform() -> String {
+pub(crate) fn platform() -> String {
     let os = match std::env::consts::OS {
         "macos" => "macOS",
         "windows" => "Windows",
