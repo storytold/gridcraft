@@ -1,13 +1,24 @@
 //! Formatting: Home › Font, Alignment, Number, Styles, Cells › Format.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, NumFmt, Style, StyleId, Theme, Underline, VAlign, VertAlign};
+use gridcraft_xlsx::MAX_XML_NODES;
 use serde_json::{Value as Json, json};
 
 use super::{
-    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, parse_lines, split_sheet, str_param,
+    CommandSpec, Ctx, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, parse_lines, split_sheet, str_param,
     target_ranges, target_sheet,
 };
+
+/// A whole-row selection writes one `<row>` entry per selected row -- plus one cell per row for
+/// the presets whose left edge lands on each row's first cell -- so a selection larger than this
+/// would push the sheet part past the reader's element cap and a reload would drop content, the
+/// damage #2484 is about. It bounds each range's rows, and it bounds the first cells the whole
+/// selection materialises together against what the sheet already holds (see the projection in
+/// `borders`). Refused whole, before anything is applied, the way the cell-by-cell path's size
+/// guard refuses. (A whole-column selection holds at most 16,384 columns, the sheet's width: it
+/// needs no cap of its own.)
+const MAX_WHOLE_ROW_LINES: u64 = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -405,6 +416,189 @@ fn border_style(name: &str) -> BorderStyle {
     }
 }
 
+/// The border change one cell takes, by the edges of the range it sits on, as
+/// `(top, bottom, left, right)`.
+fn edge_change(preset: &str, base: BorderStyle, color: Color, b: &mut Borders, edges: (bool, bool, bool, bool)) {
+    let (top, bottom, left, right) = edges;
+    let line = |style: BorderStyle| BorderLine { style, color };
+    match preset {
+        "none" => *b = Borders::default(),
+        "all" => {
+            b.top = line(base);
+            b.bottom = line(base);
+            b.left = line(base);
+            b.right = line(base);
+        }
+        "outside" | "thickOutside" => {
+            let st = if preset == "thickOutside" { BorderStyle::Thick } else { base };
+            if top {
+                b.top = line(st);
+            }
+            if bottom {
+                b.bottom = line(st);
+            }
+            if left {
+                b.left = line(st);
+            }
+            if right {
+                b.right = line(st);
+            }
+        }
+        "inside" | "insideHorizontal" | "insideVertical" => {
+            if preset != "insideVertical" {
+                if !top {
+                    b.top = line(base);
+                }
+                if !bottom {
+                    b.bottom = line(base);
+                }
+            }
+            if preset != "insideHorizontal" {
+                if !left {
+                    b.left = line(base);
+                }
+                if !right {
+                    b.right = line(base);
+                }
+            }
+        }
+        "top" if top => b.top = line(base),
+        "bottom" if bottom => b.bottom = line(base),
+        "left" if left => b.left = line(base),
+        "right" if right => b.right = line(base),
+        "thickBottom" if bottom => b.bottom = line(BorderStyle::Thick),
+        "doubleBottom" if bottom => b.bottom = line(BorderStyle::Double),
+        "topBottom" => {
+            if top {
+                b.top = line(base);
+            }
+            if bottom {
+                b.bottom = line(base);
+            }
+        }
+        "topThickBottom" => {
+            if top {
+                b.top = line(base);
+            }
+            if bottom {
+                b.bottom = line(BorderStyle::Thick);
+            }
+        }
+        "topDoubleBottom" => {
+            if top {
+                b.top = line(base);
+            }
+            if bottom {
+                b.bottom = line(BorderStyle::Double);
+            }
+        }
+        "diagonalDown" => b.diag_down = line(base),
+        "diagonalUp" => b.diag_up = line(base),
+        _ => {}
+    }
+}
+
+/// The cells a whole-row selection would hold when the borders are applied, judged before any
+/// is applied: the first cells `left`/`outside`/`thickOutside` materialise on the selected rows,
+/// plus the cells the sheet already holds -- the reader of the saved file counts every `<c>`
+/// element of a part and refuses one past [`MAX_XML_NODES`], keeping only the rows it managed to
+/// read, which is the loss #2484 is about. The ranges of one selection are judged together: ten
+/// disjoint 100,000-row ranges each pass the per-range cap while together they materialise a
+/// million cells. Errors when the projection exceeds what the sheet may gain.
+fn project_line_cells(cx: &Ctx<'_>, sheet: usize, ranges: &[RangeRef], preset: &str) -> Result<()> {
+    if !matches!(preset, "left" | "outside" | "thickOutside") {
+        return Ok(());
+    }
+    let mut projected: u64 = 0;
+    for r in ranges {
+        if r.is_full_rows() && !r.is_full_cols() {
+            let rows = u64::from(r.end.row.saturating_sub(r.start.row)).saturating_add(1);
+            let present =
+                cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(*r).filter(|(c, _)| c.col == r.start.col).count() as u64).unwrap_or_default();
+            projected = projected.saturating_add(rows.saturating_sub(present));
+        }
+    }
+    let held = cx.wb.sheet(sheet).map(|sh| sh.cells.len() as u64).unwrap_or_default();
+    let budget = (MAX_XML_NODES as u64).saturating_sub(held).min(MAX_WHOLE_ROW_LINES);
+    if projected > budget {
+        return Err(bad("home.borders", "selection too large"));
+    }
+    Ok(())
+}
+
+/// Borders of a whole row or column go on that line's default style, as Excel stores them: the
+/// edges that every cell of the line has, which a cell in the middle of the line has. The first
+/// and last row or column keep their own per-cell edges in `borders`.
+fn line_borders(cx: &mut Ctx<'_>, sheet: usize, r: RangeRef, columns: bool, preset: &str, base: BorderStyle, color: Color) {
+    let lines: Vec<u32> = if columns { (r.start.col..=r.end.col).collect() } else { (r.start.row..=r.end.row).collect() };
+    for n in lines {
+        let cur = {
+            let sh = cx.wb.sheet(sheet);
+            let info = if columns { sh.and_then(|s| s.cols.get(&n)) } else { sh.and_then(|s| s.rows.get(&n)) };
+            info.and_then(|i| i.style).unwrap_or_default()
+        };
+        let (top, bottom, left, right) =
+            if columns { (false, false, n == r.start.col, n == r.end.col) } else { (n == r.start.row, n == r.end.row, false, false) };
+        let new = cx.wb.styles.derive(cur, |st| edge_change(preset, base, color, &mut st.borders, (top, bottom, left, right)));
+        if new != cur
+            && let Some(sh) = cx.sheet_mut(sheet).ok()
+        {
+            let map = if columns { &mut sh.cols } else { &mut sh.rows };
+            map.entry(n).or_default().style = Some(new);
+        }
+    }
+}
+
+/// `preset = "none"` on a whole row or column: a border line can be drawn from either side, so the
+/// facing edge of the neighbouring line and of its cells goes too, as the per-cell path does.
+fn none_neighbours(cx: &mut Ctx<'_>, sheet: usize, r: RangeRef, columns: bool) -> Result<()> {
+    let (from, to, last) = if columns { (r.start.col, r.end.col, MAX_COLS - 1) } else { (r.start.row, r.end.row, MAX_ROWS - 1) };
+    for (n, lower) in [(from.checked_sub(1), true), (to.checked_add(1).filter(|n| *n <= last), false)] {
+        let Some(n) = n else { continue };
+        let clear = |b: &mut Borders| {
+            if columns {
+                if lower {
+                    b.right = BorderLine::default();
+                } else {
+                    b.left = BorderLine::default();
+                }
+            } else if lower {
+                b.bottom = BorderLine::default();
+            } else {
+                b.top = BorderLine::default();
+            }
+        };
+        let cur = {
+            let sh = cx.wb.sheet(sheet);
+            let info = if columns { sh.and_then(|s| s.cols.get(&n)) } else { sh.and_then(|s| s.rows.get(&n)) };
+            info.and_then(|i| i.style).unwrap_or_default()
+        };
+        let new = cx.wb.styles.derive(cur, |st| clear(&mut st.borders));
+        if new != cur
+            && let Some(sh) = cx.sheet_mut(sheet).ok()
+        {
+            let map = if columns { &mut sh.cols } else { &mut sh.rows };
+            map.entry(n).or_default().style = Some(new);
+        }
+        let span = if columns {
+            RangeRef::new(CellRef::new(0, n), CellRef::new(MAX_ROWS - 1, n))
+        } else {
+            RangeRef::new(CellRef::new(n, 0), CellRef::new(n, MAX_COLS - 1))
+        };
+        let cells: Vec<(CellRef, StyleId)> =
+            cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(span).map(|(c, x)| (c, x.style)).collect()).unwrap_or_default();
+        for (c, st) in &cells {
+            let new = cx.wb.styles.derive(*st, |s| clear(&mut s.borders));
+            if new != *st
+                && let Some(sh) = cx.sheet_mut(sheet).ok()
+            {
+                sh.set_style(*c, new);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
@@ -415,92 +609,67 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
     }
     edit(s, |cx| {
+        // The selection's whole-row ranges are judged together before any border is applied.
+        project_line_cells(cx, sheet, &ranges, &preset)?;
         for r in &ranges {
+            // A whole row or column: Excel stores its borders as the line's default style,
+            // merged into the cells that exist. A styled cell per row of a column is a million
+            // of them -- more elements in the sheet part than any reader accepts, and past that
+            // cap the tables and formulas are lost (#2484). A range over the whole sheet keeps
+            // the size guard below.
+            if r.is_full_rows() != r.is_full_cols() {
+                let columns = r.is_full_cols();
+                if !columns && u64::from(r.end.row.saturating_sub(r.start.row)).saturating_add(1) > MAX_WHOLE_ROW_LINES {
+                    return Err(bad("home.borders", "selection too large"));
+                }
+                line_borders(cx, sheet, *r, columns, &preset, base, color);
+                let mut cells: Vec<(CellRef, StyleId)> =
+                    cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(*r).map(|(c, x)| (c, x.style)).collect()).unwrap_or_default();
+                if !columns && matches!(preset.as_str(), "left" | "outside" | "thickOutside") {
+                    // Excel draws a whole row's left edge on the first cell of *every* selected
+                    // row, materialising each one when that sheet row is empty; the rows' lines
+                    // never take a left edge. Those three presets are the ones whose left edge
+                    // *is* the selection's: `all` and the inside presets put it on the rows'
+                    // lines instead and store no cell at all (measured in Excel over 8-row and
+                    // 10,000-row selections).
+                    let present: std::collections::HashSet<u32> = cells.iter().filter(|(c, _)| c.col == r.start.col).map(|(c, _)| c.row).collect();
+                    for row in r.start.row..=r.end.row {
+                        if present.contains(&row) {
+                            continue;
+                        }
+                        let at = CellRef::new(row, r.start.col);
+                        let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+                        cells.push((at, st));
+                    }
+                }
+                for (c, st) in &cells {
+                    let (top, mut bottom, left, mut right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
+                    if columns {
+                        // Excel never stores a whole column's bottom edge, boundary cell or not.
+                        bottom = false;
+                    } else {
+                        // ... nor a whole row's right edge.
+                        right = false;
+                    }
+                    let new = cx.wb.styles.derive(*st, |s| edge_change(&preset, base, color, &mut s.borders, (top, bottom, left, right)));
+                    if new != *st
+                        && let Some(sh) = cx.sheet_mut(sheet).ok()
+                    {
+                        sh.set_style(*c, new);
+                    }
+                }
+                if preset == "none" {
+                    none_neighbours(cx, sheet, *r, columns)?;
+                }
+                continue;
+            }
             if r.count() > 2_000_000 {
                 return Err(bad("home.borders", "selection too large"));
             }
             for c in r.iter() {
                 let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
-                let line = |style: BorderStyle| BorderLine { style, color };
-                let new = cx.wb.styles.derive(st, |s| {
-                    let b = &mut s.borders;
-                    match preset.as_str() {
-                        "none" => *b = Borders::default(),
-                        "all" => {
-                            b.top = line(base);
-                            b.bottom = line(base);
-                            b.left = line(base);
-                            b.right = line(base);
-                        }
-                        "outside" | "thickOutside" => {
-                            let st = if preset == "thickOutside" { BorderStyle::Thick } else { base };
-                            if top {
-                                b.top = line(st);
-                            }
-                            if bottom {
-                                b.bottom = line(st);
-                            }
-                            if left {
-                                b.left = line(st);
-                            }
-                            if right {
-                                b.right = line(st);
-                            }
-                        }
-                        "inside" | "insideHorizontal" | "insideVertical" => {
-                            if preset != "insideVertical" {
-                                if !top {
-                                    b.top = line(base);
-                                }
-                                if !bottom {
-                                    b.bottom = line(base);
-                                }
-                            }
-                            if preset != "insideHorizontal" {
-                                if !left {
-                                    b.left = line(base);
-                                }
-                                if !right {
-                                    b.right = line(base);
-                                }
-                            }
-                        }
-                        "top" if top => b.top = line(base),
-                        "bottom" if bottom => b.bottom = line(base),
-                        "left" if left => b.left = line(base),
-                        "right" if right => b.right = line(base),
-                        "thickBottom" if bottom => b.bottom = line(BorderStyle::Thick),
-                        "doubleBottom" if bottom => b.bottom = line(BorderStyle::Double),
-                        "topBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(base);
-                            }
-                        }
-                        "topThickBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(BorderStyle::Thick);
-                            }
-                        }
-                        "topDoubleBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(BorderStyle::Double);
-                            }
-                        }
-                        "diagonalDown" => b.diag_down = line(base),
-                        "diagonalUp" => b.diag_up = line(base),
-                        _ => {}
-                    }
-                });
+                let new = cx.wb.styles.derive(st, |s| edge_change(&preset, base, color, &mut s.borders, (top, bottom, left, right)));
                 cx.sheet_mut(sheet)?.set_style(c, new);
                 if preset == "none" {
                     // A shared line can be stored on either cell. Selected cells are handled
