@@ -169,6 +169,9 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/pivotcache/",
+    "xl/pivottables/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {
