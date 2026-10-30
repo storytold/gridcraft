@@ -21,7 +21,8 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     // Matches the label as shown in the interface language as well as the English label and id,
-    // so "gras" finds Bold in French and "bold" still does; case and accents are ignored.
+    // so "gras" finds Bold in French and "bold" still does; the translated menu path counts too
+    // ("accueil" lists the Home commands). Case and accents are ignored.
     let lang = app.ui.language;
     let q = fold(&d.search);
     let cmds: Vec<(String, String, String)> = app
@@ -31,10 +32,13 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         .filter(|c| c.enabled)
         .map(|c| {
             let shown = shown_label(lang, c.label, &c.menu);
-            (c, shown)
+            let menu = c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ");
+            (c, shown, menu)
         })
-        .filter(|(c, shown)| q.is_empty() || fold(shown).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q))
-        .map(|(c, shown)| (c.id.to_string(), shown, c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
+        .filter(|(c, shown, menu)| {
+            q.is_empty() || fold(shown).contains(&q) || fold(menu).contains(&q) || fold(c.label).contains(&q) || fold(c.id).contains(&q)
+        })
+        .map(|(c, shown, menu)| (c.id.to_string(), shown, menu))
         .take(40)
         .collect();
 
@@ -101,8 +105,9 @@ fn shown_label(lang: crate::i18n::Language, label: &str, menu: &[&str]) -> Strin
     menu.iter().map(|m| lang.tr(&format!("{m}|{label}")).to_string()).find(|t| t != label).unwrap_or_else(|| lang.tr(label).to_string())
 }
 
-/// Lowercases `s` and strips accents from Latin letters ("Insérer" → "inserer"), so a query
-/// matches whether or not it is typed with its accents. Combining marks are dropped too.
+/// Lowercases `s` and strips accents from Latin (Vietnamese included) and Greek letters
+/// ("Insérer" → "inserer", "Đậm" → "dam"), so a query matches whether or not it is typed with
+/// its accents; Greek final ς folds to σ. Combining marks are dropped too.
 fn fold(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars().flat_map(char::to_lowercase) {
@@ -131,6 +136,23 @@ fn fold(s: &str) -> String {
                 'ŵ' => 'w',
                 'ý' | 'ÿ' | 'ŷ' => 'y',
                 'ź' | 'ż' | 'ž' => 'z',
+                'ơ' => 'o',
+                'ư' => 'u',
+                // Vietnamese letters with tone marks (Latin Extended Additional).
+                '\u{1ea0}'..='\u{1eb7}' => 'a',
+                '\u{1eb8}'..='\u{1ec7}' => 'e',
+                '\u{1ec8}'..='\u{1ecb}' => 'i',
+                '\u{1ecc}'..='\u{1ee3}' => 'o',
+                '\u{1ee4}'..='\u{1ef1}' => 'u',
+                '\u{1ef2}'..='\u{1ef9}' => 'y',
+                'ά' => 'α',
+                'έ' => 'ε',
+                'ή' => 'η',
+                'ί' | 'ϊ' | 'ΐ' => 'ι',
+                'ό' => 'ο',
+                'ύ' | 'ϋ' | 'ΰ' => 'υ',
+                'ώ' => 'ω',
+                'ς' => 'σ',
                 c => c,
             }),
         }
@@ -151,6 +173,9 @@ mod tests {
         assert_eq!(fold("e\u{301}cart"), "ecart");
         // Turkish İ lowercases to i plus a combining dot, which is dropped.
         assert_eq!(fold("İtalik"), "italik");
+        assert_eq!(fold("Đậm Cỡ chữ"), "dam co chu");
+        assert_eq!(fold("ΜΈΓΕΘΟΣ"), fold("Μέγεθος"));
+        assert_eq!(fold("Μέγεθος"), "μεγεθοσ");
     }
 
     #[test]
