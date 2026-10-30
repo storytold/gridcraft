@@ -687,6 +687,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Pogrubienie",
         "Italic" => "Kursywa",
         "None" => "Brak",
+        "Legend|None" => "Brak",
         "Borders|None" => "Brak",
         "Paste Special|None" => "Brak",
         "Single" => "Pojedyncze",

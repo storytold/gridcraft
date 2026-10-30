@@ -40,3 +40,26 @@ fn notes_with_a_pipe_show_in_full() {
         assert!(h.query_by_label_contains(url).is_some(), "{language}: the link note lost part of {url}");
     }
 }
+
+#[test]
+fn chart_legend_positions_are_translated() {
+    let mut h = harness();
+    let session = &mut h.state_mut().session;
+    session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    session.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3"})).unwrap();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.state_mut().selected_chart = Some(chart["chart"].as_u64().unwrap() as u32);
+    h.state_mut().grid.pane = Some("formatChart".into());
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Légende").click();
+    h.run_steps(2);
+    for english in ["Legend|None", "Bottom", "Top", "Left", "Right"] {
+        let translated = Language::Fr.tr(english);
+        assert!(h.query_all_by_label(translated).next().is_some(), "no {translated}");
+    }
+    for english in ["None", "Bottom", "Top", "Left", "Right"] {
+        assert!(h.query_all_by_label(english).next().is_none(), "{english} is untranslated");
+    }
+}

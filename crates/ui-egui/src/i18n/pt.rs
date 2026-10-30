@@ -708,6 +708,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Negrito",
         "Italic" => "Itálico",
         "None" => "Nenhum",
+        "Legend|None" => "Nenhum",
         "Borders|None" => "Nenhum",
         "Paste Special|None" => "Nenhum",
         "Single" => "Simples",

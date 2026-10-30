@@ -207,11 +207,12 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    ui.collapsing("Legend", |ui| {
+    let lang = app.ui.language;
+    ui.collapsing(lang.tr("Legend"), |ui| {
         ui.horizontal(|ui| {
-            for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
+            for (l, v) in [("Legend|None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
                 let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
-                if ui.selectable_label(cur, l).clicked() {
+                if ui.selectable_label(cur, lang.tr(l)).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
                 }
             }

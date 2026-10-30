@@ -874,6 +874,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No ranges yet." => "Aucune plage pour le moment.",
         "None" => "Aucun",
         "Borders|None" => "Aucune",
+        "Legend" => "Légende",
+        "Legend|None" => "Aucune",
         "Normal Probability" => "Probabilité normale",
         "Not in Dictionary ({cell}):" => "Absent du dictionnaire ({cell}) :",
         "Note" => "Remarque",

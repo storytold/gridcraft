@@ -693,6 +693,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Grassetto",
         "Italic" => "Corsivo",
         "None" => "Nessuno",
+        "Legend|None" => "Nessuno",
         "Borders|None" => "Nessuno",
         "Paste Special|None" => "Nessuno",
         "Single" => "Singola",

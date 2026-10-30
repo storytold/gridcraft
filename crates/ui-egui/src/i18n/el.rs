@@ -812,6 +812,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Έντονη γραφή",
         "Italic" => "Πλάγια γραφή",
         "None" => "Κανένα",
+        "Legend|None" => "Κανένα",
         "Borders|None" => "Κανένα",
         "Paste Special|None" => "Κανένα",
         "Single" => "Μονή",

@@ -693,6 +693,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bold" => "Aldin",
         "Italic" => "Cursiv",
         "None" => "Niciunul",
+        "Legend|None" => "Niciunul",
         "Borders|None" => "Niciunul",
         "Paste Special|None" => "Niciunul",
         "Single" => "Simplu",

@@ -713,6 +713,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Bold", "太字"),
     ("Italic", "斜体"),
     ("None", "なし"),
+    ("Legend|None", "なし"),
     ("Borders|None", "なし"),
     ("Paste Special|None", "なし"),
     ("Single", "下線"),
