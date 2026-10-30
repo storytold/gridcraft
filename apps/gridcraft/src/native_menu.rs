@@ -4,7 +4,7 @@
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
-use gridcraft_ui_egui::{OpenWindow, SheetApp};
+use gridcraft_ui_egui::{OpenWindow, SheetApp, i18n::Language};
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             ],
         ),
         (
-            "Edit",
+            "menu|Edit",
             vec![
                 ("Undo", "edit.undo", None),
                 ("Redo", "edit.redo", None),
@@ -191,8 +191,29 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
     ]
 }
 
+/// A native menu item whose text follows the interface language.
+enum Label {
+    Item(MenuItem),
+    Submenu(Submenu),
+    Predefined(PredefinedMenuItem),
+}
+
+impl Label {
+    /// Updates the displayed text without replacing the native menu item.
+    fn set_text(&self, text: &str) {
+        match self {
+            Self::Item(item) => item.set_text(text),
+            Self::Submenu(menu) => menu.set_text(text),
+            Self::Predefined(item) => item.set_text(text),
+        }
+    }
+}
+
 pub struct NativeMenu {
     _menu: Menu,
+    /// The language the labels show, and each label with its English catalog key.
+    language: Language,
+    labels: Vec<(&'static str, Label)>,
     events: Receiver<MenuEvent>,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
     window_menu: Option<Submenu>,
@@ -208,6 +229,9 @@ const WINDOW_ITEM: &str = "window:id:";
 /// (`SheetApp::request_quit`), which AppKit's own Quit (terminate:) would skip.
 const QUIT: &str = "app.quit";
 
+/// The View › Theme choices: mode and English label.
+const THEMES: [(&str, &str); 3] = [("system", "System"), ("light", "Light"), ("dark", "Dark")];
+
 fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     let mode = match id {
         "theme:system" => "system",
@@ -220,35 +244,51 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
 }
 
 impl NativeMenu {
-    pub fn install(ctx: &egui::Context) -> NativeMenu {
+    pub fn install(ctx: &egui::Context, language: Language) -> NativeMenu {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let about = MenuItem::with_id("dialog:about", language.tr("About GridCraft"), true, None);
+        let quit = MenuItem::with_id(QUIT, language.tr("Quit GridCraft"), true, Accelerator::from_str("CMD+Q").ok());
+        let services = PredefinedMenuItem::services(Some(language.tr("Services")));
+        let hide = PredefinedMenuItem::hide(Some(language.tr("Hide GridCraft")));
+        let hide_others = PredefinedMenuItem::hide_others(Some(language.tr("Hide Others")));
+        let show_all = PredefinedMenuItem::show_all(Some(language.tr("Show All")));
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
+            &services,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
+            &hide,
+            &hide_others,
+            &show_all,
             &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(QUIT, "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok()),
+            &quit,
         ]);
+        let mut labels = vec![
+            ("About GridCraft", Label::Item(about)),
+            ("Services", Label::Predefined(services)),
+            ("Hide GridCraft", Label::Predefined(hide)),
+            ("Hide Others", Label::Predefined(hide_others)),
+            ("Show All", Label::Predefined(show_all)),
+            ("Quit GridCraft", Label::Item(quit)),
+        ];
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
         let mut window_menu = None;
+        let mut help_menu = None;
         for (title, entries) in tree() {
-            let sub = Submenu::new(title, true);
+            let sub = Submenu::new(language.tr(title), true);
+            labels.push((title, Label::Submenu(sub.clone())));
             for (label, id, acc) in entries {
                 if label == "-" {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                     continue;
                 }
                 if id == "view.theme" {
-                    let themes = Submenu::new(label, true);
-                    for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
+                    let themes = Submenu::new(language.tr(label), true);
+                    labels.push((label, Label::Submenu(themes.clone())));
+                    for (mode, label) in THEMES {
+                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), language.tr(label), true, false, None);
                         let _ = themes.append(&item);
                         theme_items.push((mode, item));
                     }
@@ -256,12 +296,15 @@ impl NativeMenu {
                     continue;
                 }
                 let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
-                let item = MenuItem::with_id(id, label, true, accel);
+                let item = MenuItem::with_id(id, language.tr(label), true, accel);
+                labels.push((label, Label::Item(item.clone())));
                 let _ = sub.append(&item);
             }
             let _ = menu.append(&sub);
-            if title == "Window" {
-                window_menu = Some(sub);
+            match title {
+                "Window" => window_menu = Some(sub),
+                "Help" => help_menu = Some(sub),
+                _ => {}
             }
         }
         menu.init_for_nsapp();
@@ -271,13 +314,32 @@ impl NativeMenu {
         if let Some(window) = &window_menu {
             window.set_as_windows_menu_for_nsapp();
         }
+        // A translated title ("Aide") isn't the system's Help title, so AppKit only adds its Help
+        // search field once the submenu is registered as NSApp's helpMenu.
+        if let Some(help) = &help_menu {
+            help.set_as_help_menu_for_nsapp();
+        }
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
+        NativeMenu { _menu: menu, language, labels, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
+    }
+
+    /// Relabels the menus when the interface language changed since the last call.
+    pub fn sync_language(&mut self, app: &SheetApp) {
+        if self.language == app.ui.language {
+            return;
+        }
+        self.language = app.ui.language;
+        for (key, label) in &self.labels {
+            label.set_text(self.language.tr(key));
+        }
+        for ((_, item), (_, key)) in self.theme_items.iter().zip(THEMES) {
+            item.set_text(self.language.tr(key));
+        }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
@@ -315,6 +377,7 @@ impl NativeMenu {
     /// Runs the chosen menu items. Commands go to the active window, the most recently focused;
     /// `viewport` is its egui viewport, for the items that act on its input.
     pub fn poll(&mut self, app: &mut SheetApp, ctx: &egui::Context, viewport: egui::ViewportId) {
+        self.sync_language(app);
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
             if id == QUIT {
@@ -409,6 +472,20 @@ mod tests {
         assert_eq!(item.1, "app.checkForUpdates");
         let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         assert!(app.run(item.1, serde_json::json!({})).is_ok());
+    }
+
+    #[test]
+    fn french_catalog_covers_every_native_menu_entry() {
+        let app_menu = ["About GridCraft", "Services", "Hide GridCraft", "Hide Others", "Show All", "Quit GridCraft"];
+        let themes = THEMES.map(|(_, label)| label);
+        for (title, entries) in tree() {
+            for key in app_menu.into_iter().chain(themes).chain([title]).chain(entries.iter().map(|entry| entry.0)) {
+                // Separators, and labels that read the same in French.
+                if !matches!(key, "-" | "Format" | "Normal" | "Zoom…" | "Services") {
+                    assert_ne!(Language::Fr.tr(key), key, "missing French menu label: {key}");
+                }
+            }
+        }
     }
 
     #[test]

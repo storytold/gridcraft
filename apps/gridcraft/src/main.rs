@@ -19,13 +19,22 @@ mod logging;
 mod native_menu;
 mod print;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
+
+thread_local! {
+    /// The UI language, for the system file dialogs' type labels (they run on the UI thread).
+    static LANGUAGE: Cell<gridcraft_ui_egui::i18n::Language> = Cell::default();
+}
+
+fn tr(text: &'static str) -> &'static str {
+    LANGUAGE.with(Cell::get).tr(text)
+}
 
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
@@ -35,13 +44,14 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+                self.2 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
             }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
         }
+        LANGUAGE.with(|l| l.set(self.0.ui.language));
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
@@ -60,6 +70,11 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.1.show(&mut self.0, ui);
+        // A language chosen in this frame relabels the menu bar now, not on the next repaint.
+        #[cfg(target_os = "macos")]
+        if let Some(m) = &mut self.2 {
+            m.sync_language(&self.0);
+        }
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -167,18 +182,18 @@ fn services() -> Services {
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
-                .add_filter("Excel Workbook", &["xlsx", "xlsm"])
-                .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
-                .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
-                .add_filter("OpenDocument Spreadsheet (data import)", &["ods"])
+                .add_filter(tr("Spreadsheets"), &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                .add_filter(tr("Excel Workbook"), &["xlsx", "xlsm"])
+                .add_filter(tr("Excel 97-2003 Workbook (import)"), &["xls"])
+                .add_filter(tr("Excel Binary Workbook (data import)"), &["xlsb"])
+                .add_filter(tr("OpenDocument Spreadsheet (data import)"), &["ods"])
                 .add_filter("CSV", &["csv"])
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
+                .add_filter(tr("Pictures (PNG, JPEG)"), &["png", "jpg", "jpeg"])
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
@@ -192,7 +207,7 @@ fn services() -> Services {
             let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
             for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
-                dialog = dialog.add_filter(*label, &[*x]);
+                dialog = dialog.add_filter(tr(label), &[*x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
         })),
@@ -427,6 +442,15 @@ mod packaging_tests {
         let mut v: Vec<String> = text.split(marker).skip(1).filter_map(|s| s.split_once(start)?.1.split(end).next()).map(str::to_string).collect();
         v.sort();
         v
+    }
+
+    /// macOS shows its Save and Open panels in the user's language only if the bundle lists it.
+    #[test]
+    fn macos_bundle_lists_every_ui_language() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        for l in gridcraft_ui_egui::i18n::Language::ALL {
+            assert!(plist.contains(&format!("<string>{}</string>", l.code())), "{} missing from CFBundleLocalizations", l.code());
+        }
     }
 
     /// macOS Open With (`CFBundleDocumentTypes`) offers GridCraft for the same files as Windows

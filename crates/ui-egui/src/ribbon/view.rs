@@ -167,7 +167,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
 /// choosing one brings it forward.
 fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
     let anchor = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
-    anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
+    anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Switch Windows")));
     control_keytip(app, ui, &anchor, "view.switchWindows");
     let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");
     egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {

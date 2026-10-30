@@ -1,7 +1,7 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
+for Spanish formula entry and display, or **Français** for French. On first run the preference follows the system language.
 English and the other interface languages currently use the English formula table and separators.
 
 | Spanish | Canonical English |
@@ -20,6 +20,14 @@ Names are case-insensitive. Spanish formulas use decimal commas (`1,5`), semicol
 and reference unions, and backslashes between array columns (`{1\2;3\4}`). For example,
 `=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
 decimal points and comma array columns; it does not silently translate Spanish aliases.
+
+Choose **Français** for French formulas: Excel's French names (`SOMME`, `SI`, `RECHERCHEX`,
+`NB.SI.ENS`, `AUJOURDHUI`…, `VRAI`/`FAUX`), decimal commas, semicolon arguments and dots between
+array columns (`{1,5.2;3.4}`, as French Excel writes them). Error literals use the French
+spellings (`#VALEUR!`, `#NOM?`, `#NOMBRE!`, `#NUL!`, `#PROPAGATION!`, `#CHARGEMENT_DONNEES`);
+the English spellings are still accepted. A function passed by name (`GROUPER.PAR(…;SOMME)`) is
+translated too. Stored formulas and XLSX stay canonical English. `crates/engine/tests/it/french_formula_names.rs`
+checks that every registered function has a French row or is listed as spelled alike.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions

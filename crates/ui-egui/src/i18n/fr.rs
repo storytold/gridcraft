@@ -115,7 +115,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Convertir le texte\nen colonnes",
         "Link" => "Lien",
         "Symbol" => "Symbole",
-        "Sparklines" => "Courbes de tendance",
+        "Sparklines" => "Graphiques sparkline",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
         "Header & Footer" => "En-tête et pied de page",
@@ -344,6 +344,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "File" => "Fichier",
         "Back" => "Retour",
         "New" => "Nouveau",
+        "Book" => "Classeur",
         "Open" => "Ouvrir",
         "Info" => "Informations",
         "Save" => "Enregistrer",
@@ -417,6 +418,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "CSV (Comma delimited)" => "CSV (séparateur point-virgule)",
         "Save the active sheet as comma-separated text." => "Enregistrer la feuille active sous forme de texte séparé par des points-virgules.",
         "Web Page (.html)" => "Page web (.html)",
+        "Spreadsheets" => "Feuilles de calcul",
+        "Excel Workbook" => "Classeur Excel",
+        "Excel 97-2003 Workbook (import)" => "Classeur Excel 97-2003 (importation)",
+        "Excel Binary Workbook (data import)" => "Classeur binaire Excel (importation des données)",
+        "OpenDocument Spreadsheet (data import)" => "Feuille de calcul OpenDocument (importation des données)",
+        "Pictures (PNG, JPEG)" => "Images (PNG, JPEG)",
+        "Excel Workbook (.xlsx)" => "Classeur Excel (.xlsx)",
         "Save the workbook as a web page." => "Enregistrer le classeur en tant que page web.",
         "Options|General" => "Général",
         "Options|Save" => "Enregistrer",
@@ -450,16 +458,2185 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Toutes les feuilles",
         "New sheet (⇧F11)" => "Nouvelle feuille (⇧F11)",
         "Text Box" => "Zone de texte",
+        " (password)" => " (mot de passe)",
+        " (password, unlocked)" => " (mot de passe, déverrouillée)",
+        "$ English (United States)" => "$ Anglais (États-Unis)",
+        "'{file}' is protected." => "« {file} » est protégé.",
+        "(No suggestions)" => "(Aucune suggestion)",
+        "(unnamed)" => "(sans nom)",
+        "+ Add Level" => "+ Ajouter un niveau",
+        "100% Stacked Area" => "Aires empilées 100 %",
+        "100% Stacked Bar" => "Barres empilées 100 %",
+        "100% Stacked Column" => "Histogramme empilé 100 %",
+        "20% - Accent1" => "20 % - Accent1",
+        "20% - Accent2" => "20 % - Accent2",
+        "20% - Accent3" => "20 % - Accent3",
+        "20% - Accent4" => "20 % - Accent4",
+        "20% - Accent5" => "20 % - Accent5",
+        "20% - Accent6" => "20 % - Accent6",
+        "3 Arrows" => "3 flèches",
+        "3 Symbols" => "3 symboles",
+        "3 Traffic Lights" => "3 feux de signalisation",
+        "4 Ratings" => "4 évaluations",
+        "40% - Accent1" => "40 % - Accent1",
+        "40% - Accent2" => "40 % - Accent2",
+        "40% - Accent3" => "40 % - Accent3",
+        "40% - Accent4" => "40 % - Accent4",
+        "40% - Accent5" => "40 % - Accent5",
+        "40% - Accent6" => "40 % - Accent6",
+        "5 Arrows" => "5 flèches",
+        "5 Quarters" => "5 quarts",
+        "60% - Accent1" => "60 % - Accent1",
+        "60% - Accent2" => "60 % - Accent2",
+        "60% - Accent3" => "60 % - Accent3",
+        "60% - Accent4" => "60 % - Accent4",
+        "60% - Accent5" => "60 % - Accent5",
+        "60% - Accent6" => "60 % - Accent6",
+        "A Date Occurring…" => "Une date se produisant…",
+        "A to Z" => "De A à Z",
+        "About" => "À propos",
+        "Accent1" => "Accent1",
+        "Accent2" => "Accent2",
+        "Accent3" => "Accent3",
+        "Accent4" => "Accent4",
+        "Accent5" => "Accent5",
+        "Accent6" => "Accent6",
+        "Accessibility" => "Accessibilité",
+        "Action" => "Action",
+        "Action Journal" => "Journal des actions",
+        "Add" => "Ajouter",
+        "Add Chart Element" => "Ajouter un élément de graphique",
+        "Add subtotal to (columns, e.g. C,D):" => "Ajouter un sous-total à (colonnes, par ex. C,D) :",
+        "Add to Dictionary" => "Ajouter au dictionnaire",
+        "Add-in and Automation" => "Compléments et automatisation",
+        "Agent Control" => "Contrôle de l'agent",
+        "Aggregate duplicates using" => "Agréger les doublons avec",
+        "Align Left" => "Aligner à gauche",
+        "Align Right" => "Aligner à droite",
+        "Alignment" => "Alignement",
+        "All" => "Tout",
+        "All Borders" => "Toutes les bordures",
+        "All Charts" => "Tous les graphiques",
+        "All done. We made {count} replacements." => "Terminé. Nous avons effectué {count} remplacements.",
+        "All except borders" => "Tout sauf la bordure",
+        "Allow" => "Autoriser",
+        "Allow all users of this sheet to:" => "Autoriser tous les utilisateurs de cette feuille à :",
+        "Alpha:" => "Alpha :",
+        "Analysis Tools" => "Outils d'analyse",
+        "Anova: Single Factor" => "Analyse de variance : un facteur",
+        "Any value" => "Tout",
+        "Apply" => "Appliquer",
+        "Area" => "Aires",
+        "Arrow" => "Flèche",
+        "At each change in (column letter):" => "À chaque changement de (lettre de colonne) :",
+        "AutoSum (⌘⇧T)" => "Somme automatique (⌘⇧T)",
+        "Average" => "Moyenne",
+        "Background Color:" => "Couleur d'arrière-plan :",
+        "Bad" => "Insatisfaisant",
+        "Bar" => "Barres",
+        "Before sheet (position, 0 = first):" => "Avant la feuille (position, 0 = première) :",
+        "Between…" => "Entre…",
+        "Bin Range (blank for automatic bins):" => "Plage des classes (vide pour des classes automatiques) :",
+        "Blanks" => "Cellules vides",
+        "Blue" => "Bleu",
+        "Blue - White - Red" => "Bleu - Blanc - Rouge",
+        "Bold (⌘B)" => "Gras (⌘B)",
+        "Border" => "Bordure",
+        "Bottom" => "Bas",
+        "Bottom Align" => "Aligner en bas",
+        "Bottom Border" => "Bordure inférieure",
+        "Bottom Double Border" => "Bordure double inférieure",
+        "Bottom margin (in):" => "Marge basse (pouces) :",
+        "Box & Whisker" => "Zone et valeur",
+        "Bubble" => "Bulles",
+        "By Changing Variable Cells:" => "Cellules variables :",
+        "By changing cell:" => "Cellule à modifier :",
+        "Calculate Now (F9)" => "Calculer maintenant (F9)",
+        "Calculate Sheet (⇧F9)" => "Calculer la feuille (⇧F9)",
+        "Calculated Field…" => "Champ calculé…",
+        "Calculation" => "Calcul",
+        "Calculation Options" => "Options de calcul",
+        "Cancel" => "Annuler",
+        "Category:" => "Catégorie :",
+        "Cell Color" => "Couleur de cellule",
+        "Cell Styles" => "Styles de cellules",
+        "Cell Values" => "Valeurs des cellules",
+        "Center Across Selection" => "Centré sur plusieurs colonnes",
+        "Change" => "Remplacer",
+        "Change All" => "Remplacer tout",
+        "Change Chart Type" => "Modifier le type de graphique",
+        "Chart" => "Graphique",
+        "Chart Title" => "Titre du graphique",
+        "Chart data range:" => "Plage de données du graphique :",
+        "Check Accessibility" => "Vérifier l'accessibilité",
+        "Check Cell" => "Vérification",
+        "Choose a PNG or JPEG no larger than 16 MB." => "Choisissez un fichier PNG ou JPEG de 16 Mo maximum.",
+        "Choose fields to add to report:" => "Choisissez les champs à inclure dans le rapport :",
+        "Clear Filter" => "Effacer le filtre",
+        "Clear Rules" => "Effacer les règles",
+        "Clustered Bar" => "Barres groupées",
+        "Clustered Column" => "Histogramme groupé",
+        "Color:" => "Couleur :",
+        "Column" => "Histogramme",
+        "Column Width" => "Largeur de colonne",
+        "Column chart" => "Histogramme",
+        "Column or Bar" => "Histogramme ou barres",
+        "Column width (characters):" => "Largeur de colonne (caractères) :",
+        "Column widths" => "Largeurs de colonne",
+        "Columns" => "Colonnes",
+        "Columns (blank = all, e.g. A,C):" => "Colonnes (vide = toutes, par ex. A,C) :",
+        "Combo" => "Combiné",
+        "Comma" => "Milliers",
+        "Comma [0]" => "Milliers [0]",
+        "Comment:" => "Commentaire :",
+        "Comments and notes (C)" => "Commentaires et notes (C)",
+        "Comments pane" => "Volet Commentaires",
+        "Compact" => "Compacte",
+        "Compatibility" => "Compatibilité",
+        "Conditional Formatting Rules Manager" => "Gestionnaire des règles de mise en forme conditionnelle",
+        "Conditional formats" => "Formats conditionnels",
+        "Confidence Level (%):" => "Niveau de confiance (%) :",
+        "Confidence Level for Mean (%), blank for none:" => "Niveau de confiance pour la moyenne (%), vide pour aucun :",
+        "Confidence interval" => "Intervalle de confiance",
+        "Confidence level (%):" => "Niveau de confiance (%) :",
+        "Constant is Zero" => "Constante nulle",
+        "Contributors" => "Contributeurs",
+        "Convert Text to Columns" => "Convertir le texte en colonnes",
+        "Convert the last ink stroke to a shape" => "Convertir le dernier trait d'encre en forme",
+        "Convert to Number" => "Convertir en nombre",
+        "Convert to Range" => "Convertir en plage",
+        "Copies" => "Copies",
+        "Copy (⌘C)" => "Copier (⌘C)",
+        "Correlation" => "Corrélation",
+        "Count" => "Nombre",
+        "CountA" => "NbVal",
+        "Covariance" => "Covariance",
+        "Create Forecast Worksheet" => "Créer une feuille de prévision",
+        "Create Sparklines" => "Créer des graphiques sparkline",
+        "Create a copy" => "Créer une copie",
+        "Cube" => "Cube",
+        "Cumulative Percentage" => "Pourcentage cumulé",
+        "Currency [0]" => "Monétaire [0]",
+        "Current region" => "Zone en cours",
+        "Custom (%):" => "Personnalisé (%) :",
+        "Custom Sort" => "Tri personnalisé",
+        "Cut (⌘X)" => "Couper (⌘X)",
+        "Damping factor:" => "Facteur d'amortissement :",
+        "Data Range:" => "Plage de données :",
+        "Data and Model" => "Données et modèle",
+        "Data validation" => "Validation des données",
+        "Database" => "Base de données",
+        "Date & Time" => "Date et heure",
+        "Date unit" => "Unité de date",
+        "Day" => "Jour",
+        "Decimal" => "Décimal",
+        "Define Name…" => "Définir un nom…",
+        "Delete Comment" => "Supprimer le commentaire",
+        "Delete Sheet" => "Supprimer la feuille",
+        "Delete chart" => "Supprimer le graphique",
+        "Delete rows" => "Supprimer les lignes",
+        "Delete…" => "Supprimer…",
+        "Description (optional):" => "Description (facultative) :",
+        "Descriptive Statistics" => "Statistiques descriptives",
+        "Destination:" => "Destination :",
+        "Diagonal ↗" => "Diagonale ↗",
+        "Diagonal ↘" => "Diagonale ↘",
+        "Dismiss" => "Ignorer",
+        "Display:" => "Texte à afficher :",
+        "Distributed" => "Distribué",
+        "Divide" => "Division",
+        "Do you want to save the changes you made to {title}?" => "Voulez-vous enregistrer les modifications apportées à {title} ?",
+        "Don't Save" => "Ne pas enregistrer",
+        "Double" => "Double",
+        "Double Accounting" => "Double comptabilité",
+        "Doughnut" => "Anneau",
+        "Down" => "Vers le bas",
+        "Drag to fill cells. Drag from inside a cell to select a range." => {
+            "Faites glisser pour remplir les cellules. Faites glisser depuis l'intérieur d'une cellule pour sélectionner une plage."
+        }
+        "Duplicate Values…" => "Valeurs en double…",
+        "Edit Name" => "Modifier le nom",
+        "Edit chart title" => "Modifier le titre du graphique",
+        "Edit…" => "Modifier…",
+        "End date:" => "Date de fin :",
+        "Engineering" => "Ingénierie",
+        "Entire column" => "Colonne entière",
+        "Entire row" => "Ligne entière",
+        "Equal To…" => "Égal à…",
+        "Erase ink strokes" => "Effacer les traits d'encre",
+        "Error checking options" => "Options de vérification des erreurs",
+        "Error message:" => "Message d'erreur :",
+        "Error style" => "Style d'erreur",
+        "Errors" => "Erreurs",
+        "Every command run in this session (replayable)" => "Toutes les commandes exécutées dans cette session (rejouables)",
+        "Expand formula bar" => "Développer la barre de formule",
+        "Explanatory Text" => "Texte explicatif",
+        "Exponential Smoothing" => "Lissage exponentiel",
+        "Export as CSV…" => "Exporter au format CSV…",
+        "Export as PDF…" => "Exporter au format PDF…",
+        "Export as Web Page (.html)…" => "Exporter en tant que page web (.html)…",
+        "F-Test Two-Sample for Variances" => "Test d'égalité des variances (F-Test)",
+        "Fill missing points using" => "Remplir les points manquants avec",
+        "Filter (⌘⇧F)" => "Filtrer (⌘⇧F)",
+        "Filter by Selected Cell's Value" => "Filtrer par valeur de la cellule sélectionnée",
+        "Filters" => "Filtres",
+        "Find" => "Rechercher",
+        "Find & Select" => "Rechercher et sélectionner",
+        "Find All" => "Rechercher tout",
+        "Find Next" => "Suivant",
+        "Find and Replace" => "Rechercher et remplacer",
+        "Find what:" => "Rechercher :",
+        "Finding printers…" => "Recherche des imprimantes…",
+        "Fits inside the selected cell and moves with its content." => {
+            "S'ajuste à l'intérieur de la cellule sélectionnée et se déplace avec son contenu."
+        }
+        "Flash Fill (⌘E)" => "Remplissage instantané (⌘E)",
+        "Font" => "Police",
+        "Footer (in):" => "Pied de page (po) :",
+        "Footer:" => "Pied de page :",
+        "Forecast Sheet" => "Feuille de prévision",
+        "Forecast end (date or number; blank: a third of the history):" => "Fin de la prévision (date ou nombre ; vide : un tiers de l'historique) :",
+        "Forecast start (a date or number in the history; blank: after the last point):" => {
+            "Début de la prévision (date ou nombre de l'historique ; vide : après le dernier point) :"
+        }
+        "Format Cells" => "Format de cellules",
+        "Format Cells|Fill" => "Remplissage",
+        "Format Chart Area…" => "Mettre en forme la zone de graphique…",
+        "Format Chart pane" => "Volet Format du graphique",
+        "Format as Table" => "Mettre sous forme de tableau",
+        "Format cells" => "Mettre en forme les cellules",
+        "Format cells that are (value):" => "Appliquer une mise en forme aux cellules qui sont (valeur) :",
+        "Format cells that contain a date occurring:" => "Appliquer une mise en forme aux cellules contenant une date :",
+        "Format cells that contain the text:" => "Appliquer une mise en forme aux cellules qui contiennent le texte :",
+        "Format columns" => "Format de colonne",
+        "Format rows" => "Format de ligne",
+        "Format values where this formula is true:" => "Appliquer une mise en forme aux valeurs pour lesquelles cette formule est vraie :",
+        "Formats (T)" => "Formats (T)",
+        "Formula Builder" => "Générateur de formules",
+        "Formula:" => "Formule :",
+        "Formulas (F)" => "Formules (F)",
+        "Formulas and number formats" => "Formules et formats des nombres",
+        "Funnel" => "Entonnoir",
+        "GRG Nonlinear" => "GRG non linéaire",
+        "Go To" => "Atteindre",
+        "Go To Special" => "Atteindre spécial",
+        "Goal Seek" => "Valeur cible",
+        "Goal Seeking found a solution: {value}" => "La recherche de valeur cible a trouvé une solution : {value}",
+        "Good" => "Satisfaisant",
+        "Good, Bad and Neutral" => "Satisfaisant, insatisfaisant et neutre",
+        "Gradebook" => "Carnet de notes",
+        "Grayscale" => "Nuances de gris",
+        "Greater Than…" => "Supérieur à…",
+        "Green" => "Vert",
+        "Green - White - Red" => "Vert - Blanc - Rouge",
+        "Green - Yellow - Red" => "Vert - Jaune - Rouge",
+        "Green Fill with Dark Green Text" => "Remplissage vert avec texte vert foncé",
+        "Group by Months" => "Grouper par mois",
+        "Group by Quarters" => "Grouper par trimestres",
+        "Group by Years" => "Grouper par années",
+        "Grouped By:" => "Groupées par :",
+        "Growth" => "Géométrique",
+        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => {
+            "En-tête (&L gauche, &C centre, &R droite ; &P page, &N pages, &D date, &A feuille) :"
+        }
+        "Header (in):" => "En-tête (po) :",
+        "Heading 1" => "Titre 1",
+        "Heading 2" => "Titre 2",
+        "Heading 3" => "Titre 3",
+        "Heading 4" => "Titre 4",
+        "Hex" => "Hex",
+        "Hidden" => "Masquée",
+        "Hidden: {sheets}" => "Masquées : {sheets}",
+        "Hide Sheet" => "Masquer la feuille",
+        "Hierarchy & more" => "Hiérarchie et plus",
+        "Highlight Cells Rules" => "Règles de mise en surbrillance des cellules",
+        "Highlighter" => "Surligneur",
+        "Histogram" => "Histogramme",
+        "Horizontal (Category) Axis Labels:" => "Étiquettes de l'axe horizontal (abscisse) :",
+        "Horizontal axis title:" => "Titre de l'axe horizontal :",
+        "Household Budget" => "Budget familial",
+        "How agents drive GridCraft (MCP / control channel)" => "Comment les agents pilotent GridCraft (MCP / canal de contrôle)",
+        "Hypothesized Mean Difference:" => "Différence hypothétique des moyennes :",
+        "Ignore Once" => "Ignorer une fois",
+        "Ignore blank" => "Ignorer si vide",
+        "Import a text or CSV file" => "Importer un fichier texte ou CSV",
+        "In the last 7 days" => "Dans les 7 derniers jours",
+        "In-cell dropdown" => "Liste déroulante dans la cellule",
+        "Include forecast statistics" => "Inclure les statistiques de prévision",
+        "Indent" => "Retrait",
+        "Information" => "Informations",
+        "Input" => "Entrée",
+        "Input Range:" => "Plage d'entrée :",
+        "Input X Range:" => "Plage d'entrée X :",
+        "Input Y Range:" => "Plage d'entrée Y :",
+        "Input message:" => "Message de saisie :",
+        "Insert Calculated Field" => "Insérer un champ calculé",
+        "Insert Chart" => "Insérer un graphique",
+        "Insert Function" => "Insérer une fonction",
+        "Insert Function (⇧F3)" => "Insérer une fonction (⇧F3)",
+        "Insert Hyperlink" => "Insérer un lien hypertexte",
+        "Insert Link" => "Insérer un lien",
+        "Insert Link (⌘K)" => "Insérer un lien (⌘K)",
+        "Insert Slicer" => "Insérer un segment",
+        "Insert a picture" => "Insérer une image",
+        "Insert a slicer to filter a table" => "Insérer un segment pour filtrer un tableau",
+        "Insert an icon" => "Insérer une icône",
+        "Insert rows" => "Insérer des lignes",
+        "Insert\nSlicer" => "Insérer un\nsegment",
+        "Insert…" => "Insérer…",
+        "Inside Borders" => "Bordures intérieures",
+        "Interpolation" => "Interpolation",
+        "Interval:" => "Intervalle :",
+        "Italic (⌘I)" => "Italique (⌘I)",
+        "Join the ArtCraft Discord" => "Rejoindre le Discord d'ArtCraft",
+        "Justify" => "Justifié",
+        "Keep" => "Conserver",
+        "Keep Solver Solution" => "Conserver la solution du solveur",
+        "Kth Largest (blank for none):" => "K-ième plus grande valeur (vide si aucune) :",
+        "Kth Smallest (blank for none):" => "K-ième plus petite valeur (vide si aucune) :",
+        "Labels in first row" => "Intitulés en première ligne",
+        "Last cell" => "Dernière cellule",
+        "Last month" => "Mois dernier",
+        "Last week" => "Semaine dernière",
+        "Left Border" => "Bordure gauche",
+        "Left margin (in):" => "Marge gauche (po) :",
+        "Legend Entries (Series)" => "Entrées de légende (séries)",
+        "Less Than…" => "Inférieur à…",
+        "Light Blue" => "Bleu clair",
+        "Light Red Fill" => "Remplissage rouge clair",
+        "Light Red Fill with Dark Red Text" => "Remplissage rouge clair avec texte rouge foncé",
+        "Line" => "Courbes",
+        "Line chart" => "Graphique en courbes",
+        "Line or Area" => "Courbes ou aires",
+        "Line with Markers" => "Courbes avec marqueurs",
+        "Linear" => "Linéaire",
+        "Link to (web address, e-mail or Sheet!A1):" => "Lier à (adresse web, e-mail ou Sheet!A1) :",
+        "Linked Cell" => "Cellule liée",
+        "Link…" => "Lien…",
+        "List" => "Liste",
+        "Location Range:" => "Plage d'emplacement :",
+        "Locked" => "Verrouillée",
+        "Lookup & Reference" => "Recherche et référence",
         "Macros" => "Macros",
+        "Macros and scripts in this workbook (Alt+F8)" => "Macros et scripts de ce classeur (Alt+F8)",
+        "Make Unconstrained Variables Non-Negative" => "Rendre les variables sans contrainte non négatives",
+        "Manage Rules…" => "Gérer les règles…",
+        "Markers" => "Marqueurs",
+        "Match case" => "Respecter la casse",
+        "Match entire cell contents" => "Totalité du contenu de la cellule",
+        "Math & Trig" => "Maths et trigonométrie",
+        "Max" => "Max",
+        "Maximum:" => "Maximum :",
+        "Median" => "Médiane",
+        "Middle Align" => "Aligner au milieu",
+        "Min" => "Min",
+        "Minimum / Source / Formula:" => "Minimum / Source / Formule :",
+        "Models" => "Modèles",
+        "Modify" => "Modifier",
+        "Month" => "Mois",
+        "More Borders…" => "Autres bordures…",
+        "More Colors…" => "Autres couleurs…",
+        "More Functions…" => "Autres fonctions…",
+        "More commands" => "Autres commandes",
+        "Move or Copy" => "Déplacer ou copier",
+        "Move or Copy Sheet…" => "Déplacer ou copier la feuille…",
+        "Move to Column Labels" => "Déplacer dans Étiquettes de colonnes",
+        "Move to Report Filter" => "Déplacer dans Filtre du rapport",
+        "Move to Row Labels" => "Déplacer dans Étiquettes de lignes",
+        "Move to Values" => "Déplacer dans Valeurs",
+        "Moving Average" => "Moyenne mobile",
+        "Multiply" => "Multiplication",
+        "My data has headers" => "Mes données ont des en-têtes",
+        "My list has headers" => "Ma liste contient des en-têtes",
+        "Name" => "Nom",
+        "Name Manager" => "Gestionnaire de noms",
+        "Name:" => "Nom :",
+        "Neutral" => "Neutre",
+        "New Comment" => "Nouveau commentaire",
+        "New Name" => "Nouveau nom",
+        "New Rule…" => "Nouvelle règle…",
+        "New Workbook" => "Nouveau classeur",
+        "New Worksheet Ply:" => "Nouvelle feuille de calcul :",
+        "New title (Modify):" => "Nouveau titre (Modifier) :",
+        "New…" => "Nouveau…",
+        "Next month" => "Mois prochain",
+        "Next week" => "Semaine prochaine",
+        "No Border" => "Aucune bordure",
+        "No Fill" => "Aucun remplissage",
+        "No names defined" => "Aucun nom défini",
+        "No picture selected" => "Aucune image sélectionnée",
+        "No printers found. Configure a system printer or export a PDF." => {
+            "Aucune imprimante trouvée. Configurez une imprimante système ou exportez un PDF."
+        }
+        "No ranges yet." => "Aucune plage pour le moment.",
+        "None" => "Aucun",
+        "Normal Probability" => "Probabilité normale",
+        "Not in Dictionary ({cell}):" => "Absent du dictionnaire ({cell}) :",
+        "Note" => "Note",
+        "Note:" => "Remarque :",
+        "Number Format" => "Format de nombre",
+        "Number Stored as Text" => "Nombre stocké sous forme de texte",
+        "Numbers" => "Nombres",
+        "OK" => "OK",
+        "One-sided" => "Recto",
+        "Open…" => "Ouvrir…",
+        "Operation" => "Opération",
+        "Options|Editing" => "Édition",
+        "Orange" => "Orange",
+        "Orientation (degrees)" => "Orientation (degrés)",
+        "Other:" => "Autre :",
+        "Outline" => "Plan",
+        "border|Outline" => "Contour",
+        "shape|Line" => "Ligne",
+        "delimiter|Comma" => "Virgule",
+        "Output" => "Sortie",
+        "Output Range:" => "Plage de sortie :",
+        "Output options" => "Options de sortie",
+        "Outside Borders" => "Bordures extérieures",
+        "Oval" => "Ovale",
+        "Page Break Preview" => "Aperçu des sauts de page",
+        "Page Breaks" => "Sauts de page",
+        "Page Setup" => "Mise en page",
+        "Paper Size" => "Taille du papier",
+        "Pareto (sorted histogram)" => "Pareto (histogramme trié)",
+        "Password" => "Mot de passe",
+        "Password (optional):" => "Mot de passe (facultatif) :",
+        "Password:" => "Mot de passe :",
+        "Paste (⌘V)" => "Coller (⌘V)",
+        "Paste Special" => "Collage spécial",
+        "Paste formulas that refer to the copied cells" => "Coller des formules qui font référence aux cellules copiées",
+        "Pen\nBlack" => "Stylet\nnoir",
+        "Pen\nBlue" => "Stylet\nbleu",
+        "Pen\nRed" => "Stylet\nrouge",
+        "Percent" => "Pourcentage",
+        "Pick From Drop-down List…" => "Liste déroulante de choix…",
+        "Pick From List" => "Liste de choix",
+        "Picture file path (PNG or JPEG):" => "Chemin du fichier image (PNG ou JPEG) :",
+        "Pie" => "Secteurs",
+        "Pie or Doughnut" => "Secteurs ou anneau",
+        "PivotTable Fields" => "Champs de tableau croisé dynamique",
+        "Place Picture in Cell" => "Placer l'image dans la cellule",
+        "Place Picture over Cells" => "Placer l'image sur les cellules",
+        "Place in Cell" => "Placer dans la cellule",
+        "Place over Cells" => "Placer sur les cellules",
+        "Print Area" => "Zone d'impression",
+        "Print Titles" => "Imprimer les titres",
+        "Print failed: the printing worker stopped." => "Échec de l'impression : le processus d'impression s'est arrêté.",
+        "Print failed: {error}" => "Échec de l'impression : {error}",
+        "Print job submitted." => "Travail d'impression envoyé.",
+        "Print job submitted: {receipt}" => "Travail d'impression envoyé : {receipt}",
+        "Printer" => "Imprimante",
+        "Printer default" => "Valeur par défaut de l'imprimante",
+        "Printer discovery failed." => "Échec de la recherche d'imprimantes.",
+        "Print…" => "Imprimer…",
+        "Product" => "Produit",
+        "Protect Sheet" => "Protéger la feuille",
+        "Protect Structure and Windows" => "Protéger la structure et les fenêtres",
+        "Protect Workbook structure" => "Protéger la structure du classeur",
+        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => {
+            "Protéger le classeur pour : Structure (les feuilles ne peuvent pas être ajoutées, déplacées, renommées, masquées ou supprimées)."
+        }
+        "Protect\nSheet" => "Protéger la\nfeuille",
+        "Protection" => "Protection",
+        "Purple" => "Violet",
+        "Quarterly Sales Dashboard" => "Tableau de bord des ventes trimestrielles",
+        "Radar" => "Radar",
+        "Range password:" => "Mot de passe de la plage :",
+        "Ranges that stay editable when the sheet is protected:" => "Plages qui restent modifiables lorsque la feuille est protégée :",
+        "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
+            "Le verrouillage des cellules ou le masquage des formules n'a aucun effet tant que la feuille n'est pas protégée (Révision › Protéger la feuille)."
+        }
+        "Rank and Percentile" => "Rang et centile",
+        "Recent Colors" => "Couleurs récentes",
+        "Recommended Charts" => "Graphiques recommandés",
+        "Rectangle" => "Rectangle",
+        "Red" => "Rouge",
+        "Red - Yellow - Green" => "Rouge - Jaune - Vert",
+        "Red Border" => "Bordure rouge",
+        "Red Text" => "Texte rouge",
+        "Redo" => "Rétablir",
+        "Redo (⌘Y)" => "Rétablir (⌘Y)",
+        "Reference:" => "Référence :",
+        "Refers To" => "Fait référence à",
+        "Refers to cells:" => "Fait référence aux cellules :",
+        "Refers to:" => "Fait référence à :",
+        "Refresh" => "Actualiser",
+        "Refresh printers" => "Actualiser les imprimantes",
+        "Regression" => "Régression linéaire",
+        "Remove" => "Supprimer",
+        "Remove Duplicates" => "Supprimer les doublons",
+        "Remove Field" => "Supprimer le champ",
+        "Remove the password (Modify)" => "Supprimer le mot de passe (Modifier)",
+        "Rename Sheet" => "Renommer la feuille",
+        "Replace" => "Remplacer",
+        "Replace All" => "Remplacer tout",
+        "Replace with:" => "Remplacer par :",
+        "Report Layout" => "Disposition du rapport",
+        "Residuals" => "Résidus",
+        "Restore Original Values" => "Restaurer les valeurs d'origine",
+        "Right Border" => "Bordure droite",
+        "Right margin (in):" => "Marge droite (po) :",
+        "Rounded Rectangle" => "Rectangle à coins arrondis",
+        "Row Height" => "Hauteur de ligne",
+        "Row height (pixels):" => "Hauteur de ligne (pixels) :",
+        "Rows" => "Lignes",
+        "Sample" => "Exemple",
+        "Save (⌘S)" => "Enregistrer (⌘S)",
+        "Save As…" => "Enregistrer sous…",
+        "Save Changes?" => "Enregistrer les modifications ?",
+        "Save a Copy" => "Enregistrer une copie",
+        "Save a Copy as Excel Workbook (.xlsx)…" => "Enregistrer une copie au format Classeur Excel (.xlsx)…",
+        "Save a copy as .{format}" => "Enregistrer une copie au format .{format}",
+        "Scatter" => "Nuage de points",
+        "Scatter or Bubble" => "Nuage de points ou bulles",
+        "Scatter with Lines" => "Nuage de points avec courbes",
+        "Scope" => "Étendue",
+        "Scope (Workbook or sheet name):" => "Étendue (Classeur ou nom de feuille) :",
+        "ScreenTip:" => "Info-bulle :",
+        "Search" => "Rechercher",
+        "Search Commands" => "Rechercher des commandes",
+        "Search and run any command" => "Rechercher et exécuter n'importe quelle commande",
+        "Search commands" => "Rechercher des commandes",
+        "Search commands (⌘⇧Space)" => "Rechercher des commandes (⌘⇧Space)",
+        "Search:" => "Rechercher :",
+        "Seasonality (auto, 0 for none, or a season length):" => "Saisonnalité (auto, 0 pour aucune, ou une durée de saison) :",
+        "Select" => "Sélectionner",
+        "Select Data" => "Sélectionner les données",
+        "Select Data Source" => "Sélectionner la source de données",
+        "Select Data…" => "Sélectionner les données…",
+        "Select a Solving Method:" => "Sélectionner une méthode de résolution :",
+        "Select a chart first." => "Sélectionnez d'abord un graphique.",
+        "Select a printer" => "Sélectionner une imprimante",
+        "Select and move ink and shapes" => "Sélectionner et déplacer l'encre et les formes",
+        "Semicolon" => "Point-virgule",
+        "Series" => "Série",
+        "Series in" => "Série en",
+        "Series{n}" => "Série{n}",
+        "Series…" => "Série…",
+        "Set Objective:" => "Définir l'objectif :",
+        "Set cell:" => "Cellule à définir :",
+        "Share: export or save a copy" => "Partager : exporter ou enregistrer une copie",
+        "Sheets: {sheets}" => "Feuilles : {sheets}",
+        "Shift cells down" => "Décaler les cellules vers le bas",
+        "Shift cells left" => "Décaler les cellules vers la gauche",
+        "Shift cells right" => "Décaler les cellules vers la droite",
+        "Shift cells up" => "Décaler les cellules vers le haut",
+        "Show Formulas (⌃`)" => "Afficher les formules (⌃`)",
+        "Show as % of Grand Total" => "Afficher en % du total général",
+        "Show as No Calculation" => "Afficher sans calcul",
+        "Show as Rank" => "Afficher en rang",
+        "Show as Running Total" => "Afficher en résultat cumulé",
+        "Show password" => "Afficher le mot de passe",
+        "Shrink to fit" => "Ajuster",
+        "Single" => "Simple",
+        "Single Accounting" => "Simple (comptabilité)",
+        "Skip blanks" => "Blancs non compris",
+        "Slicer" => "Segment",
+        "Solve" => "Résoudre",
+        "Solver Parameters" => "Paramètres du solveur",
+        "Solver Results" => "Résultats du solveur",
+        "Sort & Filter" => "Trier et filtrer",
+        "Sort Ascending" => "Trier par ordre croissant",
+        "Sort Descending" => "Trier par ordre décroissant",
+        "Sort by" => "Trier par",
+        "Sort On" => "Trier sur",
+        "Source:" => "Source :",
+        "Space" => "Espace",
+        "Special…" => "Spécial…",
+        "Spelling (F7)" => "Orthographe (F7)",
+        "Stacked Area" => "Aires empilées",
+        "Stacked Bar" => "Barres empilées",
+        "Stacked Column" => "Histogramme empilé",
+        "Stacked Line" => "Courbes empilées",
+        "Standard Colors" => "Couleurs standard",
+        "Standard Errors" => "Erreurs-types",
+        "Standard Width" => "Largeur standard",
+        "Standard column width (pixels):" => "Largeur de colonne standard (pixels) :",
+        "Standardized Residuals" => "Résidus standardisés",
+        "Start a conversation:" => "Démarrer une conversation :",
+        "Start a new workbook" => "Créer un nouveau classeur",
+        "Statistic" => "Statistique",
+        "Statistical" => "Statistiques",
+        "Step value:" => "Valeur du pas :",
+        "Stock" => "Boursier",
+        "Stop" => "Arrêt",
+        "Stop value:" => "Dernière valeur :",
+        "Subject to the Constraints:" => "Contraintes :",
+        "Submitting print job…" => "Envoi du travail d'impression…",
+        "Subscript" => "Indice",
+        "Subtract" => "Soustraction",
+        "Suggestions:" => "Suggestions :",
+        "Sum" => "Somme",
+        "Summarize by Average" => "Synthétiser par moyenne",
+        "Summarize by Count" => "Synthétiser par nombre",
+        "Summarize by Max" => "Synthétiser par max",
+        "Summarize by Min" => "Synthétiser par min",
+        "Summarize by Sum" => "Synthétiser par somme",
+        "Summary statistics" => "Rapport détaillé",
+        "Sunburst" => "Rayons de soleil",
+        "Superscript" => "Exposant",
+        "Switch Row/Column" => "Permuter ligne/colonne",
+        "Tab" => "Tabulation",
+        "Table (⌘T)" => "Tableau (⌘T)",
+        "Table Styles" => "Styles de tableau",
+        "Tabular" => "Tabulaire",
+        "Tab|Insert" => "Insertion",
+        "Text length" => "Longueur du texte",
+        "Text that Contains…" => "Texte qui contient…",
+        "Text to Columns" => "Convertir le texte en colonnes",
+        "The output range already holds data. Replace it with the report?" => {
+            "La plage de sortie contient déjà des données. La remplacer par le rapport ?"
+        }
+        "The spelling check is complete for the entire sheet." => "La vérification orthographique est terminée pour toute la feuille.",
+        "Theme Colors" => "Couleurs du thème",
+        "Themed Cell Styles" => "Styles de cellules avec thème",
+        "Then by" => "Puis par",
+        "There are no conditional formatting rules on this sheet." => "Cette feuille ne contient aucune règle de mise en forme conditionnelle.",
+        "Thick Bottom Border" => "Bordure épaisse en bas",
+        "Thick Outside Borders" => "Bordure extérieure épaisse",
+        "This month" => "Ce mois-ci",
+        "This week" => "Cette semaine",
+        "This workbook" => "Ce classeur",
+        "This workbook has no scripts or macros." => "Ce classeur ne contient ni script ni macro.",
+        "Timeline range (blank: first column of the selection):" => "Plage de la chronologie (vide : première colonne de la sélection) :",
+        "Title:" => "Titre :",
+        "Titles and Headings" => "Titres et en-têtes",
+        "To value:" => "Valeur à atteindre :",
+        "To:" => "À :",
+        "Today" => "Aujourd'hui",
+        "Tomorrow" => "Demain",
+        "Top" => "Haut",
+        "Top Align" => "Aligner en haut",
+        "Top Border" => "Bordure supérieure",
+        "Top and Bottom Border" => "Bordure en haut et en bas",
+        "Top and Double Bottom Border" => "Bordure simple en haut et double en bas",
+        "Top and Thick Bottom Border" => "Bordure simple en haut et épaisse en bas",
+        "Top margin (in):" => "Marge haute (po) :",
+        "Top/Bottom Rules" => "Règles des valeurs plus/moins élevées",
+        "Total" => "Total",
+        "Transpose (E)" => "Transposé (E)",
+        "Treat consecutive delimiters as one" => "Interpréter des séparateurs identiques consécutifs comme uniques",
+        "Treemap" => "Compartimentage",
+        "Triangle" => "Triangle",
+        "Two-sided printing" => "Impression recto verso",
+        "Two-sided: long edge" => "Recto verso : bord long",
+        "Two-sided: short edge" => "Recto verso : bord court",
+        "Type" => "Type",
+        "Type (custom format code):" => "Type (code de format personnalisé) :",
+        "Type a command, e.g. freeze, chart, bold…" => "Tapez une commande, par ex. figer, graphique, gras…",
+        "Type to filter…" => "Tapez pour filtrer…",
+        "Underline (⌘U)" => "Souligné (⌘U)",
+        "Undo" => "Annuler",
+        "Undo (⌘Z)" => "Annuler (⌘Z)",
+        "Undo list" => "Liste d'annulation",
+        "Unhide" => "Afficher",
+        "Unhide Sheet…" => "Afficher la feuille…",
+        "Unhide sheet:" => "Afficher la feuille :",
+        "Unlock with password" => "Déverrouiller avec un mot de passe",
+        "Unprotect Sheet" => "Ôter la protection de la feuille",
+        "Unprotect Workbook" => "Ôter la protection du classeur",
+        "Up" => "Vers le haut",
+        "Use AutoFilter" => "Utiliser le filtre automatique",
+        "Use a field's menu to move it between areas:" => "Utilisez le menu d'un champ pour le déplacer entre les zones :",
+        "Use function" => "Utiliser la fonction",
+        "Validation" => "Validation",
+        "Value" => "Valeur",
+        "Value Of:" => "Valeur :",
+        "Values" => "Valeurs",
+        "Values (V)" => "Valeurs (V)",
+        "Values and number formats" => "Valeurs et formats des nombres",
+        "Values range (blank: second column of the selection):" => "Plage de valeurs (vide : deuxième colonne de la sélection) :",
+        "Variable 1 Range:" => "Plage pour la variable 1 :",
+        "Variable 2 Range:" => "Plage pour la variable 2 :",
+        "Version {version}" => "Version {version}",
+        "Vertical" => "Vertical",
+        "Vertical axis title:" => "Titre de l'axe vertical :",
+        "Visible cells only" => "Cellules visibles seulement",
+        "Warning" => "Avertissement",
+        "Warning Text" => "Texte d'avertissement",
+        "Watch\nWindow" => "Fenêtre\nEspion",
+        "Waterfall" => "Cascade",
+        "Web" => "Web",
+        "Weekday" => "Jour ouvré",
+        "What-If Analysis" => "Analyse de scénarios",
+        "White - Green" => "Blanc - Vert",
+        "White - Red" => "Blanc - Rouge",
+        "Whole number" => "Nombre entier",
+        "Win/Loss" => "Positif/Négatif",
+        "Within workbook" => "Dans le classeur",
+        "Workbook" => "Classeur",
+        "Workbook Statistics" => "Statistiques du classeur",
+        "Workbook\nStatistics" => "Statistiques\ndu classeur",
+        "Wrap text" => "Renvoyer à la ligne automatiquement",
+        "Year" => "Année",
+        "Yellow Fill with Dark Yellow Text" => "Remplissage jaune avec texte jaune foncé",
+        "Z to A" => "De Z à A",
+        "Zeros" => "Zéros",
+        "Zoom In" => "Zoom avant",
+        "Zoom Out" => "Zoom arrière",
+        "Zoom to 100%" => "Zoom 100 %",
+        "Zoom to Selection" => "Zoom sur la sélection",
+        "Zoom…" => "Zoom…",
+        "and:" => "et :",
+        "applies to" => "s'applique à",
+        "between" => "comprise entre",
+        "dashed" => "tirets",
+        "dotted" => "pointillés",
+        "double" => "double",
+        "e.g. lookup, average, date" => "par ex. recherche, moyenne, date",
+        "equal to" => "égale à",
+        "greater than" => "supérieure à",
+        "greater than or equal to" => "supérieure ou égale à",
+        "less than" => "inférieure à",
+        "less than or equal to" => "inférieure ou égale à",
+        "medium" => "moyen",
+        "none" => "aucun",
+        "not between" => "non comprise entre",
+        "not equal to" => "différente de",
+        "t-Test: Paired Two Sample for Means" => "Test d'égalité des espérances : observations pairées",
+        "t-Test: Two-Sample Assuming Equal Variances" => "Test d'égalité des espérances : deux observations de variances égales",
+        "t-Test: Two-Sample Assuming Unequal Variances" => "Test d'égalité des espérances : deux observations de variances différentes",
+        "thick" => "épais",
+        "thin" => "fin",
+        "this workbook" => "ce classeur",
+        "with" => "avec",
+        "{count} cell(s) found" => "{count} cellule(s) trouvée(s)",
+        "£ English (United Kingdom)" => "£ Anglais (Royaume-Uni)",
+        "¥ Japanese" => "¥ Japonais",
+        "— 1 step" => "— 1 étape",
+        "— VBA project (preserved, not run)" => "— Projet VBA (conservé, non exécuté)",
+        "— {steps} steps" => "— {steps} étapes",
+        "€ Euro" => "€ Euro",
+        "The password is incorrect. Check that Caps Lock is off and try again." => {
+            "Le mot de passe est incorrect. Vérifiez que la touche Verr. Maj est désactivée, puis réessayez."
+        }
+        "No precedent cells." => "Aucune cellule antécédente.",
+        "No dependent cells." => "Aucune cellule dépendante.",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "Un tableur open source écrit en Rust et développé en salle blanche. Fait partie d'ArtCraft."
+        }
+        "Answer" => "Réponses",
+        "Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed." => {
+            "Automatisation de ce classeur. GridCraft exécute ses propres scripts ; le projet VBA d'un fichier est conservé mais pas exécuté."
+        }
+        "Constraint Cell Reference" => "Référence de cellule de la contrainte",
+        "Constraint Value" => "Valeur de la contrainte",
+        "Constraint Operator" => "Opérateur de la contrainte",
+        "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
+            "{count} commandes du moteur sont disponibles. Voir docs/mcp.md et docs/control-protocol.md."
+        }
+        "Evolutionary" => "Évolutionnaire",
+        "Evolutionary: a genetic search for models that aren't smooth; every variable cell needs bounds." => {
+            "Évolutionnaire : une recherche génétique pour les modèles non lisses ; chaque cellule variable doit être bornée."
+        }
+        "GRG Nonlinear: a local optimum of a smooth model, from the current values." => {
+            "GRG non linéaire : un optimum local d'un modèle lisse, à partir des valeurs actuelles."
+        }
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "GridCraft est entièrement pilotable par des agents. Chaque élément de menu, bouton et geste est une commande :"
+        }
+        "Let this workbook's scripts run for the rest of this session" => {
+            "Autoriser l'exécution des scripts de ce classeur jusqu'à la fin de la session"
+        }
+        "Limits" => "Limites",
+        "Remove level" => "Supprimer le niveau",
+        "Reports:" => "Rapports :",
+        "Return to the original worksheet to insert this picture, or cancel and choose another cell." => {
+            "Revenez à la feuille de calcul d'origine pour insérer cette image, ou annulez et choisissez une autre cellule."
+        }
+        "Scripts in this workbook came from a file and are disabled." => "Les scripts de ce classeur proviennent d'un fichier et sont désactivés.",
+        "Simplex LP" => "Simplex PL",
+        "Simplex LP: for linear models; integer and binary constraints by branch and bound." => {
+            "Simplex PL : pour les modèles linéaires ; contraintes entières et binaires par séparation et évaluation."
+        }
+        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook." => {
+            "Ce classeur demande à ouvrir l'adresse ci-dessous. Les liens peuvent mener à des sites malveillants ou lancer d'autres programmes : ne l'ouvrez que si vous faites confiance au classeur."
+        }
+        "Can't Undo" => "Impossible d'annuler",
+        "Undo {action}" => "Annuler {action}",
+        "Scroll ribbon left" => "Faire défiler le ruban vers la gauche",
+        "Scroll ribbon right" => "Faire défiler le ruban vers la droite",
+        "Border presets" => "Bordures prédéfinies",
+        "Medium" => "Moyen",
+        "Insert {symbol}" => "Insérer {symbol}",
+        "Letter" => "Lettre US",
+        "Legal" => "Légal US",
+        "Tabloid" => "Tabloïd",
+        "Executive" => "Exécutif",
+        "Japanese Postcard" => "Carte postale japonaise",
+        "Japanese Double Postcard" => "Carte postale japonaise double",
+        "Japanese Envelope #3" => "Enveloppe japonaise n° 3",
+        "Japanese Envelope #4" => "Enveloppe japonaise n° 4",
+        "Japanese Envelope Kaku #2" => "Enveloppe japonaise Kaku n° 2",
+        "Japanese Envelope Kaku #3" => "Enveloppe japonaise Kaku n° 3",
+        "Table Name:" => "Nom du tableau :",
+        "% of all commits" => "% de tous les commits",
+        "(Blanks)" => "(Vides)",
+        "(Select All Search Results)" => "(Sélectionner tous les résultats de la recherche)",
+        "(Select All)" => "(Sélectionner tout)",
+        "A print job is already being submitted." => "Un travail d'impression est déjà en cours d'envoi.",
+        "Add Watch (active cell)" => "Ajouter un espion (cellule active)",
+        "Auto Fill Options" => "Options de recopie incrémentée",
+        "Average: {value}" => "Moyenne : {value}",
+        "Binary assets added" => "Ressources binaires ajoutées",
+        "Binary assets removed" => "Ressources binaires supprimées",
+        "Border preview" => "Aperçu de la bordure",
+        "Cell" => "Cellule",
+        "Chart Type" => "Type de graphique",
+        "Circular References: {cell}" => "Références circulaires : {cell}",
+        "Click once to follow. Click and hold to select this cell." => {
+            "Cliquez une fois pour suivre le lien. Cliquez et maintenez le bouton enfoncé pour sélectionner cette cellule."
+        }
+        "Colors & Layout" => "Couleurs et disposition",
+        "Commits" => "Commits",
+        "Copy Cells" => "Copier les cellules",
+        "Could not check for updates: {error}" => "Impossible de rechercher les mises à jour : {error}",
+        "Couldn't decode the generated PDF." => "Impossible de décoder le PDF généré.",
+        "Count: {value}" => "Nombre : {value}",
+        "Data Labels" => "Étiquettes de données",
+        "Display name" => "Nom d'affichage",
+        "Elements" => "Éléments",
+        "Exporting needs a file picker, which this window doesn't have." => {
+            "L'exportation nécessite un sélecteur de fichiers, dont cette fenêtre ne dispose pas."
+        }
+        "Fill Days" => "Incrémenter les jours",
+        "Fill Formatting Only" => "Ne recopier que la mise en forme",
+        "Fill Months" => "Incrémenter les mois",
+        "Fill Series" => "Incrémenter une série",
+        "Fill Weekdays" => "Incrémenter les jours ouvrés",
+        "Fill Without Formatting" => "Recopier les valeurs sans la mise en forme",
+        "Fill Years" => "Incrémenter les années",
+        "Fill…" => "Remplissage…",
+        "First commit" => "Premier commit",
+        "Format Chart Area" => "Mise en forme de la zone de graphique",
+        "Formula" => "Formule",
+        "Grab bag" => "En vrac",
+        "GridCraft {version} is up to date." => "GridCraft {version} est à jour.",
+        "Height" => "Hauteur",
+        "Height: {height} ({pixels} pixels)" => "Hauteur : {height} ({pixels} pixels)",
+        "Hyperlink" => "Lien hypertexte",
+        "Last commit" => "Dernier commit",
+        "Layout {n}" => "Disposition {n}",
+        "Legend" => "Légende",
+        "Line delta" => "Écart de lignes",
+        "Lines +/−" => "Lignes +/−",
+        "Lines added" => "Lignes ajoutées",
+        "Lines deleted" => "Lignes supprimées",
+        "Macros preserved (not executed)" => "Macros conservées (non exécutées)",
+        "Maximum" => "Maximum",
+        "Maximum: {value}" => "Maximum : {value}",
+        "Merged PRs" => "PR fusionnées",
+        "Minimum" => "Minimum",
+        "Minimum: {value}" => "Minimum : {value}",
+        "Model" => "Modèle",
+        "Name (A–Z)" => "Nom (A–Z)",
+        "No comments on this sheet yet. Select a cell and choose New Comment." => {
+            "Aucun commentaire sur cette feuille pour l'instant. Sélectionnez une cellule et choisissez Nouveau commentaire."
+        }
+        "No contributor data was built into this copy." => "Aucune donnée de contributeurs n'est incluse dans cette copie.",
+        "No model credits were built into this copy." => "Aucun crédit de modèle n'est inclus dans cette copie.",
+        "Numerical Count" => "Nombre de valeurs numériques",
+        "Numerical Count: {value}" => "Nombre de valeurs numériques : {value}",
+        "Page {n}" => "Page {n}",
+        "Picture in cell" => "Image dans la cellule",
+        "Picture: {alt}" => "Image : {alt}",
+        "Preview" => "Aperçu",
+        "Printing is unavailable here; export a PDF instead." => "L'impression n'est pas disponible ici ; exportez plutôt un PDF.",
+        "Real name" => "Nom réel",
+        "Reopen" => "Rouvrir",
+        "Reply…" => "Répondre…",
+        "Resolve" => "Résoudre",
+        "Resolved" => "Résolu",
+        "Reverse the order" => "Inverser l'ordre",
+        "Select a chart to format it." => "Sélectionnez un graphique pour le mettre en forme.",
+        "Select an available printer in File > Print before submitting." => {
+            "Sélectionnez une imprimante disponible dans Fichier > Imprimer avant de lancer l'impression."
+        }
+        "Selection" => "Sélection",
+        "Send" => "Envoyer",
+        "Series {n}" => "Série {n}",
+        "Split tabs" => "Séparateur des onglets",
+        "Stacked" => "Empilé",
+        "Sum: {value}" => "Somme : {value}",
+        "The cell being edited can't be entered." => "La cellule en cours de modification ne peut pas être validée.",
+        "The cell or chart you're trying to change is on a protected sheet." => {
+            "La cellule ou le graphique que vous essayez de modifier se trouve sur une feuille protégée."
+        }
+        "The chart no longer exists." => "Le graphique n'existe plus.",
+        "The print command did not produce a PDF." => "La commande d'impression n'a pas produit de PDF.",
+        "The text box's worksheet is no longer active." => "La feuille de calcul de la zone de texte n'est plus active.",
+        "The web version is always the latest release." => "La version web est toujours la dernière version publiée.",
+        "There are no shapes, pictures or charts on this sheet." => "Cette feuille ne contient aucune forme, image ni aucun graphique.",
+        "This workbook contains VBA macros. GridCraft keeps them when you save as .xlsm, but does not run them." => {
+            "Ce classeur contient des macros VBA. GridCraft les conserve lorsque vous enregistrez au format .xlsm, mais ne les exécute pas."
+        }
+        "This workbook's VBA macros could not be loaded and were dropped, so they will not be in the saved file. Keep the original file." => {
+            "Les macros VBA de ce classeur n'ont pas pu être chargées et ont été abandonnées : elles ne figureront pas dans le fichier enregistré. Conservez le fichier d'origine."
+        }
+        "Username" => "Nom d'utilisateur",
+        "What this means" => "Qu'est-ce que cela signifie ?",
+        "Width" => "Largeur",
+        "Width: {width} ({pixels} pixels)" => "Largeur : {width} ({pixels} pixels)",
+        "color|New" => "Nouvelle",
+        "credits|First" => "Premier",
+        "credits|Last" => "Dernier",
+        "legend|Bottom" => "En bas",
+        "legend|Left" => "À gauche",
+        "legend|None" => "Aucune",
+        "legend|Right" => "À droite",
+        "legend|Top" => "En haut",
+        "{count} contributors · {commits} commits" => "{count} contributeurs · {commits} commits",
+        "{count} items in this file were handled differently. First: {first}" => {
+            "{count} éléments de ce fichier ont été traités différemment. Premier : {first}"
+        }
+        "{name} options" => "Options de {name}",
+        "{title} — Edited" => "{title} — Modifié",
+        "Σ Values" => "Σ Valeurs",
+        "Actions" => "Actions",
+        "Activate Sheet" => "Activer la feuille",
+        "Active Field" => "Champ actif",
+        "Add Field" => "Ajouter un champ",
+        "Add Scenario" => "Ajouter un scénario",
+        "Add-ins" => "Compléments",
+        "Advanced" => "Avancé",
+        "Advanced…" => "Avancé…",
+        "Align" => "Aligner",
+        "All Scripts" => "Tous les scripts",
+        "Allow Edit Ranges…" => "Permettre la modification des plages…",
+        "Analysis" => "Analyse",
+        "Arrange" => "Organiser",
+        "Arrange All" => "Réorganiser tout",
+        "AutoFill" => "Recopie incrémentée",
+        "Background" => "Arrière-plan",
+        "Banded Columns" => "Colonnes à bandes",
+        "Banded Rows" => "Lignes à bandes",
+        "Bring Forward" => "Avancer",
+        "Calculated Field" => "Champ calculé",
+        "Calculations" => "Calculs",
+        "Cancel Copy" => "Annuler la copie",
+        "Cell Controls" => "Contrôles de cellule",
+        "Cells" => "Cellules",
+        "Change Chart Type…" => "Modifier le type de graphique…",
+        "Change Colors" => "Modifier les couleurs",
+        "Change Data Source" => "Changer la source de données",
+        "Chart Layouts" => "Dispositions du graphique",
+        "Chart Properties" => "Propriétés du graphique",
+        "Chart Recommendations" => "Graphiques recommandés",
+        "Chart Styles" => "Styles du graphique",
+        "Charts" => "Graphiques",
+        "Check Value Against Validation" => "Vérifier la valeur selon la validation",
+        "Check for Updates" => "Rechercher des mises à jour",
+        "Check for Updates…" => "Rechercher des mises à jour…",
+        "Clear Slicer Filter" => "Effacer le filtre du segment",
+        "Clipboard" => "Presse-papiers",
+        "Close Window" => "Fermer la fenêtre",
+        "Collapse Ribbon" => "Réduire le ruban",
+        "Colors" => "Couleurs",
+        "Consolidate" => "Consolider",
+        "Consolidate…" => "Consolider…",
+        "Convert" => "Convertir",
+        "Current Selection" => "Sélection active",
+        "Custom Views" => "Affichages personnalisés",
+        "Custom Views…" => "Affichages personnalisés…",
+        "Customize Status Bar" => "Personnaliser la barre d'état",
+        "Data Analysis…" => "Analyse de données…",
+        "Data Table" => "Table de données",
+        "Data Tools" => "Outils de données",
+        "Default Width" => "Largeur par défaut",
+        "Defined Names" => "Noms définis",
+        "Delete Cells" => "Supprimer des cellules",
+        "Delete Chart" => "Supprimer le graphique",
+        "Delete Name" => "Supprimer le nom",
+        "Delete Object" => "Supprimer l'objet",
+        "Delete PivotTable" => "Supprimer le tableau croisé dynamique",
+        "Delete Scenario" => "Supprimer le scénario",
+        "Delete Script" => "Supprimer le script",
+        "Delete Slicer" => "Supprimer le segment",
+        "Display Theme" => "Thème d'affichage",
+        "Draw Border" => "Tracer les bordures",
+        "Edit Cell" => "Modifier la cellule",
+        "Edit Text Box" => "Modifier la zone de texte",
+        "Editing" => "Édition",
+        "Effects" => "Effets",
+        "Encode Workbook" => "Encoder le classeur",
+        "Enter Cell" => "Saisir dans la cellule",
+        "Evaluate" => "Évaluer",
+        "Expand Formula Bar" => "Développer la barre de formule",
+        "Expand/Collapse Field" => "Développer/Réduire le champ",
+        "Export as CSV" => "Exporter au format CSV",
+        "Export as PDF" => "Exporter au format PDF",
+        "Field List" => "Liste des champs",
+        "File (Backstage view)" => "Fichier (mode Backstage)",
+        "Fill Down" => "Recopier en bas",
+        "Fill Left" => "Recopier à gauche",
+        "Fill Range With Input" => "Remplir la plage avec la saisie",
+        "Fill Right" => "Recopier à droite",
+        "Fill Up" => "Recopier en haut",
+        "Filter Column" => "Filtrer la colonne",
+        "Filter Items" => "Filtrer les éléments",
+        "First Column" => "Première colonne",
+        "Fonts" => "Polices",
+        "Forecast" => "Prévision",
+        "Format Painter" => "Reproduire la mise en forme",
+        "Format Selection" => "Mise en forme de la sélection",
+        "Formula Auditing" => "Vérification des formules",
+        "From Table/Range" => "À partir d'un tableau ou d'une plage",
+        "From Text/CSV" => "À partir d'un fichier texte/CSV",
+        "Function Library" => "Bibliothèque de fonctions",
+        "Get & Transform Data" => "Récupérer et transformer des données",
+        "Get Cell" => "Lire la cellule",
+        "Get Data" => "Obtenir des données",
+        "Grand Totals" => "Totaux généraux",
+        "Group Field" => "Grouper le champ",
+        "Header Row" => "Ligne d'en-tête",
+        "Hide & Unhide" => "Masquer et afficher",
+        "Illustrations" => "Illustrations",
+        "Ink Stroke" => "Trait d'encre",
+        "Ink to Shape" => "Encre en forme",
+        "Insert Cells" => "Insérer des cellules",
+        "Insert Function…" => "Insérer une fonction…",
+        "Inspect Workbook" => "Inspecter le classeur",
+        "Interface Language" => "Langue de l'interface",
+        "Interface Language: English" => "Langue de l'interface : anglais",
+        "Interface Language: Japanese" => "Langue de l'interface : japonais",
+        "Interface Size" => "Taille de l'interface",
+        "Lasso Select" => "Sélection au lasso",
+        "Last Column" => "Dernière colonne",
+        "Layout" => "Disposition",
+        "Links" => "Liens",
+        "List Commands" => "Lister les commandes",
+        "List Functions" => "Lister les fonctions",
+        "Manage Rules" => "Gérer les règles",
+        "More Functions" => "Plus de fonctions",
+        "Move Chart" => "Déplacer le graphique",
+        "Move Chart…" => "Déplacer le graphique…",
+        "Move Columns" => "Déplacer les colonnes",
+        "Move Field" => "Déplacer le champ",
+        "Move Object" => "Déplacer l'objet",
+        "Move Selection" => "Déplacer la sélection",
+        "Move or Copy Sheet" => "Déplacer ou copier la feuille",
+        "New Cell Style" => "Nouveau style de cellule",
+        "New Cell Style…" => "Nouveau style de cellule…",
+        "New Script" => "Nouveau script",
+        "New Window" => "Nouvelle fenêtre",
+        "Next Cell in Selection" => "Cellule suivante de la sélection",
+        "Next Sheet" => "Feuille suivante",
+        "Object Properties" => "Propriétés de l'objet",
+        "Open Dialog" => "Ouvrir une boîte de dialogue",
+        "Open Hyperlink" => "Ouvrir le lien hypertexte",
+        "Outline Settings" => "Paramètres du plan",
+        "Settings" => "Paramètres",
+        "Paste Names" => "Coller des noms",
+        "Paste Names…" => "Coller des noms…",
+        "Paste Name" => "Coller un nom",
+        "Paste name" => "Coller un nom",
+        "Paste List" => "Coller une liste",
+        "Pen" => "Stylet",
+        "Picture" => "Image",
+        "PivotChart" => "Graphique croisé dynamique",
+        "PivotTable Analyze" => "Analyse du tableau croisé dynamique",
+        "PivotTable Design" => "Création",
+        "PivotTable Layout" => "Disposition du tableau croisé dynamique",
+        "PivotTable Options" => "Options du tableau croisé dynamique",
+        "PivotTable Styles" => "Styles de tableau croisé dynamique",
+        "PivotTables" => "Tableaux croisés dynamiques",
+        "Previous Sheet" => "Feuille précédente",
+        "Print Gridlines" => "Imprimer le quadrillage",
+        "Print Headings" => "Imprimer les en-têtes",
+        "Print Preview" => "Aperçu avant impression",
+        "Print Settings" => "Paramètres d'impression",
+        "Proofing" => "Vérification",
+        "Protect" => "Protéger",
+        "Queries & Connections" => "Requêtes et connexions",
+        "Quick Layout" => "Disposition rapide",
+        "Read Range" => "Lire la plage",
+        "Recently Used" => "Récemment utilisées",
+        "Recommended PivotTables" => "Tableaux croisés dynamiques recommandés",
+        "Record Actions" => "Enregistrer les actions",
+        "Refresh All" => "Actualiser tout",
+        "Reply" => "Répondre",
+        "Resize Table" => "Redimensionner le tableau",
+        "Resolve Thread" => "Résoudre le fil",
+        "Ribbon Tab" => "Onglet du ruban",
+        "Rotate" => "Faire pivoter",
+        "Run Script" => "Exécuter le script",
+        "Save as Web Page" => "Enregistrer comme page web",
+        "Scale to Fit" => "Mise à l'échelle",
+        "Scenario Manager" => "Gestionnaire de scénarios",
+        "Scenario Summary" => "Synthèse de scénarios",
+        "Scripting Tools" => "Outils de script",
+        "Select All" => "Sélectionner tout",
+        "Select Current Region" => "Sélectionner la zone en cours",
+        "Select Dependents" => "Sélectionner les dépendants",
+        "Select Entire Column" => "Sélectionner toute la colonne",
+        "Select Entire Row" => "Sélectionner toute la ligne",
+        "Select Precedents" => "Sélectionner les antécédents",
+        "Selection Pane" => "Volet Sélection",
+        "Selection Statistics" => "Statistiques de la sélection",
+        "Send Backward" => "Reculer",
+        "Set Values" => "Définir les valeurs",
+        "Shape Fill" => "Remplissage de forme",
+        "Shape Outline" => "Contour de forme",
+        "Shape Styles" => "Styles de formes",
+        "Sheet Options" => "Options de la feuille de calcul",
+        "Show" => "Afficher",
+        "Show Comments" => "Afficher les commentaires",
+        "Show Details" => "Afficher les détails",
+        "Show Objects" => "Afficher les objets",
+        "Show Outline Levels" => "Afficher les niveaux du plan",
+        "Show Outline Symbols" => "Afficher les symboles du plan",
+        "Show Scenario" => "Afficher le scénario",
+        "Show Zeros" => "Afficher les zéros",
+        "Shrink to Fit" => "Ajuster",
+        "Solver Reports" => "Rapports du solveur",
+        "Solver…" => "Solveur…",
+        "Sort Field" => "Trier le champ",
+        "Sort…" => "Trier…",
+        "Split" => "Fractionner",
+        "Stop Action" => "Arrêter l'action",
+        "Styles" => "Styles",
+        "Submit Print Job" => "Envoyer le travail d'impression",
+        "Subtotals" => "Sous-totaux",
+        "Summarize with PivotTable" => "Synthétiser avec un tableau croisé dynamique",
+        "Switch Window" => "Changer de fenêtre",
+        "Switch Windows" => "Changement de fenêtre",
+        "Symbols" => "Symboles",
+        "Table Name" => "Nom du tableau",
+        "Table Style Options" => "Options de style de tableau",
+        "Tables" => "Tableaux",
+        "Thesaurus" => "Dictionnaire des synonymes",
+        "Toggle Checkbox" => "Cocher/Décocher la case",
+        "Toggle Slicer Value" => "Basculer la valeur du segment",
+        "Tools" => "Outils",
+        "Total Row" => "Ligne des totaux",
+        "Totals Function" => "Fonction de total",
+        "Trust Scripts" => "Approuver les scripts",
+        "Undo History" => "Historique des annulations",
+        "Unhide Sheet" => "Afficher la feuille",
+        "Value Field Settings" => "Paramètres des champs de valeurs",
+        "Window" => "Fenêtre",
+        "Windows" => "Fenêtres",
+        "Workbook Views" => "Modes d'affichage",
+        // Fixed engine error messages (literal, not built with `format!`).
+        "That undo group has already ended." => "Ce groupe d'annulation est déjà terminé.",
+        "Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format." => {
+            "Excel 97-2003 (.xls) est pris en charge en importation uniquement. Enregistrez au format .xlsx ou dans un autre format d'exportation pris en charge."
+        }
+        "XLSB is supported for data import only. Save as .xlsx or another supported export format." => {
+            "XLSB est pris en charge pour l'importation de données uniquement. Enregistrez au format .xlsx ou dans un autre format d'exportation pris en charge."
+        }
+        "ODS is supported for data import only. Save as .xlsx or another supported export format." => {
+            "ODS est pris en charge pour l'importation de données uniquement. Enregistrez au format .xlsx ou dans un autre format d'exportation pris en charge."
+        }
+        "files larger than 2 GB aren't supported" => "Les fichiers de plus de 2 Go ne sont pas pris en charge.",
+        "The table needs a header row to be used as a PivotTable source." => {
+            "Le tableau doit avoir une ligne d'en-tête pour servir de source à un tableau croisé dynamique."
+        }
+        "The reference isn't valid." => "La référence n'est pas valide.",
+        "The source range is too large for a PivotTable." => "La plage source est trop grande pour un tableau croisé dynamique.",
+        "The PivotTable report is too large." => "Le rapport de tableau croisé dynamique est trop grand.",
+        "There's no such sheet." => "Cette feuille n'existe pas.",
+        "The PivotTable report is out of date. Refresh it first." => {
+            "Le rapport de tableau croisé dynamique n'est pas à jour. Actualisez-le d'abord."
+        }
+        "The PivotTable report will not fit on the sheet." => "Le rapport de tableau croisé dynamique ne tient pas dans la feuille.",
+        "There's no such PivotTable." => "Ce tableau croisé dynamique n'existe pas.",
+        "The PivotTable report will not fit on the sheet. Choose a different location." => {
+            "Le rapport de tableau croisé dynamique ne tient pas dans la feuille. Choisissez un autre emplacement."
+        }
+        "A PivotTable report cannot overlap another PivotTable report." => {
+            "Un rapport de tableau croisé dynamique ne peut pas chevaucher un autre rapport de tableau croisé dynamique."
+        }
+        "The PivotTable report can't overlap its source data. Choose a different location." => {
+            "Le rapport de tableau croisé dynamique ne peut pas chevaucher ses données sources. Choisissez un autre emplacement."
+        }
+        "A PivotTable report cannot overlap a table." => "Un rapport de tableau croisé dynamique ne peut pas chevaucher un tableau.",
+        "The formula is empty." => "La formule est vide.",
+        "The formula is too long." => "La formule est trop longue.",
+        "The formula has an unterminated text value." => "La formule contient un texte non terminé.",
+        "The formula has an unterminated field name." => "La formule contient un nom de champ non terminé.",
+        "The formula contains an error." => "La formule contient une erreur.",
+        "The fill is too large." => "La recopie est trop grande.",
+        "The weekday series runs past the supported date range." => "La série de jours ouvrés dépasse la plage de dates prise en charge.",
+        "there are no comments in this workbook" => "Il n'y a aucun commentaire dans ce classeur.",
+        "There are no comments in this workbook." => "Il n'y a aucun commentaire dans ce classeur.",
+        "The sheet is protected with a password. Unprotect it first (Review › Unprotect Sheet)." => {
+            "La feuille est protégée par un mot de passe. Ôtez d'abord sa protection (Révision › Ôter la protection de la feuille)."
+        }
+        "The password you supplied is not correct." => "Le mot de passe fourni n'est pas correct.",
+        "missing `title`" => "`title` manquant.",
+        "Unprotect the sheet to change its edit ranges." => "Ôtez la protection de la feuille pour modifier ses plages modifiables.",
+        "no such range" => "Cette plage n'existe pas.",
+        "A table can't overlap another table." => "Un tableau ne peut pas chevaucher un autre tableau.",
+        "Multi-cell array formulas aren't allowed in tables." => {
+            "Les formules matricielles à plusieurs cellules ne sont pas autorisées dans les tableaux."
+        }
+        "range too large" => "Plage trop grande.",
+        "The name that you entered is not valid." => "Le nom entré n'est pas valide.",
+        "The name entered already exists. Enter a unique name." => "Le nom entré existe déjà. Entrez un nom unique.",
+        "This operation isn't allowed: it would shift cells in a table on your worksheet." => {
+            "Cette opération n'est pas autorisée : elle décalerait des cellules d'un tableau de votre feuille de calcul."
+        }
+        "To prevent possible loss of data, cells can't be pushed off the end of the worksheet." => {
+            "Pour éviter toute perte de données, les cellules ne peuvent pas être repoussées au-delà de la fin de la feuille de calcul."
+        }
+        "select a cell in a table" => "Sélectionnez une cellule dans un tableau.",
+        "There's no room below the table for the total row." => "Il n'y a pas de place sous le tableau pour la ligne des totaux.",
+        "missing `column`" => "`column` manquant.",
+        "missing `name`" => "`name` manquant.",
+        "Select data for the chart first." => "Sélectionnez d'abord les données du graphique.",
+        "multi-area charts require a text category column followed by equal-height series columns" => {
+            "Les graphiques à plusieurs zones exigent une colonne de catégories textuelles suivie de colonnes de séries de même hauteur."
+        }
+        "multi-area series columns require headers" => "Les colonnes de séries à plusieurs zones doivent avoir des en-têtes.",
+        "range too large for a chart" => "Plage trop grande pour un graphique.",
+        "no such chart" => "Ce graphique n'existe pas.",
+        "expected exclusive or inclusive" => "exclusive ou inclusive attendu.",
+        "missing `range`" => "`range` manquant.",
+        "missing `location`" => "`location` manquant.",
+        "placement must be cell or overCells" => "placement doit valoir cell ou overCells.",
+        "invalid base64" => "Base64 non valide.",
+        "invalid cell address" => "Adresse de cellule non valide.",
+        "The cell you're trying to change is on a protected sheet." => "La cellule que vous essayez de modifier se trouve sur une feuille protégée.",
+        "image larger than 64 MB" => "Image de plus de 64 Mo.",
+        "cell pictures must be at most 16 MiB" => "Les images dans les cellules ne doivent pas dépasser 16 Mio.",
+        "choose a valid PNG or JPEG picture" => "Choisissez une image PNG ou JPEG valide.",
+        "cell pictures support PNG and JPEG" => "Les images dans les cellules prennent en charge PNG et JPEG.",
+        "invalid image dimensions" => "Dimensions d'image non valides.",
+        "cell pictures are limited to 8192 pixels per side and 16 million pixels" => {
+            "Les images dans les cellules sont limitées à 8192 pixels par côté et 16 millions de pixels."
+        }
+        "picture cannot be decoded within the 64 MiB limit" => "L'image ne peut pas être décodée dans la limite de 64 Mio.",
+        "`id` must be a text box id" => "`id` doit être l'identifiant d'une zone de texte.",
+        "`text` must be a string" => "`text` doit être une chaîne.",
+        "`text` is longer than 32,767 characters" => "`text` dépasse 32 767 caractères.",
+        "no such text box" => "Cette zone de texte n'existe pas.",
+        "the shape is not a text box" => "La forme n'est pas une zone de texte.",
+        "missing `id`" => "`id` manquant.",
+        "no such object" => "Cet objet n'existe pas.",
+        "kind must be chart, image or shape" => "kind doit valoir chart, image ou shape.",
+        "mode must be moveAndSize, moveOnly or absolute" => "mode doit valoir moveAndSize, moveOnly ou absolute.",
+        "There's no hyperlink in this cell." => "Cette cellule ne contient aucun lien hypertexte.",
+        "There's no comment in this cell." => "Cette cellule ne contient aucun commentaire.",
+        "`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}" => "`style` doit être un objet, par ex. {\"fill\": \"#FFC7CE\"}.",
+        "all cells of a reference must be on one sheet" => "Toutes les cellules d'une référence doivent se trouver sur une même feuille.",
+        "a constraint is a string like \"B5 <= 10\" or {lhs, op, rhs}" => "Une contrainte est une chaîne comme \"B5 <= 10\" ou {lhs, op, rhs}.",
+        "Constraint cells must be on the objective cell's sheet." => {
+            "Les cellules de contrainte doivent se trouver sur la feuille de la cellule objectif."
+        }
+        "the constraint's right side must be a number" => "Le membre de droite de la contrainte doit être un nombre.",
+        "The constraint's two sides must be the same size (or the right side one cell)." => {
+            "Les deux membres de la contrainte doivent avoir la même taille (ou le membre de droite une seule cellule)."
+        }
+        "missing the constraint's right side" => "Le membre de droite de la contrainte est manquant.",
+        "The objective must be a single cell." => "L'objectif doit être une cellule unique.",
+        "The objective cell must contain a formula." => "La cellule objectif doit contenir une formule.",
+        "goal `value` needs a number in `value`" => "L'objectif `value` exige un nombre dans `value`.",
+        "The variable cells must be a reference like B2:B4." => "Les cellules variables doivent être une référence comme B2:B4.",
+        "The variable cells must be on the objective cell's sheet." => {
+            "Les cellules variables doivent se trouver sur la feuille de la cellule objectif."
+        }
+        "Variable cells must hold constants, not formulas." => "Les cellules variables doivent contenir des constantes, et non des formules.",
+        "`constraints` must be an array" => "`constraints` doit être un tableau.",
+        "Integer and binary constraints must be on variable cells." => {
+            "Les contraintes entières et binaires doivent porter sur des cellules variables."
+        }
+        "`reports` must be an array of answer and limits" => "`reports` doit être un tableau de answer et limits.",
+        "The Limits report doesn't apply to models with integer or binary constraints." => {
+            "Le rapport des limites ne s'applique pas aux modèles avec des contraintes entières ou binaires."
+        }
+        "The Limits report is available for Simplex LP and GRG Nonlinear." => {
+            "Le rapport des limites est disponible pour Simplex PL et GRG non linéaire."
+        }
+        "The workbook is protected and cannot be changed." => "Le classeur est protégé et ne peut pas être modifié.",
+        "Too many report sheets." => "Trop de feuilles de rapport.",
+        "missing `reports` (answer, limits)" => "`reports` manquant (answer, limits).",
+        "`reports` is empty (answer, limits)" => "`reports` est vide (answer, limits).",
+        "`model` must be data.solver params" => "`model` doit contenir des paramètres data.solver.",
+        "This sheet has no saved Solver model." => "Cette feuille n'a aucun modèle du Solveur enregistré.",
+        "The Evolutionary method needs a lower and an upper bound on every variable cell (constraints such as \"A1:A3 <= 10\"), or requireBounds: false." => {
+            "La méthode Évolutionnaire exige une borne inférieure et une borne supérieure sur chaque cellule variable (contraintes telles que \"A1:A3 <= 10\"), ou requireBounds: false."
+        }
+        "no chart on this sheet" => "Aucun graphique sur cette feuille.",
+        "no such series" => "Cette série n'existe pas.",
+        "trendlines need a 2-D column, bar, line, area, scatter or bubble series" => {
+            "Les courbes de tendance exigent une série en histogramme, barres, courbes, aires, nuage de points ou bulles 2D."
+        }
+        "no such sheet" => "Cette feuille n'existe pas.",
+        "not a range" => "Ce n'est pas une plage.",
+        "`categories` is not a range" => "`categories` n'est pas une plage.",
+        "missing `range`, `categories` or `removeSeries`" => "`range`, `categories` ou `removeSeries` manquant.",
+        "no such shape" => "Cette forme n'existe pas.",
+        "`flip` is not supported: shapes have no flip state" => "`flip` n'est pas pris en charge : les formes n'ont pas d'état de retournement.",
+        "no such view" => "Cet affichage n'existe pas.",
+        "no such window" => "Cette fenêtre n'existe pas.",
+        "The headers must remain in the same row, and the resulting table range must overlap the original table range." => {
+            "Les en-têtes doivent rester sur la même ligne, et la plage de tableau obtenue doit chevaucher la plage de tableau d'origine."
+        }
+        "The file is empty." => "Le fichier est vide.",
+        "Nothing to import." => "Rien à importer.",
+        "`commands` must be an array" => "`commands` doit être un tableau.",
+        "`trusted` must be true or false" => "`trusted` doit valoir true ou false.",
+        "no such script" => "Ce script n'existe pas.",
+        "scripts in this workbook came from a file and are disabled; trust the workbook first (Trust Scripts in View › Macros, Alt+F8; `automate.trustScripts`; or `trusted: true`)" => {
+            "Les scripts de ce classeur proviennent d'un fichier et sont désactivés ; approuvez d'abord le classeur (Approuver les scripts dans Affichage › Macros, Alt+F8 ; `automate.trustScripts` ; ou `trusted: true`)."
+        }
+        "all cells must be on one sheet" => "Toutes les cellules doivent se trouver sur une même feuille.",
+        "`to` must be a number" => "`to` doit être un nombre.",
+        "Cell must contain a formula." => "La cellule doit contenir une formule.",
+        "Cell must contain a value." => "La cellule doit contenir une valeur.",
+        "the name is too long (255 characters max)" => "Le nom est trop long (255 caractères maximum).",
+        "missing `changing`" => "`changing` manquant.",
+        "no changing cells" => "Aucune cellule variable.",
+        "too many scenarios" => "Trop de scénarios.",
+        "no such scenario" => "Ce scénario n'existe pas.",
+        "There are no scenarios on this sheet." => "Il n'y a aucun scénario sur cette feuille.",
+        "result cells must be on the scenarios' sheet" => "Les cellules résultantes doivent se trouver sur la feuille des scénarios.",
+        "give `rowInput`, `columnInput` or both" => "Indiquez `rowInput`, `columnInput` ou les deux.",
+        "the table needs at least two rows and two columns" => "La table doit comporter au moins deux lignes et deux colonnes.",
+        "Input cell reference is not valid." => "La référence de la cellule d'entrée n'est pas valide.",
+        "the list range is too large" => "La plage de la liste est trop grande.",
+        "the criteria range is too large" => "La zone de critères est trop grande.",
+        "the extract range exceeds the worksheet" => "La plage d'extraction dépasse la feuille de calcul.",
+        "The extract range can't overlap the list range." => "La plage d'extraction ne peut pas chevaucher la plage de la liste.",
+        "give at least one source range in `sources`" => "Indiquez au moins une plage source dans `sources`.",
+        "too many sources (255 max)" => "Trop de sources (255 maximum).",
+        "the sources are too large" => "Les sources sont trop grandes.",
+        "The consolidated data doesn't fit below and right of the destination." => {
+            "Les données consolidées ne tiennent pas en dessous et à droite de la destination."
+        }
+        "missing `path`" => "`path` manquant.",
+        "missing `window`" => "`window` manquant.",
+        "the symbol can't contain a quote, a backslash or a control character" => {
+            "Le symbole ne peut pas contenir de guillemet, de barre oblique inverse ni de caractère de contrôle."
+        }
+        "selection too large to format cell by cell" => "Sélection trop grande pour être mise en forme cellule par cellule.",
+        "missing `size`" => "`size` manquant.",
+        "The number must be between 1 and 409." => "Le nombre doit être compris entre 1 et 409.",
+        "missing or invalid `color`" => "`color` manquant ou non valide.",
+        "selection too large" => "Sélection trop grande.",
+        "missing `format` or `code`" => "`format` ou `code` manquant.",
+        "Row height must be between 0 and 546 pixels (409.5 points)." => {
+            "La hauteur de ligne doit être comprise entre 0 et 546 pixels (409,5 points)."
+        }
+        "Row height must be between 0 and 409.5 points." => "La hauteur de ligne doit être comprise entre 0 et 409,5 points.",
+        "missing `height` (pixels) or `points`" => "`height` (pixels) ou `points` manquant.",
+        "Column width must be between 0 and 1800 pixels." => "La largeur de colonne doit être comprise entre 0 et 1800 pixels.",
+        "Column width must be between 0 and 255 characters." => "La largeur de colonne doit être comprise entre 0 et 255 caractères.",
+        "missing `width` (pixels) or `chars`" => "`width` (pixels) ou `chars` manquant.",
+        "missing `width`" => "`width` manquant.",
+        "a stroke needs at least two points" => "Un trait doit comporter au moins deux points.",
+        "no ink stroke to convert" => "Aucun trait d'encre à convertir.",
+        "To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet." => {
+            "Pour éviter toute perte de données, Excel ne peut pas déplacer des cellules non vides hors de la feuille de calcul."
+        }
+        "the inserted lines would extend past the end of the worksheet" => "Les lignes insérées dépasseraient la fin de la feuille de calcul.",
+        "missing `before`" => "`before` manquant.",
+        "source columns are outside the worksheet" => "Les colonnes sources sont en dehors de la feuille de calcul.",
+        "destination columns are outside the worksheet" => "Les colonnes de destination sont en dehors de la feuille de calcul.",
+        "To prevent possible loss of data, columns cannot be shifted off of the worksheet." => {
+            "Pour éviter toute perte de données, les colonnes ne peuvent pas être déplacées hors de la feuille de calcul."
+        }
+        "the move is too close to the worksheet boundary" => "Le déplacement est trop proche du bord de la feuille de calcul.",
+        "Nothing to paste." => "Rien à coller.",
+        "The copy area is the whole sheet; there is no room to insert it." => {
+            "La zone de copie est la feuille entière ; il n'y a pas de place pour l'insérer."
+        }
+        "Insert Cut Cells works on whole rows or columns; cut whole rows or columns, or use Paste." => {
+            "Insérer les cellules coupées s'applique à des lignes ou colonnes entières ; coupez des lignes ou colonnes entières, ou utilisez Coller."
+        }
+        "The cut rows or columns can't be inserted inside themselves." => {
+            "Les lignes ou colonnes coupées ne peuvent pas être insérées à l'intérieur d'elles-mêmes."
+        }
+        "The copied cells don't fit on the sheet at this position." => "Les cellules copiées ne tiennent pas dans la feuille à cette position.",
+        "A workbook must contain at least one visible worksheet." => "Un classeur doit contenir au moins une feuille de calcul visible.",
+        "missing `to`" => "`to` manquant.",
+        "No sheets are hidden." => "Aucune feuille n'est masquée.",
+        "select a cell in a PivotTable (or pass `pivot`)" => "Sélectionnez une cellule dans un tableau croisé dynamique (ou passez `pivot`).",
+        "missing `area` (rows|columns|values|filters)" => "`area` manquant (rows|columns|values|filters).",
+        "The field you are moving cannot be placed in that PivotTable area." => {
+            "Le champ que vous déplacez ne peut pas être placé dans cette zone du tableau croisé dynamique."
+        }
+        "A calculated field can only be placed in the Values area." => "Un champ calculé ne peut être placé que dans la zone Valeurs.",
+        "PivotTable field name already exists." => "Ce nom de champ de tableau croisé dynamique existe déjà.",
+        "The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`." => {
+            "La référence n'est pas valide. Sélectionnez une cellule dans une plage avec des colonnes étiquetées, ou passez `source`."
+        }
+        "A PivotTable with that name already exists." => "Un tableau croisé dynamique portant ce nom existe déjà.",
+        "a field object needs `field`" => "Un objet champ exige `field`.",
+        "fields are names or {field, func?, name?}" => "Les champs sont des noms ou des objets {field, func?, name?}.",
+        "`enableShowDetails` must be true or false" => "`enableShowDetails` doit valoir true ou false.",
+        "missing `field`" => "`field` manquant.",
+        "`name` must be 1 to 255 characters" => "`name` doit compter de 1 à 255 caractères.",
+        "missing `formula`" => "`formula` manquant.",
+        "There's no such calculated field." => "Ce champ calculé n'existe pas.",
+        "pass `field` or `index`" => "Passez `field` ou `index`.",
+        "no value field at that index" => "Aucun champ de valeur à cet index.",
+        "The name isn't valid." => "Le nom n'est pas valide.",
+        "`numberFormat` is a format code or null" => "`numberFormat` est un code de format ou null.",
+        "too many items" => "Trop d'éléments.",
+        "You must select at least one item." => "Vous devez sélectionner au moins un élément.",
+        "`selected` is a list of item labels or null" => "`selected` est une liste d'étiquettes d'éléments ou null.",
+        "Cannot group that selection." => "Impossible de grouper cette sélection.",
+        "style name too long" => "Nom de style trop long.",
+        "missing `source`" => "`source` manquant.",
+        "Refresh the PivotTable before adding a PivotChart." => {
+            "Actualisez le tableau croisé dynamique avant d'ajouter un graphique croisé dynamique."
+        }
+        "Add a field to the Values area and one to Rows or Columns before creating a PivotChart." => {
+            "Ajoutez un champ à la zone Valeurs et un autre à Lignes ou Colonnes avant de créer un graphique croisé dynamique."
+        }
+        "no suggestion with that index" => "Aucune suggestion à cet index.",
+        "range larger than 1,000,000 cells; read it in parts" => "Plage de plus de 1 000 000 de cellules ; lisez-la par parties.",
+        "missing `range`: the selection is on the active sheet" => "`range` manquant : la sélection se trouve sur la feuille active.",
+        "sort key row must be 1 or greater" => "La ligne de la clé de tri doit être supérieure ou égale à 1.",
+        "too many sort levels (64 max)" => "Trop de niveaux de tri (64 maximum).",
+        "To do this, all the merged cells need to be the same size." => {
+            "Pour effectuer cette opération, toutes les cellules fusionnées doivent être de la même taille."
+        }
+        "no filter" => "Aucun filtre.",
+        "column outside the filter range" => "Colonne en dehors de la plage filtrée.",
+        "`columns` must name at least one column of the range" => "`columns` doit désigner au moins une colonne de la plage.",
+        "a list validation needs `formula1`" => "Une validation de type liste exige `formula1`.",
+        "give `rows` or `cols`: the outline level to show (1 = top-level summaries only)" => {
+            "Indiquez `rows` ou `cols` : le niveau de plan à afficher (1 = synthèses de premier niveau uniquement)."
+        }
+        "missing `input` (or `value`)" => "`input` (ou `value`) manquant.",
+        "missing `values` (array of rows)" => "`values` manquant (tableau de lignes).",
+        "too many rows" => "Trop de lignes.",
+        "The cell you are trying to change is on a protected sheet that does not allow selecting it." => {
+            "La cellule que vous essayez de modifier se trouve sur une feuille protégée qui n'autorise pas sa sélection."
+        }
+        "missing `reference`" => "`reference` manquant.",
+        "Reference isn't valid." => "La référence n'est pas valide.",
+        "No cells were found." => "Aucune cellule n'a été trouvée.",
+        "This action won't work on multiple selections." => "Cette action ne fonctionne pas sur des sélections multiples.",
+        "The copied sheet no longer exists." => "La feuille copiée n'existe plus.",
+        "The cut area doesn't fit at this position; nothing was moved." => "La zone coupée ne tient pas à cette position ; rien n'a été déplacé.",
+        "missing `target`" => "`target` manquant.",
+        "the target must contain the source in one of its corners" => "La cible doit contenir la source dans l'un de ses coins.",
+        "We looked at all the data next to your selection and didn't see a pattern for filling in values for you." => {
+            "Nous avons examiné toutes les données en regard de votre sélection et n'avons trouvé aucun modèle pour remplir les valeurs à votre place."
+        }
+        "missing `what`" => "`what` manquant.",
+        "not found" => "Introuvable.",
+        "Pick up a format first." => "Copiez d'abord une mise en forme.",
+        "No dictionary is available on this system (GridCraft uses the system word list)." => {
+            "Aucun dictionnaire n'est disponible sur ce système (GridCraft utilise la liste de mots du système)."
+        }
+        "missing `word`" => "`word` manquant.",
+        "missing `cell`" => "`cell` manquant.",
+        "the confidence level must be between 0 and 100" => "Le niveau de confiance doit être compris entre 0 et 100.",
+        "alpha must be between 0 and 1" => "Alpha doit être compris entre 0 et 1.",
+        "Input range contains non-numeric data." => "La plage d'entrée contient des données non numériques.",
+        "Input range must be a single row or column." => "La plage d'entrée doit être une seule ligne ou colonne.",
+        "empty input range" => "Plage d'entrée vide.",
+        "choose at least one of summary, confidence, kthLargest or kthSmallest" => {
+            "Choisissez au moins une option parmi summary, confidence, kthLargest ou kthSmallest."
+        }
+        "The input range holds no numbers." => "La plage d'entrée ne contient aucun nombre.",
+        "The bin range holds no numbers." => "La plage des classes ne contient aucun nombre.",
+        "Input Y range must be a single column." => "La plage Y d'entrée doit être une seule colonne.",
+        "Input Y range and input X range must have the same number of rows." => {
+            "La plage Y d'entrée et la plage X d'entrée doivent avoir le même nombre de lignes."
+        }
+        "empty input Y range" => "Plage Y d'entrée vide.",
+        "Too few observations for this many X variables." => "Trop peu d'observations pour autant de variables X.",
+        "The X variables are collinear; the regression can't be computed." => {
+            "Les variables X sont colinéaires ; la régression ne peut pas être calculée."
+        }
+        "The interval must be a whole number from 1 to the number of data points." => {
+            "L'intervalle doit être un nombre entier compris entre 1 et le nombre de points de données."
+        }
+        "The damping factor must be between 0 and 1." => "Le facteur d'amortissement doit être compris entre 0 et 1.",
+        "Each input range needs at least two numbers." => "Chaque plage d'entrée exige au moins deux nombres.",
+        "Input ranges must have the same number of values." => "Les plages d'entrée doivent contenir le même nombre de valeurs.",
+        "Anova needs at least two groups, each with at least one number." => {
+            "L'analyse de variance exige au moins deux groupes contenant chacun au moins un nombre."
+        }
+        "the report is too large" => "Le rapport est trop grand.",
+        "missing `output` (the output range)" => "`output` manquant (la plage de sortie).",
+        "The report doesn't fit on the sheet below and right of the output cell." => {
+            "Le rapport ne tient pas sur la feuille en dessous et à droite de la cellule de sortie."
+        }
+        "There's no room to the right of the selection for the total." => "Il n'y a pas de place à droite de la sélection pour le total.",
+        "There's no room below the selection for the totals." => "Il n'y a pas de place sous la sélection pour les totaux.",
+        "There's a problem with this formula." => "Il y a un problème avec cette formule.",
+        "no such name to edit" => "Ce nom à modifier n'existe pas.",
+        "no such name" => "Ce nom n'existe pas.",
+        "This workbook has no names to paste." => "Ce classeur ne contient aucun nom à coller.",
+        "There isn't room on the sheet for the list of names." => "Il n'y a pas assez de place sur la feuille pour la liste des noms.",
+        "The cell has no formula." => "La cellule ne contient aucune formule.",
+        "missing `cell`: the selection is on the active sheet" => "`cell` manquant : la sélection se trouve sur la feuille active.",
+        "missing `percent`" => "`percent` manquant.",
+        "`printArea` must be a range like \"A1:F50\"" => "`printArea` doit être une plage comme \"A1:F50\".",
+        "no workbook open" => "Aucun classeur ouvert.",
+        "nothing to undo" => "Rien à annuler.",
+        "nothing to redo" => "Rien à rétablir.",
+        "finish or stop the running action first (automate.stopAction)" => "Terminez ou arrêtez d'abord l'action en cours (automate.stopAction).",
+        "the clipboard is empty" => "Le Presse-papiers est vide.",
+        "You can't change part of an array." => "Impossible de modifier une partie d'une matrice.",
+        "Select a cell inside a table first, or pass `table`." => "Sélectionnez d'abord une cellule dans un tableau, ou passez `table`.",
+        "the table has no columns" => "Le tableau ne contient aucune colonne.",
+        "no slicer on this sheet" => "Aucun segment sur cette feuille.",
+        "missing `value`" => "`value` manquant.",
+        "no slicer" => "Aucun segment.",
+        "value is not in the column" => "La valeur ne figure pas dans la colonne.",
+        "the timeline and the values are each one row or one column" => {
+            "La chronologie et les valeurs doivent chacune tenir sur une ligne ou une colonne."
+        }
+        "the timeline and the values must be on one sheet" => "La chronologie et les valeurs doivent se trouver sur une même feuille.",
+        "Select a timeline column and a values column for the forecast." => {
+            "Sélectionnez une colonne de chronologie et une colonne de valeurs pour la prévision."
+        }
+        "give both `timeline` and `values`, or neither" => "Indiquez à la fois `timeline` et `values`, ou aucun des deux.",
+        "`seasonality` is \"auto\", 0 (none) or a season length from 2 to 8,760" => {
+            "`seasonality` vaut \"auto\", 0 (aucune) ou une longueur de saison de 2 à 8 760."
+        }
+        "`confidence` is between 0 and 1 (or 0 and 100%)" => "`confidence` est compris entre 0 et 1 (ou entre 0 et 100 %).",
+        "the timeline and the values need the same number of cells" => "La chronologie et les valeurs doivent avoir le même nombre de cellules.",
+        "The timeline needs at least two points a constant step apart." => "La chronologie exige au moins deux points séparés par un pas constant.",
+        "There are no values to forecast." => "Il n'y a aucune valeur à prévoir.",
+        "`forecastStart` is not on the timeline (it is a point of the history, before its last point)" => {
+            "`forecastStart` n'est pas sur la chronologie (c'est un point de l'historique, avant son dernier point)."
+        }
+        "The forecast start needs at least two values before it to fit the forecast." => {
+            "Le début de la prévision exige au moins deux valeurs avant lui pour ajuster la prévision."
+        }
+        "the forecast runs past the last date" => "La prévision dépasse la dernière date.",
+        "`end` is not on the timeline" => "`end` n'est pas sur la chronologie.",
+        "The forecast end must be after the last point of the timeline." => {
+            "La fin de la prévision doit être postérieure au dernier point de la chronologie."
+        }
+        "unterminated text" => "Texte non terminé.",
+        "unterminated sheet name" => "Nom de feuille non terminé.",
+        "expected ! after sheet name" => "! attendu après le nom de feuille.",
+        "unexpected end of formula" => "Fin de formule inattendue.",
+        "expected `;` or `)`, found end of formula" => "« ; » ou « ) » attendu avant la fin de la formule",
+        "unknown error literal" => "Valeur d'erreur inconnue.",
+        "unbalanced [" => "[ non équilibré.",
+        "formula is nested too deeply" => "La formule est trop imbriquée.",
+        "too many arguments" => "Trop d'arguments.",
+        "invalid 3-D reference" => "Référence 3D non valide.",
+        "array rows must have the same length" => "Les lignes de la matrice doivent avoir la même longueur.",
+        "unclosed `[` in structured reference" => "`[` non fermé dans la référence structurée.",
+        "a structured reference names at most two columns" => "Une référence structurée désigne au maximum deux colonnes.",
+        "the delimiter and quote character must differ" => "Le délimiteur et le caractère de citation doivent être différents.",
+        "A sheet name can't be blank." => "Un nom de feuille ne peut pas être vide.",
+        "A sheet name can't be longer than 31 characters." => "Un nom de feuille ne peut pas dépasser 31 caractères.",
+        "A sheet name can't contain any of these characters: : \\ / ? * [ ]" => {
+            "Un nom de feuille ne peut contenir aucun des caractères suivants : : \\ / ? * [ ]"
+        }
+        "A sheet name can't begin or end with an apostrophe." => "Un nom de feuille ne peut pas commencer ou se terminer par une apostrophe.",
+        "\"History\" is a reserved name." => "\"History\" est un nom réservé.",
+        "That name is already taken. Try a different one." => "Ce nom est déjà utilisé. Essayez-en un autre.",
+        "the stored password hash is damaged" => "Le hachage du mot de passe enregistré est endommagé.",
+        "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns." => {
+            "Le nom de champ du tableau croisé dynamique n'est pas valide. Pour créer un tableau croisé dynamique, vous devez utiliser des données organisées sous forme de liste avec des colonnes étiquetées."
+        }
+        "missing `rows` or `cols`: the selection is on the active sheet" => {
+            "`rows` ou `cols` manquant : la sélection se trouve sur la feuille active."
+        }
+        "The password is incorrect." => "Le mot de passe est incorrect.",
+        "This workbook was password-protected. GridCraft saves it without the password." => {
+            "Ce classeur était protégé par un mot de passe. GridCraft l'enregistre sans le mot de passe."
+        }
+        "select a value cell in a PivotTable" => "Sélectionnez une cellule de valeur dans un tableau croisé dynamique.",
+        "You can't change cell protection on a protected sheet. Unprotect it first." => {
+            "Vous ne pouvez pas modifier la protection des cellules sur une feuille protégée. Ôtez d'abord sa protection."
+        }
+        "Show Details is turned off for this PivotTable." => "L'option Afficher les détails est désactivée pour ce tableau croisé dynamique.",
+        "A calculated field can't refer to cells or tables; use field names." => {
+            "Un champ calculé ne peut pas faire référence à des cellules ou des tableaux ; utilisez des noms de champs."
+        }
+        "The link contains control characters." => "Le lien contient des caractères de contrôle.",
+        "Links to network locations aren't opened." => "Les liens vers des emplacements réseau ne sont pas ouverts.",
+        "This value doesn't match the data validation restrictions defined for this cell." => {
+            "Cette valeur ne correspond pas aux restrictions de validation des données définies pour cette cellule."
+        }
+        "The model isn't linear in the variable cells, so Simplex LP can't solve it. Try GRG Nonlinear." => {
+            "Le modèle n'est pas linéaire par rapport aux cellules variables : Simplex PL ne peut pas le résoudre. Essayez GRG non linéaire."
+        }
+        "Solver stopped when the best solution stopped improving. All constraints are satisfied." => {
+            "Le Solveur s'est arrêté lorsque la meilleure solution a cessé de s'améliorer. Toutes les contraintes sont satisfaites."
+        }
+        "The population converged. The best solution found satisfies all constraints." => {
+            "La population a convergé. La meilleure solution trouvée satisfait toutes les contraintes."
+        }
+        "Solver found an optimal solution. All constraints are satisfied." => {
+            "Le Solveur a trouvé une solution optimale. Toutes les contraintes sont satisfaites."
+        }
+        "Solver converged to a locally optimal solution. All constraints are satisfied." => {
+            "Le Solveur a convergé vers une solution localement optimale. Toutes les contraintes sont satisfaites."
+        }
+        "Solver stopped at its evaluation limit; the best solution found satisfies the constraints." => {
+            "Le Solveur s'est arrêté à sa limite d'évaluations ; la meilleure solution trouvée satisfait les contraintes."
+        }
+        "Solver stopped at its evaluation limit without finding a feasible solution." => {
+            "Le Solveur s'est arrêté à sa limite d'évaluations sans trouver de solution réalisable."
+        }
+        "Solver could not find a solution that satisfies all constraints." => {
+            "Le Solveur n'a pas trouvé de solution satisfaisant toutes les contraintes."
+        }
+        "The objective can grow without limit: the problem is unbounded." => "L'objectif peut croître sans limite : le problème n'est pas borné.",
+        // macOS menu bar (apps/gridcraft native_menu.rs).
+        "menu|Edit" => "Édition",
+        "Agent Control (MCP)…" => "Contrôle par agent (MCP)…",
+        "Cells…" => "Cellules…",
+        "Command Palette…" => "Palette de commandes…",
+        "Conditional Formatting…" => "Mise en forme conditionnelle…",
+        "Contributors…" => "Contributeurs…",
+        "Error Checking…" => "Vérification des erreurs…",
+        "Evaluate Formula…" => "Évaluation de formule…",
+        "Function…" => "Fonction…",
+        "GridCraft on getartcraft.com" => "GridCraft sur getartcraft.com",
+        "Help" => "Aide",
+        "Join the ArtCraft Discord…" => "Rejoindre le Discord ArtCraft…",
+        "Name…" => "Nom…",
+        "New from Sample…" => "Nouveau à partir d'un exemple…",
+        "Picture…" => "Image…",
+        "Properties…" => "Propriétés…",
+        "Remove Duplicates…" => "Supprimer les doublons…",
+        "Rename Sheet…" => "Renommer la feuille…",
+        "Save as Web Page…" => "Enregistrer comme page web…",
+        "Sheet" => "Feuille",
+        "Sparklines…" => "Graphiques sparkline…",
+        "Spelling…" => "Orthographe…",
+        "Subtotal…" => "Sous-total…",
+        "Text to Columns…" => "Convertir le texte en colonnes…",
+        "Services" => "Services",
+        "Hide GridCraft" => "Masquer GridCraft",
+        "Hide Others" => "Masquer les autres",
+        "Show All" => "Tout afficher",
+        "Quit GridCraft" => "Quitter GridCraft",
+        // File import warnings (gridcraft-xlsx readers).
+        "a cell picture has an external or invalid image relationship; kept its scalar fallback" => {
+            "une image dans une cellule a une relation d'image externe ou non valide ; sa valeur de repli a été conservée"
+        }
+        "a cell picture is not a supported PNG/JPEG or exceeds 8192 pixels per side / 16 million pixels; kept its scalar fallback" => {
+            "une image dans une cellule n'est pas un PNG/JPEG pris en charge ou dépasse 8192 pixels de côté / 16 millions de pixels ; sa valeur de repli a été conservée"
+        }
+        "a linked (not embedded) picture was skipped" => "une image liée (non incorporée) a été ignorée",
+        "a PivotTable's cache has no fields; kept as plain cells" => {
+            "le cache d'un tableau croisé dynamique n'a aucun champ ; conservé sous forme de cellules simples"
+        }
+        "a PivotTable's cache has no worksheet source; kept as plain cells" => {
+            "le cache d'un tableau croisé dynamique n'a pas de feuille source ; conservé sous forme de cellules simples"
+        }
+        "a PivotTable's source is in another workbook; its source reference may not resolve" => {
+            "la source d'un tableau croisé dynamique est dans un autre classeur ; sa référence source risque de ne pas être résolue"
+        }
+        "a PivotTable's source reference is missing or invalid; kept as plain cells" => {
+            "la référence source d'un tableau croisé dynamique est absente ou non valide ; conservé sous forme de cellules simples"
+        }
+        "a shared formula refers to a missing master cell; kept the cached value" => {
+            "une formule partagée fait référence à une cellule maître absente ; la valeur en cache a été conservée"
+        }
+        "calculated PivotTable fields are not supported" => "les champs calculés des tableaux croisés dynamiques ne sont pas pris en charge",
+        "Cell comments in .xls files are not imported yet." => "Les commentaires de cellule des fichiers .xls ne sont pas encore importés.",
+        "cell pictures exceed the 128 MiB workbook limit; remaining pictures kept their scalar fallbacks" => {
+            "les images dans les cellules dépassent la limite de 128 Mio par classeur ; les images restantes ont conservé leur valeur de repli"
+        }
+        "Conditional formatting in .xls files is not imported yet." => "La mise en forme conditionnelle des fichiers .xls n'est pas encore importée.",
+        "Data validation in .xls files is not imported yet." => "La validation des données des fichiers .xls n'est pas encore importée.",
+        "date filters in AutoFilters are not supported" => "les filtres de date des filtres automatiques ne sont pas pris en charge",
+        "Dialog sheets and unreadable sheets were skipped." => "Les feuilles de dialogue et les feuilles illisibles ont été ignorées.",
+        "duplicate XLRICHVALUE metadata types; cell pictures were not loaded" => {
+            "types de métadonnées XLRICHVALUE en double ; les images dans les cellules n'ont pas été chargées"
+        }
+        "formula-generated cell pictures were imported as static pictures; their formulas were not retained" => {
+            "les images dans les cellules générées par formule ont été importées comme images statiques ; leurs formules n'ont pas été conservées"
+        }
+        "Hyperlinks in .xls files are not imported yet." => "Les liens hypertexte des fichiers .xls ne sont pas encore importés.",
+        "Invalid XLSB merged ranges were skipped." => "Les plages fusionnées XLSB non valides ont été ignorées.",
+        "links to external workbooks were kept; they are not followed or refreshed" => {
+            "les liaisons vers des classeurs externes ont été conservées ; elles ne sont ni suivies ni actualisées"
+        }
+        "Macro names were skipped." => "Les noms de macros ont été ignorés.",
+        "macros (VBA project) reference a missing part and were dropped" => {
+            "les macros (projet VBA) font référence à une partie absente et ont été supprimées"
+        }
+        "macros (VBA project) were kept but not executed" => "les macros (projet VBA) ont été conservées mais pas exécutées",
+        "missing rich-value data relationship; cell pictures were not loaded" => {
+            "relation de données de valeurs enrichies absente ; les images dans les cellules n'ont pas été chargées"
+        }
+        "missing rich-value structure or image relationships; cell pictures were not loaded" => {
+            "structure de valeurs enrichies ou relations d'image absentes ; les images dans les cellules n'ont pas été chargées"
+        }
+        "missing XLRICHVALUE future metadata; cell pictures were not loaded" => {
+            "métadonnées XLRICHVALUE absentes ; les images dans les cellules n'ont pas été chargées"
+        }
+        "no styles part" => "aucune partie de styles",
+        "ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported." => {
+            "Import ODS des données seules : les formules sont remplacées par leurs résultats enregistrés et ne seront pas recalculées. La mise en forme, les graphiques, les images et les autres fonctionnalités ne sont pas importés. Enregistrez un nouveau fichier .xlsx ; l'enregistrement au format ODS n'est pas pris en charge."
+        }
+        "Pictures, charts and shapes in .xls files are not imported yet." => {
+            "Les images, graphiques et formes des fichiers .xls ne sont pas encore importés."
+        }
+        "PivotTables in .xls files are not imported yet; their values were kept." => {
+            "Les tableaux croisés dynamiques des fichiers .xls ne sont pas encore importés ; leurs valeurs ont été conservées."
+        }
+        "some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)" => {
+            "certaines cellules ont des métadonnées de valeur absentes ou non prises en charge ; leur valeur de repli a été conservée (des images dans les cellules peuvent manquer)"
+        }
+        "some cells refer to missing shared strings" => "certaines cellules font référence à des chaînes partagées absentes",
+        "Some cells refer to missing shared strings and were left empty." => {
+            "Certaines cellules font référence à des chaînes partagées absentes et ont été laissées vides."
+        }
+        "some date cells could not be read" => "certaines cellules de date n'ont pas pu être lues",
+        "some Excel 2010 conditional format extensions were skipped" => {
+            "certaines extensions de mise en forme conditionnelle d'Excel 2010 ont été ignorées"
+        }
+        "Some number formats were shorter than their declared length; the characters present were kept." => {
+            "Certains formats de nombre étaient plus courts que leur longueur déclarée ; les caractères présents ont été conservés."
+        }
+        "some numeric cells could not be read" => "certaines cellules numériques n'ont pas pu être lues",
+        "Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names." => {
+            "Certains noms de feuilles ODS ont été raccourcis ou renommés en noms de feuilles XLSX valides et uniques."
+        }
+        "Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result]." => {
+            "Certaines valeurs ODS ou certains résultats de formule en cache étaient absents ou non pris en charge ; leur texte affiché (ou leur valeur brute) a été conservé comme texte. Une formule sans l'un ni l'autre est marquée [Unavailable ODS formula result]."
+        }
+        "some rich values are unsupported or malformed; their scalar fallbacks were retained (cell pictures may be missing)" => {
+            "certaines valeurs enrichies sont mal formées ou non prises en charge ; leurs valeurs de repli ont été conservées (des images dans les cellules peuvent manquer)"
+        }
+        "the workbook has no worksheets; added an empty sheet" => "le classeur ne contient aucune feuille de calcul ; une feuille vide a été ajoutée",
+        "unmodelled content of a Strict Open XML workbook (custom XML, links, controls…) is not kept on save" => {
+            "le contenu non pris en charge d'un classeur Strict Open XML (XML personnalisé, liaisons, contrôles…) n'est pas conservé à l'enregistrement"
+        }
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Les blocs XLSB d'enregistrements futurs et de contenu alternatif non pris en charge ont été ignorés."
+        }
+        "what-if data tables are not supported; kept their values" => {
+            "les tables de données de simulation ne sont pas prises en charge ; leurs valeurs ont été conservées"
+        }
+        "What-if data tables are not supported; their values were kept." => {
+            "Les tables de données de simulation ne sont pas prises en charge ; leurs valeurs ont été conservées."
+        }
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Import XLSB des données seules : les formules sont remplacées par leurs résultats enregistrés et ne seront pas recalculées. La mise en forme, les graphiques, les images, les macros et les autres fonctionnalités ne sont pas importés ; les dates, montants et pourcentages peuvent s'afficher comme des nombres. Enregistrez un nouveau fichier .xlsx ; l'enregistrement au format XLSB n'est pas pris en charge."
+        }
+        "XLSB module sheets were skipped." => "Les feuilles de module XLSB ont été ignorées.",
+        "XLSB non-worksheet sheets were skipped." => "Les feuilles XLSB autres que des feuilles de calcul ont été ignorées.",
+        "Chart sheets in .xls files are not imported yet and were skipped." => {
+            "Les feuilles graphiques des fichiers .xls ne sont pas encore importées et ont été ignorées."
+        }
+        "Excel 4.0 macro sheets were skipped." => "Les feuilles de macros Excel 4.0 ont été ignorées.",
+        "VBA modules and other non-worksheet sheets were skipped." => {
+            "Les modules VBA et les autres feuilles qui ne sont pas des feuilles de calcul ont été ignorés."
+        }
         "Record Macro" => "Enregistrer une macro",
         "Stop Recording" => "Arrêter l’enregistrement",
         "Use Relative References" => "Utiliser les références relatives",
         "Run\nMacro" => "Exécuter la macro",
         "Macros…" => "Macros…",
         "Recording" => "Enregistrement",
-        "Stop" => "Arrêter",
         "New Macro" => "Nouvelle macro",
-        "Show" => "Afficher",
         _ => return None,
     })
 }
+
+/// Engine messages built with `format!`: English template and French, with matching `{name}` placeholders.
+pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
+    ("A PivotTable can have at most {max} calculated fields.", "Un tableau croisé dynamique peut contenir au maximum {max} champs calculés."),
+    (
+        "A PivotTable can have at most {MAX_AXIS_FIELDS} row and column fields.",
+        "Un tableau croisé dynamique peut contenir au maximum {MAX_AXIS_FIELDS} champs de ligne et de colonne.",
+    ),
+    (
+        "A PivotTable can have at most {MAX_VALUE_FIELDS} value fields.",
+        "Un tableau croisé dynamique peut contenir au maximum {MAX_VALUE_FIELDS} champs de valeurs.",
+    ),
+    ("a range titled `{title}` already exists", "une plage intitulée « {title} » existe déjà"),
+    (
+        "`arrange` must be tiled, horizontal, vertical or cascade, not `{value}`",
+        "`arrange` doit valoir tiled, horizontal, vertical ou cascade, et non « {value} »",
+    ),
+    ("A scenario named '{name}' already exists on this sheet.", "Un scénario nommé « {name} » existe déjà sur cette feuille."),
+    ("at most {cap} forecast steps for this much history", "au maximum {cap} étapes de prévision pour cet historique"),
+    ("at most {MAX_HISTORY} rows of history", "au maximum {MAX_HISTORY} lignes d'historique"),
+    ("`{name}` refers to itself through its formula", "« {name} » fait référence à lui-même par sa formule"),
+    ("`{cell}` is not a variable cell", "« {cell} » n'est pas une cellule variable"),
+    ("`chart` is line or column, not `{value}`", "`chart` vaut line ou column, et non « {value} »"),
+    ("{function} has too few arguments. Use {signature}", "Nombre d'arguments insuffisant pour {function}. Utilisez {signature}"),
+    ("{function} has too many arguments. Use {signature}", "Trop d'arguments pour {function}. Utilisez {signature}"),
+    ("`{field}` isn't in the {area} area", "« {field} » ne figure pas dans la zone {area}"),
+    ("`{field}` isn't in the filters area", "« {field} » ne figure pas dans la zone Filtres"),
+    ("`{field}` isn't in the PivotTable", "« {field} » ne figure pas dans le tableau croisé dynamique"),
+    ("`{field}` isn't in the rows or columns area", "« {field} » ne figure pas dans la zone Lignes ou Colonnes"),
+    ("`{field}` isn't in the values area", "« {field} » ne figure pas dans la zone Valeurs"),
+    ("`Σ Values` isn't in the {area} area", "« Σ Valeurs » ne figure pas dans la zone {area}"),
+    ("`fillMissing` is interpolate or zeros, not `{value}`", "`fillMissing` vaut interpolate ou zeros, et non « {value} »"),
+    ("Go To selects at most {GO_TO_MAX_AREAS} areas.", "Atteindre sélectionne au maximum {GO_TO_MAX_AREAS} zones."),
+    ("Input X range must have {MAX_REGRESSORS} columns or fewer.", "La plage d'entrée X doit compter au plus {MAX_REGRESSORS} colonnes."),
+    ("invalid cell reference `{ref}` for `{key}`", "référence de cellule « {ref} » non valide pour `{key}`"),
+    ("invalid colour {value} for `{key}`", "couleur {value} non valide pour `{key}`"),
+    (
+        "invalid {what} formula `{formula}` — it does not parse; Excel would reject the saved file",
+        "formule {what} « {formula} » non valide : elle ne peut pas être analysée ; Excel refuserait le fichier enregistré",
+    ),
+    (
+        "`{key}` can't name workbook data: use letters, digits, `_` and `.`",
+        "`{key}` ne peut pas nommer des données du classeur : utilisez des lettres, des chiffres, `_` et `.`",
+    ),
+    ("`{key}.{cell}` must be a number", "`{key}.{cell}` doit être un nombre"),
+    ("`{key}` is not a cell: `{value}`", "`{key}` n'est pas une cellule : « {value} »"),
+    ("`{key}` is not a column range: `{value}`", "`{key}` n'est pas une plage de colonnes : « {value} »"),
+    ("`{key}` is not a number", "`{key}` n'est pas un nombre"),
+    ("`{key}` is not a number or a date", "`{key}` n'est ni un nombre ni une date"),
+    ("`{key}` is not a number or a date: `{value}`", "`{key}` n'est ni un nombre ni une date : « {value} »"),
+    ("`{key}` is not a range: `{value}`", "`{key}` n'est pas une plage : « {value} »"),
+    ("`{key}` is not a row range: `{value}`", "`{key}` n'est pas une plage de lignes : « {value} »"),
+    ("`{key}` must be text like \"1:2\"", "`{key}` doit être un texte comme « 1:2 »"),
+    ("`{key}` must be text like \"1:2\" or \"A:A\"", "`{key}` doit être un texte comme « 1:2 » ou « A:A »"),
+    ("`{key}` must be text like \"A:B\"", "`{key}` doit être un texte comme « A:B »"),
+    ("`{key}` must map cells to numbers", "`{key}` doit associer des cellules à des nombres"),
+    ("`{key}` must be a window or workbook id number", "`{key}` doit être un numéro d'identifiant de fenêtre ou de classeur"),
+    ("margin `{key}` must be a non-negative number of inches", "la marge `{key}` doit être un nombre de pouces positif ou nul"),
+    ("missing `{key}`", "`{key}` manquant"),
+    ("missing `{key}`: the selection is on the active sheet", "`{key}` manquant : la sélection se trouve sur la feuille active"),
+    ("missing `{key}` (the input range)", "`{key}` manquant (la plage d'entrée)"),
+    (
+        "'{name}' is a legacy binary file but not an Excel workbook (no workbook stream). GridCraft can't open it.",
+        "« {name} » est un ancien fichier binaire mais pas un classeur Excel (aucun flux Workbook). GridCraft ne peut pas l'ouvrir.",
+    ),
+    (
+        "'{name}' is a name GridCraft keeps its own data in (stored macros, scripts or views). Pass `force: true` to change it anyway.",
+        "« {name} » est un nom dans lequel GridCraft conserve ses propres données (macros, scripts ou affichages enregistrés). Passez `force: true` pour le modifier quand même.",
+    ),
+    (
+        "'{name}' is password-protected. Enter its password to open it.",
+        "« {name} » est protégé par mot de passe. Entrez son mot de passe pour l'ouvrir.",
+    ),
+    (
+        "{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json or .html.",
+        "{name} : format de fichier inconnu. Enregistrez au format .xlsx, .csv, .tsv, .json ou .html.",
+    ),
+    (
+        "'{name}' uses {scheme} encryption, which GridCraft can't open yet. Remove the password in Excel and try again.",
+        "« {name} » utilise le chiffrement {scheme}, que GridCraft ne sait pas encore ouvrir. Supprimez le mot de passe dans Excel, puis réessayez.",
+    ),
+    ("no calculated field `{name}`", "aucun champ calculé « {name} »"),
+    ("no field `{field}` in the source data", "aucun champ « {field} » dans les données source"),
+    ("no open window has id {id}", "aucune fenêtre ouverte n'a l'identifiant {id}"),
+    ("no open workbook has id {id}", "aucun classeur ouvert n'a l'identifiant {id}"),
+    ("no PivotTable `{name}`", "aucun tableau croisé dynamique « {name} »"),
+    ("no range titled `{title}`", "aucune plage intitulée « {title} »"),
+    ("no scenario named `{name}`", "aucun scénario nommé « {name} »"),
+    ("no sheet named `{name}`", "aucune feuille nommée « {name} »"),
+    ("no table named `{name}`", "aucun tableau nommé « {name} »"),
+    ("not a cell: `{cell}`", "ce n'est pas une cellule : « {cell} »"),
+    ("not a constraint: `{text}`", "ce n'est pas une contrainte : « {text} »"),
+    ("not a GridCraft JSON workbook: {error}", "ce n'est pas un classeur JSON GridCraft : {error}"),
+    ("not a range: `{range}`", "ce n'est pas une plage : « {range} »"),
+    ("not a range: {range}", "ce n'est pas une plage : {range}"),
+    ("not a reference: `{ref}`", "ce n'est pas une référence : « {ref} »"),
+    ("orientation must be portrait or landscape, not `{value}`", "l'orientation doit valoir portrait ou landscape, et non « {value} »"),
+    ("`page` must be odd, even or first, not `{value}`", "`page` doit valoir odd, even ou first, et non « {value} »"),
+    ("parse {value}: true or false", "`parse` vaut true ou false, et non {value}"),
+    ("`part` must be header or footer, not `{value}`", "`part` doit valoir header ou footer, et non « {value} »"),
+    ("{path}: no file system in the browser", "{path} : pas de système de fichiers dans le navigateur"),
+    ("{path}: only regular files can be opened", "{path} : seuls les fichiers ordinaires peuvent être ouverts"),
+    ("{path}: scripts can't read or write files", "{path} : les scripts ne peuvent ni lire ni écrire de fichiers"),
+    ("`periods` is from 1 to {cap} for {rows} rows of history", "`periods` est compris entre 1 et {cap} pour {rows} lignes d'historique"),
+    ("`printArea` is not a range: `{value}`", "`printArea` n'est pas une plage : « {value} »"),
+    ("scripts can't open links (`{link}`)", "les scripts ne peuvent pas ouvrir de liens (« {link} »)"),
+    ("`section` must be left, center or right, not `{value}`", "`section` doit valoir left, center ou right, et non « {value} »"),
+    ("`sheets` must be active or all, not `{value}`", "`sheets` doit valoir active ou all, et non « {value} »"),
+    ("table has no column `{column}`", "le tableau n'a pas de colonne « {column} »"),
+    (
+        "`{ref}` for `{key}` names a sheet other than the one this command works on",
+        "« {ref} » pour `{key}` désigne une autre feuille que celle sur laquelle porte cette commande",
+    ),
+    (
+        "The criteria label `{label}` doesn't match a column of the list.",
+        "L'étiquette de critère « {label} » ne correspond à aucune colonne de la liste.",
+    ),
+    (
+        "The data is too large to keep in the workbook ({max} MB at most).",
+        "Les données sont trop volumineuses pour être conservées dans le classeur ({max} Mo au maximum).",
+    ),
+    ("the input range is too large ({MAX_INPUT_CELLS} cells at most)", "la plage d'entrée est trop grande ({MAX_INPUT_CELLS} cellules au maximum)"),
+    (
+        "The output range {range} already holds data; pass overwrite: true to replace it.",
+        "La plage de sortie {range} contient déjà des données ; passez overwrite: true pour la remplacer.",
+    ),
+    ("there are only {n} pages", "il n'y a que {n} pages"),
+    (
+        "There's already data in {sheet}!{cell}. Do you want to replace it? (Run again with replace: true to overwrite.)",
+        "Il existe déjà des données dans {sheet}!{cell}. Voulez-vous les remplacer ? (Relancez avec replace: true pour les écraser.)",
+    ),
+    ("There's a problem with this formula: {error}", "Il y a un problème avec cette formule : {error}"),
+    ("There's no name \"{name}\" to paste.", "Il n'existe aucun nom « {name} » à coller."),
+    ("the scenario's sheet `{sheet}` no longer exists", "la feuille « {sheet} » du scénario n'existe plus"),
+    (
+        "the sheet is too tall for a web page ({rows} rows, at most {HTML_EXPORT_MAX_ROWS}). Save as .xlsx or CSV instead.",
+        "la feuille est trop haute pour une page web ({rows} lignes, au maximum {HTML_EXPORT_MAX_ROWS}). Enregistrez plutôt au format .xlsx ou CSV.",
+    ),
+    (
+        "the sheet is too tall × wide for a web page ({rows} × {columns} cells, at most {HTML_EXPORT_MAX_CELLS}). Save as .xlsx or CSV instead.",
+        "la feuille est trop grande pour une page web ({rows} × {columns} cellules, au maximum {HTML_EXPORT_MAX_CELLS}). Enregistrez plutôt au format .xlsx ou CSV.",
+    ),
+    ("the table body is too large ({MAX_TABLE_CELLS} cells max)", "le corps du tableau est trop grand ({MAX_TABLE_CELLS} cellules au maximum)"),
+    ("The timeline must hold numbers or dates ({value} isn't one).", "La chronologie doit contenir des nombres ou des dates ({value} n'en est pas)."),
+    (
+        "The workbook has a defined name '{name}', which GridCraft needs for its own data. Rename it first.",
+        "Le classeur contient un nom défini « {name} », dont GridCraft a besoin pour ses propres données. Renommez-le d'abord.",
+    ),
+    ("{ref} is not in a PivotTable", "{ref} ne se trouve pas dans un tableau croisé dynamique"),
+    ("`{ref}` names a sheet other than `sheet`", "« {ref} » désigne une autre feuille que `sheet`"),
+    ("too many bins ({MAX_BINS} at most)", "trop de classes ({MAX_BINS} au maximum)"),
+    ("too many cells (at most {cap})", "trop de cellules ({cap} au maximum)"),
+    ("Too many constraints (at most {MAX_CONSTRAINTS}).", "Trop de contraintes ({MAX_CONSTRAINTS} au maximum)."),
+    ("Too many constraints (at most {MAX_CONSTRAINTS} cells).", "Trop de contraintes ({MAX_CONSTRAINTS} cellules au maximum)."),
+    ("Too many variable cells (at most {MAX_VARS}).", "Trop de cellules variables ({MAX_VARS} au maximum)."),
+    ("too many variables ({MAX_MATRIX_VARS} at most)", "trop de variables ({MAX_MATRIX_VARS} au maximum)"),
+    ("unknown action `{value}`", "action inconnue « {value} »"),
+    ("unknown `aggregate`: `{value}`", "valeur inconnue pour `aggregate` : « {value} »"),
+    ("unknown area `{area}` (rows|columns|values|filters)", "zone inconnue « {area} » (rows|columns|values|filters)"),
+    ("unknown cell style `{name}`", "style de cellule inconnu « {name} »"),
+    ("unknown constraint relation `{op}`", "relation de contrainte inconnue « {op} »"),
+    ("unknown element `{value}`", "élément inconnu « {value} »"),
+    ("unknown errorStyle `{value}` (stop, warning, information)", "errorStyle inconnu « {value} » (stop, warning, information)"),
+    ("unknown function `{name}`", "fonction inconnue « {name} »"),
+    ("unknown goal `{value}` (max, min or value)", "objectif inconnu « {value} » (max, min ou value)"),
+    ("unknown grouping `{value}` (years|quarters|months|days|none)", "regroupement inconnu « {value} » (years|quarters|months|days|none)"),
+    ("unknown key `{key}` in `style` (known: {known})", "clé inconnue « {key} » dans `style` (clés connues : {known})"),
+    (
+        "unknown key `preset` in `style` (known: {known}); a preset goes in `rule.preset`",
+        "clé inconnue « preset » dans `style` (clés connues : {known}) ; un préréglage se place dans `rule.preset`",
+    ),
+    ("unknown kind `{value}`", "type inconnu « {value} »"),
+    ("unknown layout `{value}` (compact|outline|tabular)", "disposition inconnue « {value} » (compact|outline|tabular)"),
+    ("unknown method `{value}` (grg, simplex or evolutionary)", "méthode inconnue « {value} » (grg, simplex ou evolutionary)"),
+    ("unknown mode `{value}` (off|on|rows|columns)", "mode inconnu « {value} » (off|on|rows|columns)"),
+    ("unknown operator `{op}` ({known})", "opérateur inconnu « {op} » ({known})"),
+    ("unknown operator `{op}`", "opérateur inconnu « {op} »"),
+    ("unknown order `{value}` (asc|desc|none)", "ordre inconnu « {value} » (asc|desc|none)"),
+    ("unknown paper size `{name}`", "format de papier inconnu « {name} »"),
+    ("unknown report {value} (answer or limits)", "rapport inconnu {value} (answer ou limits)"),
+    ("unknown rule type `{value}`", "type de règle inconnu « {value} »"),
+    ("unknown sample `{name}`", "exemple inconnu « {name} »"),
+    ("unknown `shift`: {value} (down or right)", "valeur inconnue pour `shift` : {value} (down ou right)"),
+    ("unknown showAs `{value}`", "showAs inconnu « {value} »"),
+    ("unknown subtotals `{value}` (top|bottom|none)", "subtotals inconnu « {value} » (top|bottom|none)"),
+    ("unknown theme `{name}`", "thème inconnu « {name} »"),
+    ("unknown tool `{name}`", "outil inconnu « {name} »"),
+    ("unknown trendline type `{value}`", "type de courbe de tendance inconnu « {value} »"),
+    (
+        "unknown type `{value}` (any, whole, decimal, list, date, time, textLength, custom)",
+        "type inconnu « {value} » (any, whole, decimal, list, date, time, textLength, custom)",
+    ),
+    ("unknown `what`: {value}", "valeur inconnue pour `what` : {value}"),
+    ("{count} values for {cells} changing cells", "{count} valeurs pour {cells} cellules variables"),
+    ("We can't import '{name}': {error}", "Impossible d'importer « {name} » : {error}"),
+    ("We can't open '{name}': {error}", "Impossible d'ouvrir « {name} » : {error}"),
+    (
+        "We can't open '{name}': the encrypted file is damaged ({detail}).",
+        "Impossible d'ouvrir « {name} » : le fichier chiffré est endommagé ({detail}).",
+    ),
+    (
+        "We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).",
+        "Impossible d'ouvrir « {name} » : le fichier chiffré est endommagé (il contient un autre fichier chiffré).",
+    ),
+    ("We couldn't find what you were looking for: {what}", "Nous n'avons pas trouvé ce que vous cherchiez : {what}"),
+    (
+        "{what} isn't allowed on this protected sheet (Review › Unprotect Sheet).",
+        "{what} n'est pas autorisé sur cette feuille protégée (Révision › Ôter la protection de la feuille).",
+    ),
+    (
+        "{name}: {count} cells outside the 1,048,576 × 16,384 grid were dropped",
+        "{name} : {count} cellules situées hors de la grille de 1 048 576 × 16 384 ont été supprimées",
+    ),
+    (
+        "Links of type \"{scheme}:\" aren't opened. Only http, https and mailto links are allowed.",
+        "Les liens de type « {scheme}: » ne sont pas ouverts. Seuls les liens http, https et mailto sont autorisés.",
+    ),
+    ("missing {what}: programmatic calls never open dialogs", "{what} manquant : les appels programmatiques n'ouvrent jamais de boîte de dialogue"),
+    ("scripts can't pass a file `path` to `{id}`", "les scripts ne peuvent pas transmettre de fichier `path` à `{id}`"),
+    ("scripts can't run `{id}`: it reaches outside the workbook", "les scripts ne peuvent pas exécuter `{id}` : cette commande sort du classeur"),
+    ("There's no field named '{name}'.", "Il n'existe aucun champ nommé « {name} »."),
+    (
+        "We can't open '{name}': its part {part} unpacks to {mb} MB, over GridCraft's limit of {limit} MB for one part (a guard against damaged or malicious files). To open it, split the data across several sheets, since the limit applies to each part, or save the sheet as CSV, which keeps only its values.",
+        "Impossible d'ouvrir « {name} » : sa partie {part} se décompresse en {mb} Mo, au-delà de la limite de {limit} Mo par partie de GridCraft (une protection contre les fichiers endommagés ou malveillants). Pour l'ouvrir, répartissez les données sur plusieurs feuilles, car la limite s'applique à chaque partie, ou enregistrez la feuille au format CSV, qui n'en conserve que les valeurs.",
+    ),
+    (
+        "We can't open '{name}': its part {part} unpacks to more than {mb} MB, over GridCraft's limit of {limit} MB for one part (a guard against damaged or malicious files). To open it, split the data across several sheets, since the limit applies to each part, or save the sheet as CSV, which keeps only its values.",
+        "Impossible d'ouvrir « {name} » : sa partie {part} se décompresse en plus de {mb} Mo, au-delà de la limite de {limit} Mo par partie de GridCraft (une protection contre les fichiers endommagés ou malveillants). Pour l'ouvrir, répartissez les données sur plusieurs feuilles, car la limite s'applique à chaque partie, ou enregistrez la feuille au format CSV, qui n'en conserve que les valeurs.",
+    ),
+    (
+        "We can't open '{name}': its part {part} unpacks to {mb} MB, over GridCraft's limit of {limit} MB for one part (a guard against damaged or malicious files). To open it, save the data as CSV, which keeps only its values.",
+        "Impossible d'ouvrir « {name} » : sa partie {part} se décompresse en {mb} Mo, au-delà de la limite de {limit} Mo par partie de GridCraft (une protection contre les fichiers endommagés ou malveillants). Pour l'ouvrir, enregistrez les données au format CSV, qui n'en conserve que les valeurs.",
+    ),
+    (
+        "We can't open '{name}': its part {part} unpacks to more than {mb} MB, over GridCraft's limit of {limit} MB for one part (a guard against damaged or malicious files). To open it, save the data as CSV, which keeps only its values.",
+        "Impossible d'ouvrir « {name} » : sa partie {part} se décompresse en plus de {mb} Mo, au-delà de la limite de {limit} Mo par partie de GridCraft (une protection contre les fichiers endommagés ou malveillants). Pour l'ouvrir, enregistrez les données au format CSV, qui n'en conserve que les valeurs.",
+    ),
+    // Formula syntax errors (gridcraft-formula parser and lexer).
+    ("unexpected {token}", "{token} inattendu"),
+    ("unexpected character {character}", "Caractère {character} inattendu"),
+    ("unexpected `{gap}` in structured reference", "« {gap} » inattendu dans la référence structurée"),
+    ("expected {expected}, found {found}", "{expected} attendu, {found} trouvé"),
+    ("expected {expected}, found end of formula", "{expected} attendu avant la fin de la formule"),
+    ("expected `;` or `)`, found {found}", "« ; » ou « ) » attendu, {found} trouvé"),
+    ("expected a reference after the sheet name, found {found}", "Référence attendue après le nom de feuille, {found} trouvé"),
+    // File import warnings built with `format!` (gridcraft-xlsx readers, engine file open).
+    ("a chart without its chart part was skipped ({part}, object {n})", "un graphique sans sa partie graphique a été ignoré ({part}, objet {n})"),
+    (
+        "a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})",
+        "un graphique histogramme, cascade, compartimentage… sans sa partie graphique a été ignoré ({part}, objet {n})",
+    ),
+    ("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})", "un objet incorporé (SmartArt, OLE…) a été ignoré ({part}, objet {n})"),
+    (
+        "cell-picture {kind} count does not match its records",
+        "le nombre de {kind} des images dans les cellules ne correspond pas à leurs enregistrements",
+    ),
+    (
+        "cell-picture data could not be read ({error}); scalar fallbacks were retained",
+        "les données des images dans les cellules n'ont pas pu être lues ({error}) ; les valeurs de repli ont été conservées",
+    ),
+    ("{n} cells outside the grid were skipped.", "{n} cellules hors de la grille ont été ignorées."),
+    ("chart sheet \"{name}\" was dropped: {why}", "la feuille graphique « {name} » a été supprimée : {why}"),
+    (
+        "chart sheet \"{name}\" was skipped and is not kept on save",
+        "la feuille graphique « {name} » a été ignorée et ne sera pas conservée à l'enregistrement",
+    ),
+    ("chart {target} has no supported plot and was skipped", "le graphique {target} n'a aucun tracé pris en charge et a été ignoré"),
+    (
+        "chart {target} is missing from the package and was skipped ({part}, object {n})",
+        "le graphique {target} est absent du fichier et a été ignoré ({part}, objet {n})",
+    ),
+    (
+        "conditional formats past {max} kept range cells were dropped",
+        "les mises en forme conditionnelles au-delà de {max} cellules conservées ont été supprimées",
+    ),
+    ("conditional format type \"{other}\" is not supported", "le type de mise en forme conditionnelle « {other} » n'est pas pris en charge"),
+    (
+        "conflicting {kind} relationships; cell pictures may be missing",
+        "relations {kind} contradictoires ; des images dans les cellules peuvent manquer",
+    ),
+    (
+        "external {kind} relationship is unsupported; cell pictures may be missing",
+        "la relation {kind} externe n'est pas prise en charge ; des images dans les cellules peuvent manquer",
+    ),
+    (
+        "grouped shapes are not supported and were skipped ({part}, object {n})",
+        "les formes groupées ne sont pas prises en charge et ont été ignorées ({part}, objet {n})",
+    ),
+    ("invalid cell-picture part {path}", "partie d'image dans une cellule non valide : {path}"),
+    ("{part} is not a PivotTable definition; skipped", "{part} n'est pas une définition de tableau croisé dynamique ; ignoré"),
+    ("links to external workbooks were dropped: {why}", "les liaisons vers des classeurs externes ont été supprimées : {why}"),
+    ("macros (VBA project) could not be read and were dropped: {e}", "les macros (projet VBA) n'ont pas pu être lues et ont été supprimées : {e}"),
+    ("missing or damaged cell-picture part {path}: {e}", "partie d'image dans une cellule absente ou endommagée {path} : {e}"),
+    (
+        "missing, damaged or oversized cell picture {target}: {e}; kept its scalar fallback",
+        "image dans une cellule absente, endommagée ou trop grande {target} : {e} ; sa valeur de repli a été conservée",
+    ),
+    ("missing part {part}", "partie absente : {part}"),
+    ("missing picture {target}", "image absente : {target}"),
+    (
+        "{part} is not a pivot cache definition; its PivotTable was kept as plain cells",
+        "{part} n'est pas une définition de cache de tableau croisé dynamique ; le tableau a été conservé sous forme de cellules simples",
+    ),
+    ("{kind} part {part} was dropped: {why}", "la partie {kind} {part} a été supprimée : {why}"),
+    (
+        "PivotTable \"{name}\": calculated items and label/value filters are not supported",
+        "Tableau croisé dynamique « {name} » : les éléments calculés et les filtres d'étiquettes/de valeurs ne sont pas pris en charge",
+    ),
+    (
+        "PivotTable field \"{name}\" (grouped items) is not supported",
+        "Le champ de tableau croisé dynamique « {name} » (éléments groupés) n'est pas pris en charge",
+    ),
+    (
+        "PivotTable function {s} is not supported; using Sum",
+        "La fonction de tableau croisé dynamique {s} n'est pas prise en charge ; Somme est utilisée",
+    ),
+    (
+        "PivotTable grouping of \"{name}\" is not supported; the field is ungrouped",
+        "Le regroupement de « {name} » dans le tableau croisé dynamique n'est pas pris en charge ; le champ est dissocié",
+    ),
+    (
+        "PivotTable \"{name}\" has no valid location; kept as plain cells",
+        "Le tableau croisé dynamique « {name} » n'a pas d'emplacement valide ; conservé sous forme de cellules simples",
+    ),
+    (
+        "PivotTable in {part} has no cache; kept as plain cells",
+        "Le tableau croisé dynamique de {part} n'a pas de cache ; conservé sous forme de cellules simples",
+    ),
+    (
+        "PivotTable show-values-as {other} is not supported",
+        "L'option « Afficher les valeurs » {other} des tableaux croisés dynamiques n'est pas prise en charge",
+    ),
+    (
+        "PivotTables on sheet \"{name}\" could not be read: {e}",
+        "Les tableaux croisés dynamiques de la feuille « {name} » n'ont pas pu être lus : {e}",
+    ),
+    (
+        "PivotTables with a {ty} data source are not supported; kept as plain cells",
+        "Les tableaux croisés dynamiques avec une source de données {ty} ne sont pas pris en charge ; conservés sous forme de cellules simples",
+    ),
+    ("shared strings are damaged ({e}); kept {n} strings", "les chaînes partagées sont endommagées ({e}) ; {n} chaînes conservées"),
+    (
+        "shared strings: {conflicts} phonetic readings were dropped because another <si> with the same text already had one",
+        "chaînes partagées : {conflicts} lectures phonétiques ont été supprimées car un autre <si> au même texte en avait déjà une",
+    ),
+    (
+        "shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)",
+        "chaînes partagées : {dropped} segments phonétiques ont été supprimés (sb/eb incorrects ou lecture absente)",
+    ),
+    (
+        "sheet \"{name}\": {n} cells or rows outside the 1,048,576 × 16,384 grid were dropped",
+        "feuille « {name} » : {n} cellules ou lignes hors de la grille de 1 048 576 × 16 384 ont été supprimées",
+    ),
+    (
+        "sheet \"{name}\": controls and embedded objects could not be read and were dropped",
+        "feuille « {name} » : les contrôles et objets incorporés n'ont pas pu être lus et ont été supprimés",
+    ),
+    (
+        "sheet \"{name}\": controls and embedded objects were dropped: {why}",
+        "feuille « {name} » : les contrôles et objets incorporés ont été supprimés : {why}",
+    ),
+    ("sheet \"{name}\" could not be read: {e}", "la feuille « {name} » n'a pas pu être lue : {e}"),
+    (
+        "sheet \"{name}\": embedded objects and form controls are not shown; they are kept for saving",
+        "feuille « {name} » : les objets incorporés et les contrôles de formulaire ne sont pas affichés ; ils sont conservés à l'enregistrement",
+    ),
+    ("sheet \"{name}\" has no part; skipped", "la feuille « {name} » n'a pas de partie ; ignorée"),
+    (
+        "sheet \"{name}\": header and footer pictures were dropped: {why}",
+        "feuille « {name} » : les images d'en-tête et de pied de page ont été supprimées : {why}",
+    ),
+    (
+        "sheet \"{name}\": hyperlinks past the first {max} cells were dropped",
+        "feuille « {name} » : les liens hypertexte au-delà des {max} premières cellules ont été supprimés",
+    ),
+    (
+        "sheet \"{name}\": hyperlink targets past {max} bytes were dropped",
+        "feuille « {name} » : les cibles de liens hypertexte de plus de {max} octets ont été supprimées",
+    ),
+    ("sheet \"{name}\" is a {kind} and was skipped", "la feuille « {name} » est de type {kind} et a été ignorée"),
+    ("sheet \"{name}\" is damaged ({e}); kept {n} rows", "la feuille « {name} » est endommagée ({e}) ; {n} lignes conservées"),
+    (
+        "sheet \"{name}\": pictures in the header and footer are not shown; they are kept for saving",
+        "feuille « {name} » : les images de l'en-tête et du pied de page ne sont pas affichées ; elles sont conservées à l'enregistrement",
+    ),
+    ("sheet \"{name}\": printer settings were dropped: {why}", "feuille « {name} » : les paramètres d'imprimante ont été supprimés : {why}"),
+    (
+        "sheet \"{name}\": relationships could not be read ({e}); unmodelled content was dropped",
+        "feuille « {name} » : les relations n'ont pas pu être lues ({e}) ; le contenu non pris en charge a été supprimé",
+    ),
+    ("sheet \"{name}\": {slot} were dropped: {why}", "feuille « {name} » : {slot} supprimés : {why}"),
+    ("sheet \"{name}\": {what} was dropped: {why}", "feuille « {name} » : {what} supprimé : {why}"),
+    ("skipped {part}: {e}", "{part} ignoré : {e}"),
+    ("Some defined names use {why} and were skipped.", "Certains noms définis utilisent {why} et ont été ignorés."),
+    (
+        "Some formulas use {why}; their saved results were kept as values.",
+        "Certaines formules utilisent {why} ; leurs résultats enregistrés ont été conservés comme valeurs.",
+    ),
+    ("{what} was dropped: {why}", "{what} supprimé : {why}"),
+    (
+        "{name}: {n} cells outside the 1,048,576 × 16,384 grid were dropped",
+        "{name} : {n} cellules hors de la grille de 1 048 576 × 16 384 ont été supprimées",
+    ),
+    ("{n} additional import warnings.", "{n} autres avertissements d'import."),
+];

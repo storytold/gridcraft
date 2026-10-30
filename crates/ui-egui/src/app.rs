@@ -154,7 +154,7 @@ impl SheetApp {
             return;
         }
         let Some(d) = self.session.active() else { return };
-        let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        let title = if d.is_dirty() { self.ui.language.tr("{title} — Edited").replace("{title}", &d.display_title()) } else { d.display_title() };
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.grid.last_title = Some(title);
@@ -200,6 +200,7 @@ impl SheetApp {
         }
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
+        self.session.set_book_name(self.ui.language.tr("Book"));
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
@@ -527,5 +528,13 @@ mod lifecycle_tests {
             .get(&ctx.viewport_id())
             .is_some_and(|output| output.commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaintWhileHidden)));
         assert!(painted, "logic must ask for a real UI pass while a synthetic step is unapplied");
+    }
+
+    #[test]
+    /// Message boxes show only the engine's reason, so the reason alone can be translated.
+    fn clean_error_strips_command_prefixes() {
+        assert_eq!(clean_error("command `home.bold` is not available right now: The sheet is protected."), "The sheet is protected.");
+        assert_eq!(clean_error("invalid parameters for `cell.set`: bad input"), "bad input");
+        assert_eq!(clean_error("no workbook open"), "no workbook open");
     }
 }

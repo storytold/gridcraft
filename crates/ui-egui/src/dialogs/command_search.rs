@@ -11,22 +11,27 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
             i.consume_key(egui::Modifiers::NONE, Key::PageDown),
         )
     });
+    let lang = app.ui.language;
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(lang.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
         d.focus_initialized = true;
     }
 
-    let q = d.search.to_ascii_lowercase();
+    // Matches the label as shown (translated), the English label and the id.
+    let q = d.search.to_lowercase();
     let cmds: Vec<(String, String, String)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › ")))
+        .map(|c| (c.id, c.label, lang.tr(c.label), c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ")))
+        .filter(|(id, en, label, _)| {
+            q.is_empty() || label.to_lowercase().contains(&q) || en.to_lowercase().contains(&q) || id.to_lowercase().contains(&q)
+        })
+        .map(|(id, _, label, menu)| (id.to_string(), label.to_string(), menu))
         .take(40)
         .collect();
 

@@ -19,12 +19,27 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let _menu = native_menu::NativeMenu::install(&ctx);
+    let mut menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::En);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
     assert_eq!(tops, ["GridCraft", "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Window"), "AppKit knows the Window menu");
+
+    // Switching the interface language relabels the installed menus in place.
+    let mut app = gridcraft_ui_egui::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+    app.ui.language = gridcraft_ui_egui::i18n::Language::Fr;
+    menu.sync_language(&app);
+    let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
+    assert_eq!(tops, ["GridCraft", "Fichier", "Édition", "Affichage", "Insertion", "Format", "Outils", "Données", "Fenêtre", "Aide"]);
+    let file = bar.itemAtIndex(1).and_then(|item| item.submenu()).expect("File menu");
+    assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("Nouveau classeur"));
+    assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Fenêtre"));
+    assert_eq!(nsapp.helpMenu().map(|m| m.title().to_string()).as_deref(), Some("Aide"), "AppKit knows the translated Help menu");
+    app.ui.language = gridcraft_ui_egui::i18n::Language::En;
+    menu.sync_language(&app);
+    assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("New Workbook"));
+    assert_eq!(bar.itemAtIndex(2).and_then(|item| item.submenu()).map(|m| m.title().to_string()).as_deref(), Some("Edit"));
 
     println!("mac_menu_appkit: ok");
 }

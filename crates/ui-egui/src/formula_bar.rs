@@ -161,7 +161,8 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        let lang = app.ui.language;
+        return if picture.alt.is_empty() { lang.tr("Picture in cell").into() } else { lang.tr("Picture: {alt}").replace("{alt}", &picture.alt) };
     }
     if let Some(anchor) = sh.spill_anchor(a) {
         if gridcraft_engine::display::formula_hidden(&d.wb, sh, anchor) {
@@ -241,7 +242,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(app.ui.language.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {

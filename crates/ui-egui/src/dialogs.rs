@@ -211,6 +211,8 @@ impl Dialog {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
+        // Notes built with data are translated here, before the data goes in.
+        let lang = app.ui.language;
         use Field::*;
         let d = match name {
             "insertCells" => Dialog::form(
@@ -293,7 +295,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(lang.tr("Sheets: {sheets}").replace("{sheets}", &sheets.join(", "))),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -331,8 +333,8 @@ impl Dialog {
                         a.iter()
                             .map(|r| {
                                 let lock = match (r["password"].as_bool(), r["unlocked"].as_bool()) {
-                                    (Some(true), Some(true)) => " (password, unlocked)",
-                                    (Some(true), _) => " (password)",
+                                    (Some(true), Some(true)) => lang.tr(" (password, unlocked)"),
+                                    (Some(true), _) => lang.tr(" (password)"),
                                     _ => "",
                                 };
                                 format!("{}: {}{lock}", r["title"].as_str().unwrap_or(""), r["range"].as_str().unwrap_or(""))
@@ -340,13 +342,13 @@ impl Dialog {
                             .collect()
                     })
                     .unwrap_or_default();
-                let summary = if rows.is_empty() { "No ranges yet.".to_string() } else { rows.join("\n") };
+                let summary = if rows.is_empty() { lang.tr("No ranges yet.").to_string() } else { rows.join("\n") };
                 Dialog::form(
                     "allowEditRanges",
                     "Allow Edit Ranges",
                     "review.allowEditRanges",
                     vec![
-                        Note(format!("Ranges that stay editable when the sheet is protected:\n{summary}")),
+                        Note(format!("{}\n{summary}", lang.tr("Ranges that stay editable when the sheet is protected:"))),
                         Choice {
                             key: "action",
                             label: "Action",
@@ -382,7 +384,8 @@ impl Dialog {
                 // The file rides along in the values (`path` on the desktop, `name` and `base64`
                 // on the web) and goes back to `file.open` with the password.
                 let source = p("path").as_str().or(p("name").as_str()).map(str::to_string).unwrap_or_default();
-                let file = std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("This workbook").to_string();
+                let file =
+                    std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(lang.tr("This workbook")).to_string();
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
@@ -391,7 +394,7 @@ impl Dialog {
                     "openPassword",
                     "Password",
                     "file.open",
-                    vec![Note(format!("'{file}' is protected.")), Password { key: "password", label: "Password:" }],
+                    vec![Note(lang.tr("'{file}' is protected.").replace("{file}", &file)), Password { key: "password", label: "Password:" }],
                     values,
                 )
             }
@@ -410,7 +413,7 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(lang.tr("Hidden: {sheets}").replace("{sheets}", &opts.join(", ")))],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
@@ -489,7 +492,8 @@ impl Dialog {
                     "Open Hyperlink",
                     "link.open",
                     vec![Note(format!(
-                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                        "{}\n\n{url}",
+                        lang.tr("This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.")
                     ))],
                     json!({"url": url}),
                 )
@@ -557,7 +561,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "delimiter|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },

@@ -344,7 +344,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(
+                            ui,
+                            egui::RichText::new(app.ui.language.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -354,8 +357,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => app.ui.language.tr("Circular References: {cell}").replace("{cell}", &c.a1()),
+                            None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -407,7 +410,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(app.ui.language.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -439,26 +442,28 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    let lang = app.ui.language;
+    let stat = |pattern: &str, value: String| lang.tr(pattern).replace("{value}", &value);
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(stat("Average: {value}", fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(stat("Count: {value}", st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(stat("Numerical Count: {value}", st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(stat("Minimum: {value}", fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(stat("Maximum: {value}", fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(stat("Sum: {value}", fmt(st.sum)));
     }
     parts
 }

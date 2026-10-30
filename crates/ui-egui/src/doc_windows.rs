@@ -248,7 +248,7 @@ fn visible_windows(app: &SheetApp) -> Vec<u64> {
 fn window_title(app: &SheetApp, window: u64) -> String {
     let title = app.session.window_title(window).unwrap_or_default();
     let dirty = app.session.window(window).and_then(|w| app.session.documents().iter().find(|d| d.uid == w.doc_uid)).is_some_and(|d| d.is_dirty());
-    if dirty { format!("{title} — Edited") } else { title }
+    if dirty { app.ui.language.tr("{title} — Edited").replace("{title}", &title) } else { title }
 }
 
 /// Outer rectangles for `n` windows arranged within `bounds` as View › Arrange All's `arrange`

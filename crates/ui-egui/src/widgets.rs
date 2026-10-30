@@ -142,7 +142,9 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
     let name = label.replace('\n', " ");
     let enabled = ui.is_enabled();
     main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
-    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options")));
+    // Translated outside the closure: `widget_info` runs it with the context locked.
+    let options = tr(ui, "{name} options").replace("{name}", &name);
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &options));
     let tip = tip_text(ui, tip);
     (main.on_hover_text(tip.clone()), arrow.on_hover_text(tip))
 }
@@ -271,7 +273,9 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
     let name = label.replace('\n', " ");
     let enabled = ui.is_enabled();
     m.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
-    a.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options")));
+    // Translated outside the closure: `widget_info` runs it with the context locked.
+    let options = tr(ui, "{name} options").replace("{name}", &name);
+    a.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &options));
     if m.hovered() || a.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
         for (part, r) in [(&m, main), (&a, arrow)] {
@@ -457,10 +461,10 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
         });
         ui.data_mut(|d| d.remove_temp::<Option<(usize, usize)>>(pal_id));
     }
-    if ui.button(none_label).clicked() {
+    if ui.button(tr(ui, none_label)).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(tr(ui, "Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.scope_id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -483,7 +487,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(tr(ui, "Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (col, hex) in std_hex.iter().enumerate() {
@@ -504,7 +508,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     // Recent Colors: the custom colours picked below, newest first.
     let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
     if !recent.is_empty() {
-        ui.label(egui::RichText::new("Recent Colors").small());
+        ui.label(egui::RichText::new(tr(ui, "Recent Colors")).small());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for hex in &recent {
@@ -524,7 +528,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     if more_colors {
         ui.separator();
     }
-    if more_colors && ui.button("More Colors…").clicked() {
+    if more_colors && ui.button(tr(ui, "More Colors…")).clicked() {
         let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
         more = Some(MoreColors::new(start));
     }
@@ -536,7 +540,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             m.hex = hex_of(m.hsva.to_srgb());
         }
         ui.horizontal(|ui| {
-            let label = ui.label("Hex");
+            let label = ui.label(tr(ui, "Hex"));
             let r = ui.add(egui::TextEdit::singleline(&mut m.hex).desired_width(72.0).char_limit(7)).labelled_by(label.id);
             if r.changed()
                 && let Some(c) = parse_hex(&m.hex)
@@ -547,7 +551,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             let (sw, _) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::hover());
             ui.painter().rect_filled(sw, 1.0, Color32::from_rgb(c[0], c[1], c[2]));
             ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-            ui.label(egui::RichText::new("New").small());
+            ui.label(egui::RichText::new(tr(ui, "color|New")).small());
         });
         ui.horizontal(|ui| {
             if ui.button("  OK  ").clicked() {
@@ -558,7 +562,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 picked = Some(hex);
                 done = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr(ui, "Cancel")).clicked() {
                 done = true;
             }
         });
@@ -576,7 +580,8 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
-    let msg = app.ui.language.tr_error(&msg);
+    // A file's import warnings arrive joined by blank lines: each is translated on its own.
+    let msg = msg.split("\n\n").map(|part| app.ui.language.tr_error(part)).collect::<Vec<_>>().join("\n\n");
     let mut close = false;
     egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -655,13 +660,15 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
                 border,
             );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
+            // `tr_error`, not `tr`: a reader warning is dynamic text (a file name may hold a `|`).
+            let text = i18n::current(ui.ctx()).tr_error(&notice.text);
+            ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
                     dismiss = true;
                 }
                 if let Some((label, dialog)) = &notice.action
-                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+                    && ui.button(egui::RichText::new(tr(ui, label)).font(theme::ui_font(12.5))).clicked()
                 {
                     action = Some((label.clone(), dialog.clone()));
                 }

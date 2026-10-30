@@ -4913,6 +4913,21 @@ fn switch_windows_lists_workbooks_by_stable_id_and_switches_to_one() {
 }
 
 #[test]
+fn book_name_titles_new_workbooks_and_renames_unsaved_ones() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.new_workbook();
+    s.active_mut().unwrap().title = "Budget".into(); // the second workbook, renamed
+    s.set_book_name("Classeur");
+    let titles: Vec<_> = s.documents().iter().map(|d| d.title.clone()).collect();
+    assert_eq!(titles, ["Classeur1", "Budget"]);
+    s.new_workbook();
+    assert_eq!(s.documents()[2].title, "Classeur2");
+    s.set_book_name("");
+    assert_eq!(s.documents()[0].title, "Classeur1", "an empty name changes nothing");
+}
+
+#[test]
 fn new_window_shares_the_workbook_and_closes_window_by_window() {
     let mut s = s();
     let book = s.doc().unwrap().uid;

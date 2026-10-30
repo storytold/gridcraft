@@ -305,7 +305,8 @@ pub struct SheetApp {
 
 /// Strips the engine's error prefixes for message boxes.
 pub fn clean_error(e: &str) -> String {
-    if let Some(rest) = e.split_once("`: ").map(|(_, r)| r) {
+    // `Disabled` first ("command `x` is not available right now: <reason>"): its reason may contain "`: ".
+    if let Some(rest) = e.split_once("` is not available right now: ").or_else(|| e.split_once("`: ")).map(|(_, r)| r) {
         return rest.to_string();
     }
     e.to_string()

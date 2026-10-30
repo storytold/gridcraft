@@ -94,6 +94,7 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
 }
 
 /// Text for a value with General narrowing to the available width.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -102,6 +103,7 @@ pub(super) fn display_text(
     st: &Style,
     width_px: f32,
     char_w: f32,
+    locale: gridcraft_engine::formula::FormulaLocale,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -126,7 +128,13 @@ pub(super) fn display_text(
         };
     }
     let f = gridcraft_engine::display::format(v, code, wb);
-    (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
+    // Booleans and errors read in the formula language, as in localized Excel (VRAI, #VALEUR!).
+    let text = match v {
+        Value::Bool(b) if !f.text.is_empty() => locale.function_name(if *b { "TRUE" } else { "FALSE" }).to_string(),
+        Value::Error(e) if !f.text.is_empty() => locale.error_name(*e).to_string(),
+        _ => f.text,
+    };
+    (text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {

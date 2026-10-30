@@ -149,7 +149,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 if ui.button(lang.tr("None")).clicked() {
                     st.borders = Default::default();
                 }
-                if ui.button(lang.tr("Outline")).clicked() {
+                if ui.button(lang.tr("border|Outline")).clicked() {
                     st.borders.top = line;
                     st.borders.bottom = line;
                     st.borders.left = line;

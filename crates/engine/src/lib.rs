@@ -519,6 +519,8 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// The UI's word for "Book" in new workbooks' titles ([`Session::set_book_name`]); empty is "Book".
+    book_name: String,
 }
 
 impl Session {
@@ -583,15 +585,36 @@ impl Session {
             }
         }
     }
-    /// A new blank workbook titled `BookN`.
+    fn book_name(&self) -> &str {
+        if self.book_name.is_empty() { "Book" } else { &self.book_name }
+    }
+    /// Titles new blank workbooks `{name}N` (French "Classeur1") and renames the unsaved ones
+    /// still titled with the previous word.
+    pub fn set_book_name(&mut self, name: &str) {
+        let old = self.book_name().to_string();
+        if name.is_empty() || name == old {
+            return;
+        }
+        for d in self.docs.iter_mut().filter(|d| d.path.is_none()) {
+            if let Some(n) = d.title.strip_prefix(old.as_str())
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+            {
+                d.title = format!("{name}{n}");
+            }
+        }
+        self.book_name = name.to_string();
+    }
+    /// A new blank workbook titled `BookN` (in the UI's language: [`Session::set_book_name`]).
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
+        let book = self.book_name().to_string();
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
+        self.add_document(DocState::new(wb, None, format!("{book}{n}"), Trust::Local))
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
