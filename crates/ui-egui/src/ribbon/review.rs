@@ -7,12 +7,12 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("spelling", json!({}));
     }
-    let __k = big_button(ui, Icon::Calc, "Workbook\nStatistics", "Workbook Statistics", false);
+    let __k = big_button(ui, Icon::Statistics, "Workbook\nStatistics", "Workbook Statistics", false);
     control_keytip(app, ui, &__k, "statistics");
     if __k.clicked() {
         app.open_dialog("statistics", json!({}));
     }
-    let __k = big_button(ui, Icon::Validation, "Check\nAccessibility", "Check Accessibility", false);
+    let __k = big_button(ui, Icon::Accessibility, "Check\nAccessibility", "Check Accessibility", false);
     control_keytip(app, ui, &__k, "dialog:accessibility");
     if __k.clicked() {
         app.open_dialog("accessibility", json!({}));
@@ -76,7 +76,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         crate::backstage::protect_workbook(app);
     }
-    if big_button(ui, Icon::Validation, "Allow Edit\nRanges", "Allow Edit Ranges", false).clicked() {
+    if big_button(ui, Icon::EditRanges, "Allow Edit\nRanges", "Allow Edit Ranges", false).clicked() {
         app.open_dialog("allowEditRanges", json!({}));
     }
 }

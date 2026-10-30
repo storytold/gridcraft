@@ -58,7 +58,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("zoom", json!({}));
     }
-    let __k = big_button(ui, Icon::Search, "100%", "Zoom to 100%", false);
+    let __k = big_button(ui, Icon::ZoomPercent, "100%", "Zoom to 100%", false);
     control_keytip(app, ui, &__k, "view.zoom");
     if __k.clicked() || invoke(app, "view.zoom") {
         act(app, "view.zoom", json!({"percent": 100}));

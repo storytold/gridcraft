@@ -42,7 +42,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    let icn = big_button(ui, Icon::Theme, "Icons", "Insert an icon", true);
+    let icn = big_button(ui, Icon::Icons, "Icons", "Insert an icon", true);
     anchor_keytip(app, ui, &icn, &["insert.icons"]);
     egui::Popup::menu(&icn).show(|ui| {
         ui.set_width(260.0);
@@ -123,7 +123,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 ),
                 (Icon::Chart, "Statistic", "insert.chart.statistic", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
                 (
-                    Icon::Theme,
+                    Icon::ChartMore,
                     "Hierarchy & more",
                     "insert.chart.hierarchy",
                     vec![
@@ -212,7 +212,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
 
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
-    let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
+    let __k = big_button(ui, Icon::Pointer, "Select\nObjects", "Select and move ink and shapes", false);
     control_keytip(app, ui, &__k, "draw.lasso");
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));

@@ -208,7 +208,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("evaluateFormula", json!({}));
         }
     });
-    if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
+    if big_button(ui, Icon::WatchWindow, "Watch\nWindow", "Watch Window", false).clicked() {
         app.grid.pane = Some("watch".into());
     }
     sep(ui);

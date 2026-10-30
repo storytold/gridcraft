@@ -1668,7 +1668,7 @@ fn power_pivot_window_loads_a_model_and_edits_measures_and_relationships() {
     {
         let d = h.state().dialog.as_ref().unwrap();
         assert_eq!(d.values["resultKind"], json!("Measure"));
-        assert_eq!(d.values["resultText"], json!("120"));
+        assert_eq!(d.values["resultText"], json!("$120.00"), "the measure's Currency format applies to evaluate output");
     }
 
     // Update Measure edits the same engine measure and clears a blank format.

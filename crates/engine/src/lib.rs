@@ -528,6 +528,14 @@ pub struct Session {
     /// Data Model loaded from a JSON model file (Power Pivot prototype). Application state, not
     /// saved in the workbook.
     pub dax_model: Option<gridcraft_dax::DataModel>,
+    /// Power Pivot window view state: the Data View's sorts, per-column filters and the Show
+    /// Hidden / Show Implicit Measures toggles. Application state, not workbook data; the derived
+    /// `Default` starts it empty and `dataModel.load` resets it.
+    pub dax_view: cmd::dax::ModelView,
+    /// The model metadata read from the model JSON (hidden columns, date tables, default
+    /// summarization). Metadata, not view state: it belongs to the model document and travels in
+    /// it, but the session holds it because `dax_model` does.
+    pub dax_metadata: gridcraft_dax::model::ModelMetadata,
 }
 
 impl Session {
