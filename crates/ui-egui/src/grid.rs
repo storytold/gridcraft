@@ -190,6 +190,13 @@ pub struct GridState {
     pub cells_rect: Option<Rect>,
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
+    /// The grid's input method context: its generation, and the pass that last allowed it (a new
+    /// generation starts when the grid takes the keyboard back).
+    pub ime_generation: u64,
+    pub ime_pass: Option<u64>,
+    /// The keys that started an edit by typing over the cell, for the in-cell editor once it has
+    /// the keyboard (see `keyboard::start_typing`).
+    pub typed: Vec<egui::Event>,
     pub context_menu: Option<Pos2>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,

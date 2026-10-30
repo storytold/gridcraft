@@ -33,6 +33,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    app.grid.typed.clear();
+    allow_ime(app, ctx, resp, geo, sh);
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -43,7 +45,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
-    for ev in events {
+    let mut events = events.into_iter();
+    while let Some(ev) = events.next() {
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -60,12 +63,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
-            egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {}
-            egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
-                app.begin_edit(Some(text), false);
-                if let Some(ed) = app.editor.as_mut() {
-                    ed.caret = ed.text.chars().count();
-                }
+            egui::Event::Text(_) | egui::Event::Ime(_) if shortcut_pressed || shortcut_ran => {}
+            egui::Event::Text(ref text) | egui::Event::Ime(egui::ImeEvent::Commit(ref text) | egui::ImeEvent::Preedit { ref text, .. })
+                if text.chars().all(|c| !c.is_control()) && !text.is_empty() =>
+            {
+                start_typing(app, ctx, std::iter::once(ev).chain(events).collect());
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
@@ -155,4 +157,51 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// Lets the input method compose while the grid has the keyboard. Otherwise the first key of an
+/// entry arrives as a lone jamo (or kana) that the next keys can no longer combine with, and the
+/// in-cell editor, which allows the input method, only gets the keys after it. Not on a touch
+/// screen, where an input method context brings up the on-screen keyboard.
+fn allow_ime(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if ctx.input(|i| i.has_touch_screen()) {
+        return;
+    }
+    let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
+    let cell = match sh.merge_at(active) {
+        Some(m) => geo.range_rect(sh, m),
+        None => geo.cell_rect(sh, active),
+    };
+    let caret = Rect::from_min_size(cell.min + vec2(2.0, 0.0), vec2(1.0, cell.height()));
+    // A new context each time the grid takes the keyboard back, as a text field does on focus.
+    let pass = ctx.cumulative_pass_nr();
+    if app.grid.ime_pass.is_none_or(|last| last.saturating_add(1) < pass) {
+        app.grid.ime_generation = app.grid.ime_generation.wrapping_add(1).max(1);
+    }
+    app.grid.ime_pass = Some(pass);
+    let to_global = ctx.layer_transform_to_global(resp.layer_id).unwrap_or_default();
+    let ime = egui::output::IMEOutput::new(
+        resp.id,
+        app.grid.ime_generation,
+        egui::IMEPurpose::Normal,
+        to_global * geo.mirror_rect(cell),
+        to_global * geo.mirror_rect(caret),
+    );
+    ctx.output_mut(|o| o.ime = Some(ime));
+}
+
+/// Starts editing the cell with the keys typed over it. The in-cell editor gets those keys itself,
+/// once it has the keyboard: egui interrupts the input method when the focus moves, which would
+/// cancel the composition just started (the next key starts a new one, so a Korean syllable comes
+/// apart into its jamo). So the keys are held back from this pass, which is discarded, and the
+/// repeat pass, where the editor has the focus and the input method context is its own, replays
+/// them: the interrupt was asked for the grid's context and doesn't reach the platform.
+fn start_typing(app: &mut SheetApp, ctx: &egui::Context, typed: Vec<egui::Event>) {
+    app.begin_edit(Some(String::new()), false);
+    if app.editor.is_none() {
+        return;
+    }
+    ctx.input_mut(|i| i.events.retain(|e| !typed.contains(e)));
+    app.grid.typed = typed;
+    ctx.request_discard("the in-cell editor takes the keys that started the edit");
 }

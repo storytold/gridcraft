@@ -79,6 +79,14 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
     child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    // The keys that started the edit, once the editor has the keyboard (`keyboard::start_typing`).
+    if !app.grid.typed.is_empty() && ui.ctx().memory(|m| m.has_focus(id)) {
+        let typed = std::mem::take(&mut app.grid.typed);
+        ui.ctx().input_mut(|i| {
+            let later = std::mem::replace(&mut i.events, typed);
+            i.events.extend(later);
+        });
+    }
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0, erect.height() - 2.0);
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.cell_editor.rect"), erect));
 }
