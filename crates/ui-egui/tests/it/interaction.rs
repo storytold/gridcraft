@@ -1,6 +1,6 @@
 //! UI interaction tests: real egui input through the whole app (no GPU needed).
 
-use egui::{Event, Key, Modifiers, PointerButton};
+use egui::{Event, Key, Modifiers, PointerButton, accesskit::Role};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -1132,4 +1132,498 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     h.state_mut().run("pageLayout.headerFooter", vals).unwrap();
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
+}
+
+/// A two-table model: the Data View's table tabs, Table Properties and Create Relationship all
+/// need two tables to exercise.
+fn power_pivot_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("gridcraft-power-pivot-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "tables": [
+                {"name":"Sales","columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                 "rows":[["East",10],["West",20],["East",30]]},
+                {"name":"Regions","columns":[{"name":"Region","data_type":"String"},{"name":"Manager","data_type":"String"}],
+                 "rows":[["East","Ana"],["West","Bo"]]}
+            ],
+            "relationships": [],
+            "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
+        }"#,
+    )
+    .unwrap();
+    (dir, path)
+}
+
+/// Clicks the last button with this label. The Power Pivot window is painted over the sheet's own
+/// ribbon, so labels such as "File" and "Home" exist twice; the dialog's copy comes later. The
+/// click goes through accesskit so a floating overlay whose position was laid out this frame is
+/// still hit correctly.
+fn click_button(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
+    let node = h.get_all_by_role_and_label(Role::Button, label).last().unwrap_or_else(|| panic!("no button labelled {label:?}"));
+    node.click_accesskit();
+    h.run_steps(2);
+}
+
+/// Clicks the first button with this label, e.g. the Home ribbon's "Diagram View" rather than the
+/// footer's copy of the same switch.
+fn click_first_button(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
+    let node = h.get_all_by_role_and_label(Role::Button, label).next().unwrap_or_else(|| panic!("no button labelled {label:?}"));
+    node.click_accesskit();
+    h.run_steps(2);
+}
+
+/// Whether any node carries this exact label, as `query_by_label` panics when the same label is
+/// painted more than once (the dialog's footer and ribbon repeat Data View).
+fn seen(h: &egui_kittest::Harness<'static, SheetApp>, label: &str) -> bool {
+    h.query_all_by_label(label).next().is_some()
+}
+
+/// Puts a formula in the Data View formula bar and commits it with Enter. Excel's layout has no
+/// Evaluate button: the ✓ button and Enter both run `dataModel.evaluate` for the formula bar.
+fn enter_formula(h: &mut egui_kittest::Harness<'static, SheetApp>, formula: &str) {
+    h.state_mut().dialog.as_mut().expect("the Power Pivot dialog is open").values.insert("formula".into(), json!(formula));
+    h.run_steps(1);
+    let field = h.get_all_by_role(Role::TextInput).last().expect("the Data View formula bar has a text field").rect();
+    h.get_all_by_role(Role::TextInput).find(|node| node.rect() == field).expect("formula field").focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+}
+
+#[allow(clippy::cognitive_complexity)] // One end-to-end Power Pivot walkthrough: load, measure, relationship.
+#[test]
+fn power_pivot_window_loads_a_model_and_edits_measures_and_relationships() {
+    let (dir, path) = power_pivot_fixture("ui");
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("powerPivot"));
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["tab"], json!("Home"), "Excel's Power Pivot opens on Home");
+        assert_eq!(d.values["view"], json!("Data"), "the Data View is the default canvas");
+    }
+    assert!(seen(&h, "Load a model and choose a table tab to see its rows."), "the Data View starts empty");
+    assert!(seen(&h, "No table tabs"));
+    assert!(seen(&h, "Add Measure"), "the Calculation Area is part of the Data View");
+    for tab in ["File", "Home", "Design", "Advanced"] {
+        assert!(h.query_all_by_role_and_label(Role::Button, tab).next().is_some(), "the {tab} tab is in the strip");
+    }
+    assert!(!seen(&h, "Diagram"), "Diagram View is not a tab");
+    assert!(!seen(&h, "Pivot Preview"), "the old Pivot Preview surface is gone");
+    assert!(!seen(&h, "Pivot Result"));
+
+    // Load through Home › Existing Connections: the model path now lives in the overlay.
+    click_button(&mut h, "Existing Connections");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["overlay"], json!("existingConnections"));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), json!(path.to_string_lossy()));
+    h.run_steps(1);
+    click_button(&mut h, "Load");
+    h.run_steps(3);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!(""), "a successful load closes the overlay");
+        assert_eq!(d.values["model"]["loaded"], json!(true));
+        assert_eq!(d.values.get("error").and_then(|e| e.as_str()), Some(""));
+        assert_eq!(d.values["tableIndex"], json!(0));
+        assert_eq!(d.values["tableData"]["columns"], json!(["Region", "Amount"]));
+        assert_eq!(d.values["tableData"]["rows"].as_array().map(Vec::len), Some(3), "the Data View fetched the first table's rows");
+    }
+    for label in ["Data View", "Sales", "Regions", "Region", "Amount", "Add Measure", "Total Sales"] {
+        assert!(seen(&h, label), "{label} is visible in the loaded Data View");
+    }
+    let name_box = h.get_all_by_role(Role::ComboBox).last().expect("the Data View formula bar has a name box");
+    assert_eq!(name_box.value().as_deref(), Some("[Region]"), "the formula bar's name box names the selected column");
+    assert!(!seen(&h, "Pivot Preview"));
+
+    // Each table tab runs a table evaluation (`Table` + `table: true`) behind the Data View grid.
+    click_button(&mut h, "Regions");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["tableIndex"], json!(1));
+        assert_eq!(d.values["tableData"]["columns"], json!(["Region", "Manager"]));
+        assert_eq!(d.values["tableData"]["rows"].as_array().map(Vec::len), Some(2));
+    }
+    assert!(seen(&h, "Manager"), "the new table's headers replace the old ones");
+    click_button(&mut h, "Sales");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["tableData"]["rows"].as_array().map(Vec::len), Some(3));
+
+    // Scalar evaluation through the formula bar (Enter, not an Evaluate button).
+    enter_formula(&mut h, "SUM(Sales[Amount])");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["resultKind"], json!("Scalar"));
+        assert_eq!(d.values["resultText"], json!("60"));
+        assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_f64()), Some(60.0));
+    }
+    assert!(seen(&h, "Scalar: 60"), "the formula bar renders the result");
+
+    // Design and Advanced keep the Data View canvas below their ribbons.
+    click_button(&mut h, "Design");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["tab"], json!("Design"));
+        assert_eq!(d.values["view"], json!("Data"));
+    }
+    assert!(seen(&h, "Region") && seen(&h, "Add Measure"), "Design keeps the grid and Calculation Area");
+    assert_eq!(h.get_all_by_role(Role::ComboBox).last().and_then(|node| node.value()).as_deref(), Some("[Region]"), "Design keeps the formula bar");
+    assert!(!seen(&h, "Diagram"));
+    click_button(&mut h, "Advanced");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["tab"], json!("Advanced"));
+    assert!(seen(&h, "Region") && seen(&h, "Add Measure"), "Advanced keeps the Data View canvas");
+    assert_eq!(h.get_all_by_role(Role::ComboBox).last().and_then(|node| node.value()).as_deref(), Some("[Region]"), "Advanced keeps the formula bar");
+    assert!(seen(&h, "Show Implicit Measures"), "the Advanced ribbon is active");
+
+    // File is a backstage inside the window: its entries replace the canvas.
+    click_button(&mut h, "File");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["tab"], json!("File"));
+        assert_eq!(d.tab, "File", "the generic dialog tab mirrors the in-window strip");
+    }
+    for entry in ["Open Model…", "Existing Connections", "Switch to Advanced Mode", "Close", "Exit"] {
+        assert!(seen(&h, entry), "File lists {entry}");
+    }
+    assert!(!seen(&h, "Add Measure"), "the File menu replaces the Data View canvas");
+    click_button(&mut h, "Switch to Advanced Mode");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["tab"], json!("Advanced"));
+    assert!(seen(&h, "Add Measure"), "leaving File restores the canvas");
+
+    // Home › Diagram View is a view, not a tab; the footer switches back.
+    click_button(&mut h, "Home");
+    click_first_button(&mut h, "Diagram View");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["tab"], json!("Home"));
+        assert_eq!(d.values["view"], json!("Diagram"));
+        assert!(!seen(&h, "Add Measure"), "the Diagram View replaces the Data View canvas");
+    }
+    assert!(seen(&h, "Model Diagram"));
+    assert!(h.query_all_by_role_and_label(Role::Label, "Sales").next().is_some(), "the diagram draws a card for Sales");
+    assert!(h.query_all_by_role_and_label(Role::Label, "Regions").next().is_some(), "the diagram draws a card for Regions");
+    assert!(seen(&h, "Manager"), "the cards list their columns");
+    assert!(seen(&h, "This model exposes no relationships; showing table cards only."));
+    click_button(&mut h, "Data View");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["view"], json!("Data"));
+        assert!(!seen(&h, "Model Diagram"));
+        assert!(seen(&h, "Add Measure"));
+    }
+
+    // Add Measure writes through dataModel.addMeasure; the Calculation Area lists the result.
+    click_button(&mut h, "Add Measure");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!("addMeasure"));
+        assert_eq!(d.values["measureDialogMode"], json!("Add"));
+    }
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("newMeasureName".into(), json!("Double Sales"));
+        d.values.insert("newMeasureTable".into(), json!("Sales"));
+        d.values.insert("newMeasureFormula".into(), json!("SUM(Sales[Amount]) * 2"));
+        d.values.insert("newMeasureFormat".into(), json!("Currency"));
+    }
+    h.run_steps(1);
+    click_button(&mut h, "Add");
+    h.run_steps(2);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!(""), "Add closes on success");
+        let measures = d.values["model"]["measures"].as_array().expect("status carries the measure list");
+        assert_eq!(measures.len(), 2);
+        assert_eq!(measures[1]["name"], json!("Double Sales"));
+        assert_eq!(measures[1]["formula"], json!("SUM(Sales[Amount]) * 2"));
+        assert_eq!(measures[1]["format"], json!("Currency"));
+        assert_eq!(d.values["measureIndex"], json!(1), "the new measure is selected in the Calculation Area");
+        assert_eq!(d.values["formula"], json!("[Double Sales]"));
+    }
+    assert!(seen(&h, "Double Sales") && seen(&h, "Currency"), "the Calculation Area lists the new measure");
+    enter_formula(&mut h, "[Double Sales]");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["resultKind"], json!("Measure"));
+        assert_eq!(d.values["resultText"], json!("$120.00"), "the measure's Currency format applies to evaluate output");
+    }
+
+    // Update Measure edits the same engine measure and clears a blank format.
+    click_button(&mut h, "Update");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!("addMeasure"));
+        assert_eq!(d.values["measureDialogMode"], json!("Update"));
+    }
+    assert!(seen(&h, "Update Measure"), "the overlay title says Update Measure");
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("newMeasureFormula".into(), json!("SUM(Sales[Amount]) * 3"));
+        d.values.insert("newMeasureFormat".into(), json!(""));
+    }
+    h.run_steps(1);
+    click_button(&mut h, "Update");
+    h.run_steps(2);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!(""));
+        let measures = d.values["model"]["measures"].as_array().unwrap();
+        assert_eq!(measures[1]["formula"], json!("SUM(Sales[Amount]) * 3"));
+        assert!(measures[1]["format"].is_null(), "a blank format clears the measure format");
+    }
+    enter_formula(&mut h, "[Double Sales]");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["resultText"], json!("180"));
+
+    // Delete Measure removes it through dataModel.deleteMeasure.
+    click_button(&mut h, "Delete");
+    h.run_steps(2);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        let measures = d.values["model"]["measures"].as_array().unwrap();
+        assert_eq!(measures.len(), 1, "Delete removed the measure");
+        assert_eq!(measures[0]["name"], json!("Total Sales"));
+        assert_eq!(d.values["measureIndex"], json!(-1));
+        assert_eq!(d.values["formula"], json!(""));
+    }
+    assert!(!seen(&h, "Double Sales"), "the Calculation Area dropped the deleted measure");
+
+    // Create Relationship writes through dataModel.addRelationship; Manage Relationships lists it.
+    click_button(&mut h, "Design");
+    click_button(&mut h, "Create Relationship");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!("createRelationship"));
+        assert_eq!(d.values["relFromTable"], json!("Sales"), "the dialog defaults to the first two tables");
+        assert_eq!(d.values["relToTable"], json!("Regions"));
+    }
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("relFromTable".into(), json!("Sales"));
+        d.values.insert("relFromColumn".into(), json!("Region"));
+        d.values.insert("relToTable".into(), json!("Regions"));
+        d.values.insert("relToColumn".into(), json!("Region"));
+        d.values.insert("relBidirectional".into(), json!(true));
+    }
+    h.run_steps(1);
+    click_button(&mut h, "Create");
+    h.run_steps(2);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!(""), "Create closes on success");
+        let relationships = d.values["model"]["relationships"].as_array().unwrap();
+        assert_eq!(relationships.len(), 1);
+        assert_eq!(relationships[0]["from_table"], json!("Sales"));
+        assert_eq!(relationships[0]["from_column"], json!("Region"));
+        assert_eq!(relationships[0]["to_table"], json!("Regions"));
+        assert_eq!(relationships[0]["to_column"], json!("Region"));
+        assert_eq!(relationships[0]["bidirectional"], json!(true));
+    }
+
+    click_button(&mut h, "Manage Relationships");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["overlay"], json!("manageRelationships"));
+    for label in ["Relationships", "1 defined", "Sales[Region]", "Regions[Region]", "Both"] {
+        assert!(seen(&h, label), "Manage Relationships lists {label}");
+    }
+    click_button(&mut h, "Sales[Region]");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["relIndex"], json!(0), "selecting a row enables Delete");
+    click_button(&mut h, "Delete");
+    h.run_steps(2);
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values["overlay"], json!("manageRelationships"), "Manage Relationships stays open after Delete");
+        assert_eq!(d.values["model"]["relationships"].as_array().map(Vec::len), Some(0));
+    }
+    assert!(seen(&h, "No relationships are exposed by this model."), "the list is empty after Delete");
+    click_button(&mut h, "Close");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["overlay"], json!(""));
+
+    // Table Properties: the table name, row/column counts, and each column's model type.
+    click_button(&mut h, "Table Properties");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["overlay"], json!("tableProperties"));
+    for label in ["Table name", "Sales", "Rows", "3", "Columns", "2", "Column", "Type", "String", "Double"] {
+        assert!(seen(&h, label), "Table Properties shows {label}");
+    }
+    click_button(&mut h, "Close");
+
+    // Engine errors replace the result and leave the dialog open.
+    click_button(&mut h, "Home");
+    enter_formula(&mut h, "SUM(Missing[Amount])");
+    let error = {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert!(d.result.is_none());
+        assert_eq!(d.name(), "powerPivot", "the dialog stays open after an engine error");
+        d.values.get("error").and_then(|e| e.as_str()).unwrap_or("").to_string()
+    };
+    assert!(!error.is_empty(), "the engine's error is recorded");
+    assert!(seen(&h, &error), "the Data View renders the error");
+    assert!(!seen(&h, "Scalar: 60"), "a failed evaluation clears the previous result");
+
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn power_pivot_function_library_inserts_parseable_templates() {
+    let (dir, path) = power_pivot_fixture("functions");
+    let mut session = blank();
+    session.run("dataModel.load", json!({"path": path.to_string_lossy()})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+
+    // The Function Library moved to Design › Insert Function; its search box filters the templates.
+    click_button(&mut h, "Design");
+    click_button(&mut h, "Insert Function");
+    assert!(seen(&h, "Function Picker"), "the Function Library opens");
+
+    let scalar_cases = [
+        ("SUM", "SUM(Sales[Amount])", Some(60.0)),
+        ("SUMX", "SUMX(Sales, Sales[Amount])", Some(60.0)),
+        ("ROUND", "ROUND(1.234, 2)", None),
+        ("CALCULATE", "CALCULATE([Total Sales], Sales[Region] = \"\")", None),
+        ("DATE", "DATE(2024, 1, 1)", None),
+    ];
+    for (name, expected, value) in scalar_cases {
+        if !seen(&h, "Function Picker") {
+            click_button(&mut h, "Insert Function");
+        }
+        h.state_mut().dialog.as_mut().unwrap().values.insert("fnSearch".into(), json!(name));
+        h.run_steps(1);
+        click_button(&mut h, name);
+        {
+            let d = h.state().dialog.as_ref().unwrap();
+            assert_eq!(d.values.get("formula").and_then(|f| f.as_str()), Some(expected), "{name} inserts its template");
+            assert_eq!(d.values.get("showFunctions").and_then(|f| f.as_bool()), Some(false), "choosing a function closes the picker");
+        }
+        enter_formula(&mut h, expected);
+        {
+            let d = h.state().dialog.as_ref().unwrap();
+            let error = d.values.get("error").and_then(|e| e.as_str()).unwrap_or("");
+            assert!(error.is_empty(), "{name} template evaluates: {error}");
+            if let Some(value) = value {
+                assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_f64()), Some(value));
+            }
+        }
+    }
+
+    // IF evaluates to a value rather than a number.
+    click_button(&mut h, "Insert Function");
+    h.state_mut().dialog.as_mut().unwrap().values.insert("fnSearch".into(), json!("IF"));
+    h.run_steps(1);
+    click_button(&mut h, "IF");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values.get("formula").and_then(|f| f.as_str()), Some("IF(TRUE(), 1, 0)"));
+    }
+    enter_formula(&mut h, "IF(TRUE(), 1, 0)");
+    {
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values.get("error").and_then(|e| e.as_str()), Some(""));
+        assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_i64()), Some(1));
+    }
+
+    // Table templates: the Excel layout has no table switch in the formula bar; the Data View
+    // loads table expressions through `dataModel.evaluate` with `table: true`, so verify the
+    // inserted templates through that same engine path.
+    let table_cases = [
+        ("FILTER", "FILTER(Sales, Sales[Amount] > 0)"),
+        ("TOPN", "TOPN(10, Sales, Sales[Amount], 0)"),
+        ("ADDCOLUMNS", "ADDCOLUMNS(Sales, \"Value\", Sales[Amount])"),
+        ("DATATABLE", "DATATABLE(\"Value\", INTEGER, {{1}, {2}})"),
+    ];
+    for (name, expected) in table_cases {
+        click_button(&mut h, "Insert Function");
+        h.state_mut().dialog.as_mut().unwrap().values.insert("fnSearch".into(), json!(name));
+        h.run_steps(1);
+        click_button(&mut h, name);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("formula").and_then(|f| f.as_str()), Some(expected), "{name} inserts its template");
+        let result = h
+            .state_mut()
+            .session
+            .run("dataModel.evaluate", json!({"formula": expected, "table": true}))
+            .unwrap_or_else(|error| panic!("{name} template evaluates as a table: {error}"));
+        assert!(result.get("columns").and_then(|c| c.as_array()).is_some(), "{name} returns a table");
+    }
+
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn power_pivot_open_model_browses_a_json_file() {
+    let (dir, path) = power_pivot_fixture("browse");
+    let bytes = std::fs::read(&path).unwrap();
+    type Requests = std::sync::Arc<std::sync::Mutex<Vec<gridcraft_ui_egui::Inbox>>>;
+    let requests: Requests = std::sync::Arc::default();
+    let send = requests.clone();
+    let mut h = crate::support::services_harness(
+        gridcraft_ui_egui::Services {
+            // The browser host: no filesystem, files arrive through a picker-owned inbox.
+            open_async: Some(Box::new(|| {})),
+            pick_model_async: Some(Box::new(move |inbox| send.lock().unwrap().push(inbox))),
+            ..Default::default()
+        },
+        4,
+    );
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+    click_button(&mut h, "File");
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    assert_eq!(requests.lock().unwrap().len(), 1, "Browse… starts the browser picker");
+
+    // Canceling the dialog drops its inbox: the late pick cannot load a model later.
+    click_button(&mut h, "Cancel");
+    h.run_steps(2);
+    let canceled = requests.lock().unwrap().pop().unwrap();
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    canceled.lock().unwrap().push(("late.json".into(), bytes.clone()));
+    h.run_steps(3);
+    assert_eq!(h.state_mut().session.run("dataModel.status", json!({})).unwrap()["loaded"], json!(false));
+
+    // A picked file reaches dataModel.load as JSON text (wasm has no path to read).
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    requests.lock().unwrap().pop().unwrap().lock().unwrap().push(("model.json".into(), bytes));
+    h.run_steps(3);
+    let status = h.state_mut().session.run("dataModel.status", json!({})).unwrap();
+    assert_eq!(status["loaded"], json!(true));
+    assert_eq!(status["tables"][0]["name"], json!("Sales"));
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.values["overlay"], json!(""), "a loaded model closes the overlay");
+    assert_eq!(d.values["modelName"], json!("model.json"));
+    assert_eq!(d.values["tableData"]["columns"], json!(["Region", "Amount"]), "the Data View fetched the loaded table");
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn power_pivot_open_model_browses_a_path_on_native() {
+    let (dir, path) = power_pivot_fixture("browse-native");
+    let chosen = path.to_string_lossy().to_string();
+    let mut h = crate::support::services_harness(
+        gridcraft_ui_egui::Services { pick_open: Some(Box::new(move || Some(chosen.clone()))), ..Default::default() },
+        4,
+    );
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+    click_button(&mut h, "File");
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["path"], json!(path.to_string_lossy()));
+    assert!(!h.state().dialog.as_ref().unwrap().values.contains_key("modelJson"), "the native picker fills the path, not JSON text");
+    click_button(&mut h, "Load");
+    h.run_steps(3);
+    assert_eq!(h.state_mut().session.run("dataModel.status", json!({})).unwrap()["loaded"], json!(true));
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
 }

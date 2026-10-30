@@ -131,12 +131,12 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
+    let __k = big_button(ui, Icon::SwitchRowsColumns, "Switch\nRow/Column", "Switch Row/Column", false);
     control_keytip(app, ui, &__k, "chart.switchRowColumn");
     if __k.clicked() {
         act(app, "chart.switchRowColumn", json!({"chart": id}));
     }
-    if big_button(ui, Icon::Table, "Select\nData", "Select Data", false).clicked() {
+    if big_button(ui, Icon::SelectData, "Select\nData", "Select Data", false).clicked() {
         app.open_dialog("selectData", json!({"chart": id}));
     }
     let ct = big_button(ui, Icon::ChartBar, "Change\nChart Type", "Change Chart Type", true);

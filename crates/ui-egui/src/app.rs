@@ -8,7 +8,7 @@ use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    keytips, macro_ui, model_pivot_pane, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
@@ -228,6 +228,7 @@ impl SheetApp {
             }
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
+            model_pivot_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();

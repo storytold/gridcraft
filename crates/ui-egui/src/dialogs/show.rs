@@ -9,6 +9,7 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
+use super::power_pivot::power_pivot;
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -137,12 +138,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
+        "powerPivot" => 1320.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(egui::Id::unique("dialog").with(&d.name))
         .collapsible(false)
-        .resizable(false)
+        .resizable(d.name == "powerPivot")
         .default_width(width)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
@@ -151,6 +153,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
+        "powerPivot" => window.default_height(740.0),
         _ => window,
     };
     window.show(ctx, |ui| {
@@ -175,6 +178,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
+                "powerPivot" => power_pivot(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");

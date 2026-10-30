@@ -18,6 +18,7 @@ mod note_box;
 mod ods_tests;
 mod passthrough_tests;
 mod phonetic_tests;
+mod pivot_model_tests;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;

@@ -15,6 +15,17 @@ fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// The colour a ribbon command's icon and label draw with: Excel greys a command that cannot run,
+/// so a button inside a disabled scope paints both with the disabled ink.
+fn command_ink(ui: &Ui, t: &Tokens) -> Color32 {
+    if ui.is_enabled() { t.text } else { t.text_disabled }
+}
+
+/// [`command_ink`] for a command's secondary marks (the dropdown chevron, a split button's line).
+fn command_dim_ink(ui: &Ui, t: &Tokens) -> Color32 {
+    if ui.is_enabled() { t.text_dim } else { t.text_disabled }
+}
+
 /// Keyboard shortcuts shown after a ribbon tooltip's command name: Excel for Mac's on macOS,
 /// Excel for Windows' elsewhere (each one GridCraft binds). Only the name is translated.
 const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
@@ -92,7 +103,7 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, command_ink(ui, &t));
     resp.on_hover_text(tip_text(ui, tip))
 }
 
@@ -107,7 +118,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 5.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, command_ink(ui, &t));
     paint_big_label(ui, rect, &lines, dropdown);
     let name = label.replace('\n', " ");
     let enabled = ui.is_enabled();
@@ -137,7 +148,7 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
             ui.painter().rect_filled(r, 5.0, t.pressed);
         }
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, command_ink(ui, &t));
     paint_big_label(ui, rect, &lines, true);
     let name = label.replace('\n', " ");
     let enabled = ui.is_enabled();
@@ -169,13 +180,13 @@ fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], 
         let line_w = line.size().x + if has_arrow { arrow_space } else { 0.0 };
         let left = rect.center().x - line_w / 2.0;
         let y = rect.top() + 46.0 + i as f32 * 13.0;
-        ui.painter().galley(pos2(left, y - line.size().y / 2.0), line.clone(), t.text);
+        ui.painter().galley(pos2(left, y - line.size().y / 2.0), line.clone(), command_ink(ui, &t));
         if has_arrow {
             icons::paint(
                 ui.painter(),
                 Rect::from_center_size(pos2(left + line_w - BIG_ARROW / 2.0, y + 1.0), vec2(BIG_ARROW, BIG_ARROW)),
                 Icon::Chevron,
-                t.text_dim,
+                command_dim_ink(ui, &t),
             );
         }
     }
@@ -194,16 +205,16 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, command_ink(ui, &t));
     if !label.is_empty() {
-        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, command_ink(ui, &t));
     }
     if dropdown {
         icons::paint(
             ui.painter(),
             Rect::from_center_size(pos2(rect.right() - 7.0, rect.center().y + 1.0), vec2(10.0, 10.0)),
             Icon::Chevron,
-            t.text_dim,
+            command_dim_ink(ui, &t),
         );
     }
     // The accessible name is the label, or the tooltip for an icon-only button.
@@ -248,11 +259,12 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, command_ink(ui, &t));
     if let Some(c) = accent {
+        let c = if ui.is_enabled() { c } else { c.gamma_multiply(0.45) };
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, command_dim_ink(ui, &t));
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
@@ -281,9 +293,14 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
         }
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
-    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, command_ink(ui, &t));
+    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, command_ink(ui, &t));
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)),
+        Icon::Chevron,
+        command_dim_ink(ui, &t),
+    );
     let tip = tip_text(ui, tip);
     (m.on_hover_text(tip.clone()), a.on_hover_text(tip))
 }

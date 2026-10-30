@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod power_pivot;
 mod show;
 mod spelling;
 mod zoom;
@@ -66,6 +67,8 @@ pub struct Dialog {
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
     picture_inbox: Option<crate::Inbox>,
+    /// Browser data-model picker results (name, bytes); the dialog that opened the picker owns it.
+    model_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
@@ -179,6 +182,7 @@ impl Dialog {
             show_password: false,
             focus_first_field: true,
             picture_inbox: None,
+            model_inbox: None,
             picture_target: None,
             back: None,
             focus_initialized: false,
@@ -200,6 +204,7 @@ impl Dialog {
             show_password: false,
             focus_first_field: false,
             picture_inbox: None,
+            model_inbox: None,
             picture_target: None,
             back: None,
             focus_initialized: false,
@@ -994,6 +999,74 @@ impl Dialog {
                     json!({"path": "", "placement": placement, "at": active}),
                 );
                 dialog.picture_target = app.view_key();
+                dialog
+            }
+            "powerPivot" => {
+                // Excel's Power Pivot window: the File/Home/Design/Advanced tab strip, the
+                // Data View or Diagram View canvas, and floating dialogs for the commands that
+                // Excel opens from the ribbon. The model lives in the engine session, so the
+                // dialog reads it back through `dataModel.status`.
+                let status = app.session.run("dataModel.status", json!({})).unwrap_or(Json::Null);
+                let mut dialog = Dialog::custom(
+                    "powerPivot",
+                    "Power Pivot",
+                    json!({
+                        "tab": "Home",
+                        "view": "Data",
+                        "overlay": "",
+                        "path": p("path").as_str().unwrap_or_default(),
+                        "formula": "",
+                        "column": "",
+                        "columnIndex": 0,
+                        "measureIndex": -1,
+                        "filterColumn": "",
+                        "filterValue": "",
+                        "calcArea": true,
+                        "calcMode": "Automatic",
+                        "showHidden": false,
+                        "showImplicit": false,
+                        "resultKind": "",
+                        "resultText": "",
+                        "error": "",
+                        "model": status,
+                        "diagramZoom": 1.0,
+                        "diagramFit": false,
+                        "tableIndex": 0,
+                        "showFunctions": false,
+                        "fnCategory": "All",
+                        "fnSearch": "",
+                        "measureDialogMode": "Add",
+                        "newMeasureName": "",
+                        "newMeasureTable": "",
+                        "newMeasureFormula": "",
+                        "newMeasureFormat": "",
+                        "relIndex": -1,
+                        "relFromTable": "",
+                        "relFromColumn": "",
+                        "relToTable": "",
+                        "relToColumn": "",
+                        "relBidirectional": false,
+                    }),
+                );
+                // Excel's Data View shows the selected table's rows; status only carries counts,
+                // so fetch the first table as a table expression and select its first column.
+                if let Some(table) = status.get("tables").and_then(Json::as_array).and_then(|tables| tables.first()) {
+                    if let Some(column) = table
+                        .get("columns")
+                        .and_then(Json::as_array)
+                        .and_then(|columns| columns.first())
+                        .and_then(|column| column.get("name"))
+                        .and_then(Json::as_str)
+                    {
+                        dialog.values.insert("column".into(), json!(column));
+                    }
+                    if let Some(table_name) = table.get("name").and_then(Json::as_str) {
+                        dialog.values.insert("newMeasureTable".into(), json!(table_name));
+                        if let Ok(data) = app.session.run("dataModel.evaluate", json!({"formula": table_name, "table": true})) {
+                            dialog.values.insert("tableData".into(), data);
+                        }
+                    }
+                }
                 dialog
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),

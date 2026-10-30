@@ -9,6 +9,7 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
+//! gridcraft-cli dax format|parse|bind|eval|pivot [TEXT] [--file PATH] [--model PATH] [--measure NAME] [--table]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod dax;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -47,6 +49,11 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
+  gridcraft-cli dax format [TEXT] [--file PATH]           canonical DAX text (expression or EVALUATE/DEFINE query)
+  gridcraft-cli dax parse [TEXT] [--file PATH]            DAX syntax tree
+  gridcraft-cli dax bind|eval|pivot ...                   bind/evaluate/pivot a JSON data model
+  gridcraft-cli dax measures --file BOOK.xlsx [--write JSON --out BOOK.xlsx]
+                                                          read or rewrite Power Pivot measures
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
@@ -81,6 +88,7 @@ fn main() -> ExitCode {
         Some("check") => return check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
+        Some("dax") => dax::main(rest),
         Some("mcp") => mcp(rest),
         Some("send") => send(rest),
         Some(other) => Err(format!("unknown subcommand `{other}`\n{USAGE}")),

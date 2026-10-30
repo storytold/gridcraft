@@ -187,6 +187,35 @@ fn check_rejects_an_empty_scan() {
 }
 
 #[test]
+fn dax_bind_resolves_model_names_and_measures() {
+    let dir = tmpdir("dax-bind");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    let out = ok(&["dax", "bind", "--model", model, "SUM(Sales[Amount])"]);
+    assert!(out.contains("Call") && out.contains("Column"), "{out}");
+    let out = ok(&["dax", "bind", "--model", model, "--measure", "East Sales"]);
+    assert!(out.contains("Measure(") && out.contains("dependencies: Total Sales"), "{out}");
+
+    let o = run(&["dax", "bind", "--model", model, "Sales[Missing]"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown column"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
     let dir = tmpdir("check-depth");
     let book = dir.join("readable.xlsx");
@@ -241,4 +270,74 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
     assert!(usage.contains(r#"{"command": "id", "params": {…}}"#), "{usage}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dax_eval_model_rows_and_measures() {
+    let dir = tmpdir("dax-eval");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}],
+                        "rows":[["East",10],["West",20],["East",30]]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    assert_eq!(ok(&["dax", "eval", "--model", model, "SUM(Sales[Amount])"]).trim(), "60.0");
+    assert_eq!(ok(&["dax", "eval", "--model", model, "--measure", "East Sales"]).trim(), "40.0");
+    let table = ok(&["dax", "eval", "--model", model, "--table", "FILTER(Sales, Sales[Amount] > 10)"]);
+    assert!(table.contains("\"columns\"") && table.contains("West"), "{table}");
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total Sales", "--rows", "Sales[Region]"]);
+    assert!(pivot.contains("East") && pivot.contains("40.0") && pivot.contains("West"), "{pivot}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn dax_format_parse_and_errors() {
+    assert_eq!(ok(&["dax", "format", "1 + 2 * 3"]).trim(), "1 + 2 * 3");
+    assert_eq!(ok(&["dax", "format", "(1 + 2) * 3"]).trim(), "(1 + 2) * 3");
+    assert_eq!(ok(&["dax", "format", "-2 ^ 2"]).trim(), "-2 ^ 2");
+    assert!(ok(&["dax", "parse", "1 + 2 * 3"]).contains("Binary"));
+
+    assert_eq!(ok(&["dax", "format", "'Sales'[Amount] + 1"]).trim(), "'Sales'[Amount] + 1");
+    assert!(ok(&["dax", "parse", "'It''s'[A]]B]"]).contains("It's"));
+
+    let query = ok(&["dax", "format", "EVALUATE SUM('Sales'[Amount])"]);
+    assert_eq!(query.trim(), "EVALUATE SUM('Sales'[Amount])");
+    assert!(ok(&["dax", "parse", "EVALUATE 1"]).contains("Query"));
+
+    let define = ok(&["dax", "format", "DEFINE MEASURE Sales[M] = 1 VAR X = 2 EVALUATE Sales ORDER BY [M] DESC START AT 0"]);
+    assert_eq!(define.trim(), "DEFINE\n    MEASURE Sales[M] = 1\n    VAR X = 2\nEVALUATE Sales\nORDER BY\n    [M] DESC\nSTART AT 0");
+    assert!(ok(&["dax", "parse", "DEFINE MEASURE Sales[M] = 1 EVALUATE Sales"]).contains("Measure"));
+
+    let o = run(&["dax", "format", "DEFINE MEASURE Sales[M] = 1"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("EVALUATE"));
+
+    let o = run(&["dax", "parse", "1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("expected expression"));
+    let o = run(&["dax", "format", "EVALUATE 1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("end of input"));
+
+    let dir = tmpdir("dax");
+    let file = dir.join("expr.dax");
+    std::fs::write(&file, "1 + 2 * 3").unwrap();
+    assert_eq!(ok(&["dax", "format", "--file", file.to_str().unwrap()]).trim(), "1 + 2 * 3");
+    let _ = std::fs::remove_dir_all(dir);
+
+    let mut child = bin().args(["dax", "format"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"1 + 2 * 3").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "1 + 2 * 3");
 }

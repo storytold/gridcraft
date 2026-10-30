@@ -33,16 +33,16 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "formulas.autoSum", json!({}));
     }
     egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
-    for (label, cat, cid) in [
-        ("Financial", "Financial", "formulas.financial"),
-        ("Logical", "Logical", "formulas.logical"),
-        ("Text", "Text", "formulas.text"),
-        ("Date &\nTime", "DateTime", "formulas.dateTime"),
-        ("Lookup &\nReference", "Lookup", "formulas.lookup"),
-        ("Math &\nTrig", "MathTrig", "formulas.mathTrig"),
-        ("More\nFunctions", "Statistical", "formulas.moreFunctions"),
+    for (icon, label, cat, cid) in [
+        (Icon::FnFinancial, "Financial", "Financial", "formulas.financial"),
+        (Icon::FnLogical, "Logical", "Logical", "formulas.logical"),
+        (Icon::FnText, "Text", "Text", "formulas.text"),
+        (Icon::FnDateTime, "Date &\nTime", "DateTime", "formulas.dateTime"),
+        (Icon::FnLookup, "Lookup &\nReference", "Lookup", "formulas.lookup"),
+        (Icon::FnMathTrig, "Math &\nTrig", "MathTrig", "formulas.mathTrig"),
+        (Icon::FnMore, "More\nFunctions", "Statistical", "formulas.moreFunctions"),
     ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
+        let r = big_button(ui, icon, label, label, true);
         control_keytip(app, ui, &r, cid);
         let forced_c = invoke(app, cid);
         egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
@@ -168,7 +168,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("evaluateFormula", json!({}));
         }
     });
-    if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
+    if big_button(ui, Icon::WatchWindow, "Watch\nWindow", "Watch Window", false).clicked() {
         app.grid.pane = Some("watch".into());
     }
     sep(ui);

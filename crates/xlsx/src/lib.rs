@@ -24,6 +24,7 @@ mod ods;
 mod package;
 mod passthrough;
 mod pivot;
+mod pivot_model;
 mod read;
 mod richdata;
 mod sheet_read;
@@ -49,6 +50,11 @@ pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
+pub use pivot_model::{
+    ModelPivotColumn, ModelPivotDataType, ModelPivotFieldRef, ModelPivotFilter, ModelPivotLayout, ModelPivotMeasure, ModelPivotPartInfo,
+    ModelPivotRelationship, ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue, attach_model_pivot, read_model_pivots,
+    write_model_pivot,
+};
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
 

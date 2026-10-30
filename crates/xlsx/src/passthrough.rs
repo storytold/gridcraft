@@ -92,7 +92,7 @@ const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 /// Relationship kinds (last segment of the type) kept from the package root.
 const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
 /// Relationship kinds kept from the workbook without a workbook element.
-const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
+const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps", "powerPivotData"];
 /// Relationship kinds kept from a sheet without a sheet element.
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
@@ -147,7 +147,6 @@ const REWRITTEN: &[&str] = &[
     "slicercache",
     "timeline",
     "timelinecache",
-    "powerpivotdata",
 ];
 
 /// Relationship kinds a chart sheet reaches that are otherwise rewritten: its drawing, chart and
@@ -169,6 +168,9 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/pivotcache/",
+    "xl/pivottables/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {

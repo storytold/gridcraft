@@ -177,6 +177,15 @@ pub fn abs_range(r: &RangeRef) -> String {
     format!("${}${}:${}${}", c(r.start.col), r.start.row + 1, c(r.end.col), r.end.row + 1)
 }
 
+/// The `<pivotCache>` children of a `<pivotCaches>` element. Attributes on the element itself
+/// (a kept element's `xmlns:r`, say) are dropped: the workbook root declares every prefix.
+fn pivot_caches_children(xml: &str) -> &str {
+    let Some(open) = xml.find("<pivotCaches") else { return "" };
+    let Some(body) = xml.get(open..).and_then(|rest| rest.find('>')).map(|i| open + i + 1) else { return "" };
+    let Some(end) = xml.rfind("</pivotCaches>").filter(|end| *end >= body) else { return "" };
+    xml.get(body..end).unwrap_or("")
+}
+
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
 /// duplicates) but formulas keep the old spelling, so the saved file would turn into `#REF!`.
 fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
@@ -303,7 +312,16 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    // `<pivotCaches>` holds the caches of the range PivotTables GridCraft models and those of the
+    // data-model PivotTables kept as pass-through content; one element holds both, so take the
+    // children of each and write a single wrapper.
+    let mut caches = String::new();
+    for xml in [pivots.workbook_xml(&mut wb_rels), kept.element(wb, "pivotCaches")] {
+        caches.push_str(pivot_caches_children(&xml));
+    }
+    if !caches.is_empty() {
+        let _ = write!(w, "<pivotCaches>{caches}</pivotCaches>");
+    }
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");

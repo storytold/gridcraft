@@ -39,6 +39,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod model_pivot_pane;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
