@@ -23,7 +23,7 @@ mod tests;
 pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline, TrendlineKind};
 use serde::{Deserialize, Serialize};
 
-pub use axis::{Scale, format_number, nice_scale};
+pub use axis::{Scale, format_number, nice_scale, value_axis_scale};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
 pub use resolve::{default_palette, resolve, series_color, series_plot_kind};

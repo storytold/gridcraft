@@ -96,6 +96,19 @@ impl ValAxis<'_> {
     }
 }
 
+/// Where the category axis crosses the value axis: at 0, or at the end nearest 0 when the axis
+/// leaves 0 out (the top of an all-negative axis), as Excel's "Automatic" does. Bars start from
+/// the same place (`in_axis` in `cartesian`).
+fn crossing(sc: &Scale) -> f64 {
+    if sc.min <= 0.0 && sc.max >= 0.0 {
+        0.0
+    } else if sc.max < 0.0 {
+        sc.max
+    } else {
+        sc.min
+    }
+}
+
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
     let ls = LABEL_SIZE;
@@ -131,7 +144,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                 ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, (HAlign::Left, VAlign::Middle));
             }
         }
-        let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
+        let zero = crossing(&y.scale);
         let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
         match cat {
@@ -205,7 +218,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                 ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
             }
         }
-        let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
+        let zero = crossing(&y.scale);
         let x0 = plot.x + y.scale.frac(zero) * plot.w;
         ctx.vline(x0, plot.y, plot.bottom(), AXIS, 0.75);
         let n = labels.len().max(1);
