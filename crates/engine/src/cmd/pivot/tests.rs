@@ -114,6 +114,12 @@ fn no_block_several_blocks_or_unlabeled_data_keep_the_error() {
     s.execute("range.setValues", json!({"range": "H1", "values": [["Name", "Score"], ["Ann", 3]]})).unwrap();
     assert!(source_from(&mut s, "M20").unwrap_err().contains(ERR));
     assert_eq!(source_from(&mut s, "I2").unwrap(), "Sheet1!$H$1:$I$2");
+    // A selected block that meets the data only at a blank cell is not swapped for the data.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["Ann", null]]})).unwrap();
+    assert!(source_from(&mut s, "B2:C3").unwrap_err().contains(ERR));
+    assert_eq!(source_from(&mut s, "D9").unwrap(), "Sheet1!$A$1:$B$2");
     // One block whose first row leaves a column without a label, or labels it with spaces.
     for label in ["", "  "] {
         let mut s = Session::new();

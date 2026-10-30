@@ -25,7 +25,8 @@ fn default_source(s: &Session) -> Result<String> {
     };
     if r.is_single() && sh.value(r.start).is_empty() {
         // Away from the data, the sheet's only block of labeled columns is the source (#2764).
-        return match only_data_block(&d.wb, sh) {
+        // A selected block stays the user's choice, even where it holds no data.
+        return match only_data_block(&d.wb, sh).filter(|_| sel.is_single()) {
             Some(block) => Ok(source_text(sh, block)),
             None => Err(other("The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`.")),
         };
