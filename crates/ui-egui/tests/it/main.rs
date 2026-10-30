@@ -77,6 +77,7 @@ mod pivot_show_details;
 mod pivot_show_details_menu;
 mod popup_dismissal;
 mod protect_password;
+mod report_dialogs;
 mod ribbon_layout;
 mod right_to_left;
 mod scroll_position;

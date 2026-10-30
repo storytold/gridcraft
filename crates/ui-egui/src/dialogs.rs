@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod reports;
 mod show;
 mod spelling;
 mod zoom;
@@ -950,22 +951,22 @@ impl Dialog {
             "macroEditor" => return crate::macro_editor::open(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
-                d.result = app.session.run("review.workbookStatistics", json!({})).ok();
+                d.result = Some(app.session.run("review.workbookStatistics", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "accessibility" => {
                 let mut d = Dialog::custom("accessibility", "Accessibility", json!({}));
-                d.result = app.session.run("review.checkAccessibility", json!({})).ok();
+                d.result = Some(app.session.run("review.checkAccessibility", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "errorChecking" => {
                 let mut d = Dialog::custom("errorChecking", "Error Checking", json!({}));
-                d.result = app.session.run("formulas.errorChecking", json!({})).ok();
+                d.result = Some(app.session.run("formulas.errorChecking", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "evaluateFormula" => {
                 let mut d = Dialog::custom("evaluateFormula", "Evaluate Formula", json!({}));
-                d.result = app.session.run("formulas.evaluateFormula", json!({})).ok();
+                d.result = Some(app.session.run("formulas.evaluateFormula", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "spelling" => {

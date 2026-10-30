@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (report dialogs show labelled rows instead of raw JSON; AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -159,7 +159,9 @@ note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Ma
 editor (Excel's VBA editor has no counterpart here) and others exist. Missing or partial: Options,
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker. Like Excel's, every dialog opens centred and moves by its
-title bar, keeping its place while it is open (#1250).
+title bar, keeping its place while it is open (#1250). Workbook Statistics, Accessibility, Error
+Checking and Evaluate Formula draw their reports as labelled rows and tables in the interface
+language, and say so in a sentence when there is nothing to report.
 Go To lists the named ranges of every sheet (a name scoped to another sheet as `Sheet2!Name`) and
 the references entered before; a double-click goes to one. Its Reference box takes several names
 or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) and selects them all.
@@ -190,6 +192,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Workbook Statistics, Accessibility, Error Checking and Evaluate Formula show their reports as labelled rows and tables (current sheet and workbook counts; issues by sheet; error cells with their formula and circular references; evaluation steps and result) in the interface language, with a plain sentence when there is nothing to report, instead of raw JSON |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
