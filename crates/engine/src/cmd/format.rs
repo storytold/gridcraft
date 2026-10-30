@@ -414,93 +414,222 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
     }
+    // Writes the preset into `s` for a cell at the given edges of the range (all false: an interior cell).
+    let edges = |s: &mut Style, top: bool, bottom: bool, left: bool, right: bool| {
+        let line = |style: BorderStyle| BorderLine { style, color };
+        let b = &mut s.borders;
+        match preset.as_str() {
+            "none" => *b = Borders::default(),
+            "all" => {
+                b.top = line(base);
+                b.bottom = line(base);
+                b.left = line(base);
+                b.right = line(base);
+            }
+            "outside" | "thickOutside" => {
+                let st = if preset == "thickOutside" { BorderStyle::Thick } else { base };
+                if top {
+                    b.top = line(st);
+                }
+                if bottom {
+                    b.bottom = line(st);
+                }
+                if left {
+                    b.left = line(st);
+                }
+                if right {
+                    b.right = line(st);
+                }
+            }
+            "inside" | "insideHorizontal" | "insideVertical" => {
+                if preset != "insideVertical" {
+                    if !top {
+                        b.top = line(base);
+                    }
+                    if !bottom {
+                        b.bottom = line(base);
+                    }
+                }
+                if preset != "insideHorizontal" {
+                    if !left {
+                        b.left = line(base);
+                    }
+                    if !right {
+                        b.right = line(base);
+                    }
+                }
+            }
+            "top" if top => b.top = line(base),
+            "bottom" if bottom => b.bottom = line(base),
+            "left" if left => b.left = line(base),
+            "right" if right => b.right = line(base),
+            "thickBottom" if bottom => b.bottom = line(BorderStyle::Thick),
+            "doubleBottom" if bottom => b.bottom = line(BorderStyle::Double),
+            "topBottom" => {
+                if top {
+                    b.top = line(base);
+                }
+                if bottom {
+                    b.bottom = line(base);
+                }
+            }
+            "topThickBottom" => {
+                if top {
+                    b.top = line(base);
+                }
+                if bottom {
+                    b.bottom = line(BorderStyle::Thick);
+                }
+            }
+            "topDoubleBottom" => {
+                if top {
+                    b.top = line(base);
+                }
+                if bottom {
+                    b.bottom = line(BorderStyle::Double);
+                }
+            }
+            "diagonalDown" => b.diag_down = line(base),
+            "diagonalUp" => b.diag_up = line(base),
+            _ => {}
+        }
+    };
+    // The edge of a neighbouring cell that faces the range, cleared by the `none` preset.
+    let facing = |s: &mut Style, dr: i64, dc: i64| {
+        let edge = match (dr, dc) {
+            (-1, _) => &mut s.borders.bottom,
+            (1, _) => &mut s.borders.top,
+            (_, -1) => &mut s.borders.right,
+            _ => &mut s.borders.left,
+        };
+        *edge = BorderLine::default();
+    };
     edit(s, |cx| {
         for r in &ranges {
+            // Whole columns (or rows) keep the line format and touch only the cells that exist,
+            // the two end cells of each line and (for columns) the blank cells of styled rows,
+            // which would otherwise hide the column's style. A cell per row would make a single
+            // undo step hundreds of megabytes and push the older steps out of the history.
+            let lines = r.is_full_cols() != r.is_full_rows();
+            let cols = r.is_full_cols();
+            // Each touched cell with the style it gets, worked out from the styles before the lines change.
+            let mut plan: Vec<(CellRef, StyleId)> = Vec::new();
+            if lines {
+                let line_range = if cols { r.start.col..=r.end.col } else { r.start.row..=r.end.row };
+                let first = *line_range.start();
+                let mut line_new: Vec<StyleId> = Vec::new();
+                for line in line_range {
+                    let cur = cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| if cols { sh.cols.get(&line) } else { sh.rows.get(&line) })
+                        .and_then(|i| i.style)
+                        .unwrap_or_default();
+                    line_new.push(cx.wb.styles.derive(cur, |s| {
+                        if cols {
+                            edges(s, false, false, line == r.start.col, line == r.end.col)
+                        } else {
+                            edges(s, line == r.start.row, line == r.end.row, false, false)
+                        }
+                    }));
+                }
+                let ends = if cols {
+                    [RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)), RangeRef::new(CellRef::new(r.end.row, r.start.col), r.end)]
+                } else {
+                    [RangeRef::new(r.start, CellRef::new(r.end.row, r.start.col)), RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)]
+                };
+                let mut cells: Vec<CellRef> = Vec::new();
+                if let Some(sh) = cx.wb.sheet(sheet) {
+                    cells.extend(sh.cells.iter_range(*r).map(|(c, _)| c));
+                    if cols {
+                        let width = u64::from(r.end.col - r.start.col) + 1;
+                        let styled: Vec<u32> = sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| *row).collect();
+                        if (styled.len() as u64).saturating_mul(width) > 2_000_000 {
+                            return Err(bad("home.borders", "selection too large"));
+                        }
+                        cells.extend(styled.iter().flat_map(|row| (r.start.col..=r.end.col).map(|col| CellRef::new(*row, col))));
+                    }
+                }
+                cells.extend(ends.iter().flat_map(|e| e.iter()));
+                cells.sort_unstable();
+                cells.dedup();
+                for c in cells {
+                    let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
+                    let Some(sh) = cx.wb.sheet(sheet) else { continue };
+                    let (stored, st) = (sh.cells.get(c).is_some(), sh.style_id(c));
+                    // What a blank cell shows once the line styles are written: its row, else its column.
+                    let inherited = if cols {
+                        sh.rows
+                            .get(&c.row)
+                            .and_then(|i| i.style)
+                            .or_else(|| line_new.get(usize::try_from(c.col - first).unwrap_or(usize::MAX)).copied())
+                    } else {
+                        line_new.get(usize::try_from(c.row - first).unwrap_or(usize::MAX)).copied()
+                    };
+                    let new = cx.wb.styles.derive(st, |s| edges(s, top, bottom, left, right));
+                    if stored || inherited != Some(new) {
+                        plan.push((c, new));
+                    }
+                    if plan.len() > 2_000_000 {
+                        return Err(bad("home.borders", "selection too large"));
+                    }
+                }
+                let sh = cx.sheet_mut(sheet)?;
+                let map = if cols { &mut sh.cols } else { &mut sh.rows };
+                for (line, new) in (first..).zip(line_new) {
+                    map.entry(line).or_default().style = Some(new);
+                }
+                if preset == "none" {
+                    // Neighbouring lines can hold the shared edge on cells this path never visits.
+                    for (dr, dc) in if cols { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] } {
+                        let Some(n) = (if dr + dc < 0 { r.start } else { r.end }).offset(dr, dc) else { continue };
+                        let strip = if cols {
+                            RangeRef::new(CellRef::new(r.start.row, n.col), CellRef::new(r.end.row, n.col))
+                        } else {
+                            RangeRef::new(CellRef::new(n.row, r.start.col), CellRef::new(n.row, r.end.col))
+                        };
+                        let line = if cols { n.col } else { n.row };
+                        let mut existing: Vec<CellRef> =
+                            cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(strip).map(|(c, _)| c).collect()).unwrap_or_default();
+                        // Blank neighbours inherit their edges from a styled perpendicular line.
+                        if let Some(sh) = cx.wb.sheet(sheet) {
+                            if cols {
+                                existing.extend(sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| CellRef::new(*row, n.col)));
+                            } else {
+                                existing.extend(sh.cols.iter().filter(|(_, i)| i.style.is_some()).map(|(col, _)| CellRef::new(n.row, *col)));
+                            }
+                        }
+                        existing.sort_unstable();
+                        existing.dedup();
+                        for c in existing {
+                            let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                            let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
+                            if new != st {
+                                cx.sheet_mut(sheet)?.set_style(c, new);
+                            }
+                        }
+                        let cur = cx.wb.sheet(sheet).and_then(|sh| if cols { sh.cols.get(&line) } else { sh.rows.get(&line) }).and_then(|i| i.style);
+                        if let Some(cur) = cur {
+                            let new = cx.wb.styles.derive(cur, |s| facing(s, dr, dc));
+                            let sh = cx.sheet_mut(sheet)?;
+                            if let Some(info) = if cols { sh.cols.get_mut(&line) } else { sh.rows.get_mut(&line) } {
+                                info.style = Some(new);
+                            }
+                        }
+                    }
+                }
+                for (c, new) in plan {
+                    cx.sheet_mut(sheet)?.set_style(c, new);
+                }
+                continue;
+            }
             if r.count() > 2_000_000 {
                 return Err(bad("home.borders", "selection too large"));
             }
             for c in r.iter() {
                 let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
-                let line = |style: BorderStyle| BorderLine { style, color };
-                let new = cx.wb.styles.derive(st, |s| {
-                    let b = &mut s.borders;
-                    match preset.as_str() {
-                        "none" => *b = Borders::default(),
-                        "all" => {
-                            b.top = line(base);
-                            b.bottom = line(base);
-                            b.left = line(base);
-                            b.right = line(base);
-                        }
-                        "outside" | "thickOutside" => {
-                            let st = if preset == "thickOutside" { BorderStyle::Thick } else { base };
-                            if top {
-                                b.top = line(st);
-                            }
-                            if bottom {
-                                b.bottom = line(st);
-                            }
-                            if left {
-                                b.left = line(st);
-                            }
-                            if right {
-                                b.right = line(st);
-                            }
-                        }
-                        "inside" | "insideHorizontal" | "insideVertical" => {
-                            if preset != "insideVertical" {
-                                if !top {
-                                    b.top = line(base);
-                                }
-                                if !bottom {
-                                    b.bottom = line(base);
-                                }
-                            }
-                            if preset != "insideHorizontal" {
-                                if !left {
-                                    b.left = line(base);
-                                }
-                                if !right {
-                                    b.right = line(base);
-                                }
-                            }
-                        }
-                        "top" if top => b.top = line(base),
-                        "bottom" if bottom => b.bottom = line(base),
-                        "left" if left => b.left = line(base),
-                        "right" if right => b.right = line(base),
-                        "thickBottom" if bottom => b.bottom = line(BorderStyle::Thick),
-                        "doubleBottom" if bottom => b.bottom = line(BorderStyle::Double),
-                        "topBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(base);
-                            }
-                        }
-                        "topThickBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(BorderStyle::Thick);
-                            }
-                        }
-                        "topDoubleBottom" => {
-                            if top {
-                                b.top = line(base);
-                            }
-                            if bottom {
-                                b.bottom = line(BorderStyle::Double);
-                            }
-                        }
-                        "diagonalDown" => b.diag_down = line(base),
-                        "diagonalUp" => b.diag_up = line(base),
-                        _ => {}
-                    }
-                });
+                let new = cx.wb.styles.derive(st, |s| edges(s, top, bottom, left, right));
                 cx.sheet_mut(sheet)?.set_style(c, new);
                 if preset == "none" {
                     // A shared line can be stored on either cell. Selected cells are handled
@@ -511,15 +640,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
                         }
                         let Some(neighbor) = c.offset(dr, dc) else { continue };
                         let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(neighbor)).unwrap_or_default();
-                        let new = cx.wb.styles.derive(st, |s| {
-                            let edge = match (dr, dc) {
-                                (-1, _) => &mut s.borders.bottom,
-                                (1, _) => &mut s.borders.top,
-                                (_, -1) => &mut s.borders.right,
-                                _ => &mut s.borders.left,
-                            };
-                            *edge = BorderLine::default();
-                        });
+                        let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
                         if new != st {
                             cx.sheet_mut(sheet)?.set_style(neighbor, new);
                         }
