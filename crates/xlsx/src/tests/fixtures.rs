@@ -127,6 +127,12 @@ fn styles_theme_and_sizes() {
     let bytes = minimal(body, &[("xl/styles.xml", styles), ("xl/theme/theme1.xml", theme)], rels, "");
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
+    assert_style_definitions(&wb, s);
+    assert_theme(&wb);
+    assert_sheet_settings(s);
+}
+
+fn assert_style_definitions(wb: &gridcraft_model::Workbook, s: &gridcraft_model::Sheet) {
     let st1 = wb.styles.get(s.cell(at("A1")).unwrap().style);
     assert_eq!(st1.num_fmt.as_str(), "0.000\"kg\"");
     assert!(st1.font.bold && st1.font.italic && st1.font.strike);
@@ -152,6 +158,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(st3.fill.pattern, PatternType::DarkGrid);
     assert_eq!(st3.fill.fg, Color::Theme(5, 0));
     assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "General");
+}
+
+fn assert_theme(wb: &gridcraft_model::Workbook) {
     // Theme: file order dk1, lt1… maps to lt1, dk1… in the model.
     assert_eq!(wb.theme.colors[0], 0xFFFFFF);
     assert_eq!(wb.theme.colors[1], 0x000000);
@@ -159,6 +168,9 @@ fn styles_theme_and_sizes() {
     assert_eq!(wb.theme.colors[3], 0x44546A);
     assert_eq!(wb.theme.colors[4], 0x4472C4);
     assert_eq!(wb.theme.major_font, "Calibri Light");
+}
+
+fn assert_sheet_settings(s: &gridcraft_model::Sheet) {
     // Sheet settings.
     assert_eq!(s.tab_color, Some(Color::Rgb(0x00B050)));
     assert_eq!(s.freeze, Some((2, 1)));

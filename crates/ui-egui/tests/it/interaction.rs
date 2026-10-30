@@ -679,6 +679,8 @@ fn dialogs_open_and_close() {
         "pivotCalculatedField",
         "about",
         "macros",
+        "recordMacro",
+        "macroEditor",
         "analysisToolPak",
         "solver",
     ] {
