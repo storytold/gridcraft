@@ -13,6 +13,11 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// Sum and count of the blocks with one first cell and last column, by last row (`None`: an error
+/// was read in the block, perhaps `#CIRC!` from a formula in progress, or it holds a spilled value;
+/// longer blocks go the long way too).
+type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -64,10 +69,11 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
-    /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
-    /// cell and last column; each value maps a last row to the block's result (`None`: the block
-    /// has a formula, an error value or a spilled value, so every longer one has too).
-    sums: HashMap<(usize, CellRef, u32), std::collections::BTreeMap<u32, Option<(f64, u64)>>>,
+    /// Sums and counts of blocks for `range_sum`, by sheet, first cell and last column.
+    sums: HashMap<(usize, CellRef, u32), BlockSums>,
+    /// Cells `range_sum` has walked (tests check that running totals walk each cell once).
+    #[cfg(test)]
+    pub(super) cells_summed: usize,
 }
 
 impl<'a> PassHost<'a> {
@@ -101,6 +107,8 @@ impl<'a> PassHost<'a> {
             stack_top: 0,
             out_of_stack: false,
             sums: HashMap::default(),
+            #[cfg(test)]
+            cells_summed: 0,
         }
     }
 }
@@ -371,6 +379,46 @@ impl PassHost<'_> {
             }
         })
     }
+
+    /// Adds the numbers in `rest` to `start` row-major, reading formula cells through
+    /// `cell_value` (which calculates them in the order `visit_range` would) and constants from
+    /// the store. `Some(None)`: an error was read in `rest` (perhaps `#CIRC!` from a formula in
+    /// progress) or it holds a spilled value, so longer blocks go the long way too. `None`: the walk
+    /// is not remembered (a formula read here suspended the evaluation or spilled, or the sheet
+    /// doesn't exist) and the caller goes the long way.
+    fn sum_block(&mut self, sheet: usize, rest: RangeRef, (mut sum, mut count): (f64, u64)) -> Option<Option<(f64, u64)>> {
+        let wb = self.wb;
+        let sh = wb.sheet(sheet)?;
+        if sh.spill.range(rest.start..=rest.end).any(|(c, _)| rest.contains(*c)) {
+            return Some(None);
+        }
+        let spills = self.spills.len();
+        for (c, cell) in sh.cells.iter_range(rest) {
+            #[cfg(test)]
+            {
+                self.cells_summed += 1;
+            }
+            let read;
+            let v = if cell.formula.is_some() {
+                read = self.cell_value(sheet, c);
+                if self.suspend.is_some() || self.spills.len() != spills {
+                    return None;
+                }
+                &read
+            } else {
+                &cell.value
+            };
+            match v {
+                Value::Number(n) => {
+                    sum += n;
+                    count = count.saturating_add(1);
+                }
+                Value::Error(_) => return Some(None),
+                _ => {}
+            }
+        }
+        Some(Some((sum, count)))
+    }
 }
 
 /// A legacy (Ctrl+Shift+Enter) array formula's result fitted to the range it was entered in, as
@@ -543,47 +591,35 @@ impl Host for PassHost<'_> {
         true
     }
     fn range_sum(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
-        // Constants can't change during a pass, so a block's result stays valid for it. Spills
-        // found in this pass (and iteration, which tracks what a read depends on) go the long way.
+        #[cfg(test)]
+        if crate::tests::RANGE_SUMS_OFF.with(std::cell::Cell::get) {
+            return None;
+        }
+        // Constants can't change during a pass, and a formula's result doesn't once calculated, so
+        // a block's result stays valid for it. Spills found in this pass (and iteration, which
+        // calculates results again and tracks what a read depends on) go the long way.
         if self.iterate || self.spills.keys().any(|a| a.0 == sheet) {
             return None;
         }
-        let sh = self.wb.sheet(sheet)?;
         let (key, last) = ((sheet, range.start, range.end.col), range.end.row);
         let known = self.sums.entry(key).or_default();
         if let Some(r) = known.get(&last) {
             return *r;
         }
         // Start from the longest shorter block of the same rows from the top: summing row-major
-        // from there on is the same additions in the same order as one walk from the start.
-        let (from, mut sum, mut count) = match known.range(..last).next_back() {
+        // from there on is the same additions in the same order as one walk from the start, and
+        // its formulas were calculated by then.
+        let (from, start) = match known.range(..last).next_back() {
             Some((_, None)) => {
                 known.insert(last, None);
                 return None;
             }
-            Some((&row, &Some((sum, count)))) => (row + 1, sum, count),
-            None => (range.start.row, 0.0, 0),
+            Some((&row, &Some(start))) => (row.saturating_add(1), start),
+            None => (range.start.row, (0.0, 0)),
         };
         let rest = RangeRef::new(CellRef::new(from, range.start.col), range.end);
-        let mut plain = sh.spill.range(rest.start..=rest.end).all(|(c, _)| !rest.contains(*c));
-        if plain {
-            for (_, cell) in sh.cells.iter_range(rest) {
-                match &cell.value {
-                    _ if cell.formula.is_some() => plain = false,
-                    Value::Error(_) => plain = false,
-                    Value::Number(n) => {
-                        sum += n;
-                        count = u64::saturating_add(count, 1);
-                    }
-                    _ => {}
-                }
-                if !plain {
-                    break;
-                }
-            }
-        }
-        let result = plain.then_some((sum, count));
-        known.insert(last, result);
+        let result = self.sum_block(sheet, rest, start)?;
+        self.sums.entry(key).or_default().insert(last, result);
         result
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
