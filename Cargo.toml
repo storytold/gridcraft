@@ -46,6 +46,10 @@ sha2 = { version = "0.11", default-features = false }
 aes = { version = "0.9", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# PDF export: shaping (Thai and other complex scripts) and parsing the fallback font it embeds.
+# The same versions egui's epaint already pulls in, so no second copy of the font stack.
+harfrust = { version = "0.12", default-features = false, features = ["std"] }
+read-fonts = { version = "0.41", default-features = false, features = ["std"] }
 
 # ui
 egui = "0.37"

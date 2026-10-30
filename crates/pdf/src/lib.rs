@@ -2,20 +2,27 @@
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
-//!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   WinAnsiEncoding are set in the registered fallback font ([`register_fallback_font`]) when it
+//!   has them: shaped with harfrust and embedded, so Thai vowels and tone marks sit on their
+//!   consonants and the text stays searchable. Anything else (CJK without a fallback font, for
+//!   example) is set in a predefined, non-embedded Adobe-GB1 CID font with the `UniGB-UTF16-H`
+//!   CMap instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the trivial RunLengthDecode filter). The only
+//! dependencies are the font parser and shaper for the fallback font.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod embedded;
 mod metrics;
 
 use std::fmt::Write as _;
+use std::sync::Arc;
+
+pub use embedded::{FontError, MAX_FONT_BYTES, clear_fallback_fonts, has_fallback_font, register_fallback_font};
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
@@ -48,7 +55,8 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus Symbol and ZapfDingbats, plus the registered fallback font
+/// ([`register_fallback_font`]) as a cell's own font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -64,6 +72,10 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// The registered fallback font for all the text it covers, Latin and digits included (a cell
+    /// whose font is that font, "TH SarabunPSK" for example). Text it lacks uses Helvetica.
+    Fallback,
+    FallbackBold,
 }
 
 /// A font family for [`Font::styled`].
@@ -73,6 +85,8 @@ pub enum Family {
     Sans,
     Serif,
     Mono,
+    /// The registered fallback font.
+    Fallback,
 }
 
 impl Font {
@@ -106,11 +120,36 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Fallback => "Helvetica",
+            Font::FallbackBold => "Helvetica-Bold",
         }
     }
 
+    /// The standard font slot; the fallback font's text it lacks is set in Helvetica.
     fn index(self) -> usize {
-        Font::ALL.iter().position(|f| *f == self).unwrap_or(0)
+        let standard = match self {
+            Font::Fallback => Font::Helvetica,
+            Font::FallbackBold => Font::HelveticaBold,
+            f => f,
+        };
+        Font::ALL.iter().position(|f| *f == standard).unwrap_or(0)
+    }
+
+    fn is_bold(self) -> bool {
+        matches!(
+            self,
+            Font::HelveticaBold
+                | Font::HelveticaBoldOblique
+                | Font::TimesBold
+                | Font::TimesBoldItalic
+                | Font::CourierBold
+                | Font::CourierBoldOblique
+                | Font::FallbackBold
+        )
+    }
+
+    fn is_fallback(self) -> bool {
+        matches!(self, Font::Fallback | Font::FallbackBold)
     }
 
     /// The face of `family` with the given weight and slant.
@@ -128,12 +167,19 @@ impl Font {
             (Family::Mono, true, false) => Font::CourierBold,
             (Family::Mono, false, true) => Font::CourierOblique,
             (Family::Mono, true, true) => Font::CourierBoldOblique,
+            // No italic face: the fallback font is set upright.
+            (Family::Fallback, false, _) => Font::Fallback,
+            (Family::Fallback, true, _) => Font::FallbackBold,
         }
     }
 
-    /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
-    /// Courier, everything else to Helvetica.
+    /// Picks a family for a font name: the registered fallback font by its own name ("TH
+    /// SarabunPSK"); otherwise serif faces map to Times, monospaced ones to Courier, everything
+    /// else to Helvetica.
     pub fn family_for(name: &str) -> Family {
+        if embedded::is_fallback_name(name) {
+            return Family::Fallback;
+        }
         let n = name.to_ascii_lowercase();
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
@@ -149,14 +195,24 @@ impl Font {
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
         let table: Option<&[u16; 95]> = match self {
-            Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
-            Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
+            Font::Helvetica | Font::HelveticaOblique | Font::Fallback => Some(&metrics::HELVETICA),
+            Font::HelveticaBold | Font::HelveticaBoldOblique | Font::FallbackBold => Some(&metrics::HELVETICA_BOLD),
             Font::TimesRoman | Font::TimesItalic => Some(&metrics::TIMES),
             Font::TimesBold | Font::TimesBoldItalic => Some(&metrics::TIMES_BOLD),
             _ => None,
         };
+        if self.is_fallback()
+            && !c.is_control()
+            && let Some((face, _)) = embedded::face(self.is_bold())
+            && face.covers(c)
+        {
+            return u16::try_from(face.width_1000(c.encode_utf8(&mut [0; 4]))).unwrap_or(u16::MAX);
+        }
         if needs_cid(c) {
-            return CID_WIDTH;
+            return match embedded::face(self.is_bold()) {
+                Some((face, _)) if face.covers(c) => u16::try_from(face.width_1000(c.encode_utf8(&mut [0; 4]))).unwrap_or(u16::MAX),
+                _ => CID_WIDTH,
+            };
         }
         let Some(table) = table else { return 600 };
         let ascii = |c: char| -> Option<u16> {
@@ -178,9 +234,46 @@ impl Font {
 
 /// Width of `text` in points when set in `font` at `size` points.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
+    let face = embedded::face(font.is_bold()).map(|(f, _)| f);
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let units: u64 = runs(text, face.as_deref(), font.is_fallback())
+        .map(|(class, run)| match (class, &face) {
+            // Shaped as a whole: marks that stack take no width of their own.
+            (Run::Embedded, Some(face)) => face.width_1000(run),
+            _ => run.chars().map(|c| u64::from(font.char_width(c))).sum(),
+        })
+        .sum();
     units as f32 * size / 1000.0
+}
+
+/// Which font a run of text is set in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    /// The standard font, in WinAnsiEncoding.
+    Standard,
+    /// The registered fallback font, shaped and embedded.
+    Embedded,
+    /// The predefined Adobe-GB1 CID font.
+    Cid,
+}
+
+/// Splits `text` into maximal runs set in the same font. With `whole` (the cell's font is the
+/// fallback font), everything the fallback font covers is set in it, not just what WinAnsi lacks.
+fn runs<'a>(text: &'a str, face: Option<&embedded::Face>, whole: bool) -> impl Iterator<Item = (Run, &'a str)> {
+    let class = move |c: char| match face {
+        Some(f) if whole && !c.is_control() && f.covers(c) => Run::Embedded,
+        _ if !needs_cid(c) => Run::Standard,
+        Some(f) if f.covers(c) => Run::Embedded,
+        _ => Run::Cid,
+    };
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        let first = class(rest.chars().next()?);
+        let end = rest.char_indices().find(|(_, c)| class(*c) != first).map_or(rest.len(), |(i, _)| i);
+        let (run, tail) = rest.split_at(end);
+        rest = tail;
+        Some((first, run))
+    })
 }
 
 /// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.
@@ -224,8 +317,10 @@ pub fn win_ansi(c: char) -> u8 {
 
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the embedded fallback font in a page's font flags: regular, then bold.
+const EMBEDDED_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
+const FONT_SLOTS: usize = EMBEDDED_FONT + 2;
 /// Base font of the CID font used for characters WinAnsiEncoding lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
@@ -348,6 +443,8 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    /// The fallback faces this page drew with (regular, bold) and the glyphs it used.
+    embedded: [Option<(Arc<embedded::Face>, embedded::Usage)>; 2],
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
@@ -586,22 +683,78 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
-        // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
-        // advances the text position, so the runs follow each other on the baseline.
-        let mut rest = text;
-        while let Some(first) = rest.chars().next() {
-            let cid = needs_cid(first);
-            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
-            let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+        // Runs of WinAnsi text use `font`, runs the fallback font covers use it, and the rest use
+        // the CID font. Each `Tj`/`TJ` advances the text position, so the runs follow each other
+        // on the baseline.
+        let fallback = embedded::face(font.is_bold());
+        for (class, run) in runs(text, fallback.as_ref().map(|(f, _)| f.as_ref()), font.is_fallback()) {
+            let slot = match class {
+                Run::Standard => fi,
+                Run::Cid => CID_FONT,
+                Run::Embedded => EMBEDDED_FONT + usize::from(font.is_bold()),
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
-            let _ = writeln!(s, "/F{} {} Tf\n{} Tj", slot + 1, size, string);
-            rest = tail;
+            match (class, &fallback) {
+                (Run::Embedded, Some(fallback)) => s.push_str(&self.embedded_run(fallback, slot, (size.clone(), color), run)),
+                (Run::Cid, _) => {
+                    let _ = writeln!(s, "/F{} {} Tf\n{} Tj", slot + 1, size, pdf_utf16_string(run));
+                }
+                _ => {
+                    let _ = writeln!(s, "/F{} {} Tf\n{} Tj", slot + 1, size, pdf_string(run));
+                }
+            }
         }
         s.push_str("ET");
         self.op(&s);
+    }
+
+    /// Writes a run in the fallback font: glyph ids in `TJ` arrays, with the shaper's advances
+    /// and offsets as `TJ` adjustments and text rise (`Ts`), so marks stack on their base.
+    fn embedded_run(&mut self, fallback: &(Arc<embedded::Face>, bool), slot: usize, (size, color): (String, Rgb), run: &str) -> String {
+        let (face, synthetic_bold) = fallback;
+        let glyphs = face.shape(run);
+        let mut s = format!("/F{} {} Tf\n", slot + 1, size);
+        let pt: f32 = size.parse().unwrap_or(0.0);
+        if *synthetic_bold {
+            // Bold without a bold face: fill and stroke the outlines.
+            let _ = writeln!(s, "2 Tr {} w {}", n(pt * 0.03), rgb_op(color, true));
+        }
+        let mut rise = String::from("0");
+        let mut tj = String::from("[");
+        for g in &glyphs {
+            let advance = face.to_1000(i64::from(g.x_advance));
+            let x_offset = face.to_1000(i64::from(g.x_offset));
+            let glyph_rise = n(face.to_1000(i64::from(g.y_offset)) as f32 * pt / 1000.0);
+            if glyph_rise != rise {
+                let _ = writeln!(s, "{tj}] TJ\n{glyph_rise} Ts");
+                tj = String::from("[");
+                rise = glyph_rise;
+            }
+            // A TJ number moves the next glyph left by number/1000 em.
+            if x_offset != 0 {
+                let _ = write!(tj, "{} ", -x_offset);
+            }
+            let _ = write!(tj, "<{:04X}> ", g.gid);
+            let adjust = face.advance_1000(g.gid) - advance + x_offset;
+            if adjust != 0 {
+                let _ = write!(tj, "{adjust} ");
+            }
+        }
+        let _ = writeln!(s, "{tj}] TJ");
+        if rise != "0" {
+            s.push_str("0 Ts\n");
+        }
+        if *synthetic_bold {
+            s.push_str("0 Tr\n");
+        }
+        let index = slot.saturating_sub(EMBEDDED_FONT);
+        if let Some(entry) = self.embedded.get_mut(index) {
+            let (_, usage) = entry.get_or_insert_with(|| (face.clone(), embedded::Usage::default()));
+            usage.record(face, run, &glyphs);
+        }
+        s
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
@@ -699,7 +852,70 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
+/// The objects of an embedded TrueType font numbered from `id`: the `Type0` font, its
+/// `CIDFontType2` descendant, the font descriptor, the font file and the `ToUnicode` CMap.
+fn embedded_font_objects(id: u32, face: &embedded::Face, usage: &embedded::Usage) -> Vec<(u32, Vec<u8>)> {
+    let (cid_id, desc_id, file_id, cmap_id) = (id + 1, id + 2, id + 3, id + 4);
+    let name = &face.name;
+    let (ascent, descent, cap_height, [x0, y0, x1, y1]) = face.metrics_1000();
+    let stream = |dict: String, data: &[u8]| {
+        let mut o = dict.into_bytes();
+        o.extend_from_slice(b"\nstream\n");
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let cmap = usage.to_unicode();
+    vec![
+        (
+            id,
+            format!("<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [{cid_id} 0 R] /ToUnicode {cmap_id} 0 R >>")
+                .into_bytes(),
+        ),
+        (
+            cid_id,
+            format!(
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc_id} 0 R /CIDToGIDMap /Identity /DW 1000 /W {} >>",
+                usage.widths()
+            )
+            .into_bytes(),
+        ),
+        (
+            desc_id,
+            format!(
+                "<< /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [{x0} {y0} {x1} {y1}] /ItalicAngle 0 /Ascent {ascent} /Descent {descent} /CapHeight {cap_height} /StemV 80 /FontFile2 {file_id} 0 R >>"
+            )
+            .into_bytes(),
+        ),
+        (file_id, stream(format!("<< /Length {0} /Length1 {0} >>", face.bytes().len()), face.bytes())),
+        (cmap_id, stream(format!("<< /Length {} >>", cmap.len()), cmap.as_bytes())),
+    ]
+}
+
+/// How many objects the font in slot `i` takes: the CID font also needs its descendant font and
+/// font descriptor; an embedded font also its font file and ToUnicode CMap.
+fn font_object_count(i: usize) -> u32 {
+    match i {
+        CID_FONT => 3,
+        _ if i >= EMBEDDED_FONT => 5,
+        _ => 1,
+    }
+}
+
 impl PdfDoc {
+    /// Each embedded face (regular, bold), with the glyphs every page drew with it.
+    fn embedded_usage(&self) -> [Option<(Arc<embedded::Face>, embedded::Usage)>; 2] {
+        let mut embedded: [Option<(Arc<embedded::Face>, embedded::Usage)>; 2] = [None, None];
+        for p in &self.pages {
+            for (doc, page) in embedded.iter_mut().zip(p.embedded.iter()) {
+                if let Some((face, usage)) = page {
+                    doc.get_or_insert_with(|| (face.clone(), embedded::Usage::default())).1.merge(usage);
+                }
+            }
+        }
+        embedded
+    }
+
     pub fn new() -> PdfDoc {
         PdfDoc::default()
     }
@@ -708,7 +924,16 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            embedded: [None, None],
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -734,13 +959,13 @@ impl PdfDoc {
                 *u |= *f;
             }
         }
+        let embedded = self.embedded_usage();
         let mut next = 4u32;
         let mut font_ids = [0u32; FONT_SLOTS];
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;
-                // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
+                next += font_object_count(i);
             }
         }
         let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
@@ -774,6 +999,12 @@ impl PdfDoc {
                         )
                         .into_bytes(),
                     ));
+                    continue;
+                }
+                if i >= EMBEDDED_FONT {
+                    if let Some(Some((face, usage))) = embedded.get(i - EMBEDDED_FONT) {
+                        objects.extend(embedded_font_objects(*id, face, usage));
+                    }
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();

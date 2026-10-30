@@ -332,3 +332,145 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
     Ok(())
 }
+
+/// The fallback font is process-wide: tests that register one take turns.
+static FALLBACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn fallback_lock() -> std::sync::MutexGuard<'static, ()> {
+    FALLBACK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// `font` with its `OS/2.fsType` set to `fs_type` (the table directory is walked by hand).
+fn with_fs_type(font: &[u8], fs_type: u16) -> Vec<u8> {
+    let mut out = font.to_vec();
+    let tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+    for i in 0..tables {
+        let rec = 12 + i * 16;
+        if &font[rec..rec + 4] == b"OS/2" {
+            let off = u32::from_be_bytes([font[rec + 8], font[rec + 9], font[rec + 10], font[rec + 11]]) as usize;
+            out[off + 8..off + 10].copy_from_slice(&fs_type.to_be_bytes());
+        }
+    }
+    out
+}
+
+#[test]
+fn fallback_font_refuses_bad_and_restricted_files() {
+    let _guard = fallback_lock();
+    assert!(matches!(register_fallback_font(Vec::new(), false), Err(FontError::Malformed(_))));
+    assert!(matches!(register_fallback_font(vec![0; 4096], false), Err(FontError::Malformed(_))));
+    assert_eq!(register_fallback_font(vec![0; MAX_FONT_BYTES + 1], false), Err(FontError::TooLarge));
+    let restricted = with_fs_type(epaint_default_fonts::UBUNTU_LIGHT, 0x0002);
+    assert_eq!(register_fallback_font(restricted, false), Err(FontError::EmbeddingNotAllowed));
+    assert!(!has_fallback_font(), "a refused font is not registered");
+}
+
+#[test]
+fn fallback_font_is_embedded_shaped_and_searchable() -> Result<(), Box<dyn Error>> {
+    let _guard = fallback_lock();
+    let name = register_fallback_font(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), false)?;
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    // Cyrillic is outside WinAnsiEncoding and in Ubuntu; CJK is in neither.
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "No. Привет 签");
+    p.text(10.0, 40.0, 10.0, Font::HelveticaBold, [0, 0, 0], "Да");
+    let width = text_width(Font::Helvetica, 10.0, "Привет");
+    let pdf = doc.finish();
+    clear_fallback_fonts();
+    check_xref(&pdf)?;
+    assert!(find(&pdf, format!("/BaseFont /{name}").as_bytes()).is_some());
+    assert!(find(&pdf, b"/Subtype /CIDFontType2").is_some());
+    assert!(find(&pdf, b"/Encoding /Identity-H").is_some());
+    assert!(find(&pdf, b"/CIDToGIDMap /Identity").is_some());
+    assert!(find(&pdf, b"/FontFile2").is_some());
+    // The whole font file is embedded.
+    assert!(find(&pdf, format!("/Length1 {}", epaint_default_fonts::UBUNTU_LIGHT.len()).as_bytes()).is_some());
+    // Copying the text gives back the characters (П is U+041F).
+    assert!(find(&pdf, b"<041F>").is_some(), "ToUnicode maps the glyphs back to text");
+    assert!(find(&pdf, b"] TJ").is_some());
+    // Latin stays in the standard font; CJK, which the font lacks, still uses the CID font.
+    assert!(find(&pdf, b"(No. ) Tj").is_some());
+    assert!(find(&pdf, b"<7B7E> Tj").is_some());
+    // Bold text without a bold face is the regular face stroked.
+    assert!(find(&pdf, b"2 Tr").is_some());
+    // Measured from the font, not as full-width CID glyphs.
+    assert!(width > 10.0 && width < 60.0, "width {width}");
+    Ok(())
+}
+
+#[test]
+fn a_cell_in_the_fallback_font_sets_latin_and_digits_in_it_too() -> Result<(), Box<dyn Error>> {
+    let _guard = fallback_lock();
+    register_fallback_font(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), false)?;
+    // Matched by the font's own names, ignoring case, spaces and hyphens.
+    assert_eq!(Font::family_for("Ubuntu Light"), Family::Fallback);
+    assert_eq!(Font::family_for("ubuntu-light"), Family::Fallback);
+    assert_eq!(Font::family_for("Calibri"), Family::Sans);
+    assert_eq!(Font::styled(Family::Fallback, true, true), Font::FallbackBold);
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Fallback, [0, 0, 0], "No. 42 Привет");
+    p.text(10.0, 40.0, 10.0, Font::Helvetica, [0, 0, 0], "No. 42");
+    let in_font = text_width(Font::Fallback, 10.0, "No. 42");
+    let in_helvetica = text_width(Font::Helvetica, 10.0, "No. 42");
+    let pdf = doc.finish();
+    clear_fallback_fonts();
+    check_xref(&pdf)?;
+    // The first line is one shaped run; the Helvetica cell keeps its literal string.
+    assert_eq!(find(&pdf, b"(No. 42) Tj").map(|_| ()), Some(()));
+    assert!(find(&pdf, b"(No. ) Tj").is_none(), "Latin in the fallback cell is not set in Helvetica");
+    assert!(find(&pdf, b"<0034>").is_some(), "the digit 4 maps back to text");
+    assert_ne!(in_font, in_helvetica, "measured with the font's own widths");
+    // Without the font registered, the name is just another Helvetica font.
+    assert_eq!(Font::family_for("Ubuntu Light"), Family::Sans);
+    Ok(())
+}
+
+#[test]
+fn without_a_fallback_font_output_is_unchanged() {
+    let _guard = fallback_lock();
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Привет");
+    let pdf = doc.finish();
+    assert!(find(&pdf, b"/FontFile2").is_none());
+    assert!(find(&pdf, b"<041F04400438043204350442> Tj").is_some());
+    assert_eq!(text_width(Font::Helvetica, 10.0, "Привет"), 60.0);
+}
+
+/// Thai with a real Thai font (TH Sarabun New, for example). Fonts are never committed, so it
+/// runs only with `GRIDCRAFT_PDF_THAI_FONT=<path to a .ttf>`; `GRIDCRAFT_PDF_THAI_OUT=<path>`
+/// also writes the PDF, to look at.
+#[test]
+fn thai_text_with_a_thai_font() -> Result<(), Box<dyn Error>> {
+    let Some(path) = std::env::var_os("GRIDCRAFT_PDF_THAI_FONT") else { return Ok(()) };
+    let _guard = fallback_lock();
+    register_fallback_font(std::fs::read(path)?, false)?;
+    let text = "สวัสดี น้ำ ญี่ปุ่น ฐาน ปั้น";
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(400.0, 120.0);
+    p.text(10.0, 40.0, 24.0, Font::Helvetica, [0, 0, 0], text);
+    p.text(10.0, 90.0, 24.0, Font::HelveticaBold, [0, 0, 0], "ตัวหนา ผู้ใหญ่");
+    // A cell whose font is the Thai font sets its digits in it too, at the Thai text's scale.
+    let family = Font::family_for("TH SarabunPSK");
+    let mixed = Font::styled(family, false, false);
+    p.text(200.0, 90.0, 24.0, mixed, [0, 0, 0], "เลขที่ 001");
+    let measured = text_width(Font::Helvetica, 24.0, "น้ำ");
+    let pdf = doc.finish();
+    clear_fallback_fonts();
+    check_xref(&pdf)?;
+    if let Some(out) = std::env::var_os("GRIDCRAFT_PDF_THAI_OUT") {
+        std::fs::write(out, &pdf)?;
+    }
+    assert!(find(&pdf, b"/Subtype /CIDFontType2").is_some());
+    assert!(find(&pdf, b"STSong-Light").is_none(), "Thai goes to the Thai font, not the Chinese one");
+    assert!(find(&pdf, b"<0E2A>").is_some(), "ส maps back to U+0E2A");
+    // Marks are their own clusters, so a tone mark copies as itself (MAI THO, U+0E49).
+    assert!(find(&pdf, b"<0E49>").is_some(), "the tone mark maps back to U+0E49");
+    if family == Family::Fallback {
+        assert!(find(&pdf, b"( 001) Tj").is_none(), "digits in a Thai-font cell are set in the Thai font");
+    }
+    // The tone mark and SARA AM stack: three characters are much narrower than three full glyphs.
+    assert!(measured < 3.0 * 24.0 * 0.6, "width {measured}");
+    Ok(())
+}
