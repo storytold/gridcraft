@@ -59,6 +59,8 @@ pub(crate) struct Face {
     data: ShaperData,
     upem: u16,
     pub name: String,
+    /// The font's family, full and PostScript names, normalized by [`normalize_name`].
+    families: Vec<String>,
     ascent: i16,
     descent: i16,
     cap_height: i16,
@@ -89,13 +91,20 @@ impl Face {
         let cap_height = font.os2().ok().and_then(|o| o.s_cap_height()).filter(|h| *h > 0).unwrap_or(ascent);
         let bbox = [head.x_min(), head.y_min(), head.x_max(), head.y_max()];
         let name = postscript_name(&font).unwrap_or_else(|| fallback_name.to_string());
+        let families = family_names(&font);
         let data = ShaperData::new(&font);
-        let face = Face { bytes: Vec::new(), data, upem, name, ascent, descent, cap_height, bbox };
+        let face = Face { bytes: Vec::new(), data, upem, name, families, ascent, descent, cap_height, bbox };
         Ok(Face { bytes, ..face })
     }
 
     fn font(&self) -> Option<FontRef<'_>> {
         FontRef::new(&self.bytes).ok()
+    }
+
+    /// Whether a cell font named `name` ("TH SarabunPSK", "TH Sarabun New") is this font.
+    pub fn is_named(&self, name: &str) -> bool {
+        let name = normalize_name(name);
+        !name.is_empty() && self.families.contains(&name)
     }
 
     /// Whether the font has a glyph for `c`.
@@ -173,6 +182,34 @@ fn postscript_name(font: &FontRef) -> Option<String> {
     let record = name.name_record().iter().find(|r| r.name_id() == NameId::POSTSCRIPT_NAME)?;
     let s: String = record.string(name.string_data()).ok()?.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(63).collect();
     (!s.is_empty()).then_some(s)
+}
+
+/// A font name for matching: lowercase letters and digits only ("TH Sarabun New" → "thsarabunnew").
+fn normalize_name(name: &str) -> String {
+    name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+/// The names a cell may use for the font: family (1), full name (4), PostScript name (6) and
+/// typographic family (16), from every platform's records.
+fn family_names(font: &FontRef) -> Vec<String> {
+    let Ok(name) = font.name() else { return Vec::new() };
+    let wanted = [NameId::FAMILY_NAME, NameId::FULL_NAME, NameId::POSTSCRIPT_NAME, NameId::TYPOGRAPHIC_FAMILY_NAME];
+    let mut out: Vec<String> = name
+        .name_record()
+        .iter()
+        .filter(|r| wanted.contains(&r.name_id()))
+        .filter_map(|r| r.string(name.string_data()).ok())
+        .map(|s| normalize_name(&s.chars().take(256).collect::<String>()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Whether a cell font named `name` is the registered regular fallback font.
+pub(crate) fn is_fallback_name(name: &str) -> bool {
+    face(false).is_some_and(|(f, _)| f.is_named(name))
 }
 
 /// Registered faces: regular, then bold.

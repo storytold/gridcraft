@@ -55,7 +55,8 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus Symbol and ZapfDingbats, plus the registered fallback font
+/// ([`register_fallback_font`]) as a cell's own font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -71,6 +72,10 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// The registered fallback font for all the text it covers, Latin and digits included (a cell
+    /// whose font is that font, "TH SarabunPSK" for example). Text it lacks uses Helvetica.
+    Fallback,
+    FallbackBold,
 }
 
 /// A font family for [`Font::styled`].
@@ -80,6 +85,8 @@ pub enum Family {
     Sans,
     Serif,
     Mono,
+    /// The registered fallback font.
+    Fallback,
 }
 
 impl Font {
@@ -113,18 +120,36 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Fallback => "Helvetica",
+            Font::FallbackBold => "Helvetica-Bold",
         }
     }
 
+    /// The standard font slot; the fallback font's text it lacks is set in Helvetica.
     fn index(self) -> usize {
-        Font::ALL.iter().position(|f| *f == self).unwrap_or(0)
+        let standard = match self {
+            Font::Fallback => Font::Helvetica,
+            Font::FallbackBold => Font::HelveticaBold,
+            f => f,
+        };
+        Font::ALL.iter().position(|f| *f == standard).unwrap_or(0)
     }
 
     fn is_bold(self) -> bool {
         matches!(
             self,
-            Font::HelveticaBold | Font::HelveticaBoldOblique | Font::TimesBold | Font::TimesBoldItalic | Font::CourierBold | Font::CourierBoldOblique
+            Font::HelveticaBold
+                | Font::HelveticaBoldOblique
+                | Font::TimesBold
+                | Font::TimesBoldItalic
+                | Font::CourierBold
+                | Font::CourierBoldOblique
+                | Font::FallbackBold
         )
+    }
+
+    fn is_fallback(self) -> bool {
+        matches!(self, Font::Fallback | Font::FallbackBold)
     }
 
     /// The face of `family` with the given weight and slant.
@@ -142,12 +167,19 @@ impl Font {
             (Family::Mono, true, false) => Font::CourierBold,
             (Family::Mono, false, true) => Font::CourierOblique,
             (Family::Mono, true, true) => Font::CourierBoldOblique,
+            // No italic face: the fallback font is set upright.
+            (Family::Fallback, false, _) => Font::Fallback,
+            (Family::Fallback, true, _) => Font::FallbackBold,
         }
     }
 
-    /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
-    /// Courier, everything else to Helvetica.
+    /// Picks a family for a font name: the registered fallback font by its own name ("TH
+    /// SarabunPSK"); otherwise serif faces map to Times, monospaced ones to Courier, everything
+    /// else to Helvetica.
     pub fn family_for(name: &str) -> Family {
+        if embedded::is_fallback_name(name) {
+            return Family::Fallback;
+        }
         let n = name.to_ascii_lowercase();
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
@@ -163,12 +195,19 @@ impl Font {
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
         let table: Option<&[u16; 95]> = match self {
-            Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
-            Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
+            Font::Helvetica | Font::HelveticaOblique | Font::Fallback => Some(&metrics::HELVETICA),
+            Font::HelveticaBold | Font::HelveticaBoldOblique | Font::FallbackBold => Some(&metrics::HELVETICA_BOLD),
             Font::TimesRoman | Font::TimesItalic => Some(&metrics::TIMES),
             Font::TimesBold | Font::TimesBoldItalic => Some(&metrics::TIMES_BOLD),
             _ => None,
         };
+        if self.is_fallback()
+            && !c.is_control()
+            && let Some((face, _)) = embedded::face(self.is_bold())
+            && face.covers(c)
+        {
+            return u16::try_from(face.width_1000(c.encode_utf8(&mut [0; 4]))).unwrap_or(u16::MAX);
+        }
         if needs_cid(c) {
             return match embedded::face(self.is_bold()) {
                 Some((face, _)) if face.covers(c) => u16::try_from(face.width_1000(c.encode_utf8(&mut [0; 4]))).unwrap_or(u16::MAX),
@@ -197,7 +236,7 @@ impl Font {
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     let face = embedded::face(font.is_bold()).map(|(f, _)| f);
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = runs(text, face.as_deref())
+    let units: u64 = runs(text, face.as_deref(), font.is_fallback())
         .map(|(class, run)| match (class, &face) {
             // Shaped as a whole: marks that stack take no width of their own.
             (Run::Embedded, Some(face)) => face.width_1000(run),
@@ -218,9 +257,11 @@ enum Run {
     Cid,
 }
 
-/// Splits `text` into maximal runs set in the same font.
-fn runs<'a>(text: &'a str, face: Option<&embedded::Face>) -> impl Iterator<Item = (Run, &'a str)> {
+/// Splits `text` into maximal runs set in the same font. With `whole` (the cell's font is the
+/// fallback font), everything the fallback font covers is set in it, not just what WinAnsi lacks.
+fn runs<'a>(text: &'a str, face: Option<&embedded::Face>, whole: bool) -> impl Iterator<Item = (Run, &'a str)> {
     let class = move |c: char| match face {
+        Some(f) if whole && !c.is_control() && f.covers(c) => Run::Embedded,
         _ if !needs_cid(c) => Run::Standard,
         Some(f) if f.covers(c) => Run::Embedded,
         _ => Run::Cid,
@@ -646,7 +687,7 @@ impl Page {
         // the CID font. Each `Tj`/`TJ` advances the text position, so the runs follow each other
         // on the baseline.
         let fallback = embedded::face(font.is_bold());
-        for (class, run) in runs(text, fallback.as_ref().map(|(f, _)| f.as_ref())) {
+        for (class, run) in runs(text, fallback.as_ref().map(|(f, _)| f.as_ref()), font.is_fallback()) {
             let slot = match class {
                 Run::Standard => fi,
                 Run::Cid => CID_FONT,

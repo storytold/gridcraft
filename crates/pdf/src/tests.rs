@@ -399,6 +399,34 @@ fn fallback_font_is_embedded_shaped_and_searchable() -> Result<(), Box<dyn Error
 }
 
 #[test]
+fn a_cell_in_the_fallback_font_sets_latin_and_digits_in_it_too() -> Result<(), Box<dyn Error>> {
+    let _guard = fallback_lock();
+    register_fallback_font(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), false)?;
+    // Matched by the font's own names, ignoring case, spaces and hyphens.
+    assert_eq!(Font::family_for("Ubuntu Light"), Family::Fallback);
+    assert_eq!(Font::family_for("ubuntu-light"), Family::Fallback);
+    assert_eq!(Font::family_for("Calibri"), Family::Sans);
+    assert_eq!(Font::styled(Family::Fallback, true, true), Font::FallbackBold);
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Fallback, [0, 0, 0], "No. 42 Привет");
+    p.text(10.0, 40.0, 10.0, Font::Helvetica, [0, 0, 0], "No. 42");
+    let in_font = text_width(Font::Fallback, 10.0, "No. 42");
+    let in_helvetica = text_width(Font::Helvetica, 10.0, "No. 42");
+    let pdf = doc.finish();
+    clear_fallback_fonts();
+    check_xref(&pdf)?;
+    // The first line is one shaped run; the Helvetica cell keeps its literal string.
+    assert_eq!(find(&pdf, b"(No. 42) Tj").map(|_| ()), Some(()));
+    assert!(find(&pdf, b"(No. ) Tj").is_none(), "Latin in the fallback cell is not set in Helvetica");
+    assert!(find(&pdf, b"<0034>").is_some(), "the digit 4 maps back to text");
+    assert_ne!(in_font, in_helvetica, "measured with the font's own widths");
+    // Without the font registered, the name is just another Helvetica font.
+    assert_eq!(Font::family_for("Ubuntu Light"), Family::Sans);
+    Ok(())
+}
+
+#[test]
 fn without_a_fallback_font_output_is_unchanged() {
     let _guard = fallback_lock();
     let mut doc = PdfDoc::new();
@@ -423,6 +451,10 @@ fn thai_text_with_a_thai_font() -> Result<(), Box<dyn Error>> {
     let p = doc.add_page(400.0, 120.0);
     p.text(10.0, 40.0, 24.0, Font::Helvetica, [0, 0, 0], text);
     p.text(10.0, 90.0, 24.0, Font::HelveticaBold, [0, 0, 0], "ตัวหนา ผู้ใหญ่");
+    // A cell whose font is the Thai font sets its digits in it too, at the Thai text's scale.
+    let family = Font::family_for("TH SarabunPSK");
+    let mixed = Font::styled(family, false, false);
+    p.text(200.0, 90.0, 24.0, mixed, [0, 0, 0], "เลขที่ 001");
     let measured = text_width(Font::Helvetica, 24.0, "น้ำ");
     let pdf = doc.finish();
     clear_fallback_fonts();
@@ -435,6 +467,9 @@ fn thai_text_with_a_thai_font() -> Result<(), Box<dyn Error>> {
     assert!(find(&pdf, b"<0E2A>").is_some(), "ส maps back to U+0E2A");
     // Marks are their own clusters, so a tone mark copies as itself (MAI THO, U+0E49).
     assert!(find(&pdf, b"<0E49>").is_some(), "the tone mark maps back to U+0E49");
+    if family == Family::Fallback {
+        assert!(find(&pdf, b"( 001) Tj").is_none(), "digits in a Thai-font cell are set in the Thai font");
+    }
     // The tone mark and SARA AM stack: three characters are much narrower than three full glyphs.
     assert!(measured < 3.0 * 24.0 * 0.6, "width {measured}");
     Ok(())
