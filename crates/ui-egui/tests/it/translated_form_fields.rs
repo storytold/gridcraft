@@ -77,3 +77,24 @@ fn chart_format_pane_is_translated() {
         h.run_steps(2);
     }
 }
+
+#[test]
+fn custom_dialogs_are_translated() {
+    let dialogs: [(&str, &[&str]); 3] = [
+        ("find", &["Find what:", "Match case", "Match entire cell contents", "Find All", "Find Next"]),
+        ("goalSeek", &["Set cell:", "To value:", "By changing cell:"]),
+        ("nameManager", &["New…", "Edit…"]),
+    ];
+    for (dialog, labels) in dialogs {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+        h.state_mut().open_dialog(dialog, json!({}));
+        h.run_steps(3);
+        for english in labels {
+            let translated = Language::Fr.tr(english);
+            assert_ne!(translated, *english, "{dialog}: no French for {english}");
+            assert!(h.query_all_by_label_contains(translated).next().is_some(), "{dialog}: no {translated}");
+            assert!(h.query_all_by_label(english).next().is_none(), "{dialog}: {english} is untranslated");
+        }
+    }
+}

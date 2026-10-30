@@ -1,4 +1,5 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
+use crate::widgets::tr;
 
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
@@ -12,7 +13,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(tr(ui, "Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();

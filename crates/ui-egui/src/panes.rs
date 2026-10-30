@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
+use crate::widgets::tr;
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     // The Comments pane is engine state (`review.showComments`, so agents can drive it); the other
@@ -56,7 +57,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     let Some(sh) = d.wb.active() else { return };
     let list: Vec<(String, gridcraft_engine::model::Comment)> = sh.comments.iter().map(|(c, m)| (c.a1(), m.clone())).collect();
     if list.is_empty() {
-        ui.label(egui::RichText::new("No comments on this sheet yet. Select a cell and choose New Comment.").italics());
+        ui.label(egui::RichText::new(tr(ui, "No comments on this sheet yet. Select a cell and choose New Comment.")).italics());
     }
     let t = crate::theme::Tokens::get(ui.ctx());
     for (cell, c) in list {
@@ -74,7 +75,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     ui.label(egui::RichText::new(&c.author).color(t.text_dim));
                     if c.resolved {
-                        ui.label(egui::RichText::new("Resolved").small().color(t.accent));
+                        ui.label(egui::RichText::new(tr(ui, "Resolved")).small().color(t.accent));
                     }
                 });
                 ui.label(&c.text);
@@ -87,14 +88,14 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                 // a field sized by a guess wider than the row pushes the resizable pane wider every frame.
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Delete").clicked() {
+                        if ui.small_button(tr(ui, "Delete")).clicked() {
                             app.run_or_alert("review.deleteComment", json!({"cell": cell}));
                         }
                         if ui.small_button(if c.resolved { "Reopen" } else { "Resolve" }).clicked() {
                             app.run_or_alert("review.resolveComment", json!({"cell": cell, "resolved": !c.resolved}));
                         }
-                        let send = ui.small_button("Send").clicked();
-                        let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text("Reply…").desired_width(ui.available_width()));
+                        let send = ui.small_button(tr(ui, "Send")).clicked();
+                        let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text(tr(ui, "Reply…")).desired_width(ui.available_width()));
                         if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || send) && !draft.is_empty() {
                             app.run_or_alert("review.replyComment", json!({"cell": cell, "text": draft}));
                             draft.clear();
@@ -109,7 +110,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Adds the active cell, lists watch values and formulas, and removes watched entries.
 fn watch(app: &mut SheetApp, ui: &mut Ui) {
-    if ui.button("Add Watch (active cell)").clicked()
+    if ui.button(tr(ui, "Add Watch (active cell)")).clicked()
         && let Some(d) = app.session.active()
         && let Some(sh) = d.wb.active()
     {
@@ -141,7 +142,7 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
     let list = app.session.run("arrange.selectionPane", json!({})).unwrap_or(Json::Null);
     let items = list.as_array().cloned().unwrap_or_default();
     if items.is_empty() {
-        ui.label(egui::RichText::new("There are no shapes, pictures or charts on this sheet.").italics());
+        ui.label(egui::RichText::new(tr(ui, "There are no shapes, pictures or charts on this sheet.")).italics());
     }
     for it in items.iter().rev() {
         let kind = it["kind"].as_str().unwrap_or("").to_string();
@@ -151,10 +152,10 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
             if ui.selectable_label(sel, it["name"].as_str().unwrap_or("")).clicked() {
                 app.selected_chart = Some(id);
             }
-            if ui.small_button("▲").on_hover_text("Bring Forward").clicked() {
+            if ui.small_button("▲").on_hover_text(tr(ui, "Bring Forward")).clicked() {
                 app.run_or_alert("arrange.bringForward", json!({"kind": kind, "id": id}));
             }
-            if ui.small_button("▼").on_hover_text("Send Backward").clicked() {
+            if ui.small_button("▼").on_hover_text(tr(ui, "Send Backward")).clicked() {
                 app.run_or_alert("arrange.sendBackward", json!({"kind": kind, "id": id}));
             }
             if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {

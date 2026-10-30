@@ -1218,6 +1218,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "— VBA project (preserved, not run)" => "— Projet VBA (conservé, non exécuté)",
         "— {steps} steps" => "— {steps} étapes",
         "€ Euro" => "€ Euro",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "Un tableur open source, natif Rust, développé en salle blanche. Fait partie d'ArtCraft."
+        }
+        "Add Watch (active cell)" => "Ajouter un espion (cellule active)",
+        "Bring Forward" => "Avancer",
+        "Can't Undo" => "Impossible d'annuler",
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "GridCraft peut être entièrement piloté par des agents. Chaque élément de menu, bouton et geste est une commande :"
+        }
+        "Macros preserved (not executed)" => "Macros conservées (non exécutées)",
+        "No comments on this sheet yet. Select a cell and choose New Comment." => {
+            "Aucun commentaire sur cette feuille pour l'instant. Sélectionnez une cellule et choisissez Nouveau commentaire."
+        }
+        "No contributor data was built into this copy." => "Cette copie ne contient pas de données sur les contributeurs.",
+        "No macros in this workbook" => "Aucune macro dans ce classeur",
+        "No model credits were built into this copy." => "Cette copie ne contient pas de crédits de modèles.",
+        "Preview" => "Aperçu",
+        "Reply…" => "Répondre…",
+        "Reports:" => "Rapports :",
+        "Resolved" => "Résolu",
+        "Reverse the order" => "Inverser l'ordre",
+        "Send" => "Envoyer",
+        "Send Backward" => "Reculer",
+        "Table Name:" => "Nom du tableau :",
+        "There are no shapes, pictures or charts on this sheet." => "Cette feuille ne contient aucune forme, image ni graphique.",
         _ => return None,
     })
 }

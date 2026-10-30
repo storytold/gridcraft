@@ -7,6 +7,7 @@ use crate::SheetApp;
 use crate::editor::formula_refs;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
+use crate::widgets::tr;
 
 /// Lines the formula bar (and the in-cell editor) grows to before it scrolls.
 pub const MAX_LINES: usize = 5;
@@ -241,7 +242,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(tr(ui, "No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {
