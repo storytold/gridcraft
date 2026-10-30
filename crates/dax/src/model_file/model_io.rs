@@ -367,6 +367,18 @@ fn parse_column(object: &XmlNode) -> Result<ColumnMeta> {
     if partition_payloads > 1 {
         return Err(ModelFileError::Unsupported(format!("multi-partition column {}", storage)));
     }
+    // The data-id to position hash index lives on the column's intrinsic hierarchy, not on the
+    // column itself; Excel only writes it for value-encoded columns.
+    if hidx.is_none()
+        && let Some(data_objects) = member(object, "IntrinsicHierarchy").and_then(|hierarchy| hierarchy.child("DataObjects"))
+        && let Some(object) = data_objects
+            .children
+            .iter()
+            .filter_map(|child| child.child("XMObject"))
+            .find(|object| attr(object, "class").is_some_and(|class| class.contains("XMHierarchyDataID2PositionHashIndex")))
+    {
+        hidx = Some(attr(object, "name").unwrap_or("").to_string());
+    }
     let segments = parse_segments(object)?;
     let row_number = materialization == 3 || matches!(storage.as_str(), "RowNumber" | "__XL_RowNumber");
     Ok(ColumnMeta { storage, db_type, xm_type, stats, encoding, idf, hidx, segments, hierarchy, row_number })
@@ -829,6 +841,20 @@ pub fn column_metrics(data: &[u8]) -> Result<Vec<ModelColumnMetrics>> {
 // Writing (implemented below the reader so the file stays one coherent unit)
 // ---------------------------------------------------------------------------------------------
 
+/// Returns every embedded file's logical name and decompressed content, in container order.
+///
+/// This is a read-only inspection helper for tests and for comparing a part against Excel's own
+/// copy; it never modifies the stream. A file whose logical name the backup log does not map is
+/// returned under its virtual-directory storage path.
+pub fn file_contents(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+    let base = Base::load(data)?;
+    let mut result = Vec::with_capacity(base.entries.len());
+    for (index, entry) in base.entries.iter().enumerate() {
+        result.push((entry.logical.clone(), base.decode(index)?));
+    }
+    Ok(result)
+}
+
 /// Rewrites the data model described by `model` on top of the `base` container.
 pub fn write_model(base: &[u8], model: &ModelData) -> Result<Vec<u8>> {
     let loaded = Base::load(base)?;
@@ -983,7 +1009,7 @@ fn build_write_plan(layout: &ModelLayout, model: &ModelData, previous: &ModelDat
                         && previous_column.values == model_column.values
                 })
             });
-            let mut write = build_column_write(layout, column, model_column, rows)?;
+            let mut write = build_column_write(layout, column, model_column, rows, unchanged)?;
             write.unchanged = unchanged;
             columns.push(write);
         }
@@ -1110,7 +1136,13 @@ fn build_write_plan(layout: &ModelLayout, model: &ModelData, previous: &ModelDat
     Ok(WritePlan { tables, relationships, measures: model.measures.clone() })
 }
 
-fn build_column_write(layout: &ModelLayout, column: &ColumnMeta, model_column: &ModelColumnData, rows: usize) -> Result<ColumnWrite> {
+fn build_column_write(
+    layout: &ModelLayout,
+    column: &ColumnMeta,
+    model_column: &ModelColumnData,
+    rows: usize,
+    unchanged: bool,
+) -> Result<ColumnWrite> {
     let kind = column.kind();
     validate_values(kind, &model_column.values, &model_column.name)?;
     let mut dictionary: Option<(String, Vec<u8>)> = None;
@@ -1200,12 +1232,20 @@ fn build_column_write(layout: &ModelLayout, column: &ColumnMeta, model_column: &
     let encoded = encode_column_ids(&ids, min, width)?;
     let distinct: BTreeSet<u32> = ids.iter().copied().collect();
     let non_null_distinct = distinct.iter().filter(|id| **id != 2).count();
-    let distinct_ids: Vec<i64> = distinct.iter().copied().filter(|id| *id != 2).map(i64::from).collect();
+    // The hierarchy's positions are its `POS_TO_ID` prefix: the null id first when the column has
+    // nulls, then the data ids in value order (ascending ids for both encodings).
+    let mut positions: Vec<u32> = Vec::with_capacity(non_null_distinct + 1);
+    if has_nulls {
+        positions.push(2);
+    }
+    positions.extend(distinct.iter().copied().filter(|id| *id != 2));
     let hierarchy = match &column.hierarchy {
-        Some(name) => build_hierarchy_write(layout, name, has_nulls, &distinct_ids)?,
+        Some(name) => build_hierarchy_write(layout, name, &positions)?,
         None => None,
     };
-    let hidx = build_column_hidx(column, &ids, has_nulls)?;
+    // An unchanged column keeps Excel's hash index byte for byte, so never re-derive it (that
+    // would also reject a valid Excel chain longer than this encoder's bucket layout).
+    let hidx = if unchanged || !matches!(column.encoding, ColumnEncoding::Value { .. }) { None } else { build_column_hidx(column, &positions)? };
     Ok(ColumnWrite {
         storage: column.storage.clone(),
         row_number: false,
@@ -1284,54 +1324,44 @@ fn numeric_raw(value: &Scalar, real: bool) -> Result<i64> {
     }
 }
 
-fn build_column_hidx(column: &ColumnMeta, ids: &[u32], has_nulls: bool) -> Result<Option<(String, Vec<u8>)>> {
+fn build_column_hidx(column: &ColumnMeta, positions: &[u32]) -> Result<Option<(String, Vec<u8>)>> {
     let Some(name) = &column.hidx else { return Ok(None) };
-    let mut sorted: Vec<u32> = ids.iter().copied().filter(|id| *id != 2).collect();
-    sorted.sort_unstable();
-    sorted.dedup();
-    let mut entries = Vec::with_capacity(sorted.len());
-    let mut position = 0u32;
-    let _ = has_nulls;
-    for id in &sorted {
-        position = position.checked_add(1).ok_or(ModelFileError::TooLarge)?;
-        entries.push((*id, position));
-    }
-    let records = sorted.len().saturating_add(usize::from(has_nulls));
-    Ok(Some((name.clone(), super::vertipaq::encode_hierarchy_hidx(&entries, records)?)))
+    Ok(Some((name.clone(), super::vertipaq::encode_hierarchy_hidx(positions)?)))
 }
 
-fn build_hierarchy_write(layout: &ModelLayout, name: &str, has_nulls: bool, distinct_ids: &[i64]) -> Result<Option<HierarchyWrite>> {
-    let non_null_distinct = distinct_ids.len();
+fn build_hierarchy_write(layout: &ModelLayout, name: &str, positions: &[u32]) -> Result<Option<HierarchyWrite>> {
     let Some((_, _, xml)) = layout.hierarchies.iter().find(|(_, hierarchy, _)| hierarchy == name) else {
         return Ok(None);
     };
+    // Excel reserves three trailing positions after the distinct data ids (plus the null id when
+    // present) and sizes each segment by the number of distinct ids including null.
+    let non_null_distinct = positions.len();
+    let has_nulls = positions.first() == Some(&2);
+    let non_null_distinct = non_null_distinct.saturating_sub(usize::from(has_nulls));
     let total = non_null_distinct.saturating_add(3);
-    let records_per_segment = non_null_distinct.saturating_add(usize::from(has_nulls)).max(1);
-    let segments = if total > records_per_segment { 2 } else { 1 };
-    let mut positions: Vec<i64> = Vec::with_capacity(total);
-    if has_nulls {
-        positions.push(2);
-    }
+    let records_per_segment = positions.len().max(1);
+    let segments = total.div_ceil(records_per_segment);
+    let mut ids: Vec<i64> = positions.iter().map(|id| i64::from(*id)).collect();
     // The mapping lists the actual data ids in value order (ids are assigned in value order by
     // both the hash and the value encodings), not a synthetic 3..n range: value-encoded columns
-    // legitimately have gaps between ids.
-    positions.extend_from_slice(distinct_ids);
-    positions.resize(total, 0);
+    // legitimately have gaps between ids. The reserved tail is zero-filled.
+    ids.resize(total, 0);
     let mut inverse = vec![0i64; total];
-    for (position, id) in positions.iter().enumerate() {
+    for (position, id) in ids.iter().enumerate() {
         if let Ok(index) = usize::try_from(*id)
             && let Some(slot) = inverse.get_mut(index)
         {
             *slot = i64::try_from(position).map_err(|_| ModelFileError::TooLarge)?;
         }
     }
-    // Excel splits the arrays into two records (the first `records_per_segment` values, then
-    // the reserved tail). Reproduce that shape; each record is an independent bit-packed array.
+    // Excel splits the arrays into `segments` records of `records_per_segment` values each (the
+    // last one shorter). Reproduce that shape; each record is an independent bit-packed array.
     let encode_segments = |values: &[i64]| -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         let mut start = 0usize;
         for segment in 0..segments {
-            let records = if segment == 0 { records_per_segment } else { total.saturating_sub(records_per_segment) };
+            let remaining = total.saturating_sub(segment.saturating_mul(records_per_segment));
+            let records = records_per_segment.min(remaining);
             let end = start.saturating_add(records).min(values.len());
             bytes.extend_from_slice(&encode_no_split(&values[start..end], 32, 0)?);
             start = end;
@@ -1343,7 +1373,7 @@ fn build_hierarchy_write(layout: &ModelLayout, name: &str, has_nulls: bool, dist
         let Some(idf_name) = column.idf else { continue };
         match column.storage.as_str() {
             "POS_TO_ID" => {
-                files.insert(idf_name, encode_segments(&positions)?);
+                files.insert(idf_name, encode_segments(&ids)?);
             }
             "ID_TO_POS" => {
                 files.insert(idf_name, encode_segments(&inverse)?);
@@ -1534,7 +1564,9 @@ fn apply_segment_stats(stats: &mut XmlNode, write: &ColumnWrite) -> Result<()> {
     set_prop(stats, "DistinctStates", 0)?;
     set_prop(stats, "MinDataID", write.min_id)?;
     set_prop(stats, "MaxDataID", write.max_id)?;
-    set_prop(stats, "OriginalMinSegmentDataID", write.min)?;
+    // Excel records the declared minimum data id here even when the packed subsegment starts at
+    // the reserved null id (`write.min`); the null minimum stays on the subsegment compression.
+    set_prop(stats, "OriginalMinSegmentDataID", write.min_id)?;
     set_prop(stats, "RowCount", write.rows)?;
     set_prop(stats, "HasNulls", write.has_nulls)?;
     set_prop(stats, "RLERuns", write.rle_runs)?;
@@ -1568,8 +1600,8 @@ fn rewrite_hierarchy_metadata(xml: &str, hierarchy: &HierarchyWrite) -> Result<S
                 if let Some(template) = template {
                     segments.children.retain(|child| child.local_name() != "XMObject");
                     for segment in 0..hierarchy.segments {
-                        let records =
-                            if segment == 0 { hierarchy.records_per_segment } else { hierarchy.total.saturating_sub(hierarchy.records_per_segment) };
+                        let remaining = hierarchy.total.saturating_sub(segment.saturating_mul(hierarchy.records_per_segment));
+                        let records = hierarchy.records_per_segment.min(remaining);
                         let mut node = template.clone();
                         set_prop(&mut node, "Records", records)?;
                         if let Some(info) = member_mut(&mut node, "CompressionInfo") {

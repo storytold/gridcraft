@@ -290,6 +290,10 @@ pub fn encode_row_number(n: usize) -> Result<Vec<u8>> {
 }
 
 /// Encodes a `XMRENoSplit` array (hierarchy mapping or relationship index) as one record.
+///
+/// `min` is the `CompressionInfo` minimum the metadata declares, so the stored value is
+/// `value - min`. The bit-packing itself therefore runs from a zero base; subtracting `min`
+/// twice (once here and again inside [`encode_bitpacked`]) would shift every value by `min`.
 pub fn encode_no_split(values: &[i64], width: u32, min: i32) -> Result<Vec<u8>> {
     let converted: Vec<u32> = values
         .iter()
@@ -298,7 +302,7 @@ pub fn encode_no_split(values: &[i64], width: u32, min: i32) -> Result<Vec<u8>> 
             u32::try_from(relative).map_err(|_| ModelFileError::Corrupt("no-split value overflows".into()))
         })
         .collect::<Result<_>>()?;
-    let mut packed = encode_bitpacked(&converted, width, min)?;
+    let mut packed = encode_bitpacked(&converted, width, 0)?;
     let per_word = 64 / width as usize;
     if per_word > 0 && !converted.is_empty() && converted.len().is_multiple_of(per_word) {
         // Excel adds one zero padding word when the values exactly fill their words.
@@ -566,52 +570,111 @@ fn round_scaled(number: f64) -> Result<i64> {
     Ok(rounded as i64)
 }
 
+/// Entries a `.hidx` header declares per bucket.
+const HIDX_ENTRIES_PER_BIN: u32 = 6;
+/// Largest bucket chain this encoder emits; beyond it Excel's layout has no free slot.
+const HIDX_MAX_CHAIN: usize = 5;
+/// Largest bucket count accepted, bounding the allocation at 64 MiB.
+const HIDX_MAX_BINS: usize = 1 << 20;
+
 /// Builds the `XMHierarchyDataID2PositionHashIndex` (`.hidx`) used by value-encoded columns.
 ///
-/// Entries map a data id to its position in the hierarchy's `POS_TO_ID` array (the null id is
-/// position zero). Bins are 64 bytes: `u64` chain, `u32` count, six `{u32 id, u32 position}`
-/// slots; excess entries go to the overflow vector.
-pub fn encode_hierarchy_hidx(entries: &[(u32, u32)], records: usize) -> Result<Vec<u8>> {
+/// `positions` lists the column's data ids in hierarchy position order: position 0 is the null id
+/// `2` when the column has nulls, followed by the data ids in value order (which is id order for
+/// value encoding). The layout reproduced here is the one Excel 16 writes:
+///
+/// * a 40-byte header: `-1`, element size 8, page size 64, entries per bucket 6, bucket count,
+///   record count and the bucket mask;
+/// * a statistics byte (`1`) and two 64-byte prefix blocks: per-bucket occupancy statistics and
+///   the histogram of bucket chains longer than one;
+/// * one 64-byte block per bucket: a 24-byte header (with the used-slot count at offset 20) and
+///   up to five `{u32 data id, u32 position}` slots;
+/// * 20 zero bytes of trailer.
+///
+/// The bucket count reproduces Excel's rule (a quarter of the records, rounded up to a power of
+/// two, never below sixteen) and the bucket is `(id * 0x12B9B6A5) >> shift` masked to the bucket
+/// count. A chain longer than five entries has no room in this layout, so it is rejected instead
+/// of emitting a hash index Excel would refuse.
+pub fn encode_hierarchy_hidx(positions: &[u32]) -> Result<Vec<u8>> {
+    let records = positions.len();
     let mut bins = 16usize;
-    while bins < records.max(1) {
+    while bins < records.div_ceil(4) {
         bins = bins.checked_mul(2).ok_or(ModelFileError::TooLarge)?;
     }
+    if bins > HIDX_MAX_BINS {
+        return Err(ModelFileError::Unsupported(format!("hierarchy hash index needs {bins} buckets")));
+    }
     let shift = 32 - bins.trailing_zeros();
-    let mask = u64::try_from(bins - 1).map_err(|_| ModelFileError::TooLarge)?;
     let mut buckets: Vec<Vec<(u32, u32)>> = vec![Vec::new(); bins];
-    let mut overflow = Vec::new();
-    for (id, position) in entries {
-        let bucket = ((id.wrapping_mul(0x12B9_B6A5) >> shift) as usize) & (bins - 1);
-        let slot = buckets.get_mut(bucket).ok_or_else(|| ModelFileError::Corrupt("hash bucket".into()))?;
-        if slot.len() < 6 {
-            slot.push((*id, *position));
-        } else {
-            overflow.push((*id, *position));
+    for (position, id) in positions.iter().enumerate() {
+        if *id == 0 {
+            return Err(ModelFileError::Corrupt("hierarchy hash index holds the null id".into()));
+        }
+        let bucket = ((*id).wrapping_mul(0x12B9_B6A5) >> shift) as usize & (bins - 1);
+        let slot = buckets.get_mut(bucket).ok_or_else(|| ModelFileError::Corrupt("hierarchy hash bucket".into()))?;
+        slot.push((*id, u32::try_from(position).map_err(|_| ModelFileError::TooLarge)?));
+    }
+    let mut used = 0u64;
+    let mut singles = 0u64;
+    let mut max_chain = 0usize;
+    let mut histogram = [0u64; HIDX_MAX_CHAIN - 1];
+    for bucket in &buckets {
+        if bucket.is_empty() {
+            continue;
+        }
+        used = used.saturating_add(1);
+        max_chain = max_chain.max(bucket.len());
+        if bucket.len() == 1 {
+            singles = singles.saturating_add(1);
+        } else if let Some(count) = histogram.get_mut(bucket.len() - 2) {
+            *count = count.saturating_add(1);
         }
     }
+    if max_chain > HIDX_MAX_CHAIN {
+        return Err(ModelFileError::Unsupported(format!(
+            "{max_chain} data ids hash to one hierarchy bucket; Excel's index has only {HIDX_MAX_CHAIN} slots"
+        )));
+    }
+    let records_u64 = u64::try_from(records).map_err(|_| ModelFileError::TooLarge)?;
+    let bins_u64 = u64::try_from(bins).map_err(|_| ModelFileError::TooLarge)?;
     let mut out = Vec::new();
     out.extend_from_slice(&(-1i32).to_le_bytes());
+    out.extend_from_slice(&8u32.to_le_bytes()); // element size
+    out.extend_from_slice(&64u32.to_le_bytes()); // page size
+    out.extend_from_slice(&HIDX_ENTRIES_PER_BIN.to_le_bytes());
+    out.extend_from_slice(&bins_u64.to_le_bytes());
+    out.extend_from_slice(&records_u64.to_le_bytes());
+    out.extend_from_slice(&(bins_u64 - 1).to_le_bytes()); // bucket mask
+    out.push(1); // statistics present
+    // Statistics record: record and bucket counts, occupancy summary, then the constant 6/10/8
+    // fields Excel writes in every observed file, and finally the singleton count.
+    let max_chain_u64 = u64::try_from(max_chain).map_err(|_| ModelFileError::TooLarge)?;
+    for value in [records_u64, bins_u64, used, records_u64, u64::from(HIDX_ENTRIES_PER_BIN), max_chain_u64, 10] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
     out.extend_from_slice(&8u32.to_le_bytes());
-    out.extend_from_slice(&64u32.to_le_bytes());
-    out.extend_from_slice(&6u32.to_le_bytes());
-    out.extend_from_slice(&u64::try_from(bins).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
-    out.extend_from_slice(&u64::try_from(records).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
-    out.extend_from_slice(&mask.to_le_bytes());
-    out.push(0); // no hash statistics payload
+    out.extend_from_slice(&u32::try_from(singles).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
+    // Histogram of bucket chains 2..=5: one u32 every eight bytes starting at offset 4.
+    let mut block = [0u8; 64];
+    for (index, count) in histogram.iter().enumerate() {
+        let offset = 4 + index * 8;
+        let count = u32::try_from(*count).map_err(|_| ModelFileError::TooLarge)?;
+        block.get_mut(offset..offset + 4).ok_or_else(|| ModelFileError::Corrupt("hierarchy histogram".into()))?.copy_from_slice(&count.to_le_bytes());
+    }
+    out.extend_from_slice(&block);
     for bucket in &buckets {
-        out.extend_from_slice(&0u64.to_le_bytes());
-        out.extend_from_slice(&u32::try_from(bucket.len()).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
-        for index in 0..6 {
-            let (id, position) = bucket.get(index).copied().unwrap_or((0, 0));
-            out.extend_from_slice(&id.to_le_bytes());
-            out.extend_from_slice(&position.to_le_bytes());
+        let mut block = [0u8; 64];
+        let count = u32::try_from(bucket.len()).map_err(|_| ModelFileError::TooLarge)?;
+        block.get_mut(20..24).ok_or_else(|| ModelFileError::Corrupt("hierarchy bucket header".into()))?.copy_from_slice(&count.to_le_bytes());
+        for (index, (id, position)) in bucket.iter().enumerate() {
+            let start = 24 + index * 8;
+            let slot = block.get_mut(start..start + 8).ok_or_else(|| ModelFileError::Corrupt("hierarchy bucket slot".into()))?;
+            slot[0..4].copy_from_slice(&id.to_le_bytes());
+            slot[4..8].copy_from_slice(&position.to_le_bytes());
         }
+        out.extend_from_slice(&block);
     }
-    out.extend_from_slice(&u64::try_from(overflow.len()).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
-    for (id, position) in overflow {
-        out.extend_from_slice(&id.to_le_bytes());
-        out.extend_from_slice(&position.to_le_bytes());
-    }
+    out.extend_from_slice(&[0u8; 20]);
     Ok(out)
 }
 
@@ -655,6 +718,107 @@ mod tests {
         let encoded = encode_bitpacked(&values, 32, 2)?;
         assert_eq!(encoded.len(), 16);
         assert_eq!(decode_bitpacked(&encoded, 0, 4, 32, 2)?, values);
+        Ok(())
+    }
+
+    #[test]
+    fn no_split_subtracts_its_minimum_once() -> Result<()> {
+        // Excel's relationship INDEX declares Min = -1; stored slots are `value + 1`.
+        let bytes = encode_no_split(&[-1, 0, 1, 2], 2, -1)?;
+        let units = u64::from_le_bytes(bytes[0..8].try_into().map_err(|_| ModelFileError::Corrupt("record".into()))?);
+        assert_eq!(units, 1);
+        let payload = &bytes[8..];
+        assert_eq!(decode_bitpacked(payload, 0, 4, 2, 0)?, vec![0, 1, 2, 3]);
+        // The six-value relationship index Excel writes for the reference fixture: values
+        // [-1, -1, -1, 0, 1, 2] at width two, Min -1.
+        let excel = encode_no_split(&[-1, -1, -1, 0, 1, 2], 2, -1)?;
+        assert_eq!(&excel[..], &[1, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x0e, 0, 0, 0, 0, 0, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn hierarchy_hash_index_matches_the_observed_excel_layout() -> Result<()> {
+        // The `Sales[Amount]` hierarchy of the reference fixture: null first, then the fifteen
+        // data ids in value order.
+        let positions = [2u32, 3, 13, 28, 33, 43, 53, 93, 103, 133, 153, 173, 203, 253, 263, 353];
+        let bytes = encode_hierarchy_hidx(&positions)?;
+        assert_eq!(bytes.len(), 1213, "header (41) + two prefix blocks (128) + 16 buckets (1024) + trailer (20)");
+        assert_eq!(i32::from_le_bytes(bytes[0..4].try_into().map_err(|_| ModelFileError::Corrupt("header".into()))?), -1);
+        let word = |offset: usize| -> Result<u64> {
+            Ok(u64::from_le_bytes(
+                bytes
+                    .get(offset..offset + 8)
+                    .ok_or_else(|| ModelFileError::Corrupt("word".into()))?
+                    .try_into()
+                    .map_err(|_| ModelFileError::Corrupt("word".into()))?,
+            ))
+        };
+        assert_eq!(word(16)?, 16, "bucket count");
+        assert_eq!(word(24)?, 16, "record count");
+        assert_eq!(word(32)?, 15, "bucket mask");
+        assert_eq!(bytes[40], 1, "statistics byte");
+        // Statistics record, then the histogram block.
+        assert_eq!(word(41)?, 16);
+        assert_eq!(word(49)?, 16);
+        assert_eq!(word(57)?, 11, "used buckets");
+        assert_eq!(word(65)?, 16);
+        assert_eq!(word(73)?, 6);
+        assert_eq!(word(81)?, 3, "longest chain");
+        assert_eq!(word(89)?, 10);
+        assert_eq!(&bytes[145..169], &[0u8; 24]);
+        // Every entry decodes back to its position; every bucket's slot count matches its header.
+        let mut seen = 0usize;
+        for bucket in 0..16usize {
+            let start = 169 + bucket * 64;
+            let count = u32::from_le_bytes(
+                bytes
+                    .get(start + 20..start + 24)
+                    .ok_or_else(|| ModelFileError::Corrupt("bucket".into()))?
+                    .try_into()
+                    .map_err(|_| ModelFileError::Corrupt("bucket".into()))?,
+            ) as usize;
+            assert!(count <= 5);
+            for slot in 0..count {
+                let offset = start + 24 + slot * 8;
+                let id = u32::from_le_bytes(
+                    bytes
+                        .get(offset..offset + 4)
+                        .ok_or_else(|| ModelFileError::Corrupt("slot".into()))?
+                        .try_into()
+                        .map_err(|_| ModelFileError::Corrupt("slot".into()))?,
+                );
+                let position = u32::from_le_bytes(
+                    bytes
+                        .get(offset + 4..offset + 8)
+                        .ok_or_else(|| ModelFileError::Corrupt("slot".into()))?
+                        .try_into()
+                        .map_err(|_| ModelFileError::Corrupt("slot".into()))?,
+                );
+                assert_eq!(positions.get(position as usize), Some(&id));
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, positions.len());
+        Ok(())
+    }
+
+    #[test]
+    fn hierarchy_hash_index_rejects_a_chain_with_no_free_slot() -> Result<()> {
+        // With sixteen buckets the shift is 28, so collect six ids landing in one bucket.
+        let mut colliding = Vec::new();
+        for id in 3u32..10_000 {
+            if (id.wrapping_mul(0x12B9_B6A5) >> 28) & 15 == 0 {
+                colliding.push(id);
+                if colliding.len() == 6 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(colliding.len(), 6);
+        match encode_hierarchy_hidx(&colliding) {
+            Err(ModelFileError::Unsupported(message)) => assert!(message.contains("hash"), "{message}"),
+            other => panic!("expected a rejected chain, got {other:?}"),
+        }
         Ok(())
     }
 

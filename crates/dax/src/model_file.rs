@@ -43,7 +43,7 @@ mod vertipaq;
 pub mod xpress8;
 
 pub use model_data::{ModelColumnData, ModelData, ModelRelationship, ModelTableData, RelationshipMultiplicity};
-pub use model_io::{ModelColumnMetrics, column_metrics, read_model, write_model};
+pub use model_io::{ModelColumnMetrics, column_metrics, file_contents, read_model, write_model};
 
 /// Page size of the Spreadsheet Data Model container.
 pub const PAGE_SIZE: usize = 4096;
