@@ -58,8 +58,43 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
         Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        None => parse_plain(t).map(|(n, _)| n).or_else(|| euro_text(t)),
     }
+}
+
+/// Euro amounts as European bank exports write them, which Excel in a European locale flags:
+/// `65,00€`, `-6,04 €`, `€ 1.234,56` (comma decimal, dot thousands), and the en-US body `65.00€`.
+// ponytail: euro sign only; plain `65,00` needs the workbook's number locale, which isn't modelled yet.
+fn euro_text(t: &str) -> Option<f64> {
+    let space = [' ', '\u{a0}', '\u{202f}'];
+    let (neg, t) = match t.strip_prefix('-') {
+        Some(r) => (true, r.trim_start_matches(space)),
+        None => (false, t),
+    };
+    let body = t.strip_suffix('€').or_else(|| t.strip_prefix('€'))?.trim_matches(space);
+    let (neg, body) = match body.strip_prefix('-') {
+        Some(r) if !neg => (true, r),
+        _ => (neg, body),
+    };
+    if body.is_empty() || !body.bytes().all(|c| c.is_ascii_digit() || c == b',' || c == b'.') {
+        return None;
+    }
+    let n = european_number(body).or_else(|| parse_plain(body).map(|(n, _)| n))?;
+    Some(if neg { -n } else { n })
+}
+
+/// `1.234,56`: dot thousands in groups of three, an optional comma decimal part.
+fn european_number(s: &str) -> Option<f64> {
+    let (int, frac) = s.rsplit_once(',').map_or((s, None), |(a, b)| (a, Some(b)));
+    let groups: Vec<&str> = int.split('.').collect();
+    let first = groups.first()?;
+    if first.is_empty() || (groups.len() > 1 && first.len() > 3) || groups.iter().skip(1).any(|g| g.len() != 3) {
+        return None;
+    }
+    if frac.is_some_and(|f| f.is_empty() || f.contains(['.', ','])) {
+        return None;
+    }
+    format!("{}.{}", groups.concat(), frac.unwrap_or("0")).parse().ok().filter(|n: &f64| n.is_finite())
 }
 
 fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
@@ -625,8 +660,19 @@ mod tests {
             ("(100)", -100.0),
             ("$(5)", -5.0),
             ("(5)%", -0.05),
+            // Euro amounts from European bank exports.
+            ("65,00€", 65.0),
+            ("65.00€", 65.0),
+            ("-6,04 €", -6.04),
+            ("€ -6,04", -6.04),
+            ("1.234,56\u{a0}€", 1234.56),
+            ("1.234€", 1234.0),
+            ("€12", 12.0),
         ] {
             assert_eq!(number_stored_as_text(text), Some(n), "{text}");
+        }
+        for text in ["€", "65,00", "6,0,4€", "12.34.5€", "1,2.3€", "abc€", "€$5", "--5€", "5%€", ",€"] {
+            assert_eq!(number_stored_as_text(text), None, "{text}");
         }
         // Dates, times, fractions, words and blanks are not flagged.
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
