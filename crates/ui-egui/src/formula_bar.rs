@@ -189,6 +189,7 @@ fn active_input(app: &SheetApp) -> String {
 
 /// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.
 fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
+    let lang = app.ui.language;
     let id = egui::Id::unique("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
@@ -241,7 +242,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(lang.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {

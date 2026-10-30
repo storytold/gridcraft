@@ -19,12 +19,20 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let _menu = native_menu::NativeMenu::install(&ctx);
+    let _menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::En);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
     assert_eq!(tops, ["GridCraft", "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Window"), "AppKit knows the Window menu");
+
+    // The bar follows the interface language: installing a Chinese bar replaces the English one, and
+    // the Window menu stays AppKit's `windowsMenu` under its translated title.
+    let _menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::Zh);
+    let bar = nsapp.mainMenu().expect("the rebuilt main menu");
+    let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
+    assert_eq!(tops, ["GridCraft", "文件", "编辑", "视图", "插入", "格式", "工具", "数据", "窗口", "帮助"]);
+    assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("窗口"), "AppKit knows the translated Window menu");
 
     println!("mac_menu_appkit: ok");
 }

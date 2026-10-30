@@ -28,6 +28,7 @@ mod tr;
 mod uk;
 mod vi;
 mod zh;
+mod zh_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -219,12 +220,57 @@ impl Language {
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
+        // An error the engine built by filling a template (`CLEAN has too few arguments. Use
+        // CLEAN(text)`) matches no catalog key as it stands, so its template's values are read
+        // back out and put into the catalog entry's placeholders. This runs before the
+        // `command \`id\`:` prefix is stripped: a template may include that wording itself.
+        if let Some(filled) = self.fill_error_template(message) {
+            return filled;
+        }
+
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
         let translated = self.tr(&message);
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
 
         if translated == fallback { message } else { translated.to_owned() }
+    }
+
+    /// `message` with a translated template's values filled in, for the errors the engine builds
+    /// by putting values into a sentence (`CLEAN has too few arguments. Use CLEAN(text)`); `None`
+    /// when no template's shape matches.
+    fn fill_error_template(self, message: &str) -> Option<String> {
+        for (english, translated) in self.error_templates() {
+            let Some(values) = values_by_template(english, message) else { continue };
+            // The wrapped-message templates end in a message of their own; every other value the
+            // engine inserts is user data.
+            let is_wrapped_message = english.starts_with("command `");
+            let mut out = String::with_capacity(translated.len() + message.len());
+            let mut rest = *translated;
+            let mut values = values.into_iter();
+            while let Some((before, after)) = rest.split_once('{') {
+                let (_, after_brace) = after.split_once('}')?;
+                out.push_str(before);
+                let value = values.next()?;
+                // Most values are user data (a file name, a range, a number) and are inserted as
+                // they are: translating them could rename a file or read a `|` in a name as a
+                // context separator. Only a template that wraps another message
+                // (`command \`id\` is not available right now: <reason>`) has a value that is a
+                // message of its own, and that sentence is the last placeholder.
+                if is_wrapped_message {
+                    out.push_str(&self.tr_error(value));
+                } else {
+                    out.push_str(value);
+                }
+                rest = after_brace;
+            }
+            if values.next().is_some() {
+                continue;
+            }
+            out.push_str(rest);
+            return Some(out);
+        }
+        None
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -239,10 +285,20 @@ impl Language {
         lookup(self.function_help()?.1, english)
     }
 
+    /// The error-message templates this language fills in, for the errors the engine builds by
+    /// putting values into a sentence.
+    fn error_templates(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Zh => zh::ERROR_TEMPLATES,
+            _ => &[],
+        }
+    }
+
     /// The function help tables (descriptions, argument names) of the languages that have them.
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -255,6 +311,33 @@ type HelpTable = &'static [(&'static str, &'static str)];
 fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
     let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
     table.get(i).map(|(_, translated)| *translated)
+}
+
+/// The values `message` holds for a template's `{}` placeholders, read by matching the literal
+/// text around them: `"{} has too few arguments. Use {}"` against `"CLEAN has too few arguments.
+/// Use CLEAN(text)"` gives `["CLEAN", "CLEAN(text)"]`. `None` when the shape doesn't match.
+fn values_by_template<'a>(template: &str, message: &'a str) -> Option<Vec<&'a str>> {
+    let parts: Vec<&str> = template.split("{}").collect();
+    let (first, last) = (parts.first()?, parts.last()?);
+    if parts.len() == 1 {
+        return (template == message).then(Vec::new);
+    }
+    let mut rest = message.strip_prefix(first)?;
+    // The last literal anchors the end, so it is taken off now and matched after the middle ones.
+    let middle = &parts[1..parts.len() - 1];
+    let mut values = Vec::with_capacity(parts.len() - 1);
+    for literal in middle {
+        let at = rest.find(literal)?;
+        values.push(rest.get(..at)?);
+        rest = rest.get(at + literal.len()..)?;
+    }
+    if last.is_empty() {
+        values.push(rest);
+    } else {
+        let tail = rest.strip_suffix(last)?;
+        values.push(tail);
+    }
+    Some(values)
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
