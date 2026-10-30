@@ -16,15 +16,75 @@ fn default_source(s: &Session) -> Result<String> {
     }
     let sel = d.selection.current();
     let r = if sel.is_single() {
-        current_region(sh, d.selection.active)
+        // A blank active cell next to the data adds its own empty row or column to the region.
+        let region = current_region(sh, d.selection.active);
+        trim_empty_edges(sh, region).unwrap_or(region)
     } else {
         let used = sh.used_range().unwrap_or(sel);
         sel.intersection(&used).unwrap_or(sel)
     };
     if r.is_single() && sh.value(r.start).is_empty() {
-        return Err(other("The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`."));
+        // Away from the data, the sheet's only block of labeled columns is the source (#2764).
+        return match only_data_block(&d.wb, sh) {
+            Some(block) => Ok(source_text(sh, block)),
+            None => Err(other("The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`.")),
+        };
     }
-    Ok(pv::range_text(&sh.name, r))
+    Ok(if sel.is_single() { source_text(sh, r) } else { pv::range_text(&sh.name, r) })
+}
+
+/// The table holding `r`, by name, so the source leaves out its totals row and grows with it;
+/// else the range itself.
+fn source_text(sh: &Sheet, r: RangeRef) -> String {
+    match sh.tables.iter().find(|t| t.range.contains(r.start) && t.range.contains(r.end)) {
+        Some(t) => t.name.clone(),
+        None => pv::range_text(&sh.name, r),
+    }
+}
+
+/// Whether `c` holds data, as `current_region` counts it.
+fn filled(sh: &Sheet, c: CellRef) -> bool {
+    sh.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sh.spill.contains_key(&c)
+}
+
+/// Whether any cell of `r` holds data.
+fn has_data(sh: &Sheet, r: RangeRef) -> bool {
+    sh.cells.iter_range(r).any(|(c, _)| filled(sh, c)) || sh.spill.keys().any(|c| r.contains(*c))
+}
+
+/// `r` without its empty outer rows and columns; `None` when nothing in it holds data.
+fn trim_empty_edges(sh: &Sheet, r: RangeRef) -> Option<RangeRef> {
+    let (mut top, mut bottom, mut left, mut right) = (r.start.row, r.end.row, r.start.col, r.end.col);
+    let line = |r0: u32, c0: u32, r1: u32, c1: u32| RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+    while top < bottom && !has_data(sh, line(top, left, top, right)) {
+        top += 1;
+    }
+    while bottom > top && !has_data(sh, line(bottom, left, bottom, right)) {
+        bottom -= 1;
+    }
+    while left < right && !has_data(sh, line(top, left, bottom, left)) {
+        left += 1;
+    }
+    while right > left && !has_data(sh, line(top, right, bottom, right)) {
+        right -= 1;
+    }
+    let trimmed = line(top, left, bottom, right);
+    has_data(sh, trimmed).then_some(trimmed)
+}
+
+/// The sheet's one block of data, when every cell that holds data is in it and its first row
+/// labels every column. `None` for an empty sheet, several blocks, or a missing label.
+fn only_data_block(wb: &Workbook, sh: &Sheet) -> Option<RangeRef> {
+    let first = sh.cells.iter().map(|(c, _)| c).find(|c| filled(sh, *c)).or_else(|| sh.spill.keys().next().copied())?;
+    let block = current_region(sh, first);
+    let outside = |c: &CellRef| filled(sh, *c) && !block.contains(*c);
+    if sh.cells.iter().any(|(c, _)| outside(&c)) || sh.spill.keys().any(outside) {
+        return None;
+    }
+    // As `read_source` reads the field names.
+    let labeled =
+        (block.start.col..=block.end.col).all(|col| !crate::display::cell_text(wb, sh, CellRef::new(block.start.row, col)).trim().is_empty());
+    labeled.then_some(block)
 }
 
 pub(super) fn source_param(s: &Session, p: &Json) -> Result<String> {
