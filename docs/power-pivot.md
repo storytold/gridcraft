@@ -217,7 +217,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
 | Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml` and keeps them on save; the field-list pane is missing, and **Excel currently refuses to open a package with our cache definition** (the same package with an Excel-written cache opens — open defect) |
 | Pivot Preview | Not present: the window has no separate preview surface |
-| Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook (the pivot cache can reference an `xl/model/item.data` that is already in the file) |
+| Model persistence and refresh from a source | Missing: the model lives in the session and is not saved to the workbook. A workbook read on this branch also drops an existing `xl/model/item.data` on save (keeping that part is #2499's scope), so a pivot cache written here has no model database to refresh from |
 
 DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
 [DAX functions](dax-functions.md) for the per-category breakdown.
