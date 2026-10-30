@@ -58,6 +58,26 @@ fn reject_multi_cell_refs(spec: &FnSpec, args: &[Arg]) -> Option<Vec<Arg>> {
     )
 }
 
+/// Estimates immediate argument storage without traversing or allocating nested input data.
+/// Units are operational estimates, not CPU-time or hard real-time guarantees.
+pub(crate) fn value_work(value: &Value) -> u64 {
+    match value {
+        Value::Array(array) => u64::try_from(array.data.len()).unwrap_or(u64::MAX).max(1),
+        Value::Text(text) => u64::try_from(text.len()).unwrap_or(u64::MAX).max(1),
+        _ => 1,
+    }
+}
+
+/// Charges before each kernel invocation, including every broadcast output position.
+fn native_call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
+    let units = args.iter().fold(1u64, |units, arg| units.saturating_add(value_work(&arg.value)));
+    if !ctx.charge_work(units) {
+        return Value::Error(CellError::Num);
+    }
+    let value = (spec.imp)(args, ctx);
+    if ctx.charge_work(0) { value } else { Value::Error(CellError::Num) }
+}
+
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     let rejected = if spec.value_args.is_empty() { None } else { reject_multi_cell_refs(spec, args) };
     let args = rejected.as_deref().unwrap_or(args);
@@ -74,9 +94,14 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
         }
     }
     if !any {
-        return (spec.imp)(args, ctx);
+        return native_call(spec, args, ctx);
     }
     if rows.saturating_mul(cols) > MAX_CELLS {
+        return Value::Error(CellError::Num);
+    }
+    // Reserve output and argument-copy work before either allocation. Refuse the whole result
+    // on exhaustion rather than allocating a partially calculated error-filled array.
+    if !ctx.charge_work((rows as u64).saturating_mul(cols as u64).saturating_add(args.len() as u64)) {
         return Value::Error(CellError::Num);
     }
     let mut cell_args: Vec<Arg> = args.to_vec();
@@ -92,7 +117,15 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
                     slot.value = if let Value::Array(inner) = &v { inner.data.first().cloned().unwrap_or(Value::Empty) } else { v };
                 }
             }
+            let units = cell_args.iter().fold(1u64, |units, arg| units.saturating_add(value_work(&arg.value)));
+            if !ctx.charge_work(units) {
+                return Value::Error(CellError::Num);
+            }
             let out = (spec.imp)(&cell_args, ctx);
+            // Observe a host-latched refusal inside the kernel, including the final position.
+            if !ctx.charge_work(0) {
+                return Value::Error(CellError::Num);
+            }
             data.push(match out {
                 Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
                 v => v,
@@ -119,6 +152,83 @@ mod tests {
 
     fn spec() -> FnSpec {
         f!("ADD2", 2, 2, MathTrig, &[true, true], "ADD2(a, b)", "Adds two numbers.", add)
+    }
+
+    /// A host-owned bank records real invocations without importing any engine types.
+    struct BudgetCtx {
+        remaining: u64,
+        kernels: usize,
+        rejected: bool,
+    }
+    impl Ctx for BudgetCtx {
+        fn charge_work(&mut self, units: u64) -> bool {
+            if self.rejected || units > self.remaining {
+                self.rejected = true;
+                return false;
+            }
+            self.remaining -= units;
+            true
+        }
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            gridcraft_core::DateSystem::default()
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            self.kernels += 1;
+            0.0
+        }
+    }
+    fn counted_add(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+        ctx.random();
+        add(a, ctx)
+    }
+
+    #[test]
+    fn budgets_reject_before_kernels_and_stop_partway_through_broadcasts() {
+        let spec = FnSpec { imp: |a, c| crate::util::finish(counted_add(a, c)), ..spec() };
+        let mut denied = BudgetCtx { remaining: 0, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[n(1.0), n(2.0)], &mut denied), Value::Error(CellError::Num));
+        assert_eq!(denied.kernels, 0);
+        // Input work=5, output reservation=5, first kernel=3. The second is refused.
+        let mut partial = BudgetCtx { remaining: 13, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0, 3.0])), n(1.0)], &mut partial), Value::Error(CellError::Num));
+        assert_eq!(partial.kernels, 1);
+        assert!(partial.rejected);
+        assert_eq!(crate::call(&spec, &[n(1.0), n(2.0)], &mut partial), Value::Error(CellError::Num));
+        assert_eq!(partial.kernels, 1);
+    }
+
+    #[test]
+    fn output_reservation_and_shared_calls_consume_the_same_host_bank() {
+        let spec = FnSpec { imp: |a, c| crate::util::finish(counted_add(a, c)), ..spec() };
+        let mut ctx = BudgetCtx { remaining: 6, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[n(2.0), n(3.0)], &mut ctx), Value::Number(5.0));
+        assert_eq!(ctx.remaining, 0);
+        assert_eq!(crate::call(&spec, &[n(2.0), n(3.0)], &mut ctx), Value::Error(CellError::Num));
+        assert_eq!(ctx.kernels, 1);
+        let mut reserve = BudgetCtx { remaining: 5, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0, 3.0])), n(1.0)], &mut reserve), Value::Error(CellError::Num));
+        assert_eq!(reserve.kernels, 0);
+    }
+
+    #[test]
+    fn refusal_inside_the_final_broadcast_kernel_discards_the_whole_result() {
+        let spec = FnSpec {
+            imp: |args, ctx| {
+                ctx.random();
+                if !ctx.charge_work(1) {
+                    return Value::Error(CellError::Num);
+                }
+                crate::util::finish(add(args, ctx))
+            },
+            ..spec()
+        };
+        let mut ctx = BudgetCtx { remaining: 15, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0])), n(1.0)], &mut ctx), Value::Error(CellError::Num));
+        assert_eq!(ctx.kernels, 2);
+        assert!(ctx.rejected);
     }
 
     #[test]

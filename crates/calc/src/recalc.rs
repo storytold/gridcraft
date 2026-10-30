@@ -110,6 +110,10 @@ fn components(edges: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>) {
 }
 
 impl Calc {
+    /// Formula count for conservative planning; the dependency graph stays encapsulated.
+    pub fn formula_count(&self) -> usize {
+        self.graph.nodes.len()
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -345,6 +349,9 @@ impl Calc {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
+                    if !host.charge_work(0) {
+                        break;
+                    }
                     host.calculate(*k);
                 }
                 if host.iterate && !host.members.is_empty() {

@@ -1,0 +1,35 @@
+{"command":"sheet.rename","params":{"name":"Loss"}}
+{"command":"range.setValues","params":{"range":"A1","parse":false,"values":[["Actuarial portfolio — synthetic teaching inputs"],["Expected count",10],["Count variance",10],["Mean severity",1000],["Severity variance",1000000],["Expected aggregate","=ACT.AGGREGATE.MEAN(B2,B4)"],["Aggregate variance","=ACT.AGGREGATE.VARIANCE(B2,B3,B4,B5)"],["Aggregate SD","=SQRT(B7)"],["Budget",15000],["Expected loss less budget","=B6-B9"]]}}
+{"command":"range.setValues","params":{"range":"D1","parse":false,"values":[["Discrete loss","Probability"],[0,0.95],[100,0.05],[],["Confidence",0.95],["VaR","=ACT.VAR(D2:D3,E5,E2:E3)"],["TVaR","=ACT.TVAR(D2:D3,E5,E2:E3)"],["Layer at 25, limit 50","=ACT.LAYER(100,25,50)"],[],["Severity index","PMF"],[0,0],[1,1]]}}
+{"command":"range.setValues","params":{"range":"G10","parse":false,"values":[["Compound loss","PMF","CDF","Omitted mass"]]}}
+{"command":"cell.set","params":{"cell":"G11","input":"=ACT.COMPOUND.PMF(E11:E12,\"poisson\",2,0,15,100)"}}
+{"command":"range.setValues","params":{"range":"D15","parse":false,"values":[["Compound VaR 95%","=ACT.COMPOUND.VAR(E11:E12,\"poisson\",2,0,15,0.95,100)"],["Compound TVaR 95%","=ACT.COMPOUND.TVAR(E11:E12,\"poisson\",2,0,15,0.95,100)"]]}}
+{"command":"home.insertSheet","params":{"name":"Life"}}
+{"command":"range.setValues","params":{"range":"A1","parse":false,"values":[["Illustrative mortality — not an official table"],["Annual qx"],[0.1],[0.2],[1],["Effective annual rate",0.05],["Benefit",100000],["Unit annuity due","=ACT.ANNUITY(A3:A5,B6)"],["Unit whole-life insurance","=ACT.INSURANCE(A3:A5,B6)"],["Level net premium per unit","=ACT.PREMIUM(A3:A5,B6,3)"],["Inception reserve per unit","=ACT.RESERVE(A3:A5,B6,3,0,B10)"],["Premium for benefit","=B7*B10"],["Restricted UDD life expectancy","=ACT.LIFEEXPECTANCY(A3:A5,1)"]]}}
+{"command":"home.insertSheet","params":{"name":"Reserves"}}
+{"command":"range.setValues","params":{"range":"A1","parse":false,"values":[["Synthetic cumulative claim triangle"],["Development 1","Development 2","Development 3","Prior ultimate"],[100,150,180,180],[120,180,null,216],[140,null,null,252]]}}
+{"command":"range.setValues","params":{"range":"F2","parse":false,"values":[["Latest","CL ultimate","CL reserve"]]}}
+{"command":"cell.set","params":{"cell":"F3","input":"=ACT.CHAINLADDER(A3:C5)"}}
+{"command":"range.setValues","params":{"range":"J2","parse":false,"values":[["Latest","BF ultimate","BF reserve"]]}}
+{"command":"cell.set","params":{"cell":"J3","input":"=ACT.BORNHUETTERFERGUSON(A3:C5,D3:D5)"}}
+{"command":"range.setValues","params":{"range":"F8","parse":false,"values":[["Total CL reserve","=SUM(H3:H5)"],["Total BF reserve","=SUM(L3:L5)"]]}}
+{"command":"range.setValues","params":{"range":"A8","parse":false,"values":[["Mack uncertainty: last sigma2 is an explicit synthetic assumption",1],["Latest","Ultimate","Reserve","Process SE","Parameter SE","Total SE"]]}}
+{"command":"cell.set","params":{"cell":"A10","input":"=ACT.MACK(A3:C5,B8)"}}
+{"command":"home.insertSheet","params":{"name":"Markov"}}
+{"command":"range.setValues","params":{"range":"A1","parse":false,"values":[["Active / disabled / dead — homogeneous illustrative transitions"],["P: rows from, columns to"],[0.85,0.1,0.05],[0.15,0.75,0.1],[0,0,1],[],["Annual state payments in advance"],[0],[1000],[0]]}}
+{"command":"range.setValues","params":{"range":"F2","parse":false,"values":[["Five-year transition matrix"]]}}
+{"command":"cell.set","params":{"cell":"F3","input":"=ACT.MARKOV.POWER(A3:C5,5)"}}
+{"command":"range.setValues","params":{"range":"F7","parse":false,"values":[["Expected years to death","Probability of death"]]}}
+{"command":"cell.set","params":{"cell":"F8","input":"=ACT.MARKOV.ABSORPTION(A3:C5,2)"}}
+{"command":"range.setValues","params":{"range":"J2","parse":false,"values":[["Ten-year benefit PV by initial state"]]}}
+{"command":"cell.set","params":{"cell":"J3","input":"=ACT.MARKOV.REWARD(A3:C5,A8:A10,0.05,10)"}}
+{"command":"range.setValues","params":{"range":"A13","parse":false,"values":[["CTMC generator: active/dead"],[-0.02,0.02],[0,0]]}}
+{"command":"cell.set","params":{"cell":"F14","input":"=ACT.CTMC.TRANSITION(A14:B15,10)"}}
+{"command":"home.insertSheet","params":{"name":"Pricing"}}
+{"command":"range.setValues","params":{"range":"A1","parse":false,"values":[["Synthetic Poisson log-link GLM — explicit intercept"],["Count","Intercept","Risk indicator","Log exposure"],[2,1,0,0],[2,1,0,0],[4,1,1,0],[4,1,1,0]]}}
+{"command":"range.setValues","params":{"range":"F2","parse":false,"values":[["Coefficients (log mean)"]]}}
+{"command":"cell.set","params":{"cell":"F3","input":"=ACT.GLM.FIT(A3:A6,B3:C6,\"poisson\",D3:D6)"}}
+{"command":"range.setValues","params":{"range":"H2","parse":false,"values":[["Fitted mean"]]}}
+{"command":"cell.set","params":{"cell":"H3","input":"=ACT.GLM.PREDICT(B3:C6,F3:F4,D3:D6)"}}
+{"command":"range.setValues","params":{"range":"A9","parse":false,"values":[["Unit deviance","=ACT.GLM.DEVIANCE(A3:A6,H3:H6,\"poisson\")"],["Gross premium: pure 100, fixed 10, expense 20%, profit 10%","=ACT.GROSSPREMIUM(100,10,0.2,0.1)"],["Credibility: exposure 10, EPV 100, VHM 20","=ACT.CREDIBILITY(10,100,20)"]]}}
+{"command":"sheet.activate","params":{"sheet":"Loss"}}

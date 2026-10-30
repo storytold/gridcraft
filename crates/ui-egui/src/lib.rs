@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::GRIDCRAFT
 };
 
+mod analysis_ui;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;

@@ -1,9 +1,12 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-25 · **Change:** minor (the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-28 · **Change:** minor (95 GridCraft actuarial extensions documented separately from Excel parity; earlier: LAMBDA recursion/error behavior, numeric coercion, INDEX and bounded SUBTOTAL/AGGREGATE) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
+
+The [95 actuarial `ACT.*` extensions](actuarial.md) added 2026-10-27 are GridCraft-specific,
+not Excel parity functions; exclude them from the Excel-name coverage figures below.
 
 ## How this is measured
 

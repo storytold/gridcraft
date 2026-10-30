@@ -1,0 +1,670 @@
+{
+  "provenance": "Independent verifier closed-form/Decimal80 oracles, 2026-10-27. Expected values are never taken from actual product outputs. See docs/actuarial-validation.md.",
+  "cases": [
+    {
+      "label": "curve_discount",
+      "formula": "=ACT.DISCOUNT(0.05,10)",
+      "expected": 0.6139132535407591,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "curtate_expectancy",
+      "formula": "=ACT.LIFEEXPECTANCY({0.1;0.2;1})",
+      "expected": 1.62,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "insurance_factor",
+      "formula": "=ACT.INSURANCE({0.1;0.2},0.05,2)",
+      "expected": 0.25850340136054417,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "net_premium",
+      "formula": "=ACT.PREMIUM({0.1;0.2},0.05,2)",
+      "expected": 0.13919413919413917,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "weighted_tvar_atom",
+      "formula": "=ACT.TVAR({0;100},0.95,{0.95;0.05})",
+      "expected": 100,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "weighted_var_atom",
+      "formula": "=ACT.VAR({0;100},0.95,{0.95;0.05})",
+      "expected": 0,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "panjer_poisson_unit",
+      "formula": "=ACT.COMPOUND.VAR({0;1},\"poisson\",1,0,64,0.999999999999)",
+      "expected": 14,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "euler_allocation",
+      "formula": "=ACT.CAPITAL.ALLOCATION({3;4},{1,0;0,1})",
+      "expected": [
+        [
+          1.8
+        ],
+        [
+          3.2
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "capital_non_psd",
+      "formula": "=ACT.CAPITAL.SD({1;1;1},{1,-0.9,-0.9;-0.9,1,-0.9;-0.9,-0.9,1})",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "markov_analytic",
+      "formula": "=ACT.MARKOV.POWER({0.8,0.2;0.1,0.9},2)",
+      "expected": [
+        [
+          0.66,
+          0.34
+        ],
+        [
+          0.17,
+          0.83
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "markov_nonunique",
+      "formula": "=ACT.MARKOV.STATIONARY({1,0;0,1})",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "ctmc_analytic",
+      "formula": "=ACT.CTMC.TRANSITION({-0.2,0.2;0,0},10)",
+      "expected": [
+        [
+          0.1353352832366127,
+          0.8646647167633873
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "calendar_product",
+      "formula": "=ACT.MARKOV.NONHOMOGENEOUS({0.8,0.2;0,1;0.5,0.5;0,1})",
+      "expected": [
+        [
+          0.4,
+          0.6
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "semi_markov_duration_reset",
+      "formula": "=ACT.SEMIMARKOV.TRACE({1,0;0,1;0,1;1,0;0,1;1,0},{1,0},3)",
+      "expected": [
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gamma_posterior",
+      "formula": "=ACT.BAYES.POISSON({2;3},{1;2},1,2)",
+      "expected": [
+        [
+          6,
+          5,
+          1.2,
+          0.24,
+          0.44037885069817,
+          2.33366641586453,
+          1.2,
+          1.44
+        ]
+      ],
+      "relative_tolerance": 1e-08
+    },
+    {
+      "label": "beta_binomial_uniform_prior_predictive",
+      "formula": "=ACT.BAYES.BINOMIAL.PREDICT(0,0,1,1,2,4)",
+      "expected": 0.2,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gamma_poisson_predictive_zero",
+      "formula": "=ACT.BAYES.POISSON.PREDICT({2;3},{1;2},1,2,0)",
+      "expected": 0.3348979766803842,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "kaplan_meier_censored",
+      "formula": "=ACT.KAPLANMEIER({1;2;3},{1;0;1})",
+      "expected": [
+        [
+          1,
+          3,
+          1,
+          0,
+          0.6666666666666666,
+          0.2721655269759087,
+          0.0540734267865164,
+          0.945206387272047
+        ],
+        [
+          2,
+          2,
+          0,
+          1,
+          0.6666666666666666,
+          0.2721655269759087,
+          0.0540734267865164,
+          0.945206387272047
+        ],
+        [
+          3,
+          1,
+          1,
+          0,
+          0,
+          0,
+          null,
+          null
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "aj_competing_risks",
+      "formula": "=ACT.AALENJOHANSEN({1;2;3;4},{1;2;0;1})",
+      "expected": [
+        [
+          1,
+          4,
+          1,
+          0,
+          0.75,
+          0.25,
+          0
+        ],
+        [
+          2,
+          3,
+          1,
+          0,
+          0.5,
+          0.25,
+          0.25
+        ],
+        [
+          3,
+          2,
+          0,
+          1,
+          0.5,
+          0.25,
+          0.25
+        ],
+        [
+          4,
+          1,
+          1,
+          0,
+          0,
+          0.75,
+          0.25
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "ipcw_no_censor",
+      "formula": "=ACT.BRIER.IPCW({1;3},{1;1},{0.2;0.8},2)",
+      "expected": 0.04,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "cox_null",
+      "formula": "=ACT.COX.FIT({1;1;2;2;3;3},{1;1;1;1;1;1},{0;1;0;1;0;1})",
+      "expected": [
+        [
+          0
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "cox_covariance_null",
+      "formula": "=ACT.COX.COVARIANCE({1;1;2;2;3;3},{1;1;1;1;1;1},{0;1;0;1;0;1},0)",
+      "expected": [
+        [
+          0.6666666666666666
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gpd_exponential_tvar",
+      "formula": "=ACT.GPD.TVAR(0.95,0,2)",
+      "expected": 7.991464547107982,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "pot_unconditional_tvar",
+      "formula": "=ACT.POT.TVAR(100,0.1,0,20,0.99)",
+      "expected": 166.05170185988092,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gpd_infinite_moment",
+      "formula": "=ACT.GPD.TVAR(0.99,1,2)",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gaussian_copula_midpoint",
+      "formula": "=ACT.COPULA.CDF(0.5,0.5,\"gaussian\",0.5)",
+      "expected": 0.3333333333333333,
+      "relative_tolerance": 2e-09
+    },
+    {
+      "label": "student_copula_midpoint",
+      "formula": "=ACT.COPULA.CDF(0.5,0.5,\"student\",0.5,4)",
+      "expected": 0.3333333333333333,
+      "relative_tolerance": 2e-09
+    },
+    {
+      "label": "student_tail_dependence",
+      "formula": "=ACT.COPULA.TAIL(\"student\",0.5,4)",
+      "expected": [
+        [
+          0.2531699951003227,
+          0.2531699951003227
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "clayton_tail_dependence",
+      "formula": "=ACT.COPULA.TAIL(\"clayton\",2)",
+      "expected": [
+        [
+          0.7071067811865476,
+          0
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gumbel_cdf",
+      "formula": "=ACT.COPULA.CDF(0.5,0.5,\"gumbel\",2)",
+      "expected": 0.37521422724648174,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "tail_nonzero_independence",
+      "formula": "=ACT.COPULA.JOINTTAIL(0.999999999,0.999999999,\"independent\",0)",
+      "expected": 9.999999434361379e-19,
+      "relative_tolerance": 1e-08
+    },
+    {
+      "label": "automatic_derivatives",
+      "formula": "=ACT.LIFE.SENSITIVITY({0.1;0.2},0.05,2)",
+      "expected": [
+        [
+          0.25850340136054417,
+          -0.4016844833171363,
+          0.24036281179138322
+        ],
+        [
+          1.8571428571428572,
+          -0.8163265306122448,
+          -0.09523809523809523
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "immunization",
+      "formula": "=ACT.ALM.IMMUNIZE(100,5,{10;20},{2;8})",
+      "expected": [
+        [
+          5
+        ],
+        [
+          2.5
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "surplus_treaty",
+      "formula": "=ACT.REINSURANCE.SURPLUS(1000,200,3,100)",
+      "expected": 60,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "surrogate_quadratic_holdout",
+      "formula": "=ACT.SURROGATE.PREDICT(ACT.SURROGATE.FIT({-2;-1;0;1;2},{12;3;2;9;24},{-0.5;0.5},{1.5;4.5},2),0.25,0.001)",
+      "expected": [
+        [
+          3
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "surrogate_extrapolation_guard",
+      "formula": "=ACT.SURROGATE.PREDICT(ACT.SURROGATE.FIT({-2;-1;0;1;2},{12;3;2;9;24},{-0.5;0.5},{1.5;4.5},2),3,0.001)",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "surrogate_holdout_leakage_guard",
+      "formula": "=ACT.SURROGATE.FIT({-2;-1;0;1;2},{12;3;2;9;24},0,2,2)",
+      "expected": {
+        "error": "#VALUE!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "reinsurance_optimal_finite_grid",
+      "formula": "=ACT.REINSURANCE.OPTIMIZE({0;100},{0.9;0.1},{0;50;100},{0;50;100},0.2,15,0.95)",
+      "expected": [
+        [
+          0,
+          100,
+          10,
+          12,
+          0,
+          12,
+          3
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "reinstatement_capacity",
+      "formula": "=ACT.REINSURANCE.REINSTATEMENTS({200;200;200},50,100,1,10)",
+      "expected": [
+        [
+          200,
+          100,
+          100,
+          100,
+          10,
+          100
+        ],
+        [
+          200,
+          100,
+          100,
+          0,
+          0,
+          0
+        ],
+        [
+          200,
+          0,
+          200,
+          0,
+          0,
+          0
+        ],
+        [
+          600,
+          200,
+          400,
+          100,
+          20,
+          0
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "cox_no_events_guard",
+      "formula": "=ACT.COX.FIT({1;2;3},{0;0;0},{0;1;2})",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "km_delayed_entry_guard",
+      "formula": "=ACT.KAPLANMEIER(1,1,1)",
+      "expected": {
+        "error": "#NUM!"
+      },
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gpd_support_endpoint",
+      "formula": "=ACT.GPD.INV(1,-0.5,2)",
+      "expected": 4,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "copula_gaussian_independence",
+      "formula": "=ACT.COPULA.CDF(0.3,0.8,\"gaussian\",0)",
+      "expected": 0.24,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "copula_perfect_negative",
+      "formula": "=ACT.COPULA.CDF(0.3,0.8,\"student\",-1,4)",
+      "expected": 0.1,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "frank_tiny_positive_independence_limit",
+      "formula": "=ACT.COPULA.CDF(0.2,0.3,\"frank\",1E-200)",
+      "expected": 0.06,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "frank_tiny_negative_independence_limit",
+      "formula": "=ACT.COPULA.CDF(0.2,0.3,\"frank\",-1E-200)",
+      "expected": 0.06,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "gamma_extreme_credible_interval",
+      "formula": "=ACT.BAYES.POISSON(0,0,1,1,0.9999999999999999)",
+      "expected": [
+        [
+          1,
+          1,
+          1,
+          1,
+          5.551115123125783e-17,
+          37.42994775023705,
+          1,
+          2
+        ]
+      ],
+      "relative_tolerance": 3e-09
+    },
+    {
+      "label": "nb_tiny_shape_preserves_positive_probability",
+      "formula": "=INDEX(ACT.COMPOUND.PMF({0;1},\"negativebinomial\",1E-20,0.5,2),2,2)",
+      "expected": 5e-21,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "km_zero_endpoint_confidence_undefined",
+      "formula": "=ACT.KAPLANMEIER(1,1)",
+      "expected": [
+        [
+          1,
+          1,
+          1,
+          0,
+          0,
+          0,
+          null,
+          null
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "km_one_endpoint_confidence_undefined",
+      "formula": "=ACT.KAPLANMEIER(1,0)",
+      "expected": [
+        [
+          1,
+          1,
+          0,
+          1,
+          1,
+          0,
+          null,
+          null
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "ipcw_failure_censor_ties_independent_finite_population",
+      "formula": "=ACT.BRIER.IPCW({1;1;1;3},{1;1;0;1},{0.5;0.5;0.5;0.5},2)",
+      "expected": 0.25,
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "compound_tvar_extreme_precision",
+      "formula": "=ACT.COMPOUND.TVAR({0;1},\"poisson\",1,0,64,0.999999999999999)",
+      "expected": 17.064043603884745,
+      "relative_tolerance": 1e-08
+    },
+    {
+      "label": "km_terminal_missing_bounds",
+      "formula": "=ACT.KAPLANMEIER(1,1)",
+      "expected": [
+        [
+          1,
+          1,
+          1,
+          0,
+          0,
+          0,
+          null,
+          null
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "km_censor_missing_bounds",
+      "formula": "=ACT.KAPLANMEIER(1,0)",
+      "expected": [
+        [
+          1,
+          1,
+          0,
+          1,
+          1,
+          0,
+          null,
+          null
+        ]
+      ],
+      "relative_tolerance": 1e-10
+    },
+    {
+      "label": "skipped_annuity_term_default",
+      "formula": "=ACT.ANNUITY({0.2;0.5;1},0.1,,0)",
+      "expected": 1.0578512396694215,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "skipped_annuity_due_before_defer",
+      "formula": "=ACT.ANNUITY({0.2;0.5;1},0.1,2,,1)",
+      "expected": 1.0578512396694215,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "skipped_premium_term_default",
+      "formula": "=ACT.PREMIUM({0.2;0.5;1},0.1,3,,1)",
+      "expected": 0.39503468419131077,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "skipped_layer_share_default",
+      "formula": "=ACT.LAYER(100,25,50,)",
+      "expected": 50,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "blank_reference_layer_share_is_zero",
+      "formula": "=ACT.LAYER(100,25,50,A1)",
+      "expected": 0,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "blank_reference_annuity_term_is_zero",
+      "formula": "=ACT.ANNUITY({0.2;0.5;1},0.1,A1,0)",
+      "expected": 0,
+      "relative_tolerance": 1e-12
+    },
+    {
+      "label": "skipped_confidence_before_future_exposure",
+      "formula": "=ACT.BAYES.POISSON(0,0,1,1,,2)",
+      "expected": [
+        [
+          1,
+          1,
+          1,
+          1,
+          0.025317807984289897,
+          3.6888794541139363,
+          2,
+          6
+        ]
+      ],
+      "relative_tolerance": 1e-08
+    },
+    {
+      "label": "skipped_student_degrees_default",
+      "formula": "=ACT.COPULA.CDF(0.5,0.5,\"student\",0.5,)",
+      "expected": 0.3333333333333333,
+      "relative_tolerance": 1e-10
+    }
+  ]
+}

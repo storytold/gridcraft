@@ -1,7 +1,10 @@
 //! Conditional formatting evaluation: what extra style, data bar, colour scale or icon a cell
 //! gets.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, Weak},
+};
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
 use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
@@ -20,10 +23,31 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
+/// Bounded, document-owned paint results. Weak identity preserves workbook copy-on-write.
+#[derive(Clone, Debug, Default)]
+pub struct RenderCache(Arc<Mutex<PaintResults>>);
+#[derive(Debug, Default)]
+struct PaintResults {
+    workbook: Weak<Workbook>,
+    revision: u64,
+    start_ms: Option<f64>,
+    values: HashMap<(usize, CellRef), Option<CfLook>>,
+}
+const MAX_PAINT_RESULTS: usize = 4096;
+const PAINT_CACHE_MS: f64 = 1000.0;
+
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
-#[derive(Default)]
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    frame_meter: crate::workload::Meter,
+    results: Option<RenderCache>,
+}
+
+impl Default for CfCache {
+    /// Standalone hosts get a bounded bank; UI frames explicitly reuse their document's bank.
+    fn default() -> Self {
+        Self::with_budget(crate::workload::AnalysisBudget::rendering())
+    }
 }
 
 #[derive(Default, Clone)]
@@ -230,10 +254,83 @@ impl CfCache {
         Self::default()
     }
 
+    /// Uses a document-owned bank so constructing a fresh paint cache cannot reset allowance.
+    pub fn with_budget(budget: crate::workload::AnalysisBudget) -> Self {
+        Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: None }
+    }
+
+    /// Reuses results for one revision under a cache-wide one-second TTL for every look,
+    /// including nonvolatile and fallback results; this also bounds volatile-result staleness.
+    pub fn with_cache(budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64) -> Self {
+        Self::with_cache_at(budget, results, wb, revision, gridcraft_core::date::unix_now_ms())
+    }
+
+    /// Invalidates stale results using an explicit clock without replenishing the shared bank.
+    /// Unknown/backward clocks and changed workbook identity/revision never serve old styles.
+    fn with_cache_at(budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64, now: Option<f64>) -> Self {
+        let now = now.filter(|time| time.is_finite());
+        let usable = if let Ok(mut stored) = results.0.lock() {
+            let fresh = match (stored.start_ms, now) {
+                (Some(start), Some(now)) => now >= start && now - start < PAINT_CACHE_MS,
+                _ => false,
+            };
+            if !Weak::ptr_eq(&stored.workbook, &Arc::downgrade(wb)) || stored.revision != revision || !fresh {
+                stored.values.clear();
+                stored.workbook = Arc::downgrade(wb);
+                stored.revision = revision;
+                stored.start_ms = now;
+            }
+            now.is_some()
+        } else {
+            false
+        };
+        Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: usable.then_some(results) }
+    }
+
     /// Conditional look of `c`, or `None` when no rule applies.
     pub fn look(&mut self, wb: &Workbook, sheet: usize, c: CellRef) -> Option<CfLook> {
+        if !gridcraft_calc::WorkHook::allowed() {
+            return None;
+        }
+        if let Some(results) = &self.results
+            && let Ok(stored) = results.0.lock()
+            && std::ptr::eq(stored.workbook.as_ptr(), wb)
+            && let Some(value) = stored.values.get(&(sheet, c))
+        {
+            return value.clone();
+        }
+        let value = self.look_uncached(wb, sheet, c);
+        if let Some(results) = &self.results
+            && let Ok(mut stored) = results.0.lock()
+            && std::ptr::eq(stored.workbook.as_ptr(), wb)
+        {
+            if stored.values.len() >= MAX_PAINT_RESULTS {
+                stored.values.clear();
+            }
+            stored.values.insert((sheet, c), value.clone());
+        }
+        value
+    }
+
+    /// Evaluates a miss under local, ambient and shared-frame work policies. Any refusal omits
+    /// its conditional look instead of publishing a style derived from a handled numeric error.
+    fn look_uncached(&mut self, wb: &Workbook, sheet: usize, c: CellRef) -> Option<CfLook> {
         let sh = wb.sheet(sheet)?;
         if sh.cond_formats.is_empty() {
+            return None;
+        }
+        // One frame shares prepaid credit between misses instead of discarding a reservation
+        // per cell. The independent per-cell meter rejects oversized native work before it
+        // can reserve the document bank. A fresh hook keeps a local refusal cell-scoped.
+        let local = crate::workload::Meter::ordinary();
+        local.set_limit(100_000).ok()?;
+        let frame = self.frame_meter.clone();
+        let parent = gridcraft_calc::WorkHook::current();
+        let combined = gridcraft_calc::WorkHook::new(move |units| {
+            local.charge(units).is_ok() && parent.as_ref().is_none_or(|policy| policy.charge(units)) && frame.charge(units).is_ok()
+        });
+        let _scope = combined.enter_local()?;
+        if !gridcraft_calc::WorkHook::allowed() {
             return None;
         }
         let mut out = CfLook::default();
@@ -348,6 +445,9 @@ impl CfCache {
                 }
                 _ => None,
             });
+            if !gridcraft_calc::WorkHook::allowed() {
+                return None;
+            }
             if let Some(st) = matched_style {
                 any = true;
                 // Every matching rule applies; where two set the same part, the rule with the
@@ -416,6 +516,214 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A frame shares prepaid credit across misses instead of reserving 4096 units per cell.
+    #[test]
+    fn one_frame_can_style_a_thousand_uncached_cells_with_a_small_bank() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:T50","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}}))
+            .unwrap();
+        let d = s.doc().unwrap();
+        assert_eq!(d.render_budget.remaining().unwrap(), 1_000_000);
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        for row in 0..50 {
+            for col in 0..20 {
+                assert!(cache.look(&d.wb, 0, CellRef::new(row, col)).is_some());
+            }
+        }
+        assert!(d.render_budget.remaining().unwrap() > 990_000);
+        assert!(cache.frame_meter.spent().unwrap() < 10_000);
+    }
+
+    /// Rejecting an oversized kernel is local to its cell and precedes its bank reservation.
+    #[test]
+    fn local_native_refusal_preserves_frame_credit_for_other_cells() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
+        s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}}))
+            .unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"B2","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        assert!(cache.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_none());
+        assert!(d.render_budget.remaining().unwrap() > 990_000);
+        assert!(cache.frame_meter.check().is_ok(), "a local refusal must not poison the frame meter");
+        assert!(cache.look(&d.wb, 0, CellRef::parse("B2").unwrap()).is_some());
+    }
+
+    /// Optional CF refusal must not fail a real command or suppress its inexpensive neighbour.
+    #[test]
+    fn local_refusal_under_a_command_keeps_parent_and_neighbour_healthy() {
+        /// Exercises the same ambient work scope used by command-driven printing.
+        fn paint(s: &mut crate::Session, _: &serde_json::Value) -> crate::Result<serde_json::Value> {
+            let d = s.doc()?;
+            let mut cache = CfCache::with_budget(d.render_budget.clone());
+            let refused = cache.look(&d.wb, 0, CellRef::new(0, 1)).is_none();
+            let neighbour = cache.look(&d.wb, 0, CellRef::new(1, 1)).is_some();
+            Ok(json!([refused, neighbour, gridcraft_calc::WorkHook::allowed()]))
+        }
+        crate::register_test_command("test.cf.localRefusal", paint);
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"B2","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+        assert_eq!(s.execute("test.cf.localRefusal", json!({})).unwrap(), json!([true, true, true]));
+    }
+
+    /// Exhausting only the rendering frame omits CF without rejecting its enclosing command.
+    #[test]
+    fn frame_refusal_under_a_command_keeps_parent_healthy() {
+        /// A tiny frame allowance refuses the style while the command still has work credit.
+        fn paint(s: &mut crate::Session, _: &serde_json::Value) -> crate::Result<serde_json::Value> {
+            let d = s.doc()?;
+            let mut cache = CfCache::with_budget(d.render_budget.clone());
+            cache.frame_meter.set_limit(1)?;
+            let refused = cache.look(&d.wb, 0, CellRef::default()).is_none();
+            Ok(json!([refused, gridcraft_calc::WorkHook::allowed()]))
+        }
+        crate::register_test_command("test.cf.frameRefusal", paint);
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}})).unwrap();
+        assert_eq!(s.execute("test.cf.frameRefusal", json!({})).unwrap(), json!([true, true]));
+    }
+
+    /// A true ambient work refusal must still stop the command despite CF's local isolation.
+    #[test]
+    fn real_parent_refusal_during_a_look_remains_terminal() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A2","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}}))
+            .unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        let parent = crate::workload::Meter::ordinary();
+        parent.set_limit(1).unwrap();
+        {
+            let _scope = parent.hook().enter().unwrap();
+            assert!(cache.look(&d.wb, 0, CellRef::default()).is_none());
+            assert!(!gridcraft_calc::WorkHook::allowed());
+            assert!(cache.look(&d.wb, 0, CellRef::new(1, 0)).is_none());
+        }
+        assert!(parent.check().is_err());
+        assert_eq!(s.execute("formulas.evaluate", json!({"formula":"=1+1"})).unwrap(), json!(2.0));
+    }
+
+    /// Hits, including cached fallback, do not reserve credit; misses retain terminal bank failure.
+    #[test]
+    fn cached_hits_and_fallback_do_not_reserve_frame_credit() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A3","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let budget = d.render_budget.clone();
+        let results = d.render_cache.clone();
+        let mut first = CfCache::with_cache_at(budget.clone(), results.clone(), &d.wb, d.revision, Some(1000.));
+        assert!(first.look(&d.wb, 0, CellRef::default()).is_some());
+        crate::workload::Meter::new(budget.clone()).charge(budget.remaining().unwrap()).unwrap();
+        let mut next = CfCache::with_cache_at(budget.clone(), results.clone(), &d.wb, d.revision, Some(1000.));
+        assert!(next.look(&d.wb, 0, CellRef::default()).is_some());
+        assert_eq!(next.frame_meter.spent().unwrap(), 0);
+        let uncached = CellRef::new(1, 0);
+        assert!(next.look(&d.wb, 0, uncached).is_none());
+        assert!(next.frame_meter.check().is_err());
+        let spent = next.frame_meter.spent().unwrap();
+        assert!(next.look(&d.wb, 0, uncached).is_none());
+        assert_eq!(next.frame_meter.spent().unwrap(), spent);
+        assert!(results.0.lock().unwrap().values.contains_key(&(0, uncached)));
+        let parent = gridcraft_calc::WorkHook::new(|_| false);
+        let _scope = parent.enter().unwrap();
+        assert!(next.look(&d.wb, 0, CellRef::default()).is_none());
+    }
+
+    /// Unchanged frames reuse bounded results; identity/revision/TTL changes invalidate results only.
+    #[test]
+    fn repeated_paints_reuse_results_and_invalidate_without_refilling_work() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:T50","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}}))
+            .unwrap();
+        let d = s.doc().unwrap();
+        let budget = d.render_budget.clone();
+        let results = d.render_cache.clone();
+        for frame in 0..500 {
+            let mut cache = CfCache::with_cache_at(budget.clone(), results.clone(), &d.wb, d.revision, Some(1000.));
+            for row in 0..50 {
+                for col in 0..20 {
+                    assert!(cache.look(&d.wb, 0, CellRef::new(row, col)).is_some(), "frame {frame}");
+                }
+            }
+        }
+        let remaining = budget.remaining().unwrap();
+        assert!(remaining > 990_000);
+        assert_eq!(results.0.lock().unwrap().values.len(), 1000);
+        let c = CellRef::default();
+        let mut expired = CfCache::with_cache_at(budget.clone(), results.clone(), &d.wb, d.revision, Some(2000.));
+        assert!(expired.look(&d.wb, 0, c).is_some());
+        assert!(budget.remaining().unwrap() < remaining);
+        let before_revision = budget.remaining().unwrap();
+        let mut revised = CfCache::with_cache_at(budget.clone(), results.clone(), &d.wb, d.revision + 1, Some(2000.));
+        assert!(revised.look(&d.wb, 0, c).is_some());
+        assert!(budget.remaining().unwrap() < before_revision);
+        let cloned = Arc::new((*d.wb).clone());
+        let before_identity = budget.remaining().unwrap();
+        let mut changed = CfCache::with_cache_at(budget.clone(), results.clone(), &cloned, d.revision + 1, Some(2000.));
+        assert!(changed.look(&cloned, 0, c).is_some());
+        assert!(budget.remaining().unwrap() < before_identity);
+        // Unknown and backward clocks never serve cached volatile results.
+        for now in [None, Some(1000.)] {
+            let before_clock = budget.remaining().unwrap();
+            let mut cache = CfCache::with_cache_at(budget.clone(), results.clone(), &cloned, d.revision + 1, now);
+            assert!(cache.look(&cloned, 0, c).is_some());
+            assert!(budget.remaining().unwrap() < before_clock);
+        }
+        assert_eq!(Arc::strong_count(&cloned), 1, "paint identity must remain weak");
+    }
+
+    /// Workbook paint expressions are bounded without a command and cannot style a refused value.
+    #[test]
+    fn rendering_native_broadcast_refusal_has_safe_fallback_even_with_iferror() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
+        s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
+        for rule in [
+            json!({"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}),
+            json!({"type":"cellIs","operator":"notEqual","value":"=NORM.S.DIST(SEQUENCE(100001),TRUE)","preset":"lightRedFill"}),
+        ] {
+            s.execute("home.conditionalFormat", json!({"range":"B1:B2","rule":rule})).unwrap();
+            let d = s.doc().unwrap();
+            let before = d.analysis_budget.remaining().unwrap();
+            for _ in 0..3 {
+                let mut paint = CfCache::with_budget(d.render_budget.clone());
+                assert!(paint.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_none());
+                assert!(paint.look(&d.wb, 0, CellRef::parse("B2").unwrap()).is_none());
+            }
+            assert_eq!(d.analysis_budget.remaining().unwrap(), before);
+        }
+    }
+
+    /// New paint caches and formula IFERROR cannot reset the document's consumed window.
+    #[test]
+    fn repaint_caches_share_one_window_and_preserve_ambient_refusal() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let budget = d.render_budget.clone();
+        assert!(CfCache::with_budget(budget.clone()).look(&d.wb, 0, CellRef::default()).is_some());
+        crate::workload::Meter::new(budget.clone()).charge(budget.remaining().unwrap()).unwrap();
+        for _ in 0..3 {
+            assert!(CfCache::with_budget(budget.clone()).look(&d.wb, 0, CellRef::default()).is_none());
+        }
+        let parent = gridcraft_calc::WorkHook::new(|_| false);
+        let _scope = parent.enter().unwrap();
+        assert!(CfCache::new().look(&d.wb, 0, CellRef::default()).is_none());
+        assert!(!gridcraft_calc::WorkHook::allowed());
+    }
 
     #[test]
     fn every_matching_rule_applies() {

@@ -10,6 +10,7 @@ use super::{
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
     keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
+use crate::analysis_ui;
 
 mod clipboard;
 mod commands;
@@ -127,6 +128,7 @@ impl SheetApp {
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
+        analysis_ui::tick(self, ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
@@ -135,7 +137,9 @@ impl SheetApp {
         updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
-        self.autosave(ctx);
+        if !self.session.analysis_active() {
+            self.autosave(ctx);
+        }
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
         // One window always shows a workbook, unless each workbook has a native window of its own
@@ -208,34 +212,40 @@ impl SheetApp {
             self.backstage = None;
         }
         // Keytips opened the File view (Alt, F): its letters keep working there.
-        if self.backstage.is_none() || self.keytips.prefix().is_some() {
+        if !self.session.analysis_active() && (self.backstage.is_none() || self.keytips.prefix().is_some()) {
             self.ribbon_keys(&ctx);
         }
-        if self.chrome.title_bar {
-            ribbon::title_bar(self, ui);
-        }
-        if self.backstage.is_some() {
-            // File tab: the Backstage view replaces everything below the title bar.
-            backstage::show(self, ui);
-        } else {
-            ribbon::show(self, ui);
-            widgets::notice_bar(self, ui);
-            if self.session.prefs.formula_bar {
-                formula_bar::show(self, ui);
+        let analysis_active = self.session.analysis_active();
+        ui.add_enabled_ui(!analysis_active, |ui| {
+            if self.chrome.title_bar {
+                ribbon::title_bar(self, ui);
             }
-            if self.ui.status_bar {
-                tabs::status_bar(self, ui);
+            if self.backstage.is_some() {
+                // File tab: the Backstage view replaces everything below the title bar.
+                backstage::show(self, ui);
+            } else {
+                ribbon::show(self, ui);
+                widgets::notice_bar(self, ui);
+                if self.session.prefs.formula_bar {
+                    formula_bar::show(self, ui);
+                }
+                if self.ui.status_bar {
+                    tabs::status_bar(self, ui);
+                }
+                tabs::sheet_tabs(self, ui);
+                pivot_pane::show(self, ui);
+                panes::show(self, ui);
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
+                    let g0 = now_ms();
+                    grid::show(self, ui);
+                    self.perf.grid_ms = now_ms() - g0;
+                });
             }
-            tabs::sheet_tabs(self, ui);
-            pivot_pane::show(self, ui);
-            panes::show(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
-                let g0 = now_ms();
-                grid::show(self, ui);
-                self.perf.grid_ms = now_ms() - g0;
-            });
+        });
+        if !analysis_active {
+            dialogs::show(self, &ctx);
         }
-        dialogs::show(self, &ctx);
+        analysis_ui::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);

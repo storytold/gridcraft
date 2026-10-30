@@ -118,15 +118,16 @@ fn format_constraint_row(sh: &Sheet, c: &Constraint, cell: CellRef, v: f64, rhs:
     vec![Value::text(abs_ref(cell)), Value::text(cell_name(sh, cell)), num(v), Value::text(formula), Value::text(status), num(slack)]
 }
 
-fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
+/// Prepares an answer report only if its isolated evaluations stay within shared work limits.
+fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
     let m = inp.model;
     let mut trial = Trial::new(d);
-    let read = |trial: &mut Trial, x: &[f64], cells: &[CellRef]| -> Vec<f64> {
+    let read = |trial: &mut Trial, x: &[f64], cells: &[CellRef]| -> Result<Vec<f64>> {
         let sets: Vec<(usize, CellRef, Value)> = m.vars.iter().zip(x).map(|(c, v)| (m.sheet, *c, Value::number(*v))).collect();
         let reads: Vec<(usize, CellRef)> = cells.iter().map(|c| (m.sheet, *c)).collect();
-        trial.run(&sets, &reads).iter().map(as_num).collect()
+        Ok(trial.run(&sets, &reads)?.iter().map(as_num).collect())
     };
-    let f0 = read(&mut trial, &inp.original, &[m.objective]).first().copied().unwrap_or(f64::NAN);
+    let f0 = read(&mut trial, &inp.original, &[m.objective])?.first().copied().unwrap_or(f64::NAN);
     // Every cell the constraints read, at the solution.
     let mut cells = vec![m.objective];
     for c in &m.cons {
@@ -135,7 +136,7 @@ fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
             cells.extend(r);
         }
     }
-    let vals = read(&mut trial, &inp.solution, &cells);
+    let vals = read(&mut trial, &inp.solution, &cells)?;
     let mut at = vals.iter().copied();
     let f1 = at.next().unwrap_or(f64::NAN);
     let num = |v: f64| if v.is_finite() { Value::number(v) } else { Value::Error(gridcraft_core::CellError::Value) };
@@ -185,9 +186,10 @@ fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
         }
     }
     table(&mut out, r + 1, &["Cell", "Name", "Cell Value", "Formula", "Status", "Slack"], rows);
-    out
+    Ok(out)
 }
 
+/// Computes variable limits in isolated trials and propagates terminal work errors.
 fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
     let m = inp.model;
     if inp.prob.integer.iter().any(|b| *b) {
@@ -251,6 +253,7 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
     let obj = vec![vec![Value::text(abs_ref(m.objective)), Value::text(cell_name(sh, m.objective)), num(f)]];
     let r = table(&mut out, r, &["Objective Cell", "Name", "Value"], obj);
     table(&mut out, r, &["Variable Cell", "Name", "Value", "Lower Limit", "Objective Result", "Upper Limit", "Objective Result"], rows);
+    ev.trial.check()?;
     Ok(out)
 }
 
@@ -266,7 +269,7 @@ pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportIn
     let mut built = Vec::new();
     for k in kinds {
         let lines = match k {
-            ReportKind::Answer => answer_report(d, sh, inp),
+            ReportKind::Answer => answer_report(d, sh, inp)?,
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
         let name = (1..=10_000u32)

@@ -81,6 +81,9 @@ impl Evaluator<'_> {
         self.trim_ev(ev, rows, cols)
     }
 
+    /// Trims references and arrays, retaining ordinary error-valued cells as nonblank content.
+    /// A short singleton-error reference reply aborts with that error; correctly shaped
+    /// replies retain their error cells, and other shape mismatches are #VALUE!.
     fn trim_ev(&mut self, ev: Ev, rows: (bool, bool), cols: (bool, bool)) -> Result<Ev, CellError> {
         let none = rows == (false, false) && cols == (false, false);
         match ev {
@@ -96,6 +99,12 @@ impl Evaluator<'_> {
                     return Err(CellError::Num);
                 }
                 let values = self.host.range_values(a.sheet, part);
+                if values.len() != h.saturating_mul(w) {
+                    return match values.as_slice() {
+                        [Value::Error(error)] => Err(*error),
+                        _ => Err(CellError::Value),
+                    };
+                }
                 let ((r0, r1), (c0, c1)) = bounds(&values, w).ok_or(CellError::Calc)?;
                 let (h_all, w_all) = (a.range.height() as usize, a.range.width() as usize);
                 let (kr0, kr1) = keep(h_all, (r0, r1), rows);

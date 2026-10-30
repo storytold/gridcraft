@@ -18,6 +18,7 @@ use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "monteCarlo" => return super::monte_carlo::params(d),
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
                 m.remove("action");
@@ -135,6 +136,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "monteCarlo" => 560.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -174,6 +176,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "monteCarlo" => super::monte_carlo::form(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -376,7 +379,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
-        match app.run(cmd, params) {
+        match app.run_dialog_command(cmd, params) {
             Ok(r) => {
                 open = false;
                 if d.name == "solver" {
@@ -427,7 +430,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Draws dialog actions with the default Enter-to-confirm shortcut.
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_with_enter(ui, confirm, open, true);
+}
+
+/// Draws dialog actions, letting multiline editors reserve Enter for line breaks.
+/// Mouse/keyboard activation of the OK button remains available regardless of the shortcut.
+pub(super) fn ok_cancel_with_enter(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enter_confirms: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -436,7 +446,7 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            if ok.clicked() || (enter_confirms && ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {

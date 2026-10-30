@@ -294,6 +294,9 @@ impl<'h> Evaluator<'h> {
             };
         };
         if args.len() < spec.min_args || args.len() > spec.max_args {
+            if spec.name.starts_with("MC.") {
+                let _ = self.host.simulation(self.sheet, self.at, crate::SimulationRequest::Invalid);
+            }
             return err(CellError::Value);
         }
         if let Some(kind) = Agg::of(spec.name) {
