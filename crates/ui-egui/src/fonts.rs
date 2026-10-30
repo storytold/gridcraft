@@ -317,14 +317,18 @@ fn face_key(face: &Face) -> String {
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
 /// binds nothing.
 ///
-/// Each role's chain ends with the proportional family's chain as `fonts` has it (the app binds
-/// once that is the interface's), so glyphs the installed font lacks (emoji, a stray script, a
-/// currency sign) still render.
+/// Each role's chain ends with the proportional family's chain as `fonts` has it, or for the bold
+/// roles the bold interface family's when there is one (the app binds once those are the
+/// interface's), so glyphs the installed font lacks (emoji, a stray script, a currency sign) still
+/// render.
 pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face]) -> Vec<String> {
     if faces.is_empty() {
         return Vec::new();
     }
     let base: Vec<String> = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    // Bold roles end with the bold interface chain where there is one, so a glyph the installed
+    // face lacks comes out bold too.
+    let base_bold: Vec<String> = fonts.families.get(&egui::FontFamily::Name(crate::theme::UI_BOLD.into())).cloned().unwrap_or_else(|| base.clone());
     let mut bound: Vec<String> = Vec::new();
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
         let Some(primary) = pick_face(faces, bold, italic) else { continue };
@@ -346,7 +350,7 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
         if chain.is_empty() {
             continue;
         }
-        chain.extend(base.iter().cloned());
+        chain.extend(if bold { &base_bold } else { &base }.iter().cloned());
         let role = role_key(family, bold, italic);
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);

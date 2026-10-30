@@ -234,6 +234,8 @@ fn without_glyph(ctx: &egui::Context, family: FontFamily, sample: &str) -> Strin
 #[test]
 /// A cell draws every currency sign the interface font draws, in every cell role and in an installed workbook font (#2035).
 fn cells_draw_the_currency_signs_the_interface_draws() {
+    // The app scans the installed fonts in the background; wait for the catalog here.
+    let _ = crate::fonts::catalog();
     let installed = crate::fonts::installed_among(&["Arial".to_string()]);
     let ctx = egui::Context::default();
     ctx.set_fonts(font_definitions_with(Language::En, &installed));
@@ -263,6 +265,16 @@ fn cells_draw_the_currency_signs_the_interface_draws() {
             let ui_at = chain.iter().position(|k| k.starts_with("sys-ui"));
             let first_craft = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
             assert!(ui_at.is_some_and(|at| at < first_craft), "{family} must reach the interface font before the craft faces: {chain:?}");
+            // Bold text reaches the bold interface face, ahead of any regular one; a bold cell role
+            // also keeps the regular face behind it, for a system with no bold interface face.
+            let bold_key = format!("sys-{UI_BOLD}");
+            let bold_role = family == CELL_BOLD || family == CELL_BOLD_ITALIC;
+            if (bold_role || family.ends_with(":bn") || family.ends_with(":bi")) && fonts.font_data.contains_key(&bold_key) {
+                let bold_at = chain.iter().position(|k| *k == bold_key);
+                let regular_at = chain.iter().position(|k| *k == ui_key);
+                assert!(bold_at.is_some_and(|b| regular_at.is_none_or(|r| b < r)), "{family} must reach {bold_key} first: {chain:?}");
+                assert!(!bold_role || regular_at.is_some(), "{family} must keep {ui_key} behind {bold_key}: {chain:?}");
+            }
         }
     }
 }
