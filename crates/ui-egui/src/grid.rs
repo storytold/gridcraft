@@ -284,5 +284,12 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
     (11.5 * (zoom / DISPLAY_SCALE)).max(8.5)
 }
 
+/// Whether background error checking flags the cell: a number stored as text the user has not
+/// chosen to ignore.
+pub(super) fn is_number_stored_as_text(sh: &Sheet, c: CellRef) -> bool {
+    sh.cell(c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some()
+        && !gridcraft_engine::model::is_error_ignored(&sh.ignored_errors, c, gridcraft_engine::model::error_rule::NUMBER_STORED_AS_TEXT)
+}
+
 #[cfg(test)]
 mod tests;

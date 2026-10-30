@@ -82,6 +82,25 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             convert_to_number
         ),
+        cmd!(
+            "formulas.ignoreError",
+            "Ignore Error",
+            [],
+            None,
+            "{range?, kinds?: [\"numberStoredAsText\"] (default; or evalError, twoDigitTextYear, formula, formulaRange, unlockedFormula, emptyCellReference, listDataValidation, calculatedColumn, all)} → {ranges}: the cells stop being flagged for those error-checking rules (saved as the sheet's ignoredErrors). Editing a cell's content forgets what it ignored.",
+            has_doc,
+            ignore_error
+        ),
+        cmd!(
+            "formulas.clearIgnoredErrors",
+            "Reset Ignored Errors",
+            [],
+            None,
+            "{range?, kinds? (default: all rules), all?: true = every sheet (File ▸ Options ▸ Formulas ▸ Reset Ignored Errors)} → {ranges}: the cells are checked again",
+            has_doc,
+            clear_ignored_errors
+        ),
+        cmd!(query "formulas.ignoredErrors", "Ignored Errors", [], None, "{} → [{sheet, ranges: [\"A1:B2\"], kinds: [\"numberStoredAsText\"]}]", has_doc, ignored_errors),
         cmd!(query "formulas.errorChecking", "Error Checking", ["Formulas", "Formula Auditing"], None, "{} → cells with errors", has_doc, error_checking),
         cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?} → steps", has_doc, evaluate_formula),
         cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet; a formula that couldn't be entered in a cell is an error", has_doc, evaluate),
@@ -443,6 +462,8 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
             if let Some(cell) = sh.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
+            // A structural commit skips the ignored-error cleanup, so the rewritten cell drops its rules here.
+            gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::cell(c), gridcraft_model::error_rule::ALL);
         }
     }
     for n in wb.names.iter_mut() {
@@ -771,6 +792,78 @@ fn convert_to_number(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(json!({"converted": converted}))
     })
+}
+
+/// `kinds`: one rule name, or a list of them (`all` stands for every rule).
+fn kinds_param(p: &Json, default: u16) -> Result<u16> {
+    let names: Vec<&str> = match p.get("kinds") {
+        None | Some(Json::Null) => return Ok(default),
+        Some(Json::String(n)) => vec![n.as_str()],
+        Some(Json::Array(a)) => a.iter().map(|n| n.as_str().ok_or_else(|| bad("kinds", "expected rule names (text)"))).collect::<Result<_>>()?,
+        Some(_) => return Err(bad("kinds", "expected a rule name or a list of rule names")),
+    };
+    let mut mask = 0;
+    for n in names {
+        mask |= if n.eq_ignore_ascii_case("all") {
+            gridcraft_model::error_rule::ALL
+        } else {
+            gridcraft_model::error_rule::parse(n).ok_or_else(|| bad("kinds", format!("unknown error-checking rule `{n}`")))?
+        };
+    }
+    Ok(mask)
+}
+
+/// Ignore Error: the range's cells stop being flagged for the chosen rules.
+fn ignore_error(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let kinds = kinds_param(p, gridcraft_model::error_rule::NUMBER_STORED_AS_TEXT)?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        for r in &ranges {
+            gridcraft_model::ignore_errors(&mut sh.ignored_errors, *r, kinds);
+        }
+        Ok(json!({"ranges": ranges.len()}))
+    })
+}
+
+/// Reset Ignored Errors: the range's cells (or every sheet's, with `all`) are checked again.
+fn clear_ignored_errors(s: &mut Session, p: &Json) -> Result<Json> {
+    let all = bool_param(p, "all").unwrap_or(false);
+    let kinds = kinds_param(p, gridcraft_model::error_rule::ALL)?;
+    let (sheet, ranges) = if all {
+        (0, vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(u32::MAX, u32::MAX))])
+    } else {
+        (target_sheet(s, p)?, target_ranges(s, p)?)
+    };
+    edit(s, |cx| {
+        if all {
+            for sh in cx.wb.sheets.iter_mut() {
+                let sh = std::sync::Arc::make_mut(sh);
+                for r in &ranges {
+                    gridcraft_model::unignore_errors(&mut sh.ignored_errors, *r, kinds);
+                }
+            }
+        } else {
+            let sh = cx.sheet_mut(sheet)?;
+            for r in &ranges {
+                gridcraft_model::unignore_errors(&mut sh.ignored_errors, *r, kinds);
+            }
+        }
+        Ok(json!({"ranges": ranges.len()}))
+    })
+}
+
+fn ignored_errors(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let mut out = Vec::new();
+    for sh in &d.wb.sheets {
+        for ie in &sh.ignored_errors {
+            let kinds: Vec<&str> = gridcraft_model::error_rule::NAMES.iter().filter(|(_, bit)| ie.kinds & bit != 0).map(|(n, _)| *n).collect();
+            out.push(json!({"sheet": sh.name, "ranges": ie.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "kinds": kinds}));
+        }
+    }
+    Ok(Json::Array(out))
 }
 
 fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {

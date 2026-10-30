@@ -118,6 +118,9 @@ pub struct Sheet {
     /// Allow Edit Ranges (meaningful while the sheet is protected).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edit_ranges: Vec<crate::EditRange>,
+    /// Error-checking rules the user ignored for cells (Ignore Error), saved as `ignoredErrors`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_errors: Vec<crate::IgnoredError>,
     pub print: PrintSettings,
     /// Last selection and scroll position, saved with the file.
     pub view_active: CellRef,
@@ -185,6 +188,7 @@ impl Sheet {
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
+            ignored_errors: vec![],
             print: PrintSettings::default(),
             view_active: CellRef::default(),
             view_top_left: CellRef::default(),

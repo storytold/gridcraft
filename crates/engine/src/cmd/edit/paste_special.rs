@@ -46,6 +46,11 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
+fn unignore_cut_destination(cx: &mut crate::cmd::Ctx, sheet: usize, dest: CellRef) -> Result<()> {
+    gridcraft_model::unignore_errors(&mut cx.sheet_mut(sheet)?.ignored_errors, RangeRef::cell(dest), gridcraft_model::error_rule::ALL);
+    Ok(())
+}
+
 fn copy_merges(
     cx: &mut crate::cmd::Ctx,
     dest_sheet: usize,
@@ -140,6 +145,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             source.comments.retain(|c, _| !src.contains(*c));
             source.hyperlinks.retain(|c, _| !src.contains(*c));
             source.merges.retain(|m| !src.contains_range(m));
+            gridcraft_model::unignore_errors(&mut source.ignored_errors, src, gridcraft_model::error_rule::ALL);
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
@@ -243,17 +249,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             // The copied cell's validation rule replaces whatever rule the destination had.
             if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-                let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
-                let sh = cx.sheet_mut(dest_sheet)?;
-                crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
-                if let Some(mut dv) = rule {
-                    // Relative references move with the rule, as pasted formulas do.
-                    let first = dv.ranges.first().map_or(sc, |r| r.start);
-                    dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
-                    dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
-                    dv.ranges = vec![RangeRef::new(dest, dest)];
-                    sh.validations.push(dv);
-                }
+                copy_validation(cx, dest_sheet, src_sheet, sc, dest)?;
             }
             match what {
                 What::Comments => {
@@ -281,6 +277,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
             }
             cx.touch(dest_sheet, dest);
+            if cut_move {
+                // A structural commit skips the ignored-error cleanup, so each overwritten cell drops its rules here.
+                unignore_cut_destination(cx, dest_sheet, dest)?;
+            }
         }
         // Merged areas inside the copied block travel with it.
         copy_merges(cx, dest_sheet, src_sheet, src, at, what, transpose)?;
@@ -313,6 +313,21 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         s.clipboard = None;
     }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
+}
+
+fn copy_validation(cx: &mut crate::cmd::Ctx<'_>, dest_sheet: usize, src_sheet: &gridcraft_model::Sheet, src: CellRef, dest: CellRef) -> Result<()> {
+    let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(src))).cloned();
+    let sh = cx.sheet_mut(dest_sheet)?;
+    crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
+    if let Some(mut dv) = rule {
+        // Relative references move with the rule, as pasted formulas do.
+        let first = dv.ranges.first().map_or(src, |r| r.start);
+        dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
+        dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
+        dv.ranges = vec![RangeRef::new(dest, dest)];
+        sh.validations.push(dv);
+    }
+    Ok(())
 }
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.

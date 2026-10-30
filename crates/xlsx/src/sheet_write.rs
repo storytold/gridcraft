@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
     Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
-    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, error_rule, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -193,6 +193,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
 
     let prio = write_sheet_rules(&mut s, sheet, &mut rels, out);
     let kept = write_sheet_printing(&mut s, sheet, &mut rels, out);
+    write_ignored_errors(&mut s, sheet);
 
     write_sheet_drawing(&mut s, wb, si, sheet, &mut rels, out);
     write_sheet_notes(&mut s, sheet, si, &kept, &mut rels, out);
@@ -539,6 +540,24 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
         s.push_str("</hyperlinks>");
     }
     prio
+}
+
+fn write_ignored_errors(s: &mut String, sheet: &Sheet) {
+    let ignored: Vec<_> = sheet.ignored_errors.iter().filter(|e| e.kinds & error_rule::ALL != 0 && !e.ranges.is_empty()).collect();
+    if ignored.is_empty() {
+        return;
+    }
+    s.push_str("<ignoredErrors>");
+    for error in ignored {
+        let _ = write!(s, "<ignoredError sqref=\"{}\"", sqref(&error.ranges));
+        for (name, bit) in error_rule::NAMES {
+            if error.kinds & bit != 0 {
+                let _ = write!(s, " {name}=\"1\"");
+            }
+        }
+        s.push_str("/>");
+    }
+    s.push_str("</ignoredErrors>");
 }
 
 struct SheetCellData<'a> {

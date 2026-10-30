@@ -63,6 +63,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart Area…" => "Diagrammbereich formatieren…",
         "Number Stored as Text" => "Als Text gespeicherte Zahl",
         "Convert to Number" => "In eine Zahl umwandeln",
+        "Ignore Error" => "Fehler ignorieren",
         "Delete Cells…" => "Zellen löschen…",
         "Insert Sheet Rows" => "Blattzeilen einfügen",
         "Insert Sheet Columns" => "Blattspalten einfügen",

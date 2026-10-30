@@ -9,7 +9,7 @@ use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
-    ValidationKind, XmlColumnPr,
+    ValidationKind, XmlColumnPr, add_ranges, error_rule,
 };
 
 use crate::IoError;
@@ -115,6 +115,23 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
+fn read_page_margins(e: &El, sheet: &mut Sheet) {
+    let margins = &mut sheet.print.margins;
+    for (i, key) in ["left", "right", "top", "bottom", "header", "footer"].iter().enumerate() {
+        if let (Some(value), Some(slot)) = (e.attr_f64(key), margins.get_mut(i)) {
+            *slot = value.clamp(0.0, 50.0) as f32;
+        }
+    }
+}
+
+fn read_ignored_errors(e: &El, sheet: &mut Sheet) {
+    for ignored in e.kids("ignoredError") {
+        let kinds = error_rule::NAMES.iter().filter(|(name, _)| ignored.flag(name, false)).fold(0, |mask, (_, bit)| mask | bit);
+        // An element with no rule on (Excel leaves one behind after Ignore is turned off) ignores nothing.
+        add_ranges(&mut sheet.ignored_errors, kinds, parse_sqref(ignored.attr("sqref")));
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
@@ -164,6 +181,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "conditionalFormatting" => read_cf(cx, e, &mut sheet),
+            "ignoredErrors" => read_ignored_errors(e, &mut sheet),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {
@@ -179,14 +197,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 sheet.print.center_h = e.flag("horizontalCentered", false);
                 sheet.print.center_v = e.flag("verticalCentered", false);
             }
-            "pageMargins" => {
-                let m = &mut sheet.print.margins;
-                for (i, k) in ["left", "right", "top", "bottom", "header", "footer"].iter().enumerate() {
-                    if let (Some(v), Some(slot)) = (e.attr_f64(k), m.get_mut(i)) {
-                        *slot = v.clamp(0.0, 50.0) as f32;
-                    }
-                }
-            }
+            "pageMargins" => read_page_margins(e, &mut sheet),
             "pageSetup" => {
                 if e.attr("orientation") == Some("landscape") {
                     sheet.print.orientation = Orientation::Landscape;

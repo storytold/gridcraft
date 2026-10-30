@@ -443,6 +443,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart Area…" => "Formatar Área do Gráfico…",
         "Number Stored as Text" => "Número Armazenado como Texto",
         "Convert to Number" => "Converter em Número",
+        "Ignore Error" => "Ignorar Erro",
         "Error checking options" => "Opções de verificação de erros",
         "Paste formulas that refer to the copied cells" => "Colar fórmulas que se referem às células copiadas",
         "Row Height" => "Altura da Linha",

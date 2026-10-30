@@ -273,6 +273,115 @@ pub enum ErrorStyle {
     Information,
 }
 
+// ---------------------------------------------------------------- ignored errors
+
+/// Error-checking rules (File ▸ Options ▸ Formulas) a user can ignore per cell, saved as the
+/// attributes of `<ignoredError>` (ISO/IEC 29500-1 §18.3.1.51). A set of rules is a bit mask.
+pub mod error_rule {
+    pub const EVAL_ERROR: u16 = 1;
+    pub const TWO_DIGIT_TEXT_YEAR: u16 = 1 << 1;
+    pub const NUMBER_STORED_AS_TEXT: u16 = 1 << 2;
+    pub const FORMULA: u16 = 1 << 3;
+    pub const FORMULA_RANGE: u16 = 1 << 4;
+    pub const UNLOCKED_FORMULA: u16 = 1 << 5;
+    pub const EMPTY_CELL_REFERENCE: u16 = 1 << 6;
+    pub const LIST_DATA_VALIDATION: u16 = 1 << 7;
+    pub const CALCULATED_COLUMN: u16 = 1 << 8;
+    pub const ALL: u16 = (1 << 9) - 1;
+    /// The file's attribute name for each rule, in the schema's order.
+    pub const NAMES: [(&str, u16); 9] = [
+        ("evalError", EVAL_ERROR),
+        ("twoDigitTextYear", TWO_DIGIT_TEXT_YEAR),
+        ("numberStoredAsText", NUMBER_STORED_AS_TEXT),
+        ("formula", FORMULA),
+        ("formulaRange", FORMULA_RANGE),
+        ("unlockedFormula", UNLOCKED_FORMULA),
+        ("emptyCellReference", EMPTY_CELL_REFERENCE),
+        ("listDataValidation", LIST_DATA_VALIDATION),
+        ("calculatedColumn", CALCULATED_COLUMN),
+    ];
+
+    /// The rule a name stands for (the file's attribute name, any case).
+    pub fn parse(name: &str) -> Option<u16> {
+        NAMES.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, bit)| *bit)
+    }
+}
+
+/// Cells whose error-checking `kinds` (a mask of [`error_rule`] bits) the user chose to ignore.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IgnoredError {
+    pub ranges: Vec<RangeRef>,
+    pub kinds: u16,
+}
+
+/// What is left of `r` outside `cut`: up to four rectangles.
+fn range_minus(r: RangeRef, cut: RangeRef) -> Vec<RangeRef> {
+    let Some(i) = r.intersection(&cut) else { return vec![r] };
+    let mut out = Vec::new();
+    if r.start.row < i.start.row {
+        out.push(RangeRef::new(r.start, CellRef::new(i.start.row - 1, r.end.col)));
+    }
+    if i.end.row < r.end.row {
+        out.push(RangeRef::new(CellRef::new(i.end.row + 1, r.start.col), r.end));
+    }
+    if r.start.col < i.start.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, r.start.col), CellRef::new(i.end.row, i.start.col - 1)));
+    }
+    if i.end.col < r.end.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, i.end.col + 1), CellRef::new(i.end.row, r.end.col)));
+    }
+    out
+}
+
+/// Ignores `kinds` in `range`.
+pub fn ignore_errors(list: &mut Vec<IgnoredError>, range: RangeRef, kinds: u16) {
+    let kinds = kinds & error_rule::ALL;
+    if kinds == 0 {
+        return;
+    }
+    if !list.iter().any(|e| e.kinds == kinds && e.ranges.iter().any(|r| r.contains_range(&range))) {
+        add_ranges(list, kinds, [range]);
+    }
+}
+
+/// Adds `ranges` to the record for `kinds` without checking for duplicates, so reading a file
+/// with thousands of ranges stays linear.
+pub fn add_ranges(list: &mut Vec<IgnoredError>, kinds: u16, ranges: impl IntoIterator<Item = RangeRef>) {
+    let kinds = kinds & error_rule::ALL;
+    let mut ranges = ranges.into_iter().peekable();
+    if kinds == 0 || ranges.peek().is_none() {
+        return;
+    }
+    match list.iter_mut().find(|e| e.kinds == kinds) {
+        Some(e) => e.ranges.extend(ranges),
+        None => list.push(IgnoredError { ranges: ranges.collect(), kinds }),
+    }
+}
+
+/// Stops ignoring `kinds` in `range` (the cells outside it keep what they ignore).
+pub fn unignore_errors(list: &mut Vec<IgnoredError>, range: RangeRef, kinds: u16) {
+    let kinds = kinds & error_rule::ALL;
+    let mut out: Vec<IgnoredError> = Vec::new();
+    for e in std::mem::take(list) {
+        if e.kinds & kinds == 0 || !e.ranges.iter().any(|r| r.intersects(&range)) {
+            out.push(e);
+            continue;
+        }
+        let kept = e.kinds & !kinds;
+        for r in &e.ranges {
+            // Outside `range` the rules stay as they were; inside, only those not being cleared.
+            add_ranges(&mut out, e.kinds, range_minus(*r, range));
+            add_ranges(&mut out, kept, r.intersection(&range));
+        }
+    }
+    *list = out;
+}
+
+/// Whether `kind` (one [`error_rule`] bit) is ignored in `cell`.
+pub fn is_error_ignored(list: &[IgnoredError], cell: CellRef, kind: u16) -> bool {
+    list.iter().any(|e| e.kinds & kind != 0 && e.ranges.iter().any(|r| r.contains(cell)))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Validation {
     pub ranges: Vec<RangeRef>,
@@ -735,5 +844,54 @@ mod trendline_forecast_tests {
         assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
+    }
+}
+
+#[cfg(test)]
+mod ignored_error_tests {
+    use super::*;
+
+    fn range(r0: u32, c0: u32, r1: u32, c1: u32) -> RangeRef {
+        RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
+    }
+
+    fn ignored(list: &[IgnoredError], r: u32, c: u32, kind: u16) -> bool {
+        is_error_ignored(list, CellRef::new(r, c), kind)
+    }
+
+    #[test]
+    fn clearing_the_middle_of_a_block_leaves_the_ring_around_it() {
+        let mut list = Vec::new();
+        ignore_errors(&mut list, range(0, 0, 4, 4), error_rule::NUMBER_STORED_AS_TEXT | error_rule::EVAL_ERROR);
+        unignore_errors(&mut list, range(1, 1, 3, 3), error_rule::NUMBER_STORED_AS_TEXT);
+        for r in 0..5 {
+            for c in 0..5 {
+                let inside = (1..4).contains(&r) && (1..4).contains(&c);
+                assert_eq!(ignored(&list, r, c, error_rule::NUMBER_STORED_AS_TEXT), !inside, "({r},{c})");
+                assert!(ignored(&list, r, c, error_rule::EVAL_ERROR), "({r},{c}) keeps the other rule");
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_a_range_that_misses_or_covers_a_record() {
+        let mut list = Vec::new();
+        ignore_errors(&mut list, range(2, 2, 3, 3), error_rule::FORMULA);
+        unignore_errors(&mut list, range(0, 0, 1, 1), error_rule::ALL);
+        assert_eq!(list.len(), 1);
+        unignore_errors(&mut list, range(0, 0, 9, 9), error_rule::FORMULA);
+        assert!(list.is_empty());
+        // No rule, or an unknown bit, ignores nothing.
+        ignore_errors(&mut list, range(0, 0, 0, 0), 0);
+        ignore_errors(&mut list, range(0, 0, 0, 0), 1 << 12);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn rule_names_are_the_files_attribute_names() {
+        assert_eq!(error_rule::parse("numberStoredAsText"), Some(error_rule::NUMBER_STORED_AS_TEXT));
+        assert_eq!(error_rule::parse("EVALERROR"), Some(error_rule::EVAL_ERROR));
+        assert_eq!(error_rule::parse("bogus"), None);
+        assert_eq!(error_rule::NAMES.iter().fold(0, |m, (_, bit)| m | bit), error_rule::ALL);
     }
 }

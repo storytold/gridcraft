@@ -3,6 +3,7 @@ use super::cell_paint::{
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
+use super::is_number_stored_as_text;
 use super::tables::{filter_button_rect, paint_filter_button};
 use super::{
     CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, Value,
@@ -557,7 +558,7 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             ));
         }
         // Background error checking: a number stored as text gets Excel's green corner (#1994).
-        if !sh.show_formulas && sh.cell(*c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some() {
+        if !sh.show_formulas && is_number_stored_as_text(sh, *c) {
             let s = 6.0 * z.max(0.7);
             p.add(egui::Shape::convex_polygon(
                 vec![rect.left_top(), pos2(rect.left() + s, rect.top()), pos2(rect.left(), rect.top() + s)],

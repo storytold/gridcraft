@@ -1,5 +1,6 @@
 use super::editor::popup_dismissed;
 use super::geo::Geo;
+use super::is_number_stored_as_text;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 
@@ -418,7 +419,7 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
         return;
     }
     let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
-    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
+    if !is_number_stored_as_text(sh, active) {
         return;
     }
     let cell = geo.cell_rect(sh, active);
@@ -450,6 +451,10 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
         ui.separator();
         if ui.button(lang.tr("Convert to Number")).clicked() {
             app.run_or_alert("formulas.convertToNumber", json!({}));
+            ui.close();
+        }
+        if ui.button(lang.tr("Ignore Error")).clicked() {
+            app.run_or_alert("formulas.ignoreError", json!({}));
             ui.close();
         }
     });

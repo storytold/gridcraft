@@ -171,6 +171,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     for dv in sh.validations.iter_mut() {
         dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r)).collect();
     }
+    for ie in sh.ignored_errors.iter_mut() {
+        ie.ranges = ie.ranges.iter().filter_map(|r| map_range(*r)).collect();
+    }
+    sh.ignored_errors.retain(|ie| !ie.ranges.is_empty());
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
         if let Some(r) = map_range(t.range) {
@@ -764,6 +768,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     for dv in sh.validations.iter_mut() {
         dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
     }
+    for ie in sh.ignored_errors.iter_mut() {
+        ie.ranges = ie.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
+    }
+    sh.ignored_errors.retain(|ie| !ie.ranges.is_empty());
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
         // Cells inserted or deleted across a table's full height add or remove table columns.

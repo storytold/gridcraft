@@ -379,6 +379,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if !structural {
         check_arrays(&d.wb, &wb)?;
+        forget_ignored_errors(&d.wb, &mut wb, &changed);
     }
     if let Some(log) = d.touched.as_mut() {
         for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
@@ -415,6 +416,22 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// Editing a cell drops the error checks it had ignored (Excel does the same): a cell whose
+/// content differs from before stops ignoring them.
+fn forget_ignored_errors(old: &Workbook, new: &mut Workbook, changed: &[Key]) {
+    if new.sheets.iter().all(|s| s.ignored_errors.is_empty()) {
+        return;
+    }
+    for (si, c) in changed {
+        let before = old.sheet(*si).and_then(|s| s.cell(*c));
+        let after = new.sheet(*si).and_then(|s| s.cell(*c));
+        let same = same_content(before, after);
+        if !same && let Some(sh) = new.sheet_mut(*si) {
+            gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::cell(*c), gridcraft_model::error_rule::ALL);
+        }
+    }
 }
 
 /// The most cells a dry run's touch log keeps; a footprint whose log is full may be missing writes

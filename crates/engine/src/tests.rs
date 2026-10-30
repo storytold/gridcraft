@@ -4760,6 +4760,77 @@ fn convert_to_number_turns_numbers_stored_as_text_into_numbers() {
     assert_eq!(value(&mut s, "A1"), json!("123"));
 }
 
+/// Ignore Error, as observed in Excel: per cell and rule, kept as Excel's multi-area ranges,
+/// forgotten when the cell's content is edited, moved by inserted rows, never carried by paste.
+#[test]
+fn ignore_error_is_per_cell_and_rule_and_forgotten_on_edit() {
+    let mut s = s();
+    let ignored = |s: &mut Session| s.execute("formulas.ignoredErrors", json!({})).unwrap();
+    for (cell, input) in [("A1", "'1"), ("A2", "'2"), ("A3", "'3"), ("A4", "'4")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    // The default rule is number stored as text; the selection is the default range.
+    s.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    assert_eq!(s.execute("formulas.ignoreError", json!({})).unwrap()["ranges"], 1);
+    s.execute("formulas.ignoreError", json!({"range": "A4", "kinds": ["evalError", "formula"]})).unwrap();
+    assert_eq!(
+        ignored(&mut s),
+        json!([
+            {"sheet": "Sheet1", "ranges": ["A1:A2"], "kinds": ["numberStoredAsText"]},
+            {"sheet": "Sheet1", "ranges": ["A4"], "kinds": ["evalError", "formula"]},
+        ])
+    );
+    assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": ["nonsense"]})).is_err());
+    assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": ["evalError", 4]})).is_err());
+    assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": 4})).is_err());
+    // Another rule on the same cells is its own record; the same rule on more cells joins one.
+    s.execute("formulas.ignoreError", json!({"range": "A3"})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:A2", "A3"]));
+    // Undo takes the last ignore back.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:A2"]));
+    // Retyping a cell forgets what it ignored; its neighbours keep theirs.
+    s.execute("cell.set", json!({"cell": "A1", "input": "'7"})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A2"]));
+    // Formatting is not an edit.
+    s.execute("home.bold", json!({"range": "A2", "on": true})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A2"]));
+    // Inserted rows move the record with its cells.
+    s.execute("home.insertRows", json!({"rows": "2:3"})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A4"]));
+    assert_eq!(ignored(&mut s)[1]["ranges"], json!(["A6"]));
+    // Reset one rule in one cell, then everything on every sheet.
+    s.execute("formulas.clearIgnoredErrors", json!({"range": "A6", "kinds": "evalError"})).unwrap();
+    assert_eq!(ignored(&mut s)[1]["kinds"], json!(["formula"]));
+    s.execute("formulas.clearIgnoredErrors", json!({"all": true})).unwrap();
+    assert_eq!(ignored(&mut s), json!([]));
+}
+
+/// Structural commits skip the generic cleanup, so a renamed name and a cut-paste forget ignored
+/// rules themselves; a format-only edit of an empty cell keeps them.
+#[test]
+fn ignore_error_survives_format_only_edits_and_clears_on_structural_rewrites() {
+    let mut s = s();
+    let ignored = |s: &mut Session| s.execute("formulas.ignoredErrors", json!({})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Rate"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "'5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "'6"})).unwrap();
+    s.execute("formulas.ignoreError", json!({"range": "A1:C1"})).unwrap();
+    s.execute("home.bold", json!({"range": "D1", "on": true})).unwrap();
+    s.execute("formulas.ignoreError", json!({"range": "D1"})).unwrap();
+    s.execute("home.bold", json!({"range": "D1", "on": false})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:C1", "D1"]));
+    // Renaming the name rewrites A1's formula: A1 stops ignoring.
+    s.execute("formulas.defineName", json!({"name": "Tax", "refersTo": "=0.2", "oldName": "Rate"})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["B1:C1", "D1"]));
+    // Cutting B1 onto C1 overwrites C1 and empties B1: both records go.
+    s.execute("edit.cut", json!({"range": "B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["D1"]));
+}
+
 #[test]
 fn saving_csv_keeps_leading_empty_columns_and_rows() {
     let wb = gridcraft_xlsx::read_csv(b",x\r\n\r\n,,y\r\n", &gridcraft_xlsx::CsvOptions::default()).unwrap();
