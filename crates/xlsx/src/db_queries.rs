@@ -1,6 +1,7 @@
 //! The database queries behind tables (Data › From Database) in an XLSX package.
 //!
-//! They go in a custom XML part of their own, `customXml/gridcraftDbQueries.xml`, whose root
+//! They go in a custom XML part of their own, `customXml/gridcraftDbQueries.xml` (or with a
+//! number, when the file already keeps an unrelated part of that name), whose root
 //! element is in GridCraft's namespace and holds the queries as JSON text (never a password).
 //! Excel keeps custom XML parts when it saves, so a workbook keeps its queries through a round
 //! trip; the tables themselves are ordinary tables. Table ids are renumbered on save and read, so
@@ -21,8 +22,6 @@ use crate::xml::esc;
 /// The namespace of the part.
 pub const NS_DB_QUERIES: &str = "urn:gridcraft:dbqueries:1";
 const ROOT: &str = "gridcraftDbQueries";
-const PART: &str = "customXml/gridcraftDbQueries.xml";
-const PROPS_PART: &str = "customXml/gridcraftDbQueriesProps.xml";
 const CT_PROPS: &str = "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
 const REL_PROPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 /// The data store item id of the part (fixed, so saves are reproducible).
@@ -112,16 +111,31 @@ pub fn write(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) {
         return;
     }
     let Ok(json) = serde_json::to_string(&live) else { return };
+    // Kept content may already hold parts of these names (another file's custom XML): take the
+    // first numbered set that is free, since a package can't hold a name twice.
+    let kept: Vec<&str> = wb.preserved.iter().flat_map(|p| p.parts.iter().chain(&p.vml).map(|x| x.name.as_str())).collect();
+    let taken = |name: &str| kept.iter().any(|k| k.eq_ignore_ascii_case(name));
+    let Some(n) = (0..=kept.len()).map(|n| if n == 0 { String::new() } else { n.to_string() }).find(|n| {
+        ![
+            format!("customXml/gridcraftDbQueries{n}.xml"),
+            format!("customXml/gridcraftDbQueriesProps{n}.xml"),
+            format!("customXml/_rels/gridcraftDbQueries{n}.xml.rels"),
+        ]
+        .iter()
+        .any(|x| taken(x))
+    }) else {
+        return;
+    };
     let mut x = String::from(XML_DECL);
     let _ = write!(x, "<{ROOT} xmlns=\"{NS_DB_QUERIES}\" version=\"1\">{}</{ROOT}>", esc(&json));
     out.default_type("xml", "application/xml");
-    out.part(PART, None, x.into_bytes());
+    out.part(&format!("customXml/gridcraftDbQueries{n}.xml"), None, x.into_bytes());
     let props = format!(
         "{XML_DECL}<ds:datastoreItem ds:itemID=\"{ITEM_ID}\" xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\"><ds:schemaRefs><ds:schemaRef ds:uri=\"{NS_DB_QUERIES}\"/></ds:schemaRefs></ds:datastoreItem>"
     );
-    out.part(PROPS_PART, Some(CT_PROPS), props.into_bytes());
+    out.part(&format!("customXml/gridcraftDbQueriesProps{n}.xml"), Some(CT_PROPS), props.into_bytes());
     let mut item_rels = Rels::default();
-    item_rels.add_uri(REL_PROPS, "gridcraftDbQueriesProps.xml");
-    out.part("customXml/_rels/gridcraftDbQueries.xml.rels", None, item_rels.xml().into_bytes());
-    wb_rels.add("customXml", "../customXml/gridcraftDbQueries.xml");
+    item_rels.add_uri(REL_PROPS, &format!("gridcraftDbQueriesProps{n}.xml"));
+    out.part(&format!("customXml/_rels/gridcraftDbQueries{n}.xml.rels"), None, item_rels.xml().into_bytes());
+    wb_rels.add("customXml", &format!("../customXml/gridcraftDbQueries{n}.xml"));
 }

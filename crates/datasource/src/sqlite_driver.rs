@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use gridcraft_engine::datasource::{DbRequest, DbTable, DbValue};
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 
@@ -18,6 +19,7 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     #[allow(clippy::disallowed_methods)]
     let past_deadline = move || Instant::now() > deadline;
     conn.progress_handler(10_000, Some(past_deadline)).map_err(|e| format!("SQLite: {e}"))?;
+    conn.authorizer(Some(authorize)).map_err(|e| format!("SQLite: {e}"))?;
     let mut stmt = conn.prepare(&req.query).map_err(|e| format!("SQLite: {e}"))?;
     let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
     let decl: Vec<String> = stmt.columns().iter().map(|c| c.decl_type().unwrap_or("").to_ascii_uppercase()).collect();
@@ -51,6 +53,15 @@ fn value(v: ValueRef<'_>, decl: &str) -> DbValue {
             if decl.contains("DATE") || decl.contains("TIME") { crate::parse_temporal(&s).unwrap_or(DbValue::Text(s)) } else { DbValue::Text(s) }
         }
         ValueRef::Blob(b) => DbValue::Text(format!("({} bytes)", b.len())),
+    }
+}
+
+/// Keeps the query inside the one local file the connection names: ATTACH (which VACUUM INTO
+/// also goes through) could open a network share or write a file of the query's choosing.
+fn authorize(ctx: AuthContext<'_>) -> Authorization {
+    match ctx.action {
+        AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
+        _ => Authorization::Allow,
     }
 }
 
@@ -124,6 +135,27 @@ mod tests {
         assert!(run(&req(&path, "DELETE FROM t", 10)).is_err());
         assert!(run(&req(&path, "SELECT nope FROM t", 10)).is_err());
         assert!(run(&req(std::path::Path::new("/nonexistent/x.db"), "SELECT 1", 10)).is_err());
+    }
+
+    #[test]
+    fn stored_sql_cannot_reach_other_files() {
+        let (path, _c) = db();
+        let other = path.with_file_name("other.db");
+        let copy = path.with_file_name("copy.db");
+        let _ = std::fs::remove_file(&copy);
+        Connection::open(&other).unwrap().execute_batch("CREATE TABLE o (x); INSERT INTO o VALUES (1);").unwrap();
+        for q in [
+            format!("ATTACH DATABASE '{}' AS a", other.display()),
+            format!("ATTACH '{}' AS a; SELECT * FROM a.o", other.display()),
+            format!("VACUUM INTO '{}'", copy.display()),
+            "DETACH DATABASE main".to_string(),
+        ] {
+            assert!(run(&req(&path, &q, 10)).is_err(), "{q} ran");
+        }
+        assert!(!copy.exists(), "VACUUM INTO wrote a file");
+        // Ordinary reads, CTEs and the catalog's table-valued pragma still work.
+        assert!(run(&req(&path, "WITH c(x) AS (SELECT 1) SELECT x FROM c", 10)).is_ok());
+        assert!(run(&req(&path, "SELECT name FROM pragma_table_info('t')", 10)).is_ok());
     }
 
     #[test]

@@ -5,10 +5,51 @@ use std::time::Duration;
 use gridcraft_engine::datasource::{DbRequest, DbTable, DbValue};
 use mysql::consts::ColumnType;
 use mysql::prelude::Queryable;
-use mysql::{Conn, Opts, OptsBuilder, Value};
+use mysql::{Conn, DriverError, Opts, OptsBuilder, SslOpts, Value};
+
+/// The MySQL client's `ssl-mode`, given as a URL parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SslMode {
+    Disabled,
+    /// Encrypt when the server can, without checking its certificate (the default).
+    Preferred,
+    /// Encrypt or fail, without checking the certificate.
+    Required,
+    /// Encrypt with a certificate from a trusted root.
+    VerifyCa,
+    /// As `VerifyCa`, and issued for the host.
+    VerifyIdentity,
+}
+
+/// The URL without its `ssl-mode` parameter (the `mysql` client doesn't take it), and the mode.
+fn split_ssl_mode(url: &str) -> Result<(String, Option<SslMode>), String> {
+    let Some((base, query)) = url.split_once('?') else { return Ok((url.to_string(), None)) };
+    let mut mode = None;
+    let mut kept = vec![];
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if matches!(k.to_ascii_lowercase().as_str(), "ssl-mode" | "ssl_mode" | "sslmode") {
+            mode = Some(match v.to_ascii_lowercase().replace('-', "_").as_str() {
+                "disabled" | "disable" => SslMode::Disabled,
+                "preferred" | "prefer" => SslMode::Preferred,
+                "required" | "require" => SslMode::Required,
+                "verify_ca" => SslMode::VerifyCa,
+                "verify_identity" | "verify_full" => SslMode::VerifyIdentity,
+                _ => return Err(format!("Unknown ssl-mode `{v}` (DISABLED, PREFERRED, REQUIRED, VERIFY_CA, VERIFY_IDENTITY).")),
+            });
+        } else {
+            kept.push(pair);
+        }
+    }
+    Ok((if kept.is_empty() { base.to_string() } else { format!("{base}?{}", kept.join("&")) }, mode))
+}
 
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
-    let opts = Opts::from_url(&req.connection).map_err(|e| format!("Invalid MySQL connection URL: {e}"))?;
+    let (url, mode) = split_ssl_mode(&req.connection)?;
+    let opts = Opts::from_url(&url).map_err(|e| format!("Invalid MySQL connection URL: {e}"))?;
+    // TLS options written into the URL (`root_cert_path`, `danger_…`) require TLS, as before.
+    let mode = mode.unwrap_or(if opts.get_ssl_opts().is_some() { SslMode::Required } else { SslMode::Preferred });
+    let given = opts.get_ssl_opts().cloned().unwrap_or_default();
     let timeout = Some(Duration::from_secs(req.timeout_secs));
     let mut b = OptsBuilder::from_opts(opts).tcp_connect_timeout(timeout).read_timeout(timeout).write_timeout(timeout);
     if let Some(u) = &req.user {
@@ -17,7 +58,18 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     if let Some(p) = &req.password {
         b = b.pass(Some(p.as_str()));
     }
-    let mut conn = Conn::new(b).map_err(|e| format!("Could not connect to MySQL: {e}"))?;
+    let tls = match mode {
+        SslMode::Disabled => None,
+        SslMode::Preferred | SslMode::Required => Some(given.with_danger_accept_invalid_certs(true)),
+        SslMode::VerifyCa => Some(given.with_danger_skip_domain_validation(true)),
+        SslMode::VerifyIdentity => Some(given),
+    };
+    let mut conn = match Conn::new(b.clone().ssl_opts(tls)) {
+        // PREFERRED falls back to an unencrypted session only when the server has no TLS at all.
+        Err(mysql::Error::DriverError(DriverError::TlsNotSupported)) if mode == SslMode::Preferred => Conn::new(b.ssl_opts(None::<SslOpts>)),
+        r => r,
+    }
+    .map_err(|e| format!("Could not connect to MySQL: {e}"))?;
     // The binary protocol returns typed values; statements it can't prepare (SHOW, some CALLs)
     // fall back to the text protocol.
     match conn.exec_iter(req.query.as_str(), ()) {
@@ -54,7 +106,18 @@ fn value(v: Value, ty: Option<ColumnType>) -> DbValue {
         Value::Float(f) => DbValue::Float(f.into()),
         Value::Double(f) => DbValue::Float(f),
         Value::Date(y, m, d, h, mi, s, us) => {
-            if ty == Some(ColumnType::MYSQL_TYPE_DATE) || (h, mi, s, us) == (0, 0, 0, 0) && ty != Some(ColumnType::MYSQL_TYPE_DATETIME) {
+            // A DATETIME or TIMESTAMP at midnight stays a date-time: the column's format comes from
+            // its first value, so turning it into a date would hide the time of every later row.
+            let has_time = matches!(
+                ty,
+                Some(
+                    ColumnType::MYSQL_TYPE_DATETIME
+                        | ColumnType::MYSQL_TYPE_DATETIME2
+                        | ColumnType::MYSQL_TYPE_TIMESTAMP
+                        | ColumnType::MYSQL_TYPE_TIMESTAMP2
+                )
+            );
+            if !has_time && (ty == Some(ColumnType::MYSQL_TYPE_DATE) || (h, mi, s, us) == (0, 0, 0, 0)) {
                 DbValue::Date(y.into(), m.into(), d.into())
             } else {
                 DbValue::DateTime(y.into(), m.into(), d.into(), h.into(), mi.into(), f64::from(s) + f64::from(us) / 1e6)
@@ -84,5 +147,31 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
         Some(MYSQL_TYPE_DATE | MYSQL_TYPE_DATETIME | MYSQL_TYPE_TIMESTAMP | MYSQL_TYPE_TIME) => crate::parse_temporal(&s).unwrap_or(DbValue::Text(s)),
         Some(MYSQL_TYPE_BIT) => DbValue::Text(s),
         _ => DbValue::Text(s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssl_mode_is_read_and_removed() {
+        assert_eq!(split_ssl_mode("mysql://u@h/db").unwrap(), ("mysql://u@h/db".into(), None));
+        assert_eq!(split_ssl_mode("mysql://u@h/db?ssl-mode=VERIFY_IDENTITY").unwrap(), ("mysql://u@h/db".into(), Some(SslMode::VerifyIdentity)));
+        assert_eq!(
+            split_ssl_mode("mysql://u@h/db?prefer_socket=false&ssl_mode=required").unwrap(),
+            ("mysql://u@h/db?prefer_socket=false".into(), Some(SslMode::Required))
+        );
+        assert!(split_ssl_mode("mysql://u@h/db?ssl-mode=maybe").is_err());
+    }
+
+    #[test]
+    fn midnight_keeps_the_time_of_date_time_columns() {
+        let midnight = || Value::Date(2024, 1, 5, 0, 0, 0, 0);
+        assert_eq!(value(midnight(), Some(ColumnType::MYSQL_TYPE_DATE)), DbValue::Date(2024, 1, 5));
+        for ty in [ColumnType::MYSQL_TYPE_DATETIME, ColumnType::MYSQL_TYPE_TIMESTAMP, ColumnType::MYSQL_TYPE_TIMESTAMP2] {
+            assert_eq!(value(midnight(), Some(ty)), DbValue::DateTime(2024, 1, 5, 0, 0, 0.0), "{ty:?}");
+        }
+        assert_eq!(value(Value::Date(2024, 1, 5, 10, 30, 0, 0), Some(ColumnType::MYSQL_TYPE_TIMESTAMP)), DbValue::DateTime(2024, 1, 5, 10, 30, 0.0));
     }
 }

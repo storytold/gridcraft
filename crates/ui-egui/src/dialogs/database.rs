@@ -26,6 +26,24 @@ fn db_profile(d: &Dialog) -> gridcraft_engine::datasource::ConnectionProfile {
     }
 }
 
+/// `p` with only the fields its driver uses, so a value left in another driver's field (a DSN
+/// typed before switching to PostgreSQL) isn't saved with it.
+fn saved_profile(mut p: gridcraft_engine::datasource::ConnectionProfile) -> gridcraft_engine::datasource::ConnectionProfile {
+    let network = matches!(p.driver.as_str(), "postgres" | "mysql");
+    if !network {
+        p.host.clear();
+        p.port.clear();
+        p.database.clear();
+    }
+    if p.driver != "sqlite" {
+        p.file.clear();
+    }
+    if p.driver != "odbc" {
+        p.dsn.clear();
+    }
+    p
+}
+
 /// Driver, connection, user and password, as the database commands take them.
 fn db_conn_params(d: &Dialog) -> Json {
     let prof = db_profile(d);
@@ -76,7 +94,12 @@ fn db_load_columns(app: &mut SheetApp, d: &mut Dialog) {
     let mut p = db_conn_params(d);
     p["table"] = json!(db_str(d, "table"));
     p["schema"] = json!(db_str(d, "schema"));
-    match app.run("data.databaseColumns", p) {
+    let Some(r) = app.run_db("data.databaseColumns", p) else {
+        d.values.insert("busy".into(), json!("columns"));
+        return;
+    };
+    d.values.remove("busy");
+    match r {
         Ok(cols) => {
             let names: Vec<Json> = cols.as_array().map(|a| a.iter().map(|c| c["name"].clone()).collect()).unwrap_or_default();
             d.values.insert("columns".into(), cols);
@@ -91,7 +114,61 @@ fn db_load_columns(app: &mut SheetApp, d: &mut Dialog) {
     }
 }
 
+/// While a database request of the dialog runs in the background: a spinner and Cancel.
+pub(super) fn wait_row(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    if db_str(d, "busy").is_empty() {
+        return;
+    }
+    let lang = crate::i18n::current(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.label(lang.tr("Waiting for the database…"));
+        if ui.button(lang.tr("Cancel")).clicked() {
+            app.cancel_db();
+            d.values.remove("busy");
+        }
+    });
+}
+
+/// Runs the command of a confirmed dialog: `None` when there is nothing to run, or when its
+/// database requests run in the background. Then OK is pressed again for the user once the
+/// answers are in, and not before.
+pub(super) fn run_confirmed(app: &mut SheetApp, d: &mut Dialog, confirm: &mut bool) -> Option<Result<Json, String>> {
+    match db_str(d, "busy").as_str() {
+        "" => {}
+        "ok" => *confirm = !app.db_running(),
+        _ => *confirm = false,
+    }
+    let cmd = d.command.filter(|_| *confirm)?;
+    if !crate::db_jobs::is_db_command(cmd) {
+        return Some(app.run(cmd, super::show::build_params(d)));
+    }
+    let Some(r) = app.run_db(cmd, super::show::build_params(d)) else {
+        d.values.insert("busy".into(), json!("ok"));
+        return None;
+    };
+    d.values.remove("busy");
+    Some(r)
+}
+
+/// A dialog closed while waiting for the database: its answers are no longer wanted.
+pub(super) fn stop_waiting(app: &mut SheetApp, d: &Dialog) {
+    if !db_str(d, "busy").is_empty() {
+        app.cancel_db();
+    }
+}
+
+/// What the dialog was waiting for, once the background requests are in ("" = nothing).
+fn resumed(app: &SheetApp, d: &Dialog) -> String {
+    if app.db_running() { String::new() } else { db_str(d, "busy") }
+}
+
 pub(super) fn from_database(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let waiting = !db_str(d, "busy").is_empty();
+    let resume = resumed(app, d);
+    if resume == "columns" {
+        db_load_columns(app, d);
+    }
     let lang = crate::i18n::current(ui.ctx());
     let text_row = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str, hint: &str| {
         ui.label(label);
@@ -196,14 +273,20 @@ pub(super) fn from_database(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
         ui.label(egui::RichText::new(db_profile(d).connection()).monospace().weak());
     }
     ui.horizontal(|ui| {
-        if ui.button(lang.tr("Connect")).on_hover_text(lang.tr("Connect and list the tables")).clicked() {
-            match app.run("data.databaseTables", db_conn_params(d)) {
-                Ok(t) => {
+        let connect = ui.add_enabled(!waiting, egui::Button::new(lang.tr("Connect"))).on_hover_text(lang.tr("Connect and list the tables")).clicked();
+        if connect || resume == "tables" {
+            match app.run_db("data.databaseTables", db_conn_params(d)) {
+                None => {
+                    d.values.insert("busy".into(), json!("tables"));
+                }
+                Some(Ok(t)) => {
+                    d.values.remove("busy");
                     d.values.insert("tables".into(), t);
                     d.values.insert("tablesFor".into(), json!(db_list_key(d)));
                     d.values.remove("error");
                 }
-                Err(e) => {
+                Some(Err(e)) => {
+                    d.values.remove("busy");
                     d.values.insert("tables".into(), json!([]));
                     d.values.insert("error".into(), json!(crate::clean_error(&e)));
                 }
@@ -218,8 +301,15 @@ pub(super) fn from_database(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             .on_hover_text(lang.tr("Keep these settings (not the password) for next time"))
             .clicked()
         {
-            let mut prof = db_profile(d);
+            let mut prof = saved_profile(db_profile(d));
             prof.name = name.trim().to_string();
+            if [&prof.custom, &prof.dsn, &prof.host, &prof.database, &prof.file].iter().any(|f| gridcraft_engine::datasource::redact(f) != **f) {
+                d.values.insert(
+                    "error".into(),
+                    json!(lang.tr("Remove the password from the connection before saving it: it goes in the Password field, which is never saved.")),
+                );
+                return;
+            }
             let list = &mut app.session.prefs.db_connections;
             match list.iter_mut().find(|p| p.name == prof.name) {
                 Some(p) => *p = prof.clone(),
@@ -360,4 +450,62 @@ fn db_table_picker(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let cols: Vec<String> = if selected.len() == columns.len() { vec![] } else { selected };
     let sql = gridcraft_engine::datasource::select_sql(&driver, Some(&cur_schema), &cur_table, &cols);
     ui.label(egui::RichText::new(sql).monospace().small().weak());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_engine::datasource::ConnectionProfile;
+
+    #[test]
+    fn saved_profile_keeps_only_the_drivers_fields() {
+        let p = ConnectionProfile {
+            driver: "postgres".into(),
+            host: "db".into(),
+            dsn: "DSN=x;PWD=secret".into(),
+            file: "/x.db".into(),
+            ..Default::default()
+        };
+        let s = saved_profile(p);
+        assert_eq!((s.host.as_str(), s.dsn.as_str(), s.file.as_str()), ("db", "", ""));
+        let s = saved_profile(ConnectionProfile { driver: "odbc".into(), host: "db".into(), dsn: "DSN=x".into(), ..Default::default() });
+        assert_eq!((s.host.as_str(), s.dsn.as_str()), ("", "DSN=x"));
+    }
+
+    #[test]
+    fn ok_waits_for_the_database_and_then_imports() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use gridcraft_engine::datasource::{DbRequest, DbTable, DbValue};
+
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.data_source = Some(Arc::new(|_: &DbRequest| {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(DbTable { columns: vec!["a".into()], rows: vec![vec![DbValue::Int(1)]], truncated: false })
+        }));
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.install_db_jobs(&egui::Context::default());
+        app.open_dialog("fromDatabase", json!({"driver": "sqlite", "file": "/x.db", "mode": "sql", "query": "SELECT 1"}));
+        let mut d = app.dialog.take().expect("dialog");
+        let sheets = app.session.active().map(|doc| doc.wb.sheets.len());
+        let mut confirm = true;
+        assert!(run_confirmed(&mut app, &mut d, &mut confirm).is_none(), "OK must not wait for the server");
+        assert_eq!(db_str(&d, "busy"), "ok");
+        assert_eq!(app.session.active().map(|doc| doc.wb.sheets.len()), sheets);
+        // Frames go by: OK is held back while the request runs, then pressed again.
+        let mut result = None;
+        for _ in 0..200 {
+            let mut confirm = false;
+            if let Some(r) = run_confirmed(&mut app, &mut d, &mut confirm) {
+                result = Some(r);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(result.is_some_and(|r| r.is_ok()));
+        assert_eq!(app.session.active().map(|doc| doc.wb.sheets.len()), sheets.map(|n| n + 1));
+        assert!(db_str(&d, "busy").is_empty());
+    }
 }

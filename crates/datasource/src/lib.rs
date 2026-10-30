@@ -19,6 +19,8 @@ mod odbc_driver;
 mod postgres_driver;
 #[cfg(not(target_arch = "wasm32"))]
 mod sqlite_driver;
+#[cfg(not(target_arch = "wasm32"))]
+mod tls;
 
 /// The data source with every driver this build has.
 pub fn provider() -> DataSource {
@@ -96,6 +98,8 @@ mod tests {
         assert_eq!(redact("DSN=Sales;UID=bob;PWD=hunter2"), "DSN=Sales;UID=bob;PWD=***");
         assert_eq!(redact("host=db password=x user=bob"), "host=db password=*** user=bob");
         assert_eq!(redact("Driver={X};Pwd=a;b"), "Driver={X};Pwd=***;b");
+        assert_eq!(redact("postgres://u@h/db?password=x"), "postgres://u@h/db?password=***");
+        assert_eq!(redact("postgres://u@h/db?sslmode=disable&password=x"), "postgres://u@h/db?sslmode=disable&password=***");
     }
 
     #[test]
