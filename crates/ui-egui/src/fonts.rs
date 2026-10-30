@@ -317,8 +317,9 @@ fn face_key(face: &Face) -> String {
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
 /// binds nothing.
 ///
-/// Each role's chain ends with egui's default proportional fonts, so glyphs the installed font
-/// lacks (emoji, a stray script) still render.
+/// Each role's chain ends with the proportional family's chain as `fonts` has it (the app binds
+/// once that is the interface's), so glyphs the installed font lacks (emoji, a stray script, a
+/// currency sign) still render.
 pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face]) -> Vec<String> {
     if faces.is_empty() {
         return Vec::new();

@@ -446,12 +446,10 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
     }
-    // Installed workbook fonts, so a cell's chosen font actually renders in it.
-    if system {
-        for family in crate::fonts::installed_among(used) {
-            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
-        }
-    }
+    // And the other way round: cells fall back to the interface font before the script faces, so
+    // what the formula bar draws a cell draws too (#2035: macOS has ₽ and the other recent
+    // currency signs in its UI fonts but not in Arial, Calibri or Apple Symbols).
+    bind_ui_fallback(&mut fonts, &fallback);
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
     // fallback face was found (#349: macOS UI font without Hebrew, cells in Arial with it).
@@ -459,6 +457,14 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
+    }
+    // Installed workbook fonts, so a cell's chosen font actually renders in it. Bound once the
+    // proportional chain is the interface's: they end with it, so what they lack reaches the same
+    // faces as the cell roles (the interface font and the script fallbacks), not just egui's.
+    if system {
+        for family in crate::fonts::installed_among(used) {
+            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
+        }
     }
     // The optional craft-fonts faces go at the very end of every family: a system or bundled face
     // that has the script keeps its glyph shapes, while the permitted OFL faces cover scripts and
@@ -516,6 +522,23 @@ fn build_role_chain(
     chain.extend(fallback.iter().cloned());
     chain.retain(|k| fonts.font_data.contains_key(k));
     chain
+}
+
+/// Inserts the loaded interface face (bold for the bold roles) before the script fallbacks of the
+/// cell families, so a cell can draw whatever the formula bar can (#2035).
+fn bind_ui_fallback(fonts: &mut FontDefinitions, fallback: &[String]) {
+    for (role, ui) in [(CELL, UI), (CELL_BOLD, UI_BOLD), (CELL_ITALIC, UI), (CELL_BOLD_ITALIC, UI_BOLD), (SERIF, UI), (MONO, UI)] {
+        let ui_key = format!("sys-{ui}");
+        if !fonts.font_data.contains_key(&ui_key) {
+            continue;
+        }
+        if let Some(chain) = fonts.families.get_mut(&FontFamily::Name(role.into()))
+            && !chain.contains(&ui_key)
+        {
+            let at = chain.iter().position(|k| fallback.contains(k)).unwrap_or(chain.len());
+            chain.insert(at, ui_key);
+        }
+    }
 }
 
 /// Inserts the loaded cell face before the script fallbacks of the interface families, so the
