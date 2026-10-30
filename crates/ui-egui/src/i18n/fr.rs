@@ -1062,7 +1062,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Summarize by Max" => "Synthétiser par max",
         "Summarize by Min" => "Synthétiser par min",
         "Summarize by Sum" => "Synthétiser par somme",
-        "Summary statistics" => "Rapport détaillé",
+        "Summary statistics" => "Résumé statistique",
         "Sunburst" => "Rayons de soleil",
         "Superscript" => "Exposant",
         "Switch Row/Column" => "Permuter ligne/colonne",
