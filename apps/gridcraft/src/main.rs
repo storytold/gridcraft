@@ -30,7 +30,22 @@ use serde_json::json;
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
+/// Apply GridCraft's appearance and language after discarding legacy widget memory.
+/// Native window geometry remains in eframe's separate storage entry.
+fn setup_desktop_context(ctx: &egui::Context, dark: bool, language: gridcraft_ui_egui::i18n::Language) {
+    // eframe loads legacy egui memory before creating App; persist_egui_memory disables saving
+    // only. Discard that UI state before applying GridCraft's own preferences. Native window
+    // geometry lives in the separate eframe "window" entry and is retained.
+    ctx.memory_mut(|memory| *memory = egui::Memory::default());
+    SheetApp::setup_context_for_language(ctx, dark, language);
+}
+
 impl eframe::App for App {
+    // App preferences already persist separately; only the native window belongs in eframe storage.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
@@ -233,6 +248,9 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Start the native spreadsheet app, load its preferences and connect document windows.
+/// Interactive runs persist window geometry; control and no-preferences runs keep their
+/// requested viewport without reading or replacing the user's native window state.
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -339,7 +357,9 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // No-preferences and control-channel runs neither restore nor save the native window, so
+    // control-channel screenshots start from the same window every time.
+    let options = eframe::NativeOptions { viewport, persist_window: prefs_enabled() && control_port.is_none(), ..Default::default() };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut options = options;
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
@@ -381,7 +401,7 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
-                SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                setup_desktop_context(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
@@ -420,6 +440,20 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod packaging_tests {
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn desktop_start_discards_legacy_widget_memory_before_app_preferences() {
+        let ctx = egui::Context::default();
+        let widget = egui::Id::unique("legacy-dialog-state");
+        ctx.memory_mut(|memory| {
+            memory.options.zoom_factor = 1.75;
+            memory.data.insert_persisted(widget, 42_u32);
+        });
+        super::setup_desktop_context(&ctx, true, gridcraft_ui_egui::i18n::Language::En);
+        assert_eq!(ctx.memory_mut(|memory| memory.data.get_persisted::<u32>(widget)), None);
+        assert_eq!(ctx.zoom_factor(), 1.0);
+        assert!(ctx.global_style().visuals.dark_mode);
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).
