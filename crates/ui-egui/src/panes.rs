@@ -209,7 +209,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     });
     let lang = app.ui.language;
     ui.collapsing(lang.tr("Legend"), |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (l, v) in [("Legend|None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
                 let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
                 if ui.selectable_label(cur, lang.tr(l)).clicked() {
