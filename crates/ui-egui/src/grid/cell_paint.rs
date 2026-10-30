@@ -214,6 +214,25 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
     out
 }
 
+/// One cell's text as a layout job, wrapped at `wrap` (`f32::INFINITY`: one line). `slant` draws it
+/// oblique, for an italic cell whose font has no italic face (see [`crate::fonts::is_slanted`]).
+pub(super) fn cell_job(text: String, font: FontId, color: Color32, wrap: f32, slant: bool) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple(text, font, color, wrap);
+    for section in &mut job.sections {
+        section.format.italics = slant;
+    }
+    job
+}
+
+/// Paints one cell's text; `bold_dx` > 0 paints it again that far right, to thicken a bold cell
+/// whose font has no bold face (see [`crate::fonts::is_emboldened`]).
+pub(super) fn paint_cell_galley(p: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32, bold_dx: f32) {
+    if bold_dx > 0.0 {
+        p.galley(pos + egui::vec2(bold_dx, 0.0), galley.clone(), color);
+    }
+    p.galley(pos, galley, color);
+}
+
 /// The smaller font that makes `text` fit in `room` points of width (Shrink to fit), or `None`
 /// when it already fits at its own size.
 pub(super) fn shrink_font(p: &Painter, text: &str, font: &FontId, room: f32) -> Option<FontId> {
