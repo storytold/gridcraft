@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
-use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
+use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
 use gridcraft_model::Workbook;
 
@@ -215,25 +215,40 @@ impl<'h> Evaluator<'h> {
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
     pub fn value(&mut self, e: &Expr) -> Value {
+        // A one-cell reference reads its cell without the list of areas `eval` builds for it.
+        if let Expr::Ref(r) = e
+            && let RefKind::Cell(a) = &r.kind
+        {
+            if let Err(x) = self.enter() {
+                return Value::Error(x);
+            }
+            self.depth -= 1;
+            return match self.resolve_sheet(&r.sheet) {
+                Ok(sheets) if sheets.start() == sheets.end() => self.area_value(&Area { sheet: *sheets.start(), range: RangeRef::cell(a.cell()) }),
+                // A 3-D reference over several sheets, as `deref` takes it.
+                Ok(_) => Value::Error(CellError::Value),
+                Err(x) => Value::Error(x),
+            };
+        }
         let ev = self.eval(e);
         self.deref(ev)
     }
 
-    fn resolve_sheet(&self, s: &SheetSel) -> Result<Vec<usize>, CellError> {
+    fn resolve_sheet(&self, s: &SheetSel) -> Result<std::ops::RangeInclusive<usize>, CellError> {
         let wb = self.host.workbook();
         match s {
-            SheetSel::Current => Ok(vec![self.sheet]),
-            SheetSel::Named(n) => wb.sheet_index(n).map(|i| vec![i]).ok_or(CellError::Ref),
+            SheetSel::Current => Ok(self.sheet..=self.sheet),
+            SheetSel::Named(n) => wb.sheet_index(n).map(|i| i..=i).ok_or(CellError::Ref),
             SheetSel::Span(a, b) => {
                 let (i, j) = (wb.sheet_index(a).ok_or(CellError::Ref)?, wb.sheet_index(b).ok_or(CellError::Ref)?);
-                Ok((i.min(j)..=i.max(j)).collect())
+                Ok(i.min(j)..=i.max(j))
             }
         }
     }
 
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
         let range = r.range();
-        Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
+        Ok(self.resolve_sheet(&r.sheet)?.map(|sheet| Area { sheet, range }).collect())
     }
 
     /// Dereferences: one cell → its value; a block → an array; several areas → `#VALUE!`.
@@ -296,22 +311,31 @@ impl<'h> Evaluator<'h> {
     }
 
     pub fn eval(&mut self, e: &Expr) -> Ev {
+        if let Err(x) = self.enter() {
+            return err(x);
+        }
+        let r = self.eval_inner(e);
+        self.depth -= 1;
+        r
+    }
+
+    /// One nesting level deeper, within the stack budget and [`MAX_DEPTH`] (`#NUM!` past either).
+    /// The caller leaves the level again.
+    #[inline(always)]
+    fn enter(&mut self) -> Result<(), CellError> {
         let here = stack_position();
         if self.depth == 0 {
             self.stack_top = self.host.stack_top().unwrap_or(here);
         }
         if self.stack_top.abs_diff(here) > STACK_BUDGET {
             self.host.stack_exhausted();
-            return err(CellError::Num);
+            return Err(CellError::Num);
+        }
+        if self.depth >= MAX_DEPTH {
+            return Err(CellError::Num);
         }
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            self.depth -= 1;
-            return err(CellError::Num);
-        }
-        let r = self.eval_inner(e);
-        self.depth -= 1;
-        r
+        Ok(())
     }
 
     fn eval_inner(&mut self, e: &Expr) -> Ev {
@@ -592,7 +616,8 @@ impl<'h> Evaluator<'h> {
             _ => {
                 // A long chain such as A1+A2+…+A500 nests to the left: fold it in a loop instead
                 // of one level of recursion per operator (past the depth limit it was an error).
-                let mut rest = vec![(op, b)];
+                // `rest` allocates only for a chain: most operators have a plain left operand.
+                let mut rest = Vec::new();
                 let mut left = a;
                 while let Expr::Binary(o, l, r) = left
                     && !matches!(o, BinOp::Range | BinOp::Union | BinOp::Intersect)
@@ -605,7 +630,8 @@ impl<'h> Evaluator<'h> {
                     let y = self.value(r);
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
-                Ev::V(acc)
+                let y = self.value(b);
+                Ev::V(binary_values(op, &acc, &y, self.host.workbook().date_system))
             }
         }
     }

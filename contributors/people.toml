@@ -106,3 +106,6 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.clemens]
+sync_github_name = true

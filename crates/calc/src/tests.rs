@@ -1097,17 +1097,32 @@ fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
                     comment: String::new(),
                     hidden: false,
                 });
+                wb.sheet_mut(0).unwrap().set_value(c("A1"), Value::Number(2.0));
                 // F(F,n) has n + 1 calls in progress at its deepest; W adds one more call per step.
                 let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
                 let wrapped = |n: u32| format!("=LET(W,LAMBDA(f,k,f(f,k)),F,LAMBDA(me,n,IF(n<=0,0,1+W(me,n-1))),F(F,{n}))");
-                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
+                // The deepest call reads a cell.
+                let reads = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n<=0,A1,1+me(me,n-1))),F(F,{n}))");
+                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string(), reads(131), reads(132)]
+                    .map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
             })
             .expect("spawn")
             .join()
             .expect("recursion must not overflow the stack")
     };
     let small = run(1 << 20);
-    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(
+        small,
+        [
+            Value::Number(0.0),
+            Value::Error(CellError::Num),
+            Value::Number(69.0),
+            Value::Error(CellError::Num),
+            Value::Number(131.0),
+            Value::Number(133.0),
+            Value::Error(CellError::Num)
+        ]
+    );
     assert_eq!(run(64 << 20), small);
 }
 
@@ -2273,4 +2288,45 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// A one-cell reference read as a value goes straight to its cell, on another sheet, through a 3-D
+/// reference of one sheet, or to a formula calculated on demand. It gives the same value as reading
+/// it through its areas: `#VALUE!` over several sheets, `#REF!` for a sheet that doesn't exist.
+#[test]
+fn single_cell_references_read_as_values() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    t.wb.sheet_mut(1).unwrap().set_value(c("A1"), Value::Number(8.0));
+    t.calc.rebuild(&t.wb);
+    t.set("B1", "=C1*2");
+    t.set("C1", "=Data!A1+1");
+    t.set("D1", "=Data!A1*Sheet1!C1");
+    t.set("E1", "=Data:Data!A1+1");
+    t.set("F1", "=Sheet1:Data!A1+1");
+    t.set("G1", "=SUM(Sheet1:Data!A1)");
+    t.set("H1", "=Nowhere!A1+1");
+    let check = |t: &T| {
+        assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("E1"), t.num("G1")), (18.0, 9.0, 72.0, 9.0, 8.0));
+        assert_eq!(t.get("F1"), Value::Error(CellError::Value));
+        assert_eq!(t.get("H1"), Value::Error(CellError::Ref));
+    };
+    check(&t);
+    // B1 reads C1 before the pass reaches it.
+    t.calc.recalc_all(&mut t.wb);
+    check(&t);
+}
+
+/// Operators fold left to right, with an operator chain or a plain operand on the left.
+#[test]
+fn operators_fold_left_to_right() {
+    let mut t = T::new();
+    for (at, f) in
+        [("A1", "=1-2-3"), ("A2", "=(1-2)-3"), ("A3", "=10-(2-3)"), ("A4", "=2^3^2"), ("A5", "=2*3+4*5"), ("A6", "=\"a\"&\"b\"&1"), ("A7", "=1/0+1")]
+    {
+        t.set(at, f);
+    }
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4"), t.num("A5")), (-4.0, -4.0, 11.0, 64.0, 26.0));
+    assert_eq!(t.get("A6"), Value::Text("ab1".into()));
+    assert_eq!(t.get("A7"), Value::Error(CellError::Div0));
 }
