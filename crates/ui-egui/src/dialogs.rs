@@ -487,19 +487,17 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook; OK runs `link.open`, which
-            // refuses anything but http, https and mailto.
+            // Asks before a web, e-mail or local file link leaves the workbook; OK runs `link.open`,
+            // which refuses anything else (and programs and scripts).
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                Dialog::form(
-                    "openLink",
-                    "Open Hyperlink",
-                    "link.open",
-                    vec![Note(format!(
-                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                    ))],
-                    json!({"url": url}),
-                )
+                let local = params.get("local").and_then(Json::as_bool).unwrap_or(false);
+                let ask = if local {
+                    "This workbook asks to open the file or folder below with the program your computer uses for it. Files can contain harmful content: open it only if you trust the workbook."
+                } else {
+                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook."
+                };
+                Dialog::form("openLink", "Open Hyperlink", "link.open", vec![Note(format!("{ask}\n\n{url}"))], json!({"url": url}))
             }
             "insertLink" => {
                 let mut d = Dialog::form(
