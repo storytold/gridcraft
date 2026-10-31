@@ -209,8 +209,7 @@ impl EditState {
             return false;
         }
         let head = before.strip_suffix('(').unwrap_or(before);
-        let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let name: String = head.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
@@ -255,18 +254,11 @@ impl EditState {
                 '{' | '[' => depth -= 1,
                 '(' => {
                     if depth == 0 {
-                        let name: String = chars[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
+                        let name: String = chars[..i].iter().rev().take_while(|c| is_name_char(**c)).collect::<String>().chars().rev().collect();
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        return Some((name.to_uppercase(), arg));
                     }
                     depth -= 1;
                 }
@@ -450,6 +442,15 @@ mod tests {
         assert_eq!(e.autocomplete, ["ZÄHLENWENN", "ZÄHLENWENNS"]);
         assert!(e.accept_autocomplete());
         assert_eq!(e.text, "=1+ZÄHLENWENN(");
+        // The argument hint names the whole function, umlaut included.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=zählenwenn(A1:A9;".into(), true, false);
+        e.locale = gridcraft_engine::formula::FormulaLocale::De;
+        assert_eq!(e.current_function(), Some(("ZÄHLENWENN".into(), 1)));
+        // Ctrl+Shift+A after it inserts COUNTIF's arguments with German separators.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=zählenwenn(".into(), true, false);
+        e.locale = gridcraft_engine::formula::FormulaLocale::De;
+        assert!(e.insert_argument_names(crate::i18n::Language::En));
+        assert_eq!(e.text, "=zählenwenn(range;criteria)");
     }
 
     #[test]
