@@ -116,6 +116,9 @@ fn no_block_several_blocks_or_unlabeled_data_keep_the_error() {
     s.execute("range.setValues", json!({"range": "H1", "values": [["Name", "Score"], ["Ann", 3]]})).unwrap();
     assert!(source_from(&mut s, "M20").unwrap_err().contains(ERR));
     assert_eq!(source_from(&mut s, "I2").unwrap(), "Sheet1!$H$1:$I$2");
+    // A blank cell touching one of them points at that one, as a cell inside it does.
+    assert_eq!(source_from(&mut s, "F1").unwrap(), "Sheet1!$A$1:$E$13");
+    assert_eq!(source_from(&mut s, "J2").unwrap(), "Sheet1!$H$1:$I$2");
     // A selected block that meets the data only at a blank cell is not swapped for the data.
     let mut s = Session::new();
     s.new_workbook();
