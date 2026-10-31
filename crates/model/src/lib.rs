@@ -8,6 +8,7 @@ mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
+pub mod group;
 pub mod macros;
 pub mod password;
 pub mod preserved;
@@ -18,6 +19,7 @@ pub mod workbook;
 
 pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
+pub use group::{DrawingGroup, DrawingRef, GroupFile, GroupFileMember, MAX_GROUP_DEPTH, ObjectRect, rotates};
 pub use macros::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
