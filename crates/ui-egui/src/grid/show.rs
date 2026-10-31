@@ -416,6 +416,153 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     quads
 }
 
+#[derive(Clone, Copy)]
+struct ScrollbarCapture {
+    id: egui::Id,
+    release_on_pointer_gone: bool,
+    cancelled: bool,
+    was_focused: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ScrollbarFocus {
+    before_input: bool,
+    observed: bool,
+}
+
+struct ScrollbarInput;
+
+impl egui::plugin::Plugin for ScrollbarInput {
+    fn debug_name(&self) -> &'static str {
+        "worksheet scrollbar capture"
+    }
+
+    fn input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Raw focus can start true before the web canvas is focused. Only an
+        // observed focus event establishes focus before a later input batch.
+        let focus_key = egui::Id::unique(("worksheet_scrollbar_focus", raw.viewport_id));
+        let mut focus = ctx.data(|d| d.get_temp::<ScrollbarFocus>(focus_key)).unwrap_or_default();
+        focus.before_input = focus.observed;
+        for event in &raw.events {
+            if let egui::Event::WindowFocused(focused) = event {
+                focus.observed = *focused;
+            }
+        }
+        ctx.data_mut(|d| d.insert_temp(focus_key, focus));
+        let key = egui::Id::unique(("worksheet_scrollbar_capture", raw.viewport_id));
+        let Some(mut capture) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(key)) else { return };
+        // A delivered release completes the old gesture. Only an interruption that
+        // comes first cancels it; later events must not erase a completed track click.
+        let ending = raw.events.iter().find_map(|event| match event {
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => Some(false),
+            egui::Event::WindowFocused(false) => Some(true),
+            egui::Event::PointerGone if capture.release_on_pointer_gone => Some(true),
+            _ => None,
+        });
+        if !capture.cancelled && !ending.unwrap_or(capture.was_focused && !raw.focused) {
+            if ending == Some(false) {
+                ctx.data_mut(|d| d.remove::<ScrollbarCapture>(key));
+            } else if raw.focused && !capture.was_focused {
+                capture.was_focused = true;
+                ctx.data_mut(|d| d.insert_temp(key, capture));
+            }
+            return;
+        }
+        // Use the affected viewport's input for root and immediate windows alike,
+        // before egui assigns any later press. Never alter another widget's drag.
+        let released = ctx.viewport_for(raw.viewport_id, |v| {
+            (v.interact_widgets.dragged.is_none_or(|id| id == capture.id) && v.input.pointer.primary_down()).then(|| {
+                let pos = v.input.pointer.interact_pos().or_else(|| v.input.pointer.press_origin()).unwrap_or_default();
+                let cancel_click = v.input.pointer.could_any_button_be_click().then(|| v.input.pointer.press_origin().unwrap_or(pos));
+                (pos, v.input.modifiers, cancel_click)
+            })
+        });
+        if let Some((pos, modifiers, cancel_click)) = released {
+            let release = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers };
+            if let Some(origin) = cancel_click {
+                // egui has no cancelled release. Invalidate the old click; the release
+                // restores the position, and a later real press resets the click state.
+                let distance = ctx.options(|o| o.input_options.max_click_dist) + 1.0;
+                raw.events.splice(0..0, [egui::Event::PointerMoved(origin + vec2(distance, 0.0)), release]);
+            } else {
+                raw.events.insert(0, release);
+            }
+        }
+        ctx.data_mut(|d| d.remove::<ScrollbarCapture>(key));
+    }
+}
+
+pub(crate) fn setup_scrollbar_input(ctx: &egui::Context) {
+    if ctx.plugin_opt::<ScrollbarInput>().is_none() {
+        ctx.add_plugin(ScrollbarInput);
+    }
+}
+
+/// Both worksheet scrollbars share capture cleanup. `PointerGone` alone is not a release on
+/// hosts with working pointer capture. The native shell enables that fallback only on Wayland:
+/// egui-winit drops MouseInput without a pointer position, leaving primary_down stale on return.
+fn stop_scrollbar_drag(ctx: &egui::Context) {
+    let capture = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
+    let Some(mut state) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(capture)) else { return };
+    if ctx.dragged_id().is_none_or(|dragged| dragged == state.id) {
+        if ctx.input(|i| i.pointer.primary_down()) {
+            // A logic-only tick cannot process a release. Remember the cancellation
+            // until the next full pass also clears the old pending click target.
+            state.cancelled = true;
+            ctx.data_mut(|d| d.insert_temp(capture, state));
+        } else {
+            ctx.data_mut(|d| d.remove::<ScrollbarCapture>(capture));
+        }
+        ctx.stop_dragging();
+    } else {
+        ctx.data_mut(|d| d.remove::<ScrollbarCapture>(capture));
+    }
+}
+
+/// Logic-only ticks refresh raw focus but retain the previous full pass's UI events.
+pub(crate) fn cancel_scrollbar_drag(ctx: &egui::Context) {
+    let key = egui::Id::unique(("worksheet_scrollbar_capture", ctx.viewport_id()));
+    let Some(mut state) = ctx.data(|d| d.get_temp::<ScrollbarCapture>(key)) else { return };
+    if ctx.input(|i| i.raw.focused) {
+        if !state.was_focused {
+            state.was_focused = true;
+            ctx.data_mut(|d| d.insert_temp(key, state));
+        }
+    } else if state.was_focused {
+        stop_scrollbar_drag(ctx);
+    }
+}
+
+fn scrollbar_dragging(ui: &egui::Ui, resp: &egui::Response, release_on_pointer_gone: bool) -> bool {
+    setup_scrollbar_input(ui.ctx());
+    if (resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down())) || resp.dragged_by(egui::PointerButton::Primary) {
+        let capture = egui::Id::unique(("worksheet_scrollbar_capture", ui.ctx().viewport_id()));
+        if ui.ctx().data(|d| d.get_temp::<ScrollbarCapture>(capture)).is_none_or(|state| state.id != resp.id) {
+            // The plugin handles existing captures before input. A new capture can
+            // still be interrupted after its press in this same batch.
+            let focus_key = egui::Id::unique(("worksheet_scrollbar_focus", ui.ctx().viewport_id()));
+            let previously_focused = ui.ctx().data(|d| d.get_temp::<ScrollbarFocus>(focus_key)).is_some_and(|focus| focus.before_input);
+            let (was_focused, cancelled) = ui.input(|i| {
+                let was_focused = i.raw.focused && i.focused;
+                // Web focus polling can report false before the canvas ever gains focus.
+                let focus_seen = previously_focused || was_focused || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)));
+                let cancelled = i.events.iter().rev().find_map(|event| match event {
+                    egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } => Some(false),
+                    egui::Event::WindowFocused(false) if focus_seen => Some(true),
+                    egui::Event::PointerGone if release_on_pointer_gone => Some(true),
+                    _ => None,
+                });
+                (was_focused, cancelled.unwrap_or(false))
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(capture, ScrollbarCapture { id: resp.id, release_on_pointer_gone, cancelled, was_focused }));
+            if cancelled {
+                ui.ctx().stop_dragging();
+            }
+        }
+    }
+    resp.dragged() && ui.ctx().dragged_id() == Some(resp.id)
+}
+
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
@@ -430,19 +577,20 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     let extent = (content - visible).max(scroll).max(0.0).min(limit);
     let id = ui.scope_id().with("vscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
+    let dragging = scrollbar_dragging(ui, &resp, app.services.scrollbar_release_on_pointer_gone);
     let drag_id = id.with("extent");
     if resp.drag_started() {
         ui.ctx().data_mut(|d| d.insert_temp(drag_id, extent));
     }
-    let extent = if resp.dragged() { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
+    let extent = if dragging { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
     let thumb_h = (track.height() * visible / (extent + visible)).clamp(24.0_f32.min(track.height()), track.height());
     let travel = track.height() - thumb_h;
     let thumb_top = track.top() + if extent > 0.0 { travel * (scroll / extent).clamp(0.0, 1.0) } else { 0.0 };
     let thumb = Rect::from_min_size(pos2(track.left() + 3.0, thumb_top), vec2((track.width() - 6.0).max(0.0), thumb_h));
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || dragging { t.text_dim } else { t.text_disabled });
     let mut next = scroll;
-    if resp.dragged() && travel > 0.0 {
+    if dragging && travel > 0.0 {
         next += resp.drag_delta().y / travel * extent;
     } else if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -483,11 +631,12 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let extent = (content - visible).max(scroll).max(0.0);
     let id = ui.scope_id().with("hscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
+    let dragging = scrollbar_dragging(ui, &resp, app.services.scrollbar_release_on_pointer_gone);
     let drag_id = id.with("extent");
     if resp.drag_started() {
         ui.ctx().data_mut(|d| d.insert_temp(drag_id, extent));
     }
-    let extent = if resp.dragged() { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
+    let extent = if dragging { ui.ctx().data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(extent) } else { extent };
     let thumb_w = (track.width() * visible / (extent + visible).max(1.0)).clamp(24.0_f32.min(track.width()), track.width());
     let travel = track.width() - thumb_w;
     let offset = if extent > 0.0 { travel * (scroll / extent).clamp(0.0, 1.0) } else { 0.0 };
@@ -496,9 +645,9 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let thumb_left = if geo.rtl { track.right() - thumb_w - offset } else { track.left() + offset };
     let thumb = Rect::from_min_size(pos2(thumb_left, track.top() + 3.0), vec2(thumb_w, (track.height() - 6.0).max(0.0)));
     ui.painter().rect_filled(track, 0.0, t.tab_bar);
-    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled });
+    ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || dragging { t.text_dim } else { t.text_disabled });
     let mut next = scroll;
-    if resp.dragged() && travel > 0.0 {
+    if dragging && travel > 0.0 {
         next += dir * resp.drag_delta().x / travel * extent;
     } else if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
