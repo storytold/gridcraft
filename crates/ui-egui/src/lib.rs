@@ -18,6 +18,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+mod chartcache;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
@@ -267,6 +268,8 @@ pub struct SheetApp {
     pub(crate) capture_geometry_from_raw: bool,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
+    /// Rendered charts kept between frames ([`chartcache`]).
+    pub(crate) chart_cache: std::sync::Mutex<chartcache::ChartCache>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
