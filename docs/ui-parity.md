@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (AutoSum on one cell proposes its range in the editor, #1834; checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -55,9 +55,8 @@ this logic, with one undo step.
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series; month patterns use the workbook's 1900 or 1904 date system); right-drag menu partial: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, and from a date Fill Days, Fill Weekdays, Fill Months and Fill Years, then Series…; a left-drag leaves an Auto Fill Options button with the same fill choices (gone once the workbook changes or the selection moves); Linear/Growth Trend and Flash Fill missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
-| Point mode (click/drag/arrow references), reference colouring, F4 | done; Command/Ctrl-click adds separate arguments with the edit's locale separator, and Shift-click extends the current reference from a fixed anchor on the same sheet. Pointer-event regressions cover repeated/reversed selections, manual separators, sheet switches and keyboard continuation. |
+| Point mode (click/drag/arrow references), reference colouring, F4 | done; Command/Ctrl-click adds separate arguments with the edit's locale separator, and Shift-click extends the current reference from a fixed anchor on the same sheet. Pointer-event regressions cover repeated/reversed selections, manual separators, sheet switches and keyboard continuation. AutoSum on one cell leaves its proposed range pointed and selected (#1834) |
 | Number-format colors (`[Green]`, `[Color1]`–`[Color56]`) | Rendered in grid and PDF from shared RGB mappings (#1452) |
-| Point mode (click/drag/arrow references), reference colouring, F4 | done |
 | AutoComplete in columns, function autocomplete and argument tips | done; cell helpers clip to the worksheet and hide when the editor scrolls out (#200) |
 | Header resize and double-click AutoFit | done (#42, #88 for header dividers) |
 | Data › Advanced Filter | dialog offers in-place or copy-to filtering, list and optional criteria ranges, and unique records; Alt+A,Q opens it (#1622). The engine's copy-to path clears only the result footprint and rejects worksheet overflow (#1031). |
@@ -194,6 +193,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | AutoSum from the ribbon or keyboard on one cell proposes `=SUM(range)` in the editor instead of entering it, with the range pointed and selected: a click, drag, arrow key or typing replaces it and Enter enters it, as in Excel. With nothing to sum the caret waits inside `=SUM()`. A block still gets its totals at once, and programmatic `formulas.autoSum` is unchanged (#1834) |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
