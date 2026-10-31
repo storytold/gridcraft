@@ -15,7 +15,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
 | 2026-10-14 | minor | Dialogs (Find and Replace, Go To, Format Cells, Sort and the rest) move by their title bar instead of staying pinned to the centre (#1250) |
-| Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
+| Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes (10-15: AutoSave writes on a worker thread, so a big workbook no longer freezes the window for the length of the save; a change made just after a save is saved when the 2 s gate opens even if the window is idle; `options.autoSave` toggles it from agents) | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
@@ -238,6 +238,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-16 | minor | The shared UI clock delegates to the core Unix-millisecond clock, which reads Date.now() on wasm, instead of returning zero there (#1026). Native clock contract tested; browser timing remains unverified |
 | 2026-10-16 | trivial | Web: preferences (theme, interface size, language, editing options…) are kept in the browser's `localStorage` between visits, as the desktop app keeps `ui.json` and `prefs.json`; before, a reload brought back light mode and the defaults (#1562) |
 | 2026-10-15 | minor | File › Options › Formulas: Maximum Iterations (1 to 32767) and Maximum Change (0 or more) under Enable iterative calculation, disabled while it is off; invalid entries are refused with a message |
+| 2026-10-15 | minor | AutoSave writes on a worker thread (the frame was held 0.3 to 1 s per save at 50k formula cells, ~2 s at 200k, 8 s or more at 1M), saves an idle window when its gate opens, and is reachable as `options.autoSave` |
 | 2026-10-15 | minor | Number-format named colors use their RGB values; indexed `[Color1]`–`[Color56]` resolve through the shared legacy palette in grid and PDF (#1452) |
 | 2026-10-14 | minor | Spill-child formula bar uses the anchor formula with disabled theme text and blocks formula-bar edit entry; selection and recalculation restore ordinary behavior |
 | 2026-10-14 | minor | PivotTable source-field list fills the pane width so its scrollbar stays at the list's right edge |

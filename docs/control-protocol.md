@@ -106,6 +106,10 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+`{command: "options.autoSave", params: {on: true}}` turns AutoSave on (the ribbon toggle; without `on` it
+toggles). `ui.inspect` reports it in `perf`: `autosaveMs` (time the last AutoSave held its frame),
+`autosaveWriteMs` (time its worker took to write the file) and `autosaves` (count).
+
 `{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
