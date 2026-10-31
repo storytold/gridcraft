@@ -20,7 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so GridCraft starts there (#2812) |
+| 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so they no longer exit on Metal's compiler error there (#2812). Macs run with OpenCore Legacy Patcher on macOS 15 can still fail earlier, on the MSL version (#1116). |
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |
 | 2026-10-22 | minor | Multiple windows: each workbook window is a native window of its own (desktop). |
 | 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, duplex and grayscale; browser printing and PDF export remain available. Remaining print parity includes page ranges and driver-specific tray/options UI; physical printer fidelity needs hardware validation. |

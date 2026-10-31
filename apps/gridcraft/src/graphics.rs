@@ -168,6 +168,13 @@ fn probe_dx12(options: &NativeOptions) -> Vec<Dx12Adapter> {
 mod tests {
     use super::*;
 
+    fn instance_flags(options: &NativeOptions) -> InstanceFlags {
+        let WgpuSetup::CreateNew(create) = &options.wgpu_options.wgpu_setup else {
+            panic!("default native options must create a wgpu instance");
+        };
+        create.instance_descriptor.flags
+    }
+
     #[test]
     fn intel_macs_skip_the_indirect_validation_shaders() {
         // Metal's Intel compiler aborted on them, losing the device before the window opened.
@@ -176,20 +183,38 @@ mod tests {
         for (macos, intel) in [(true, false), (false, true), (false, false)] {
             assert!(!skips_indirect_validation(macos, intel), "macos={macos} intel={intel}");
         }
-        let flags = |options: &NativeOptions| {
-            let WgpuSetup::CreateNew(create) = &options.wgpu_options.wgpu_setup else {
-                panic!("default native options must create a wgpu instance");
-            };
-            create.instance_descriptor.flags
-        };
         let mut options = NativeOptions::default();
-        let before = flags(&options);
+        let before = instance_flags(&options);
         configure_indirect_validation(&mut options, false);
-        assert_eq!(flags(&options), before, "flags untouched when not skipping");
+        assert_eq!(instance_flags(&options), before, "flags untouched when not skipping");
         if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
             configure_indirect_validation(&mut options, true);
-            assert!(!flags(&options).contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
+            assert!(!instance_flags(&options).contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
         }
+    }
+
+    /// `WGPU_VALIDATION_INDIRECT_CALL=1` turns the validation back on even when it is skipped.
+    /// Tests can't set environment variables (`set_var` is unsafe, and unsafe code is forbidden),
+    /// so this runs itself again as a child process with the variable set.
+    #[test]
+    fn the_environment_turns_indirect_validation_back_on() {
+        const NAME: &str = "graphics::tests::the_environment_turns_indirect_validation_back_on";
+        if std::env::var_os("GRIDCRAFT_INDIRECT_VALIDATION_CHILD").is_some() {
+            let mut options = NativeOptions::default();
+            configure_indirect_validation(&mut options, true);
+            assert!(instance_flags(&options).contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env("GRIDCRAFT_INDIRECT_VALIDATION_CHILD", "1")
+            .env("WGPU_VALIDATION_INDIRECT_CALL", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // `--exact` matching nothing would pass too, so the child must report this one test.
+        assert!(out.status.success() && stdout.contains("1 passed"), "child test failed:\n{stdout}{}", String::from_utf8_lossy(&out.stderr));
     }
 
     fn configured_backends(backends: Backends) -> Backends {
