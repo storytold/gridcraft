@@ -165,10 +165,9 @@ impl PivotWriter {
         let mut v = Vec::new();
         for p in &self.pending {
             if let Some(pt) = wb.sheet(p.sheet).and_then(|s| s.pivots.get(p.idx)) {
-                for val in &pt.values {
-                    if let Some(f) = &val.number_format
-                        && !v.contains(f)
-                    {
+                let fields = pt.rows.iter().chain(pt.columns.iter()).filter_map(|f| f.number_format.as_ref());
+                for f in pt.values.iter().filter_map(|v| v.number_format.as_ref()).chain(fields) {
+                    if !v.contains(f) {
                         v.push(f.clone());
                     }
                 }
@@ -608,6 +607,20 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     s
 }
 
+/// A field's `<items>` order (cache item indexes): its manual order when it isn't auto-sorted
+/// (unlisted items after), else cache order.
+fn written_order(labels: &[String], af: Option<&PivotField>) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    if let Some(af) = af.filter(|f| f.sort == PivotSort::None && !f.item_order.is_empty()) {
+        let mut rank: HashMap<String, usize> = HashMap::with_capacity(af.item_order.len());
+        for (r, o) in af.item_order.iter().enumerate() {
+            rank.entry(o.to_lowercase()).or_insert(r);
+        }
+        order.sort_by_cached_key(|x| labels.get(*x).and_then(|l| rank.get(&l.to_lowercase()).copied()).unwrap_or(usize::MAX));
+    }
+    order
+}
+
 struct PivotTableLayout<'a> {
     row_fields: Vec<usize>,
     column_fields: Vec<usize>,
@@ -649,9 +662,17 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     let compact = pt.layout == PivotLayout::Compact;
     let name = if pt.name.trim().is_empty() { format!("PivotTable{}", idx + 1) } else { pt.name.clone() };
     let mut s = format!(
-        "{XML_DECL}<pivotTableDefinition xmlns=\"{NS_MAIN}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"Values\" updatedVersion=\"6\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"6\" indent=\"0\"",
-        esc_attr(&name)
+        "{XML_DECL}<pivotTableDefinition xmlns=\"{NS_MAIN}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\"",
+        esc_attr(&name),
+        esc_attr(pt.data_caption.as_deref().unwrap_or("Values"))
     );
+    if let Some(c) = &pt.grand_total_caption {
+        let _ = write!(s, " grandTotalCaption=\"{}\"", esc_attr(c));
+    }
+    if let Some(c) = &pt.empty_caption {
+        let _ = write!(s, " missingCaption=\"{}\"", esc_attr(c));
+    }
+    s.push_str(" updatedVersion=\"6\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"6\" indent=\"0\"");
     match pt.layout {
         PivotLayout::Compact => s.push_str(" outline=\"1\" outlineData=\"1\""),
         PivotLayout::Outline => s.push_str(" compact=\"0\" compactData=\"0\" outline=\"1\" outlineData=\"1\""),
@@ -674,7 +695,17 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     if !pt.grand_totals_rows {
         s.push_str(" colGrandTotals=\"0\"");
     }
-    s.push_str(" multipleFieldFilters=\"0\">");
+    s.push_str(" multipleFieldFilters=\"0\"");
+    if pt.classic_layout {
+        s.push_str(" gridDropZones=\"1\"");
+    }
+    if let Some(c) = &pt.row_header_caption {
+        let _ = write!(s, " rowHeaderCaption=\"{}\"", esc_attr(c));
+    }
+    if let Some(c) = &pt.col_header_caption {
+        let _ = write!(s, " colHeaderCaption=\"{}\"", esc_attr(c));
+    }
+    s.push('>');
 
     // Location: the body (report filters sit above it).
     let a = pt.anchor;
@@ -687,7 +718,16 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     let row_values = (k > 1 && pt.values_on_rows).then(|| values_at(row_map, layout.row_fields.len()));
     // In Columns Σ Values comes after the last field: the column layout doesn't place it elsewhere.
     let col_values = (k > 1 && !pt.values_on_rows).then_some(layout.column_fields.len());
-    let first_data_row = if layout.column_fields.is_empty() { 1 } else { 1 + layout.column_fields.len() + usize::from(col_values.is_some()) };
+    // The engine shows the Values row and the classic caption row only with field headers on.
+    let values_row = layout.column_fields.is_empty()
+        && !compact
+        && pt.show_headers
+        && ((col_values.is_some() && pt.show_values_row) || (k == 1 && pt.classic_layout));
+    let first_data_row = if layout.column_fields.is_empty() {
+        1 + usize::from(values_row)
+    } else {
+        1 + layout.column_fields.len() + usize::from(col_values.is_some())
+    };
     let row_levels = layout.row_fields.len() + usize::from(row_values.is_some());
     let first_data_col = if row_levels == 0 && layout.column_fields.is_empty() {
         0
@@ -696,8 +736,11 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     } else {
         row_levels.max(1)
     };
-    // Two or more value fields in Columns alone: Excel 365 would add a `Values` caption row.
-    let hide_values_row = col_values.is_some() && layout.column_fields.is_empty();
+    // Two or more value fields in Columns alone: Excel 365 adds a `Values` caption row
+    // when field headers are shown. Page-filter layouts retain their classic header row
+    // unless the table explicitly hides the Values row.
+    let hide_values_row =
+        col_values.is_some() && layout.column_fields.is_empty() && (layout.page_fields.is_empty() || !pt.show_values_row) && pt.show_headers;
     let first_header_row = usize::from(!hide_values_row);
     let _ = write!(
         s,
@@ -709,7 +752,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     s.push_str("/>");
 
-    write_pivot_fields(&mut s, pt, c, &layout);
+    write_pivot_fields(&mut s, pt, c, &layout, fmt_id);
     axis_fields_xml(&mut s, "rowFields", &layout.row_fields, row_values);
     axis_fields_xml(&mut s, "colFields", &layout.column_fields, col_values);
     write_page_fields(&mut s, c, &layout);
@@ -719,11 +762,20 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
-    if hide_values_row {
-        let _ = write!(
-            s,
-            "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext></extLst>"
-        );
+    let overridden = pt.rows.iter().chain(&pt.columns).any(|f| f.subtotal.is_some_and(|own| own != pt.subtotals));
+    if !pt.show_values_row || overridden {
+        s.push_str("<extLst>");
+        if !pt.show_values_row {
+            let _ = write!(s, "<ext uri=\"{EXT_X14_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext>");
+        }
+        if overridden {
+            let _ = write!(
+                s,
+                "<ext uri=\"{EXT_XPDL_TABLE}\" xmlns:xpdl=\"{NS_XPDL}\"><xpdl:pivotTableDefinition16 EnabledSubtotalsDefault=\"{}\"/></ext>",
+                u8::from(pt.subtotals)
+            );
+        }
+        s.push_str("</extLst>");
     }
     s.push_str("</pivotTableDefinition>");
     s
@@ -734,7 +786,8 @@ fn axis_field<'a>(pt: &'a PivotTable, c: &Cache, i: usize) -> Option<&'a PivotFi
     pt.rows.iter().chain(pt.columns.iter()).nth(p)
 }
 
-fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>) {
+fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+    let vals = &layout.values;
     let _ = write!(s, "<pivotFields count=\"{}\">", c.fields.len());
     for (i, f) in c.fields.iter().enumerate() {
         s.push_str("<pivotField");
@@ -763,6 +816,8 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
         }
         if f.group.is_some() {
             s.push_str(" numFmtId=\"14\"");
+        } else if let Some(id) = axis_field(pt, c, i).and_then(|f| f.number_format.as_deref()).and_then(fmt_id) {
+            let _ = write!(s, " numFmtId=\"{id}\"");
         }
         let filter = layout.hidden_fields.get(&i).copied();
         let labels = f.item_labels();
@@ -779,25 +834,38 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
             s.push_str(" multipleItemSelectionAllowed=\"1\"");
         }
         s.push_str(" showAll=\"0\"");
-        if let Some(af) = axis_field(pt, c, i) {
+        let af = axis_field(pt, c, i);
+        if let Some(af) = af {
             match af.sort {
                 PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
                 PivotSort::Desc => s.push_str(" sortType=\"descending\""),
                 PivotSort::None => {}
             }
+            if let Some(c) = &af.caption {
+                let _ = write!(s, " name=\"{}\"", esc_attr(c));
+            }
         }
-        if !pt.subtotals {
+        let subtotals = af.and_then(|f| f.subtotal).unwrap_or(pt.subtotals);
+        if !subtotals {
             s.push_str(" defaultSubtotal=\"0\"");
         }
         if !pt.subtotals_top {
             s.push_str(" subtotalTop=\"0\"");
         }
         if axis.is_some() {
-            let collapsed: &[String] = axis_field(pt, c, i).map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
-            let count = labels.len() + usize::from(pt.subtotals);
+            let collapsed: &[String] = af.map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
+            let captions: &[(String, String)] = af.map(|f| f.item_captions.as_slice()).unwrap_or(&[]);
+            // Items in display order: the manual order (unlisted items after), else cache order.
+            let order = written_order(&labels, af);
+            let count = labels.len() + usize::from(subtotals);
             let _ = write!(s, "><items count=\"{count}\">");
-            for (x, l) in labels.iter().enumerate() {
-                let _ = write!(s, "<item x=\"{x}\"");
+            for x in order {
+                let Some(l) = labels.get(x) else { continue };
+                let _ = write!(s, "<item");
+                if let Some((_, n)) = captions.iter().find(|(il, _)| same(il, l)) {
+                    let _ = write!(s, " n=\"{}\"", esc_attr(n));
+                }
+                let _ = write!(s, " x=\"{x}\"");
                 if hide.get(x).copied().unwrap_or(false) {
                     s.push_str(" h=\"1\"");
                 }
@@ -806,15 +874,56 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
                 }
                 s.push_str("/>");
             }
-            if pt.subtotals {
+            if subtotals {
                 s.push_str("<item t=\"default\"/>");
             }
-            s.push_str("</items></pivotField>");
+            s.push_str("</items>");
+            // Sort by a value field: the scope references the Values field's data item, then
+            // the other axis's items it takes the values from (index into their `<items>`), as
+            // the engine resolves them: outer field first, up to the first field it doesn't
+            // name; none when it names an item that isn't there (the grand total).
+            write_auto_sort_scope(s, pt, c, vals, af);
+            if af.is_some_and(|f| f.repeat_labels) {
+                let _ =
+                    write!(s, "<extLst><ext uri=\"{EXT_X14_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:pivotField fillDownLabels=\"1\"/></ext></extLst>");
+            }
+            s.push_str("</pivotField>");
         } else {
             s.push_str("/>");
         }
     }
     s.push_str("</pivotFields>");
+}
+
+fn write_auto_sort_scope(s: &mut String, pt: &PivotTable, c: &Cache, vals: &[(usize, &PivotValue)], af: Option<&PivotField>) {
+    let Some(d) =
+        af.filter(|f| f.sort != PivotSort::None).and_then(|f| f.sort_by.as_deref()).and_then(|n| vals.iter().position(|(_, v)| same(&v.name, n)))
+    else {
+        return;
+    };
+    let mut refs = vec![(VALUES_FIELD.to_string(), d)];
+    if let Some(af) = af {
+        let on_rows = pt.rows.iter().any(|r| std::ptr::eq(r, af));
+        let (others, base) = if on_rows { (&pt.columns, pt.rows.len()) } else { (&pt.rows, 0) };
+        for (q, o) in others.iter().enumerate() {
+            // A field without a source column isn't on the axis (the engine skips it too).
+            let Some(j) = c.axis_map.get(base + q).copied().flatten() else { continue };
+            let Some(e) = af.sort_scope.iter().find(|e| e.is_of(o)) else { break };
+            let labels = c.fields.get(j).map(CField::item_labels).unwrap_or_default();
+            match written_order(&labels, Some(o)).iter().position(|x| labels.get(*x).is_some_and(|l| same(l, &e.item))) {
+                Some(pos) => refs.push((j.to_string(), pos)),
+                None => {
+                    refs.truncate(1);
+                    break;
+                }
+            }
+        }
+    }
+    let _ = write!(s, "<autoSortScope><pivotArea dataOnly=\"0\" outline=\"0\" fieldPosition=\"0\"><references count=\"{}\">", refs.len());
+    for (field, x) in &refs {
+        let _ = write!(s, "<reference field=\"{field}\" count=\"1\" selected=\"0\"><x v=\"{x}\"/></reference>");
+    }
+    s.push_str("</references></pivotArea></autoSortScope>");
 }
 
 fn write_page_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>) {
@@ -905,3 +1014,5 @@ fn axis_fields_xml(s: &mut String, tag: &str, idx: &[usize], values_at: Option<u
     }
     let _ = write!(s, "</{tag}>");
 }
+
+// ================================================================ reading
