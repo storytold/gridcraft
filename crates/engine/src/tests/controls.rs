@@ -336,6 +336,31 @@ fn links_follow_inserts_deletes_renames_and_cut_moves() {
 }
 
 #[test]
+fn the_object_commands_leave_a_locked_control_on_a_protected_sheet_alone() {
+    let mut s = s();
+    let locked = id(&s.execute("insert.slider", json!({"at": "D2", "link": "B1"})).unwrap());
+    let other = id(&s.execute("insert.spinButton", json!({"at": "D8"})).unwrap());
+    let free = id(&s.execute("insert.button", json!({"at": "D12"})).unwrap());
+    s.execute("control.format", json!({"id": free, "locked": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    for (cmd, p) in [
+        ("object.move", json!({"kind": "control", "id": locked, "at": "H9"})),
+        ("object.delete", json!({"kind": "control", "id": locked})),
+        ("object.setAnchorMode", json!({"kind": "control", "id": locked, "mode": "absolute"})),
+        ("arrange.bringForward", json!({"kind": "control", "id": locked, "toFront": true})),
+        ("arrange.sendBackward", json!({"kind": "control", "id": locked})),
+        ("arrange.align", json!({"kind": "control", "ids": [locked, other], "align": "left"})),
+    ] {
+        assert!(err(s.execute(cmd, p)).contains("protected"), "{cmd}");
+    }
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before), "nothing changed");
+    // An unlocked control still moves, as in Excel.
+    s.execute("object.move", json!({"kind": "control", "id": free, "at": "H12"})).unwrap();
+    assert_eq!(control(&s, free).anchor.cell.a1(), "H12");
+}
+
+#[test]
 fn a_locked_control_on_a_protected_sheet_cannot_be_changed() {
     let mut s = s();
     let c = id(&s.execute("insert.slider", json!({"link": "B1"})).unwrap());

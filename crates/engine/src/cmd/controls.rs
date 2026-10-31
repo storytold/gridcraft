@@ -8,7 +8,9 @@
 //! else made asks before it runs anything.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::{Anchor, AnchorMode, CONTROL_MAX, ControlAction, ControlKind, FormControl, MAX_MACRO_NAME, MacroInput, Sheet, Workbook};
+use gridcraft_model::{
+    Anchor, AnchorMode, CONTROL_MAX, ControlAction, ControlKind, FormControl, MAX_MACRO_NAME, MacroInput, ObjKind, Sheet, Workbook,
+};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -298,6 +300,20 @@ fn find(s: &Session, cmd: &str, p: &Json) -> Result<(usize, usize, FormControl)>
 }
 
 /// Drawing objects on a protected sheet can't be changed while they are locked.
+/// For the object commands (`object.move`, `object.delete`, `object.setAnchorMode`, `arrange.*`,
+/// `arrange.align`): refuses to change form controls `ids` on `sheet` when one is locked and the
+/// sheet is protected, as `control.format` and `control.assign` do. Other kinds pass.
+pub(crate) fn check_objects_unlocked(s: &Session, sheet: usize, kind: ObjKind, ids: &[u32]) -> Result<()> {
+    if kind != ObjKind::Control {
+        return Ok(());
+    }
+    let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Ok(()) };
+    if sh.is_protected() && sh.controls.iter().any(|c| c.locked && ids.contains(&c.id)) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
+    Ok(())
+}
+
 fn check_unlocked(s: &Session, sheet: usize, c: &FormControl) -> Result<()> {
     if c.locked && s.doc()?.wb.sheet(sheet).is_some_and(Sheet::is_protected) {
         return Err(EngineError::Other(PROTECTED.into()));

@@ -1187,6 +1187,8 @@ fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
     if !d.wb.sheet(sheet).is_some_and(|sh| sh.has_object(o)) {
         return Err(bad(cmd, "no such object"));
     }
+    // A locked form control on a protected sheet stays as it is.
+    super::controls::check_objects_unlocked(s, sheet, kind, &[id])?;
     Ok((sheet, o))
 }
 

@@ -36,6 +36,9 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
     let kind = str_param(p, "kind").unwrap_or("shape").to_string();
     let extreme = bool_param(p, "toFront").or(bool_param(p, "toBack")).unwrap_or(false);
     let si = s.doc()?.wb.active_sheet();
+    if let Some(k) = gridcraft_model::ObjKind::parse(&kind) {
+        crate::cmd::controls::check_objects_unlocked(s, si, k, &[id])?;
+    }
     fn reorder<T>(v: &mut Vec<T>, i: usize, forward: bool, extreme: bool) {
         if i >= v.len() {
             return;
@@ -125,6 +128,9 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
         p.get("ids").and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as u32)).collect()).unwrap_or_default();
     let how = str_param(p, "align").unwrap_or("left").to_string();
     let si = s.doc()?.wb.active_sheet();
+    if let Some(k) = gridcraft_model::ObjKind::parse(&kind) {
+        crate::cmd::controls::check_objects_unlocked(s, si, k, &ids)?;
+    }
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
