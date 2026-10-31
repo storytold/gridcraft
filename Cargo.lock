@@ -2111,6 +2111,7 @@ dependencies = [
  "eframe",
  "egui",
  "gridcraft-engine",
+ "gridcraft-mcp",
  "gridcraft-ui-egui",
  "js-sys",
  "log",
