@@ -97,6 +97,21 @@ fn nonspilling_formulas_preserve_array_evaluation_and_metadata() {
 }
 
 #[test]
+fn single_cell_dynamic_spill_keeps_its_saved_range() {
+    // A dynamic array that fills one cell still has a spill range: `A1#` refers to it.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(at("A1"), formula("SEQUENCE(1)", 1.0));
+    sh.spill_ranges.insert(at("A1"), range("A1"));
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.spill_ranges.get(&at("A1")), Some(&range("A1")));
+    assert_eq!(sh.value(at("A1")), Value::Number(1.0));
+    assert!(sh.cell(at("A1")).unwrap().formula.as_ref().unwrap().dynamic);
+}
+
+#[test]
 fn dynamic_spills_and_legacy_cse_keep_distinct_ranges() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
@@ -130,6 +145,17 @@ fn dynamic_spills_and_legacy_cse_keep_distinct_ranges() {
     assert!(sh.cell(at("B2")).is_none());
     assert!(sh.cell(at("B3")).is_none());
     assert_eq!(sh.value(at("C1")), Value::Number(6.0));
+    // A spill's cached values are kept as spill values: readable without a recalculation (#2137).
+    assert_eq!(sh.spill_ranges.get(&at("B1")), Some(&range("B1:B3")));
+    assert_eq!((sh.value(at("B2")), sh.value(at("B3"))), (Value::Number(2.0), Value::Number(3.0)));
+    assert!(!sh.spill.contains_key(&at("A2")));
+
+    // Saving again without a recalculation keeps the spill and its values.
+    let bytes = write_xlsx(&back).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    assert_dynamic(&sheet, "B1", "B1:B3");
+    assert_eq!(cell(&sheet, "B3").child("v").unwrap().text, "3");
 }
 
 #[test]
