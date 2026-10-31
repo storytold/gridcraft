@@ -18,11 +18,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
+    let is_formula = is_formula_input(input, false);
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
@@ -75,6 +71,16 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
     Ok(Some(Cell { value: parsed.value, formula: None, style }))
+}
+
+/// Whether typed input is parsed as a formula, matching cell entry's text-format and sign rules.
+pub(crate) fn is_formula_input(input: &str, text_format: bool) -> bool {
+    !text_format
+        && (input.starts_with('=')
+            || (input.len() > 1
+                && (input.starts_with('+') || input.starts_with('-'))
+                && gridcraft_core::parse::parse_number_text(input).is_none()
+                && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '(')))
 }
 
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,

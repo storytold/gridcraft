@@ -507,3 +507,48 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn validation_checks_formula_results_and_keeps_list_value_types() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[12], [11], ["11"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "'11"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B4", "values": [[0.3]]})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A2", "style": {"num_fmt": "@"}})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1", "type": "custom", "formula1": "=C1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "F1", "type": "textLength", "operator": "equal", "formula1": "2"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1", "type": "list", "formula1": "=B2"})).unwrap();
+    s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "=B3"})).unwrap();
+    s.execute("data.validation", json!({"range": "G1", "type": "list", "formula1": "=B4"})).unwrap();
+    s.execute("data.validation", json!({"range": "H1", "type": "whole", "operator": "lessThan", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "H2", "type": "whole", "operator": "greaterThan", "formula1": "0"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let check = |cell: &str, input: &str| check_validation(&wb, 0, CellRef::parse(cell).unwrap(), input).is_none();
+
+    assert!(check("A1", "11"));
+    assert!(check("A1", "=11"));
+    assert!(check("A1", "=B1"));
+    assert!(check("A1", "+B1"), "leading plus formulas use the same input rule as cell entry");
+    assert!(!check("A2", "=11"), "text-formatted cells store formula input as text");
+    assert!(!check("A1", "=10"));
+    assert!(!check("A1", "=1/0"));
+    assert!(check("C1", "=11"));
+    assert!(!check("C1", "=1/0"));
+    assert!(check("F1", "=11"));
+    assert!(!check("F1", "=111"));
+    assert!(!check("F1", "=1/0"));
+    assert!(check("D1", "=11"));
+    assert!(check("D1", "+B2"), "list validation compares a leading plus formula's result");
+    assert!(!check("D1", "=\"11\""));
+    assert!(check("E1", "=\"11\""));
+    assert!(!check("E1", "=11"));
+    assert!(check("G1", "=0.1+0.2"), "list numbers compare at spreadsheet precision");
+    assert!(check("H1", "-B1"), "leading minus formulas use the same input rule as cell entry");
+    assert!(!check("H2", "=H2+1"), "self-referential formulas are checked after recalculation");
+
+    let before = s.doc().unwrap().wb.clone();
+    assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "=11"})).unwrap()["ok"], json!(true));
+    assert_eq!(s.doc().unwrap().wb, before, "checking prospective input does not edit the workbook");
+}
