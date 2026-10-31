@@ -327,6 +327,8 @@ pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let color = crate::cmd::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
         id,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
         fill: color,
