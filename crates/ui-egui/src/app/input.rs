@@ -18,15 +18,43 @@ impl SheetApp {
         // font gate returns before input handling, but `begin_pass` has already taken the events.
         // `cumulative_pass_nr` only advances when a pass ends, so a newer value with the batch
         // still pending means exactly that, and the step is offered again for the next real pass.
-        let offer = !self.synthetic_pending || self.synthetic_injected_at_pass.is_some_and(|pass| ctx.cumulative_pass_nr() > pass);
-        if offer && let Some(batch) = self.synthetic.front() {
+        if self.synthetic_pending {
+            let consumed_by_an_unapplied_pass = self.synthetic_injected_at_pass.is_some_and(|pass| ctx.cumulative_pass_nr() > pass);
+            if !consumed_by_an_unapplied_pass {
+                return;
+            }
+        }
+        if let Some(batch) = self.synthetic.front() {
+            let from = raw.events.len();
             raw.events.extend(batch.iter().cloned());
+            // Real input was converted per window by `ControlClicks`; a scripted Control-click
+            // gets the same, with its own press state so it never ends a real one.
+            if cfg!(target_os = "macos")
+                && let Some(added) = raw.events.get_mut(from..)
+            {
+                control_click_as_secondary(added, &mut self.control_click);
+            }
             self.synthetic_pending = true;
             self.synthetic_injected_at_pass = Some(ctx.cumulative_pass_nr());
         }
-        if cfg!(target_os = "macos") {
-            control_click_as_secondary(&mut raw.events, &mut self.control_click);
-        }
+    }
+}
+
+/// Turns macOS Control-clicks into secondary clicks in every window's input (see
+/// [`control_click_as_secondary`]). The desktop app runs it from eframe's per-viewport raw-input
+/// hook, which also reaches the extra workbook windows that `SheetApp::raw_input_hook` never sees.
+/// Each window keeps its own press, so a release ends the press made in its window.
+#[derive(Default)]
+pub struct ControlClicks {
+    held: std::sync::Mutex<std::collections::HashMap<egui::ViewportId, bool>>,
+}
+
+impl ControlClicks {
+    /// Converts one window's raw input (`raw.viewport_id`).
+    pub fn convert(&self, raw: &mut egui::RawInput) {
+        let mut held = self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let window = held.entry(raw.viewport_id).or_default();
+        control_click_as_secondary(&mut raw.events, window);
     }
 }
 
@@ -55,8 +83,8 @@ fn control_click_as_secondary(events: &mut [egui::Event], held: &mut bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::control_click_as_secondary;
-    use egui::{Event, Modifiers, PointerButton, pos2};
+    use super::{ControlClicks, control_click_as_secondary};
+    use egui::{Event, Modifiers, PointerButton, RawInput, ViewportId, pos2};
 
     fn button(button: PointerButton, pressed: bool, modifiers: Modifiers) -> Event {
         Event::PointerButton { pos: pos2(10.0, 10.0), button, pressed, modifiers }
@@ -119,5 +147,23 @@ mod tests {
                 PointerButton::Middle
             ]
         );
+    }
+
+    #[test]
+    fn each_window_keeps_its_own_control_click() {
+        let clicks = ControlClicks::default();
+        let other = ViewportId::from_hash_of("second workbook window");
+        let input = |viewport_id, events| RawInput { viewport_id, events, ..Default::default() };
+        // A Control-press in the main window, then a plain click in another window.
+        let mut main_press = input(ViewportId::ROOT, vec![button(PointerButton::Primary, true, Modifiers::CTRL)]);
+        clicks.convert(&mut main_press);
+        let mut other_click =
+            input(other, vec![button(PointerButton::Primary, true, Modifiers::NONE), button(PointerButton::Primary, false, Modifiers::NONE)]);
+        clicks.convert(&mut other_click);
+        let mut main_release = input(ViewportId::ROOT, vec![button(PointerButton::Primary, false, Modifiers::NONE)]);
+        clicks.convert(&mut main_release);
+        assert_eq!(buttons(&main_press.events), [PointerButton::Secondary]);
+        assert_eq!(buttons(&other_click.events), [PointerButton::Primary, PointerButton::Primary]);
+        assert_eq!(buttons(&main_release.events), [PointerButton::Secondary], "the release ends the main window's Control-press");
     }
 }

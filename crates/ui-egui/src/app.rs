@@ -23,6 +23,8 @@ mod print;
 mod quit;
 mod view;
 
+pub use input::ControlClicks;
+
 impl SheetApp {
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {

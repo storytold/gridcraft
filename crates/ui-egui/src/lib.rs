@@ -63,6 +63,7 @@ use gridcraft_engine::{Session, UiRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+pub use app::ControlClicks;
 pub use control::{ControlRequest, ControlResponse};
 
 mod app;
