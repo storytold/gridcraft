@@ -33,7 +33,7 @@ use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
 pub use validation::{check_validation, list_items};
 use validation::{circle_invalid, validate_cmd, validation};
-pub(super) use validation::{move_rule_formula, remove_validation_cells};
+pub(super) use validation::{move_cf_rule, move_rule_formula, remove_cond_format_cells, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

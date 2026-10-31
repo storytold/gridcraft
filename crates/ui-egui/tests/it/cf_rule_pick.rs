@@ -2,6 +2,7 @@
 //! into the formula box at its caret, as in Excel, and leaves the selection the rule applies to alone.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2, vec2};
+use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
@@ -9,6 +10,10 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_with(json!({"type": "expression", "title": "New Formatting Rule"}))
+}
+
+fn harness_with(dialog: serde_json::Value) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.insertSheet", json!({})).unwrap();
@@ -22,9 +27,13 @@ fn harness() -> Harness {
         crate::common::app(session),
     );
     h.run_steps(4);
-    h.state_mut().open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+    h.state_mut().open_dialog("cfQuick", dialog);
     h.run_steps(6);
     h
+}
+
+fn value(h: &Harness, key: &str) -> String {
+    h.state().dialog.as_ref().and_then(|d| d.values.get(key)).and_then(|v| v.as_str()).unwrap_or("").to_string()
 }
 
 fn formula(h: &Harness) -> String {
@@ -194,4 +203,33 @@ fn the_rule_follows_its_sheet_when_sheets_move_while_the_dialog_is_open() {
     assert!(sheet2.cond_formats.is_empty(), "nothing lands on the sheet that took index 0");
     let cf = sheet1.cond_formats.last().expect("the rule stays on Sheet1");
     assert_eq!(cf.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), ["F8:G9"]);
+}
+
+#[test]
+fn highlight_cell_rules_take_a_clicked_cell_as_the_value() {
+    let mut h = harness_with(json!({"type": "cellIs", "operator": "greaterThan", "title": "Greater Than"}));
+    click(&mut h, "B2");
+    assert_eq!(value(&h, "value"), "=$B$2");
+    assert_eq!(selection(&h), "F8:G9", "the range the rule applies to is still selected");
+}
+
+#[test]
+fn between_sends_clicks_to_whichever_value_box_was_used_last() {
+    let mut h = harness_with(json!({"type": "cellIs", "operator": "between", "title": "Between"}));
+    click(&mut h, "B2");
+    assert_eq!(value(&h, "value"), "=$B$2");
+    // Focus the second box by clicking into it, then pick on the grid.
+    let key_box =
+        h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).map(|r| r.center());
+    if let Some(pos) = key_box {
+        h.input_mut().events.extend([
+            Event::PointerMoved(pos),
+            Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+            Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ]);
+        h.run_steps(3);
+        click(&mut h, "D5");
+        assert_eq!(value(&h, "value2"), "=$D$5");
+        assert_eq!(value(&h, "value"), "=$B$2");
+    }
 }

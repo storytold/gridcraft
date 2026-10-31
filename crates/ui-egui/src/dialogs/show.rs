@@ -504,6 +504,11 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
+    // Only the first box takes the keyboard when the form opens (a later one asking too would win).
+    let first_box = d.fields.iter().find_map(|f| match f {
+        Field::Text { key, .. } | Field::Number { key, .. } => Some(*key),
+        _ => None,
+    });
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for f in d.fields.clone() {
             match f {
@@ -521,9 +526,17 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0)).labelled_by(label.id)
                         };
-                        take_first_focus(d, &r);
+                        if first_box == Some(key) {
+                            take_first_focus(d, &r);
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
+                        }
+                        // Grid clicks go to whichever of the dialog's reference boxes was used last.
+                        if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key != key && pick.keys.contains(&key) && r.has_focus()) {
+                            pick.key = key;
+                            pick.caret = s.chars().count();
+                            pick.point = None;
                         }
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
@@ -549,7 +562,9 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         // Typed values count straight away: otherwise Enter or OK in the same frame
                         // confirms the old value, because a number field only commits when it loses focus.
                         let r = ui.add(egui::DragValue::new(&mut n).speed(0.5).update_while_editing(true)).labelled_by(label.id);
-                        take_first_focus(d, &r);
+                        if first_box == Some(key) {
+                            take_first_focus(d, &r);
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(n));
                         }
