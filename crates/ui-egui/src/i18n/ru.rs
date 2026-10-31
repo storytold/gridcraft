@@ -458,6 +458,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Остановить",
         "New Macro" => "Новый макрос",
         "Show" => "Показать",
+        "Collapse dialog" => "Свернуть диалоговое окно",
+        "Expand dialog" => "Развернуть диалоговое окно",
         _ => return None,
     })
 }

@@ -985,6 +985,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Rejestrowanie",
         "New Macro" => "Nowe makro",
         "Show" => "Pokaż",
+        "Collapse dialog" => "Zwiń okno dialogowe",
+        "Expand dialog" => "Rozwiń okno dialogowe",
         _ => return None,
     })
 }

@@ -1,26 +1,28 @@
+use super::ref_edit::{RefLabel, end_pick, ref_edit};
 use super::show::{form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
-        ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        let l = ui.label("Set cell:");
+        ref_edit(app, ui, d, "set", RefLabel::By(l.id), 200.0);
         ui.end_row();
-        ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let l = ui.label("To value:");
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).labelled_by(l.id).changed() {
+            d.values.insert("to".into(), json!(to));
+        }
         ui.end_row();
-        ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        let l = ui.label("By changing cell:");
+        ref_edit(app, ui, d, "changing", RefLabel::By(l.id), 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
+        end_pick(app, d);
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
@@ -36,8 +38,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Ref { key: "range", label: "Input Range:" };
+    let two = || vec![Ref { key: "range1", label: "Variable 1 Range:" }, Ref { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -50,7 +52,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Ref { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
@@ -58,8 +60,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Ref { key: "inputY", label: "Input Y Range:" },
+            Ref { key: "inputX", label: "Input X Range:" },
             labels(),
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
@@ -150,19 +152,36 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    form_fields(app, ui, d);
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let r = ui.radio(to == choice, text_label);
+            if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
+                // Another output option ends picking into Output Range, so a later selection on
+                // the grid doesn't choose it again.
+                if key != "output" && d.refs.target.as_deref() == Some("output") {
+                    d.refs.target = None;
+                }
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if key == "output" {
+                let before = d.values.get(key).cloned();
+                let was_target = d.refs.target.as_deref() == Some(key);
+                ref_edit(app, ui, d, key, RefLabel::By(r.id), 190.0);
+                // Clicking into the box, typing or picking an output range chooses it; only a
+                // change does, so an option chosen later stays chosen.
+                if d.refs.target.as_deref() == Some(key) && (!was_target || d.values.get(key) != before.as_ref()) {
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }
@@ -171,7 +190,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
 /// command; the result opens Solver Results.
-pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn solver(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = crate::i18n::current(ui.ctx());
     let text = |d: &Dialog, k: &str| d.values.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, k: &str, width: f32, label: &str| {
@@ -181,8 +200,8 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         }
     };
     ui.horizontal(|ui| {
-        ui.label("Set Objective:");
-        edit(ui, d, "objective", 200.0, "Set Objective:");
+        let l = ui.label("Set Objective:");
+        ref_edit(app, ui, d, "objective", RefLabel::By(l.id), 230.0);
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
@@ -194,8 +213,8 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         }
         edit(ui, d, "value", 80.0, "Value Of:");
     });
-    ui.label("By Changing Variable Cells:");
-    edit(ui, d, "variables", 420.0, "By Changing Variable Cells:");
+    let l = ui.label("By Changing Variable Cells:");
+    ref_edit(app, ui, d, "variables", RefLabel::By(l.id), 420.0);
     ui.label("Subject to the Constraints:");
     let list: Vec<String> = d
         .values
@@ -214,7 +233,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         });
     });
     ui.horizontal(|ui| {
-        edit(ui, d, "newLhs", 110.0, "Constraint Cell Reference");
+        ref_edit(app, ui, d, "newLhs", RefLabel::Named("Constraint Cell Reference"), 130.0);
         let op = text(d, "newOp");
         craft_ui::ComboBox::from_id_salt("solverOp")
             .selected_text(op.clone())
@@ -229,7 +248,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
             .response
             .accessible_name(lang.tr("Constraint Operator"));
         if !matches!(op.as_str(), "int" | "bin") {
-            edit(ui, d, "newRhs", 110.0, "Constraint Value");
+            ref_edit(app, ui, d, "newRhs", RefLabel::Named("Constraint Value"), 130.0);
         }
         if ui.button("Add").clicked() {
             let lhs = text(d, "newLhs");

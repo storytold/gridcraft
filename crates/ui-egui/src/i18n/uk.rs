@@ -989,6 +989,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Запис",
         "New Macro" => "Новий макрос",
         "Show" => "Показати",
+        "Collapse dialog" => "Згорнути діалогове вікно",
+        "Expand dialog" => "Розгорнути діалогове вікно",
         _ => return None,
     })
 }

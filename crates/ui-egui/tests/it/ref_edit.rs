@@ -1,0 +1,390 @@
+//! Reference boxes (RefEdit) in dialogs: selecting on the grid fills the box, and the collapse
+//! button shrinks the dialog to the box while the person selects. Real pointer and keyboard input.
+
+use egui::{Event, Key, Modifiers, PointerButton};
+use egui_kittest::kittest::Queryable as _;
+use gridcraft_engine::Session;
+use gridcraft_engine::core::CellRef;
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use serde_json::json;
+
+type H = egui_kittest::Harness<'static, SheetApp>;
+
+fn harness(session: Session) -> H {
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(4);
+    h
+}
+
+/// A workbook whose B5 is a formula of B2, with B2 selected.
+fn workbook() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "=B2*3+4"})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    s
+}
+
+fn open_goal_seek(h: &mut H) {
+    h.state_mut().open_dialog("goalSeek", json!({}));
+    h.run_steps(4);
+}
+
+fn field(h: &H, key: &str) -> String {
+    h.state().dialog.as_ref().and_then(|d| d.values.get(key).and_then(|v| v.as_str()).map(str::to_string)).unwrap_or_default()
+}
+
+fn collapsed(h: &H) -> Option<String> {
+    h.state().dialog.as_ref().and_then(|d| d.collapsed().map(str::to_string))
+}
+
+fn selection(h: &H) -> (usize, String) {
+    let d = h.state().session.active().unwrap();
+    (d.wb.active_sheet(), d.selection.a1())
+}
+
+fn cell_pos(h: &H, cell: &str) -> egui::Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    geo.cell_rect(sheet, CellRef::parse(cell).unwrap()).center()
+}
+
+fn press(h: &mut H, pos: egui::Pos2, pressed: bool) {
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+}
+
+/// Presses on `from`, drags to `to` and releases, as selecting a range with the mouse.
+fn drag(h: &mut H, from: &str, to: &str) {
+    let (a, b) = (cell_pos(h, from), cell_pos(h, to));
+    h.input_mut().events.push(Event::PointerMoved(a));
+    press(h, a, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved((a + b.to_vec2()) / 2.0));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(b));
+    h.run_steps(2);
+    press(h, b, false);
+    h.run_steps(3);
+}
+
+fn click_at(h: &mut H, pos: egui::Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    press(h, pos, true);
+    press(h, pos, false);
+    h.run_steps(3);
+}
+
+fn key(h: &mut H, k: Key, m: Modifiers) {
+    h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
+    h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+    h.run_steps(3);
+}
+
+fn type_text(h: &mut H, t: &str) {
+    h.input_mut().events.push(Event::Text(t.into()));
+    h.run_steps(3);
+}
+
+/// The Goal Seek window (the collapsed box is also named after the dialog).
+fn dialog_rect(h: &H) -> egui::Rect {
+    h.get_by_role_and_label(egui::accesskit::Role::Window, "Goal Seek").rect()
+}
+
+/// The Goal Seek dialog's text boxes, top to bottom: Set cell, To value, By changing cell.
+fn dialog_boxes(h: &H) -> Vec<egui::Rect> {
+    let title = dialog_rect(h);
+    h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).filter(|r| title.contains(r.center())).collect()
+}
+
+/// Clicks the collapse (or expand) button of the dialog's `n`th reference box.
+fn click_button(h: &mut H, label: &str, n: usize) {
+    let rect = h.get_all_by_label(label).nth(n).map(|b| b.rect()).unwrap();
+    click_at(h, rect.center());
+}
+
+#[test]
+fn collapsing_shrinks_the_dialog_and_a_dragged_range_fills_the_box() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 2, "Set cell and By changing cell are reference boxes");
+    let full = dialog_rect(&h);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"));
+    assert!(h.query_by_label("To value:").is_none(), "only the reference box shows while collapsed");
+    assert_eq!(h.get_all_by_label("Expand dialog").count(), 1);
+    assert_eq!(dialog_rect(&h).top(), full.top(), "the collapsed dialog keeps its place");
+
+    drag(&mut h, "C3", "D6");
+    assert_eq!(field(&h, "changing"), "$C$3:$D$6");
+    assert_eq!(field(&h, "set"), "B5", "only the box being picked into changes");
+
+    // The box has the keyboard back after the drag: typing replaces the reference.
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "B2");
+    assert_eq!(field(&h, "changing"), "B2");
+
+    // Escape expands the dialog instead of closing it.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_some());
+    assert_eq!(collapsed(&h), None);
+    assert!(h.query_by_label("To value:").is_some());
+    assert_eq!(dialog_rect(&h), full, "expanded, the dialog comes back where it was");
+}
+
+#[test]
+fn enter_and_the_expand_button_restore_the_dialog_and_ok_runs_goal_seek() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None, "Enter expands the dialog");
+    assert!(h.state().dialog.is_some(), "Enter in the collapsed dialog does not press OK");
+
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("set"));
+    click_button(&mut h, "Expand dialog", 0);
+    assert_eq!(collapsed(&h), None);
+
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let b2 = h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse("B2").unwrap());
+    assert!((b2.as_f64().unwrap() - 7.0).abs() < 1e-6, "{b2:?}");
+    assert_eq!(selection(&h), (0, "B5".into()), "the selection from before picking comes back");
+}
+
+#[test]
+fn a_range_on_another_sheet_carries_the_sheet_name_and_cancel_returns_home() {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates Table", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The sheet tabs' "Next sheet" arrow, below the grid at the left.
+    let grid = h.state().grid.rect.unwrap();
+    click_at(&mut h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+    assert_eq!(selection(&h).0, 1, "the next sheet is active while picking");
+    drag(&mut h, "A2", "A4");
+    assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "Escape in the expanded dialog cancels it");
+    assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the sheet and selection");
+}
+
+#[test]
+fn switching_sheets_while_picking_keeps_a_typed_reference() {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates Table", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "B2");
+    assert_eq!(field(&h, "changing"), "B2");
+    // The sheet tabs' "Next sheet" and "Previous sheet" arrows, below the grid at the left.
+    let grid = h.state().grid.rect.unwrap();
+    click_at(&mut h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+    assert_eq!(selection(&h).0, 1, "the next sheet is active while picking");
+    assert_eq!(field(&h, "changing"), "B2", "changing sheets alone is not a pick");
+    click_at(&mut h, egui::pos2(grid.left() + 20.0, grid.bottom() + 16.0));
+    assert_eq!(selection(&h).0, 0, "back on the dialog's own sheet");
+    assert_eq!(field(&h, "changing"), "B2", "coming back is not a pick either");
+    click_at(&mut h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+    drag(&mut h, "A2", "A4");
+    assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4", "a selection on the other sheet still is");
+}
+
+#[test]
+fn clicking_into_a_box_picks_into_it_and_another_field_stops_picking() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    assert_eq!(boxes.len(), 3);
+    click_at(&mut h, boxes[2].center());
+    let b2 = cell_pos(&h, "B2");
+    click_at(&mut h, b2);
+    assert_eq!(field(&h, "changing"), "$B$2", "a click on the grid fills the box last clicked into");
+    click_at(&mut h, boxes[1].center());
+    let d9 = cell_pos(&h, "D9");
+    click_at(&mut h, d9);
+    assert_eq!(field(&h, "changing"), "$B$2", "To value is not a reference box, so picking stopped");
+    assert_eq!(field(&h, "set"), "B5");
+}
+
+#[test]
+fn the_collapse_button_is_named_and_works_from_the_keyboard() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    h.get_all_by_label("Collapse dialog").nth(1).unwrap().focus();
+    h.run_steps(2);
+    key(&mut h, Key::Space, Modifiers::NONE);
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"));
+    h.get_by_label("Expand dialog").focus();
+    h.run_steps(2);
+    key(&mut h, Key::Space, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None);
+}
+
+#[test]
+fn data_analysis_picks_its_input_and_output_ranges() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    let buttons = h.get_all_by_label("Collapse dialog").count();
+    assert_eq!(buttons, 2, "Input Range and Output Range are reference boxes");
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+    drag(&mut h, "B1", "B6");
+    assert_eq!(field(&h, "range"), "$B$1:$B$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("output"));
+    drag(&mut h, "D2", "D2");
+    assert_eq!(field(&h, "output"), "$D$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(field(&h, "outputTo"), "range", "picking an output range chooses it");
+}
+
+#[test]
+fn choosing_new_worksheet_ply_after_picking_an_output_range_sticks() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "D2", "D2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(field(&h, "outputTo"), "range");
+
+    let ply = h.get_by_label("New Worksheet Ply:").rect();
+    click_at(&mut h, ply.center());
+    h.run_steps(3);
+    assert_eq!(field(&h, "outputTo"), "newSheet", "the radio choice is not overridden by the Output Range box");
+    let labels = h.get_by_label("Labels in first row").rect();
+    click_at(&mut h, labels.center());
+    assert_eq!(field(&h, "outputTo"), "newSheet", "a checkbox click keeps the choice");
+
+    // Picking into Output Range ended with the radio choice: a later selection leaves it alone.
+    drag(&mut h, "F4", "F5");
+    assert_eq!(field(&h, "output"), "$D$2");
+    assert_eq!(field(&h, "outputTo"), "newSheet");
+
+    // Typing a range in the box chooses Output Range again.
+    let boxes: Vec<egui::Rect> = h
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .filter(|n| n.rect().center().y > ply.top() - 40.0 && n.rect().center().y < ply.top())
+        .map(|n| n.rect())
+        .collect();
+    assert_eq!(boxes.len(), 1, "the Output Range box, on the row above New Worksheet Ply");
+    click_at(&mut h, boxes[0].center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "H1");
+    assert_eq!(field(&h, "output"), "H1");
+    assert_eq!(field(&h, "outputTo"), "range");
+}
+
+#[test]
+fn solver_picks_its_objective_variables_and_constraint_cells() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 4, "objective, variables and both sides of a constraint");
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+    drag(&mut h, "B2", "B3");
+    assert_eq!(field(&h, "variables"), "$B$2:$B$3");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 2);
+    drag(&mut h, "D4", "D4");
+    assert_eq!(field(&h, "newLhs"), "$D$4");
+    assert_eq!(field(&h, "objective"), "B5");
+}
+
+#[test]
+fn a_sheet_inserted_while_picking_keeps_references_and_the_way_home() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // A sheet inserted before the dialog's own sheet (from the ribbon, which stays usable) moves
+    // that sheet to index 1 and becomes the active sheet at index 0.
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Inputs", "before": 0})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "changing"), "Inputs!$A$2:$A$3", "a range on the new sheet carries its name");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (1, "B5".into()), "cancelling returns to the dialog's own sheet, now at index 1");
+}
+
+#[test]
+fn a_box_for_one_reference_takes_only_the_area_being_selected() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // Several areas, as Ctrl+click adds them: By changing cell takes one reference.
+    h.state_mut().session.execute("selection.set", json!({"range": "A1,C3:C4"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "changing"), "$C$3:$C$4", "only the area being selected, not a union");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    // Solver's variable cells take several areas, as in Excel.
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+    h.state_mut().session.execute("selection.set", json!({"range": "A1,C3:C4"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "variables"), "$A$1,$C$3:$C$4");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("objective"));
+    h.state_mut().session.execute("selection.set", json!({"range": "B5,D7"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "objective"), "$D$7", "the objective is one cell");
+}
+
+#[test]
+fn renaming_the_dialogs_sheet_while_picking_keeps_the_way_home() {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The dialog's own sheet is renamed from the ribbon while the box picks.
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the renamed sheet is still the dialog's own: no sheet name");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
+}

@@ -990,6 +990,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Gravando",
         "New Macro" => "Nova Macro",
         "Show" => "Mostrar",
+        "Collapse dialog" => "Recolher caixa de diálogo",
+        "Expand dialog" => "Expandir caixa de diálogo",
         _ => return None,
     })
 }

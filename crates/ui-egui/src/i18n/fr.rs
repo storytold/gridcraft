@@ -460,6 +460,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Arrêter",
         "New Macro" => "Nouvelle macro",
         "Show" => "Afficher",
+        "Collapse dialog" => "Réduire la boîte de dialogue",
+        "Expand dialog" => "Développer la boîte de dialogue",
         _ => return None,
     })
 }

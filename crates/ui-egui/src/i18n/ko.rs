@@ -456,6 +456,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "중지",
         "New Macro" => "새 매크로",
         "Show" => "표시",
+        "Collapse dialog" => "대화 상자 축소",
+        "Expand dialog" => "대화 상자 확장",
         _ => return None,
     })
 }

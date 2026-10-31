@@ -448,6 +448,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "停止",
         "New Macro" => "新建宏",
         "Show" => "显示",
+        "Collapse dialog" => "折叠对话框",
+        "Expand dialog" => "展开对话框",
         _ => return None,
     })
 }
