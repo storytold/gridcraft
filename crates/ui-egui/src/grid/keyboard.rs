@@ -21,6 +21,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.message.is_some()
         || app.grid.filter_menu.is_some()
         || app.grid.fill_menu.is_some()
+        || app.grid.date_picker.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
     {

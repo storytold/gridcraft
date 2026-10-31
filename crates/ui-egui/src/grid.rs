@@ -24,6 +24,7 @@ type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<
 
 mod cell_paint;
 mod cursor;
+pub(crate) mod date_picker;
 mod editor;
 mod geo;
 mod interact;
@@ -212,6 +213,7 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    pub date_picker: Option<DatePickerState>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
@@ -250,6 +252,19 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatePickerState {
+    pub cell: CellRef,
+    pub doc_uid: u64,
+    pub sheet: usize,
+    pub sheet_name: String,
+    pub sheet_file_id: u32,
+    pub needs_focus: bool,
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and

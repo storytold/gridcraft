@@ -200,7 +200,7 @@ fn a_macro_whose_output_lands_on_data_asks_and_can_shift_it_down() {
 #[test]
 fn the_record_macro_dialog_names_the_macro_and_checks_name_and_shortcut() {
     let mut h = harness("Automate");
-    save(&mut h, json!({"name": "Taken", "shortcut": "Ctrl+Shift+P", "steps": []}));
+    save(&mut h, json!({"name": "Taken", "shortcut": "Ctrl+Shift+Q", "steps": []}));
     h.get_by_label("Record Macro").click();
     h.run_steps(2);
     let set = |h: &mut Harness, k: &str, v: &str| {
@@ -214,6 +214,8 @@ fn the_record_macro_dialog_names_the_macro_and_checks_name_and_shortcut() {
     assert!(h.query_by_label_contains("line breaks").is_some());
     set(&mut h, "name", "Tidy Up");
     set(&mut h, "shortcut", "P");
+    assert!(h.query_by_label_contains("Date Picker").is_some());
+    set(&mut h, "shortcut", "Q");
     assert!(h.query_by_label_contains("already runs macro “Taken”").is_some());
     set(&mut h, "shortcut", "S");
     assert!(h.query_by_label_contains("Save As").is_some());
@@ -221,7 +223,7 @@ fn the_record_macro_dialog_names_the_macro_and_checks_name_and_shortcut() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(!h.state().session.is_recording());
-    set(&mut h, "shortcut", "Q");
+    set(&mut h, "shortcut", "U");
     set(&mut h, "description", "Tidies the block");
     assert!(h.query_by_label_contains("Choose another").is_none());
     h.get_by_label("OK").click();
@@ -231,7 +233,7 @@ fn the_record_macro_dialog_names_the_macro_and_checks_name_and_shortcut() {
     h.get_by_label("Stop").click();
     h.run_steps(2);
     let m = h.state().session.active().unwrap().wb.macros.iter().find(|m| m.name == "Tidy Up").cloned().expect("saved under its name");
-    assert_eq!(m.shortcut.as_deref(), Some("Ctrl+Shift+Q"));
+    assert_eq!(m.shortcut.as_deref(), Some("Ctrl+Shift+U"));
     assert_eq!(m.description, "Tidies the block");
 }
 

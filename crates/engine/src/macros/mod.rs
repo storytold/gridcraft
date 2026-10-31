@@ -429,6 +429,7 @@ pub const RESERVED_SHORTCUTS: &[(char, &str)] = &[
     ('J', "Ungroup"),
     ('K', "Group"),
     ('L', "Filter"),
+    ('P', "Date Picker"),
     ('R', "Sort"),
     ('S', "Save As"),
     ('T', "AutoSum"),
