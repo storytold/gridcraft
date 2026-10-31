@@ -97,7 +97,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Work | Hours |
 |---|---|
-| Real-world XLSX corpus run (craftrules test-corpora standard), and confirm Excel opens our output with no repair prompt (owner runs Excel) | 15–25 |
+| Real-world XLSX corpus run, and confirm Excel opens our output with no repair prompt (owner runs Excel) | 15–25 |
 | Preserve the rest of the unmodelled XLSX content (slicers, timelines, data model, table query tables, `extLst` entries); pass-through landed for the rest (#330) | 6–10 |
 | Streaming XLSX reader for very large files (#175), part-size limits that degrade instead of failing | 10–15 |
 | Legacy `.xls` (BIFF8): styles (fonts, fills, borders, alignment), comments, CF, validation, pictures and charts on import; corpus run; then write | 10–15 |
