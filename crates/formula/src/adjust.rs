@@ -246,13 +246,14 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
     }
 }
 
-/// Renames sheet references `old` → `new`.
+/// Renames sheet references `old` → `new`. A span into a linked workbook (`[1]Jan:Dec`) names
+/// that workbook's sheets at both ends, so it never matches a sheet of this one.
 pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
     e.map(&mut |x| match x {
         Expr::Ref(mut r) => {
             match &mut r.sheet {
                 SheetSel::Named(n) if n.eq_ignore_ascii_case(old) => *n = new.to_string(),
-                SheetSel::Span(a, b) => {
+                SheetSel::Span(a, b) if !linked_span(a) => {
                     if a.eq_ignore_ascii_case(old) {
                         *a = new.to_string();
                     }
@@ -282,6 +283,7 @@ pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
         Expr::Ref(r) if r.sheet_name().is_some_and(|n| n.eq_ignore_ascii_case(name)) => Expr::Error(CellError::Ref),
         Expr::Ref(mut r) => {
             if let SheetSel::Span(a, b) = &r.sheet
+                && !linked_span(a)
                 && (a.eq_ignore_ascii_case(name) || b.eq_ignore_ascii_case(name))
             {
                 let (Some(ia), Some(ib)) = (pos(a), pos(b)) else { return Expr::Ref(r) };
@@ -298,4 +300,10 @@ pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
         }
         other => other,
     })
+}
+
+/// Whether a 3-D span whose first sheet is `first` is into a linked workbook (`[1]Jan:Dec`).
+/// Excel forbids `[` in sheet names, so no sheet of this workbook starts with one.
+fn linked_span(first: &str) -> bool {
+    first.starts_with('[')
 }

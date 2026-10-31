@@ -220,6 +220,13 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(pa) = sh.print.print_area {
         sh.print.print_area = map_range(pa);
     }
+    // Dynamic-array caches are cell-positioned state too. Move them before recalculation clears
+    // the old layout, so a linked formula whose new position cannot be evaluated keeps its spill.
+    sh.spill = std::mem::take(&mut sh.spill).into_iter().filter_map(|(c, value)| map_cell(c).map(|c| (c, value))).collect();
+    sh.spill_ranges = std::mem::take(&mut sh.spill_ranges)
+        .into_iter()
+        .filter_map(|(anchor, range)| map_cell(anchor).and_then(|anchor| map_range(range).map(|range| (anchor, range))))
+        .collect();
     // PivotTables follow their report cells. A deleted anchor line collapses onto the line that
     // takes its place; a report deleted entirely has no last area until the next refresh.
     for pt in sh.pivots.iter_mut() {
@@ -231,11 +238,56 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
 }
 
+/// Whether a formula's 3-D references cover a different set of sheets after a structural edit.
+fn spans_changed(e: &gridcraft_formula::Expr, before: &[String], after: &[String]) -> bool {
+    let members = |order: &[String], a: &str, b: &str| {
+        let (Some(i), Some(j)) = (order.iter().position(|x| x.eq_ignore_ascii_case(a)), order.iter().position(|x| x.eq_ignore_ascii_case(b))) else {
+            return Vec::new();
+        };
+        order[i.min(j)..=i.max(j)].iter().map(|x| x.to_ascii_lowercase()).collect::<Vec<_>>()
+    };
+    let mut changed = false;
+    e.walk(&mut |x| {
+        if let gridcraft_formula::Expr::Ref(r) = x
+            && let gridcraft_formula::SheetSel::Span(a, b) = &r.sheet
+        {
+            changed |= members(before, a, b) != members(after, a, b);
+        }
+    });
+    changed
+}
+/// Names containing a 3-D reference can keep the same text while their member sheets change.
+/// Mark them as changed so formulas that read the name give up a linked workbook's saved value.
+fn mark_changed_name_spans(cx: &mut Ctx, before: &[String], after: &[String]) {
+    let names: Vec<String> = cx
+        .wb
+        .names
+        .iter()
+        .filter_map(|n| gridcraft_formula::parse_name(&n.formula).ok().filter(|e| spans_changed(e, before, after)).map(|_| n.name.to_lowercase()))
+        .collect();
+    cx.changed_names.extend(names);
+}
+
 /// Rewrites every formula reference (and chart series) for a structural edit on `target`.
+/// Formulas that now read other cells count as changed, and names whose references only moved
+/// don't (see `edit::rewrite_all_formulas`).
 pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) {
     cx.edits.push((target.to_string(), e.clone()));
+    // A single command can apply several edits (multi-area delete, column move). Keep formulas
+    // forgotten by an earlier step at their final positions so their readers are seeded there.
+    let old = std::mem::take(&mut cx.changed);
+    cx.changed = old
+        .into_iter()
+        .filter_map(|(si, c)| {
+            let host = cx.wb.sheet(si).map(|s| s.name.as_str())?;
+            if host.eq_ignore_ascii_case(target) { map_range(RangeRef::cell(c), e).map(|r| (si, r.start)) } else { Some((si, c)) }
+        })
+        .collect();
+    let (forgotten, moved, changed) = super::edit::rewrite_all_formulas(&mut cx.wb, target, e);
+    cx.changed.extend(forgotten);
+    cx.moved_names.extend(moved);
+    cx.changed_names.extend(changed);
     let wb = &mut cx.wb;
-    super::edit::rewrite_all_formulas(wb, target, e);
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };

@@ -48,18 +48,21 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
         let r = if header {
             r
         } else {
-            let sh = cx.sheet_mut(sheet)?;
-            // The header row pushes the data down one row: never off the end of the sheet.
-            let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
-                return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
-            }
-            sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
-            // Like Insert Cells > Shift down: move merges, conditional formats, notes, links and pictures, and re-point every formula
-            // reference (on any sheet) at the cells that moved.
-            let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)) };
-            shift_cell_features(sh, &e);
-            let name = sh.name.clone();
+            let name = {
+                let sh = cx.sheet_mut(sheet)?;
+                // The header row pushes the data down one row: never off the end of the sheet.
+                let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
+                if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+                    return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
+                }
+                sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
+                // Like Insert Cells > Shift down: move merges, conditional formats, notes, links and pictures, and re-point every formula
+                // reference (on any sheet) at the cells that moved.
+                let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)) };
+                shift_cell_features(sh, &e);
+                (sh.name.clone(), e)
+            };
+            let (name, e) = name;
             rewrite(cx, &name, &e);
             let sh = cx.sheet_mut(sheet)?;
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
@@ -303,7 +306,7 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                     o => o,
                 });
                 if let Some(cell) = sh.cells.get_mut(c) {
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewritten(ne)));
                 }
             }
         }

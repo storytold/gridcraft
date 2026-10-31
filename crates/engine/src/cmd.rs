@@ -339,8 +339,12 @@ pub struct Ctx<'a> {
     /// The command applied sheet protection itself (row/column inserts and deletes the
     /// protection allows), so cells it shifts aren't refused as edits of locked cells.
     pub protection_checked: bool,
-    /// The structural edits the command made, in order (the sheet's name, the edit), as
-    /// references were rewritten for them.
+    /// Names (lowercase) whose references a structural edit only moved, so they read what they
+    /// did (see `edit::rewrite_all_formulas`).
+    pub moved_names: Vec<String>,
+    /// Names whose references changed during any structural rewrite.
+    pub changed_names: Vec<String>,
+    /// Structural edits recorded for macro range following.
     pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
 }
 
@@ -353,6 +357,53 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+/// The defined names and table names an edit added, removed or changed. A formula over a linked
+/// name or table that cannot be calculated keeps its saved value unless what it reads changes.
+fn changed_names(old: &Workbook, new: &Workbook, moved: &[String]) -> Vec<String> {
+    if new.external_books.is_empty() {
+        return Vec::new();
+    }
+    // Defined names are compared by name, whatever the scope: deleting a sheet renumbers the
+    // scopes after it.
+    fn group(wb: &Workbook) -> std::collections::HashMap<String, Vec<&str>> {
+        let mut m: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+        for n in &wb.names {
+            m.entry(n.name.to_lowercase()).or_default().push(n.formula.as_str());
+        }
+        m.values_mut().for_each(|v| v.sort_unstable());
+        m
+    }
+    let (before, after) = (group(old), group(new));
+    let moved: std::collections::HashSet<&str> = moved.iter().map(String::as_str).collect();
+    let mut out: Vec<String> =
+        before.keys().chain(after.keys()).filter(|k| before.get(*k) != after.get(*k) && !moved.contains(k.as_str())).cloned().collect();
+
+    // Table structured references are tracked as dynamic reads. A table's range, name, header /
+    // totals geometry, or column names changing changes what such a formula reads. Compare the
+    // stable table id so a rename is paired with the same table; missing ids cover delete/convert.
+    fn tables(wb: &Workbook) -> std::collections::HashMap<u32, (&str, gridcraft_core::RangeRef, bool, bool, Vec<&str>)> {
+        wb.sheets
+            .iter()
+            .flat_map(|sh| sh.tables.iter())
+            .map(|t| (t.id, (t.name.as_str(), t.range, t.header_row, t.totals_row, t.columns.iter().map(|c| c.name.as_str()).collect())))
+            .collect()
+    }
+    let (before, after) = (tables(old), tables(new));
+    for id in before.keys().chain(after.keys()) {
+        if before.get(id) == after.get(id) {
+            continue;
+        }
+        if let Some((name, ..)) = before.get(id) {
+            out.push((*name).to_string());
+        }
+        if let Some((name, ..)) = after.get(id) {
+            out.push((*name).to_string());
+        }
+    }
+    out.sort_unstable_by_key(|x| x.to_lowercase());
+    out.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    out
+}
 fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
@@ -370,10 +421,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         sel: &mut sel,
         fit_rows: Vec::new(),
         protection_checked: false,
+        moved_names: Vec::new(),
+        changed_names: Vec::new(),
         edits: Vec::new(),
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, moved_names, changed_names: rewrite_changed_names, edits, .. } = ctx;
+    if let Some(log) = d.edits.as_mut() {
+        log.extend(edits);
+    }
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
@@ -387,9 +443,6 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
             }
         }
     }
-    if let Some(log) = d.edits.as_mut() {
-        log.extend(edits);
-    }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
@@ -397,7 +450,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
     if structural {
-        d.calc.recalc_all(&mut wb);
+        let mut names = changed_names(&d.wb, &wb, &moved_names);
+        names.extend(rewrite_changed_names);
+        names.sort_unstable();
+        names.dedup();
+        d.calc.recalc_all_after_edit(&mut wb, &changed, &names);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }

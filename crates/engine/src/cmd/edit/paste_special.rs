@@ -1,7 +1,7 @@
 use super::clipboard::What;
 use super::{
-    Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
-    target_sheet,
+    Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, drop_linked_books, edit,
+    json, shared_links, str_param, target_sheet,
 };
 
 fn tiled_cells(rows: u32, cols: u32, tiles_r: u32, tiles_c: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> + Clone {
@@ -113,6 +113,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
+    let shared = if same_doc { vec![] } else { shared_links(&src_wb, &s.doc()?.wb) };
     if cut_move && at.offset((tiles_r * h).saturating_sub(1) as i64, (tiles_c * w).saturating_sub(1) as i64).is_none() {
         // Check the whole footprint before the source is emptied, so a move that overflows the grid loses nothing.
         return Err(EngineError::Other("The cut area doesn't fit at this position; nothing was moved.".into()));
@@ -162,6 +163,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                 let f = cell.formula.as_ref()?;
                 let e = f.expr()?;
+                // `[1]…` is the source workbook's first link: kept where this one shares it.
+                let e = if same_doc { e } else { drop_linked_books(e, &shared) };
                 if cut_move {
                     // A moved formula still reads cells on its original sheet. Qualify
                     // those references before the workbook-wide move adjustment below.
@@ -176,7 +179,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     } else {
                         e
                     };
-                    let mut moved = Formula::from_expr(e);
+                    let mut moved = f.rewritten(e);
                     // The array range moves with its formula.
                     let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                     moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
@@ -184,7 +187,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     return Some(std::sync::Arc::new(moved));
                 }
                 let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..f.rewritten(moved) }))
             };
             if link {
                 let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
@@ -201,7 +204,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     What::All | What::AllExceptBorders => {
                         new_picture = src_picture.clone();
                         new.formula = shift(&sc_cell);
-                        new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                        // Keep cached values for formulas that may read an unavailable link.
+                        new.value = if new.formula.is_some() && !cut_move { Value::Empty } else { sc_cell.value.clone() };
                         let st = map_style(sc_cell.style, &mut cx.wb);
                         new.style = if what == What::AllExceptBorders {
                             let borders = cx.wb.styles.get(old.style).borders;
@@ -213,7 +217,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     What::Formulas | What::FormulasAndNumberFormats => {
                         new_picture = src_picture.clone();
                         new.formula = shift(&sc_cell);
-                        new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                        new.value = if new.formula.is_some() && !cut_move { Value::Empty } else { sc_cell.value.clone() };
                         if what == What::FormulasAndNumberFormats {
                             let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
                             new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
@@ -292,7 +296,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name, to_row: at.row, to_col: at.col }
             };
-            rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e);
+            let (forgotten, moved, changed) = rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e);
+            cx.changed.extend(forgotten);
+            cx.moved_names.extend(moved);
+            cx.changed_names.extend(changed);
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
@@ -315,9 +322,40 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
 }
 
+/// Whether a structural edit made a formula read other cells than it did, not the same cells
+/// moved: a reference became `#REF!`, or a range grew or shrank.
+pub(crate) fn reads_differently(old: &gridcraft_formula::Expr, new: &gridcraft_formula::Expr) -> bool {
+    fn reads(e: &gridcraft_formula::Expr) -> Vec<Option<(u32, u32)>> {
+        use gridcraft_formula::Expr;
+        let mut out = Vec::new();
+        e.walk(&mut |x| match x {
+            Expr::Ref(r) => out.push(Some((r.range().height(), r.range().width()))),
+            Expr::Error(gridcraft_core::CellError::Ref) | Expr::LinkedRefError(_) => out.push(None),
+            _ => {}
+        });
+        out
+    }
+    reads(old) != reads(new)
+}
+
+/// A formula whose references a structural edit changed no longer shows its value: clearing it
+/// means a formula over a linked name that can't be calculated is calculated again, rather than
+/// keeping the value it had, and the edit counts it as changed for the formulas that read it
+/// (see `Calc::recalc_all_after_edit`).
+pub(crate) fn forget_value(cell: &mut Cell) {
+    cell.value = Value::Empty;
+}
+
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
-pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) {
+/// Returns formulas whose values were cleared, names whose references only moved, and names whose
+/// references changed (lowercase).
+pub(crate) fn rewrite_all_formulas(
+    wb: &mut gridcraft_model::Workbook,
+    target: &str,
+    e: &gridcraft_formula::adjust::Edit,
+) -> (Vec<(usize, CellRef)>, Vec<String>, Vec<String>) {
     use gridcraft_formula::adjust::Edit;
+    let mut forgotten = Vec::new();
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
     let moves_arrays = matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
@@ -331,8 +369,8 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
+            let Some(old) = f.expr_arc() else { continue };
+            let new = gridcraft_formula::adjust::adjust((*old).clone(), &host, target, e);
             let text = gridcraft_formula::print(&new);
             let array = match f.array {
                 Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
@@ -341,18 +379,33 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             if (text != f.text || array != f.array)
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
-                let mut nf = Formula::from_expr(new);
+                if reads_differently(&old, &new) {
+                    forget_value(cell);
+                    forgotten.push((si, c));
+                }
+                let mut nf = f.rewritten(new);
                 nf.array = array;
                 nf.dynamic = f.dynamic;
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }
     }
+    let mut moved = Vec::new();
+    let mut changed = Vec::new();
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
-            n.formula = gridcraft_formula::print(&new);
+            let new = gridcraft_formula::adjust::adjust(expr.clone(), "\u{0}", target, e);
+            let text = gridcraft_formula::print(&new);
+            if text != n.formula {
+                if reads_differently(&expr, &new) {
+                    changed.push(n.name.to_lowercase());
+                } else {
+                    moved.push(n.name.to_lowercase());
+                }
+            }
+            n.formula = text;
         }
     }
+    (forgotten, moved, changed)
 }
