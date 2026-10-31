@@ -93,6 +93,13 @@ Server, Access, ODBC, …), web pages, SharePoint and online services, through P
 GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
 refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
+## Hyperlink fidelity checks
+
+The CLI compares hyperlink cells, destinations, internal/external routing and tooltips after
+save/reopen, allowing the writer's representation conventions. Equal link counts alone no longer
+pass. This comparison starts after import; it does not establish initial-import fidelity.
+See [CLI documentation](cli.md) for normalization and report-count semantics.
+
 ## Work (76–114 h)
 
 | Work | Hours |
@@ -136,6 +143,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |
 | 2026-10-14 | minor | PDF export writes clickable annotations for safe cell URLs and destinations on printed pages; CLI `convert` accepts `.pdf` output (#954) |
+| 2026-10-13 | minor | Document content-level hyperlink comparison and its limits |
 | 2026-10-13 | trivial | XLSX export keeps a picture shared by several sheets as one media part (#985) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
