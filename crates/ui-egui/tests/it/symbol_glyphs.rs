@@ -153,7 +153,7 @@ fn extended_craft_fonts_cover_the_required_symbol_union_and_korean() {
 /// The required faces are embedded, the native-only Chinese face keeps its contract when present,
 /// and no barred family entered the set. Native builds embed every non-barred manifest row (for
 /// example the Thai, Arabic, Georgian and Hebrew faces), so this asserts the required set rather
-/// than claiming the embedded set is limited to the five web faces.
+/// than claiming the embedded set is limited to the six web faces.
 fn assert_exact_permitted_faces() {
     let faces: Vec<_> = theme::craft_font_scripts().collect();
     let expected: &[(&str, &str, &[&str])] = &[
@@ -162,6 +162,7 @@ fn assert_exact_permitted_faces() {
         ("NanumGothic", "Regular", &["Hang", "Kore"]),
         ("Noto Sans Symbols", "Regular", &["Zsym"]),
         ("Noto Sans Symbols 2", "Regular", &["Zsym"]),
+        ("Noto Sans Thai", "Regular", &["Thai"]),
     ];
     for (family, style, scripts) in expected {
         assert!(
