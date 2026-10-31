@@ -101,6 +101,7 @@ mod system_theme;
 mod tab_split;
 mod table_headings;
 mod text_box_editing;
+mod text_import;
 mod text_overflow_scroll;
 mod touch_pan;
 mod trace_navigation;

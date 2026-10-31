@@ -1,11 +1,16 @@
 //! CSV import and export (RFC 4180 with the usual real-world leniency).
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::{Parsed, parse_input};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
+use crate::text_layout::{
+    self, Completeness, Decimal, Evidence, Numbers, Split, TextReport, detect, detect_numbers, evidence, most_common_fields, records_before_table,
+    sample_rows, split_records,
+};
 use crate::{CsvOptions, IoError};
 
 /// The largest CSV or tab-separated file written (bytes).
@@ -150,49 +155,6 @@ pub fn decode_text(bytes: &[u8]) -> String {
     }
 }
 
-/// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
-pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
-    for d in [',', ';', '\t'] {
-        let mut counts = vec![];
-        let mut n = 0usize;
-        let mut in_q = false;
-        let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
-            if !in_q && ch == '\n' {
-                // Blank lines carry no delimiter evidence.
-                if !blank {
-                    counts.push(n);
-                }
-                n = 0;
-                blank = true;
-                if counts.len() >= 20 {
-                    break;
-                }
-                continue;
-            }
-            if ch != '\r' {
-                blank = false;
-            }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
-                n += 1;
-            }
-        }
-        if !blank {
-            counts.push(n);
-        }
-        let min = counts.iter().copied().min().unwrap_or(0);
-        let total: usize = counts.iter().sum();
-        if min > 0 && (min, total) > (best.1, best.2) {
-            best = (d as u8, min, total);
-        }
-    }
-    best.0
-}
-
 /// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
 /// dropped as they are read, so a row of endless delimiters cannot allocate a string per field.
 pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
@@ -249,23 +211,111 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
 }
 
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
-    let text = decode_text(bytes);
-    let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
-    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
-    if delim == quote {
-        return Err(IoError::Format("the delimiter and quote character must differ".into()));
+    read_text(bytes, opts).map(|(wb, _)| wb)
+}
+
+/// The settings a text file is read with, given or detected.
+struct Resolved {
+    text: String,
+    quote: Option<char>,
+    split: Split,
+    layout: Option<text_layout::Layout>,
+    start: usize,
+    fields: usize,
+    numbers: Numbers,
+}
+
+impl Resolved {
+    fn new(bytes: &[u8], opts: &CsvOptions) -> Result<Resolved, IoError> {
+        let text = decode_text(bytes);
+        let quote = (!opts.no_qualifier).then_some(if opts.quote == 0 { '"' } else { opts.quote as char });
+        let (split, layout) = match (&opts.split, opts.delimiter) {
+            (Some(split), _) => (split.clone(), None),
+            (None, 0) => {
+                let layout = detect(&text, opts.kind, quote, opts.detect_any);
+                (layout.split.clone(), Some(layout))
+            }
+            (None, d) => (Split::delimiter(d as char), None),
+        };
+        if let (Some(q), Split::Delimited { delimiters, .. }) = (quote, &split)
+            && delimiters.iter().any(|d| d.contains(q))
+        {
+            return Err(IoError::Format("the delimiter and quote character must differ".into()));
+        }
+        let start = match opts.start_row {
+            Some(n) => n,
+            None => layout.as_ref().map_or(0, |l| records_before_table(&text, &split, quote, l.start_row)),
+        };
+        let sample = sample_rows(&text, &split, quote, start);
+        let fields = layout.as_ref().map_or_else(|| most_common_fields(&sample), |l| l.fields);
+        let numbers = match opts.decimal {
+            Some(d) => Numbers::given(d),
+            None => detect_numbers(&sample, &split),
+        };
+        Ok(Resolved { text, quote, split, layout, start, fields, numbers })
     }
+
+    fn report(self, done: Completeness) -> TextReport {
+        TextReport {
+            split: self.split,
+            detected: self.layout.is_some(),
+            start_row: self.start,
+            numbers: self.numbers,
+            fields: self.fields,
+            rows: done.rows,
+            complete: done.complete,
+            other_rows: done.other_rows,
+            split_numbers: done.split_numbers,
+            uncertain: self.layout.map(|l| l.uncertain).unwrap_or_default(),
+        }
+    }
+}
+
+/// The Text Import Wizard's preview: the first `rows` rows of the file as `opts` splits them,
+/// fields as the text they hold, and what reading found (counted over the whole of `bytes`).
+pub fn preview_text(bytes: &[u8], opts: &CsvOptions, rows: usize) -> Result<(Vec<Vec<String>>, TextReport), IoError> {
+    let r = Resolved::new(bytes, opts)?;
+    let mut out = vec![];
+    let mut record = 0usize;
+    let mut done = Completeness { fields: r.fields, ..Default::default() };
+    split_records(&r.text, &r.split, r.quote, |rec| {
+        record += 1;
+        if record > r.start {
+            done.add(record, &rec, &r.split, r.numbers.decimal);
+            if out.len() < rows {
+                out.push(rec);
+            }
+        }
+        record < MAX_ROWS as usize
+    });
+    Ok((out, r.report(done)))
+}
+
+/// [`read_csv`], with what reading found: the split used (detected when neither `split` nor
+/// `delimiter` is given), the decimal separator, and how complete the rows are over the file.
+pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextReport), IoError> {
+    let resolved = Resolved::new(bytes, opts)?;
+    let Resolved { text, quote, split, start, numbers, .. } = &resolved;
+    let (quote, start) = (*quote, *start);
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
-    wb.csv_delimiter = u8::try_from(delim).ok();
+    wb.csv_delimiter = split.single_byte();
+    wb.csv_decimal_comma = opts.parse_values && numbers.decimal == Decimal::Comma;
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
-    let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
+    let mut fmt_cache: Vec<(Cow<'static, str>, StyleId)> = vec![];
     let mut row: u32 = 0;
-    parse_records(&text, delim, quote, |rec| {
+    let mut record = 0usize;
+    let mut done = Completeness { fields: resolved.fields, ..Default::default() };
+    split_records(text, split, quote, |rec| {
+        record += 1;
+        if record <= start {
+            return true;
+        }
         if row >= MAX_ROWS {
             return false;
         }
+        done.add(record, &rec, split, numbers.decimal);
         // A blank line is an empty row.
         for (col, f) in rec.into_iter().enumerate() {
             if col as u32 >= MAX_COLS {
@@ -276,12 +326,12 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&f, opts.date_system);
+                let p = read_field(&f, numbers.column(col), opts.date_system);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
                         None => {
-                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(&code));
                             fmt_cache.push((code, id));
                             id
                         }
@@ -299,7 +349,91 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     });
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
-    Ok(wb)
+    Ok((wb, resolved.report(done)))
+}
+
+/// A field's value and the number format it gets.
+struct Read {
+    value: Value,
+    format: Option<Cow<'static, str>>,
+}
+
+impl From<Parsed> for Read {
+    fn from(p: Parsed) -> Read {
+        Read { value: p.value, format: p.format.map(Cow::Borrowed) }
+    }
+}
+
+/// One field read like typed input, with the column's decimal separator: a decimal comma
+/// number is rewritten with a point first (`1.234,5` → `1,234.5`); a value that is a number
+/// only with the other separator stays text, as it does in Excel (`0.125` under a decimal
+/// comma), and `1,5E3` is 1500. In a column holding both kinds (`None`), any value that depends
+/// on the separator stays text. Dates with dots are day first (`01.11.2026`), amounts carry any
+/// currency sign (`7,50 €`), Swiss `'` groups and a trailing minus read (`1'234.50`, `7,50-`).
+fn read_field(f: &str, decimal: Option<Decimal>, sys: gridcraft_core::DateSystem) -> Read {
+    let text = || Read { value: Value::text(f), format: None };
+    if let Some(date) = dotted_date(f, sys) {
+        return date;
+    }
+    let number = |p: Parsed| matches!(p.value, Value::Number(_)).then(|| Read::from(p));
+    let amount = |d: Decimal| text_layout::currency_amount(f, d).map(|(v, code)| Read { value: Value::Number(v), format: Some(Cow::Owned(code)) });
+    // Typed input, else the same number with a point and `,` groups, else an amount.
+    let with_point = |p: Parsed| {
+        number(p.clone())
+            .or_else(|| text_layout::to_point(f, Decimal::Point).and_then(|t| number(parse_input(&t, sys))))
+            .or_else(|| amount(Decimal::Point))
+            .unwrap_or_else(|| p.into())
+    };
+    match decimal {
+        Some(Decimal::Point) => with_point(parse_input(f, sys)),
+        Some(Decimal::Comma) => match text_layout::comma_to_point(f) {
+            // Rewritten for the reader only: what doesn't read as a number keeps the file's text.
+            Some(point) => number(parse_input(&point, sys)).or_else(|| amount(Decimal::Comma)).unwrap_or_else(text),
+            None if evidence(f) == Some(Evidence::Point) => text(),
+            None => {
+                let p = parse_input(f, sys);
+                let date = p.format.is_some_and(|code| code.chars().any(|c| matches!(c.to_ascii_lowercase(), 'y' | 'd' | 'h' | 'm' | 's')));
+                if matches!(p.value, Value::Number(_)) && f.contains(['.', ',']) && !date { text() } else { p.into() }
+            }
+        },
+        None => match evidence(f) {
+            Some(Evidence::Point | Evidence::Comma | Evidence::Ambiguous) => text(),
+            _ => with_point(parse_input(f, sys)),
+        },
+    }
+}
+
+/// `25.10.2026`, `1.11.26`, with a time or without (`25.10.2026 12:30`): day first, as
+/// everywhere dates are written with dots; the input parser reads them month first.
+fn dotted_date(f: &str, sys: gridcraft_core::DateSystem) -> Option<Read> {
+    let t = f.trim();
+    let (date, time) = t.split_once(' ').map_or((t, None), |(d, tm)| (d, Some(tm.trim())));
+    let parts: Vec<&str> = date.split('.').collect();
+    let [d, m, y] = parts.as_slice() else { return None };
+    let digits = |s: &str, lens: &[usize]| lens.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(d, &[1, 2]) || !digits(m, &[1, 2]) || !digits(y, &[2, 4]) {
+        return None;
+    }
+    let (d, m, y): (i64, i64, i64) = (d.parse().ok()?, m.parse().ok()?, y.parse().ok()?);
+    let y = match y {
+        0..30 => 2000 + y,
+        30..100 => 1900 + y,
+        _ => y,
+    };
+    let month = u32::try_from(m).ok().filter(|m| (1..=12).contains(m))?;
+    if y < 1900 || d < 1 || d > i64::from(gridcraft_core::date::days_in_month_in(sys, i32::try_from(y).ok()?, month)) {
+        return None;
+    }
+    let day = gridcraft_core::date::serial_from_ymd(sys, y, m, d)?;
+    match time {
+        None => Some(Read { value: Value::Number(day), format: Some(Cow::Borrowed("dd.mm.yyyy")) }),
+        Some(tm) => match parse_input(tm, sys) {
+            Parsed { value: Value::Number(fr), format: Some(code) } if (0.0..1.0).contains(&fr) && code.contains('h') => {
+                Some(Read { value: Value::Number(day + fr), format: Some(Cow::Borrowed("dd.mm.yyyy hh:mm")) })
+            }
+            _ => None,
+        },
+    }
 }
 
 /// Writes the sheet as CSV from A1 to the end of its used range, so leading empty columns and rows

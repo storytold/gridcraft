@@ -26,6 +26,7 @@ mod names;
 mod paste;
 mod show;
 mod spelling;
+mod text_import;
 mod zoom;
 
 use analysis::toolpak_defaults;
@@ -401,6 +402,23 @@ impl Dialog {
                     vec![Note(format!("'{file}' is protected.")), Password { key: "password", label: "Password:" }],
                     values,
                 )
+            }
+            // Text Import (#2553): the file rides along like the password dialog's, and OK opens
+            // it with `file.open` and the settings.
+            "textImport" => {
+                let mut values = json!({
+                    "mode": "detect", "tab": true, "semicolon": false, "comma": false, "space": false, "otherOn": false, "other": "",
+                    "consecutive": false, "qualifier": "\"", "fixedWidths": "", "startRow": null, "decimal": "auto", "asText": false,
+                });
+                // The file, and any setting the caller gives (the control channel, a snapshot).
+                for (k, v) in params.as_object().into_iter().flatten() {
+                    if values.get(k).is_some() || matches!(k.as_str(), "path" | "name" | "base64") {
+                        values[k.as_str()] = v.clone();
+                    }
+                }
+                let mut d = Dialog::custom("textImport", "Text Import", values);
+                d.command = Some("file.open");
+                d
             }
             "unprotectSheet" => Dialog::form(
                 "unprotectSheet",

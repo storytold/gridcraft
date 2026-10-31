@@ -193,7 +193,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new()
-                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "prn", "json"])
                     .pick_file()
                     .await
                 else {
@@ -349,7 +349,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("xlsb") => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         Some("ods") => "application/vnd.oasis.opendocument.spreadsheet",
         Some("csv") => "text/csv",
-        Some("tsv" | "txt") => "text/plain",
+        Some("tsv" | "txt" | "prn") => "text/plain",
         Some("pdf") => "application/pdf",
         Some("html" | "htm") => "text/html",
         Some("json") => "application/json",
@@ -385,6 +385,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
             "csv" => "CSV (Comma delimited) (*.csv)",
             "tsv" => "Tab Delimited Text (*.tsv)",
             "txt" => "Plain Text (*.txt)",
+            "prn" => "Formatted Text (Space delimited) (*.prn)",
             "pdf" => "PDF Document (*.pdf)",
             "html" | "htm" => "HTML Document (*.html)",
             "json" => "JSON Document (*.json)",

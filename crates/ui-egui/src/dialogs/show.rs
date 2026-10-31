@@ -10,6 +10,7 @@ use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
+use super::text_import::{text_import, text_import_params};
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
@@ -17,6 +18,9 @@ use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
 pub(crate) fn build_params(d: &Dialog) -> Json {
+    if d.name == "textImport" {
+        return text_import_params(&d.values);
+    }
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "insertLink" => {
@@ -140,7 +144,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
-        "recommendedCharts" => 600.0,
+        "recommendedCharts" | "textImport" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
@@ -176,6 +180,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
+                "textImport" => text_import(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
@@ -389,7 +394,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
-                } else if d.name == "openPassword" {
+                } else if d.name == "openPassword" || d.name == "textImport" {
                     let path = d.values.get("path").and_then(Json::as_str).map(str::to_string);
                     app.after_open(path.as_deref(), &r);
                 }

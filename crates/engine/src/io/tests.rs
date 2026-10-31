@@ -383,6 +383,96 @@ fn csv_save_keeps_the_separator_it_was_opened_with() {
 }
 
 #[test]
+fn a_decimal_comma_file_saves_its_numbers_with_a_decimal_comma() {
+    // A German export: `;`, thousands dots, decimal commas (#2553).
+    let de = "Artikel;Umsatz;Menge\r\nX;1.234,50;3\r\nY;-7,25;12\r\n";
+    let (wb, _) = open_bytes("de.csv", de.as_bytes()).unwrap();
+    assert!(wb.csv_decimal_comma);
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 1)), gridcraft_core::Value::Number(1234.5));
+    assert_eq!(String::from_utf8(save_bytes(&wb, "de.csv").unwrap()).unwrap(), de);
+    // An English file stays English, and a new workbook writes points.
+    let (en, _) = open_bytes("en.csv", b"a;b\r\n1.5;2\r\n").unwrap();
+    assert!(!en.csv_decimal_comma);
+    assert_eq!(save_bytes(&en, "en.csv").unwrap(), b"a;b\r\n1.5;2\r\n");
+}
+
+/// Formatted Text (Space delimited) as Excel's Save As lays it out: column widths in
+/// characters (the standard width is 10), numbers narrowed or `#`, alignment, text running
+/// on into empty cells, hidden columns left out (#2553).
+#[test]
+fn prn_save_lays_out_the_sheet_like_excel() {
+    use gridcraft_core::{CellError, Value};
+    use gridcraft_model::{Cell, HAlign, NumFmt, StyleId};
+    let prn = |wb: &Workbook| String::from_utf8(save_bytes(wb, "t.prn").unwrap()).unwrap();
+    // Widths 1, 2, 5, 8.43, 10, 12.57 and 20 characters.
+    let mut wb = Workbook::new();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for (c, px) in [12.0, 19.0, 40.0, 64.0, 75.0, 93.0, 145.0].into_iter().enumerate() {
+            let c = c as u32;
+            sh.cols.entry(c).or_default().size = Some(px);
+            sh.set_value(CellRef::new(0, c), Value::text("abcdefghijklmnopqrstuvwxyz"));
+            sh.set_value(CellRef::new(1, c), Value::Number(12345.678));
+            sh.set_value(CellRef::new(2, c), Value::text("x"));
+            sh.set_value(CellRef::new(3, c), Value::Number(7.0));
+        }
+    }
+    assert_eq!(
+        prn(&wb),
+        "aababcdeabcdefghabcdefghijabcdefghijklabcdefghijklmnopqrstuvwxyz\r\n\
+         ###1234612345.68 12345.678   12345.678           12345.678\r\n\
+         xx x    x       x         x           x\r\n\
+         7 7    7       7         7           7                   7\r\n"
+    );
+    // Standard widths: alignment by kind and by the cell's own setting.
+    let mut wb = Workbook::new();
+    let right = wb.styles.derive(StyleId::DEFAULT, |s| s.align.h = HAlign::Right);
+    let center = wb.styles.derive(StyleId::DEFAULT, |s| s.align.h = HAlign::Center);
+    let left = wb.styles.derive(StyleId::DEFAULT, |s| s.align.h = HAlign::Left);
+    let date = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("dd.mm.yyyy"));
+    let percent = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("0.00%"));
+    if let Some(sh) = wb.sheet_mut(0) {
+        let mut put = |r: u32, c: u32, value: Value, style: StyleId| sh.set_cell(CellRef::new(r, c), Cell { value, formula: None, style });
+        put(0, 0, Value::text("left"), StyleId::DEFAULT);
+        put(0, 1, Value::Number(5.0), StyleId::DEFAULT);
+        put(0, 2, Value::Number(-5.5), StyleId::DEFAULT);
+        put(0, 3, Value::Bool(true), StyleId::DEFAULT);
+        put(0, 4, Value::Error(CellError::Div0), StyleId::DEFAULT);
+        put(0, 5, Value::text("r"), right);
+        put(0, 6, Value::text("c"), center);
+        put(0, 7, Value::Number(9.0), left);
+        put(1, 0, Value::Number(45000.0), date);
+        put(1, 1, Value::Number(1234567890123.0), StyleId::DEFAULT);
+        put(1, 2, Value::Number(0.5), percent);
+        put(1, 3, Value::text("with space "), StyleId::DEFAULT);
+        put(2, 8, Value::text("last"), StyleId::DEFAULT);
+    }
+    assert_eq!(
+        prn(&wb),
+        format!(
+            "left               5      -5.5   TRUE    #DIV/0!          r     c     9\r\n\
+             15.03.20231.2346E+12    50.00%with space\r\n\
+             {}last\r\n",
+            " ".repeat(80)
+        )
+    );
+    // Text runs on into empty cells and stops at the next value; a hidden column is left out.
+    let mut wb = Workbook::new();
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.set_value(CellRef::new(0, 0), Value::text("a long text over three columns"));
+        sh.set_value(CellRef::new(0, 3), Value::text("d"));
+        sh.set_value(CellRef::new(1, 0), Value::text("a"));
+        sh.set_value(CellRef::new(1, 1), Value::text("hidden"));
+        sh.set_value(CellRef::new(1, 2), Value::text("c"));
+        sh.cols.entry(1).or_default().hidden = true;
+    }
+    assert_eq!(prn(&wb), "a long text over thrd\r\na         c\r\n");
+    // A workbook read with decimal commas writes them; an empty sheet writes nothing.
+    let (de, _) = open_bytes("de.csv", b"a;1,5\r\n").unwrap();
+    assert_eq!(prn(&de), "a                1,5\r\n");
+    assert!(save_bytes(&Workbook::new(), "e.prn").unwrap().is_empty());
+}
+
+#[test]
 fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
     let mut wb = Workbook::new();
     if let Some(sh) = wb.sheet_mut(0) {

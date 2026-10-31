@@ -32,6 +32,7 @@ mod styles;
 mod tables;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod text_layout;
 mod theme;
 mod write;
 mod xls;
@@ -45,7 +46,7 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use csv::{MAX_CSV_BYTES, preview_text, read_csv, read_text, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -154,17 +155,43 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Resul
 /// CSV import options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CsvOptions {
-    /// Field separator; `0` auto-detects comma, semicolon or tab.
+    /// Field separator; `0` detects how the lines split ([`text_layout::detect`]).
     pub delimiter: u8,
+    /// Detection also tries other punctuation, strings, spaces and fixed widths (Text Import's
+    /// Detect); otherwise only `,`, `;` and tab, as File › Open of a CSV.
+    pub detect_any: bool,
     pub quote: u8,
+    /// No text qualifier: quotes are ordinary characters.
+    pub no_qualifier: bool,
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// How lines split, overriding `delimiter`: several delimiters, strings such as `||`, runs,
+    /// fixed widths or whole lines.
+    pub split: Option<text_layout::Split>,
+    /// Records skipped before the first row. `None` skips the title rows detection finds before
+    /// the table (only when the split is detected).
+    pub start_row: Option<usize>,
+    /// The decimal separator numbers are read with; `None` detects it from the values.
+    pub decimal: Option<text_layout::Decimal>,
+    /// The kind of file, which breaks ties when the split is detected.
+    pub kind: text_layout::TextKind,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions {
+            delimiter: b',',
+            detect_any: false,
+            quote: b'"',
+            no_qualifier: false,
+            date_system: DateSystem::D1900,
+            parse_values: true,
+            split: None,
+            start_row: Some(0),
+            decimal: Some(text_layout::Decimal::Point),
+            kind: text_layout::TextKind::Csv,
+        }
     }
 }
 

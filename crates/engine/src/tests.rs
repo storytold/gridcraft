@@ -4649,6 +4649,152 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
 
+/// File › Open's text options (#2553): detection with `delimiter: "auto"`, given delimiters,
+/// fixed widths, the start row and the decimal separator, and what reading found in the result.
+#[test]
+fn file_open_reads_text_files_with_the_import_wizards_settings() {
+    let params = |name: &str, text: &str, extra: serde_json::Value| {
+        let mut p = json!({"name": name, "base64": crate::io::base64_encode(text.as_bytes())});
+        if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+            p.extend(extra.clone());
+        }
+        p
+    };
+    let open = |s: &mut Session, name: &str, text: &str, extra: serde_json::Value| s.execute("file.open", params(name, text, extra)).unwrap();
+    let value = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+    // A German report: a title, `;`, decimal commas and thousands dots.
+    let report = "Umsatzbericht Oktober 2026\r\n\r\nArtikel;Umsatz\r\nX;1.234,50\r\nY;99,00\r\n";
+    let mut s = s();
+    let r = open(&mut s, "report.txt", report, json!({"delimiter": "auto"}));
+    assert_eq!(r["text"]["delimiters"], json!([";"]));
+    assert_eq!(r["text"]["startRow"], 3);
+    assert_eq!((r["text"]["decimal"].as_str(), r["text"]["decimalFrom"].as_str()), (Some(","), Some("values")));
+    assert_eq!(value(&mut s, "A1"), json!("Artikel"));
+    assert_eq!(value(&mut s, "B2").as_f64(), Some(1234.5));
+    // Without options a .txt still splits at tabs only and keeps the title.
+    let mut s = self::s();
+    let r = open(&mut s, "report.txt", report, json!({}));
+    assert_eq!(r["text"]["delimiters"], json!(["\t"]));
+    assert_eq!(value(&mut s, "A3"), json!("Artikel;Umsatz"));
+    // A given string delimiter, the start row and the decimal separator.
+    let mut s = self::s();
+    open(&mut s, "pairs.txt", "skip\r\na||1,5\r\n", json!({"delimiter": "||", "startRow": 2, "decimal": ","}));
+    assert_eq!(value(&mut s, "A1"), json!("a"));
+    assert_eq!(value(&mut s, "B1").as_f64(), Some(1.5));
+    // Fixed widths; and a .prn opened as Excel's File › Open does, each line in one cell.
+    let prn = "plain     a,b       1234,5\r\nr2        d2\r\n";
+    let mut s = self::s();
+    open(&mut s, "t.prn", prn, json!({"fixedWidths": [10, 20]}));
+    assert_eq!(value(&mut s, "B1"), json!("a,b"));
+    let mut s = self::s();
+    let r = open(&mut s, "t.prn", prn, json!({}));
+    assert_eq!(r["text"]["split"], "lines");
+    assert_eq!(value(&mut s, "A1"), json!("plain     a,b       1234,5"));
+    // Rows with another field count, and the number an unquoted thousands separator split.
+    let mut s = self::s();
+    let r = open(&mut s, "list.csv", "Name,Value\r\nA,1,234.50\r\nB,99.00\r\nC,12.00\r\n", json!({}));
+    assert_eq!((r["text"]["rows"].as_u64(), r["text"]["completeRows"].as_u64()), (Some(4), Some(3)));
+    assert_eq!(r["text"]["otherRows"], json!([{"row": 2, "fields": 3}]));
+    assert_eq!(r["text"]["splitNumbers"], json!([{"row": 2, "number": "1,234.50"}]));
+    // No delimiter ticked: each line in one cell.
+    let mut s = self::s();
+    let r = open(&mut s, "pairs.txt", "a;b\r\n", json!({"delimiters": []}));
+    assert_eq!(r["text"]["split"], "lines");
+    assert_eq!(value(&mut s, "A1"), json!("a;b"));
+    // Other formats report nothing about text.
+    let mut s = self::s();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let r = s.execute("file.open", json!({"name": "b.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(r.get("text").is_none());
+    // Bad settings are refused before the file is read.
+    for bad in [
+        json!({"delimiter": ""}),
+        json!({"delimiter": ";", "fixedWidths": [3]}),
+        json!({"startRow": 0}),
+        json!({"decimal": "x"}),
+        json!({"textQualifier": "x"}),
+        // The wrong kind of value, never a quiet fall back to the extension's split.
+        json!({"delimiter": 5}),
+        json!({"delimiters": ";"}),
+        json!({"delimiters": [";", 1]}),
+        json!({"fixedWidths": "10,20"}),
+        json!({"fixedWidths": 10}),
+        json!({"fixedWidths": [-5, 2.5]}),
+        json!({"decimal": 5}),
+        json!({"textQualifier": false}),
+        json!({"treatConsecutive": "yes"}),
+        json!({"csvAsText": 1}),
+        // A line end ends the record before any delimiter is looked for.
+        json!({"delimiter": "\n"}),
+        json!({"other": "\r"}),
+    ] {
+        assert!(self::s().execute("file.open", params("x.csv", "a,b", bad.clone())).is_err(), "{bad}");
+    }
+}
+
+/// A `.csv` opens without a preview, so the open says what it guessed about numbers; and only
+/// `,`, `;` or tab split it, as Excel's File › Open does.
+#[test]
+fn a_csv_open_reports_guessed_numbers_and_splits_only_at_list_separators() {
+    let open = |text: &str| {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": "w.csv", "base64": crate::io::base64_encode(text.as_bytes())})).unwrap();
+        let b2 = s.execute("cell.get", json!({"cell": "B2"})).unwrap()["value"].clone();
+        (r, b2)
+    };
+    let (r, b2) = open("Item;Weight\r\nA;2.500\r\nB;1.250\r\n");
+    assert_eq!(b2.as_f64(), Some(2500.0));
+    let warnings = r["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("2.500") && w.contains("decimal comma"))), "{warnings:?}");
+    // Both kinds in one column: what depends on the separator stays text, and the open says so.
+    let (r, _) = open("a;b\r\n1;1,5\r\n2;0.125\r\n");
+    assert!(r["warnings"].to_string().contains("column B"), "{}", r["warnings"]);
+    // Values the file shows the separator for are no guess.
+    let (r, b2) = open("Item;Weight\r\nA;2,5\r\nB;1.250,5\r\n");
+    assert_eq!((b2.as_f64(), r["warnings"].clone()), (Some(2.5), json!([])));
+    // Punctuation on every line of a one-column file is text.
+    let urls: String = (0..20).map(|i| format!("https://example.com/page{i}\r\n")).collect();
+    let (r, b2) = open(&format!("url\r\n{urls}"));
+    assert_eq!((r["text"]["split"].as_str(), b2), (Some("lines"), serde_json::Value::Null));
+}
+
+/// The Text Import preview splits the first rows as the settings say, without opening the file.
+#[test]
+fn file_preview_text_shows_the_first_rows_as_the_settings_split_them() {
+    let report = "Umsatzbericht Oktober 2026\r\n\r\nArtikel;Umsatz\r\nX;1.234,50\r\nY;99,00\r\n";
+    let b64 = crate::io::base64_encode(report.as_bytes());
+    let mut s = s();
+    let docs = s.documents().len();
+    let r = s.execute("file.previewText", json!({"name": "report.txt", "base64": b64, "delimiter": "auto", "rows": 2})).unwrap();
+    assert_eq!(r["preview"], json!([["Artikel", "Umsatz"], ["X", "1.234,50"]]));
+    assert_eq!((r["text"]["startRow"].as_u64(), r["text"]["decimal"].as_str()), (Some(3), Some(",")));
+    assert_eq!((r["text"]["rows"].as_u64(), r["text"]["completeRows"].as_u64()), (Some(3), Some(3)));
+    assert_eq!(r["partial"], json!(false));
+    // Changing a setting changes the preview; nothing was opened.
+    let r = s.execute("file.previewText", json!({"name": "report.txt", "base64": b64, "fixedWidths": [7], "startRow": 4})).unwrap();
+    assert_eq!(r["preview"], json!([["X;1.234", ",50"], ["Y;99,00"]]));
+    assert_eq!(s.documents().len(), docs);
+    assert!(s.execute("file.previewText", json!({})).is_err());
+    // A file longer than the preview window is cut at a line end.
+    let long = "a;b\r\n".repeat(300_000);
+    let b64 = crate::io::base64_encode(long.as_bytes());
+    let r = s.execute("file.previewText", json!({"name": "long.csv", "base64": b64})).unwrap();
+    assert_eq!(r["partial"], json!(true));
+    assert_eq!(r["text"]["completeRows"], r["text"]["rows"]);
+    // Only the window is decoded or read; a file of exactly its size isn't partial.
+    assert_eq!(crate::io::base64_decode_head(&b64, 10).unwrap(), long.as_bytes().get(..10).unwrap());
+    let dir = std::env::temp_dir().join(format!("gridcraft-preview-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("long.csv");
+    std::fs::write(&path, &long).unwrap();
+    let r = s.execute("file.previewText", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!((&r["partial"], &r["text"]["completeRows"]), (&json!(true), &r["text"]["rows"]));
+    std::fs::write(&path, "a;b\n".repeat(crate::io::PREVIEW_BYTES / 4)).unwrap();
+    let r = s.execute("file.previewText", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(r["partial"], json!(false));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
 /// Save As makes the new file the one it names. The sheet-name formula of #1489 depends on it.
 #[test]
