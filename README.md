@@ -165,6 +165,22 @@ directives, e.g. `RUST_LOG=debug` or `RUST_LOG=warn,gridcraft_engine=debug` (a t
 matches a prefix: `gridcraft*=debug`). Runs with `GRIDCRAFT_NO_PREFS` set (no saved settings)
 log to standard error only.
 
+### X11 or Wayland on Linux and BSD
+
+In a Wayland session GridCraft opens its window through XWayland, for file drag-and-drop (the
+windowing library has it only on X11) and, on GNOME, the desktop's own title bar and window
+buttons (GNOME draws none for Wayland windows). This applies on every Wayland desktop (GNOME,
+KDE Plasma and others), not only GNOME. GridCraft only picks XWayland when all of these hold:
+
+- `WAYLAND_DISPLAY` is set and `DISPLAY` names a local display (`:0`, `:1.0`);
+- the X11 libraries the window needs (libX11, libXcursor, libX11-xcb, libXi, libxkbcommon-x11)
+  are installed;
+- the X server accepts a connection over its local socket, with the session's authorization,
+  and answers within 5 seconds (never over TCP).
+
+Otherwise the window stays on Wayland. Set `GRIDCRAFT_WAYLAND=1` (any value but empty or `0`)
+to always stay on Wayland, with a plainer built-in frame on GNOME. X11 sessions use X11 as before.
+
 ## For agents: MCP, CLI and the control channel
 
 ```sh
