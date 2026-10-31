@@ -1,8 +1,8 @@
 use super::create::pivot_json;
 use super::params::{area_param, func_param, position_param, show_as_param};
 use super::{
-    Json, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotShowAs, PivotTable, PivotValue, Result, Session, Workbook, bad,
-    bool_param, edit, find_pivot, json, ok, other, pv, str_param, u32_param,
+    Json, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotShowAs, PivotTable, PivotValue, Result, Session, SlicerSource,
+    Workbook, bad, bool_param, edit, find_pivot, json, ok, other, pv, str_param, u32_param,
 };
 
 // ---------------------------------------------------------------- layout editing (pure)
@@ -128,11 +128,16 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             if pt.rows.len() + pt.columns.len() >= pv::MAX_AXIS_FIELDS && !in_axes(pt, &field) {
                 return Err(other(format!("A PivotTable can have at most {} row and column fields.", pv::MAX_AXIS_FIELDS)));
             }
-            let existing = take_from_axes(pt, &field).unwrap_or_else(|| PivotField { source_col: field.clone(), ..Default::default() });
-            // A report filter that selects nothing in particular goes away; a selection stays
-            // as the field's hidden items.
+            let held = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)).map(|f| pt.filter_group(f)).unwrap_or_default();
+            for f in pt.filters.iter_mut().filter(|f| f.source_col.eq_ignore_ascii_case(&field)) {
+                f.date_group = held;
+            }
+            let existing =
+                take_from_axes(pt, &field).unwrap_or_else(|| PivotField { source_col: field.clone(), date_group: held, ..Default::default() });
+            // A report filter that selects nothing in particular goes away; a selection stays as the field's hidden items.
             pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.selected.is_none()));
             insert_axis_field(pt, area == "rows", existing, position);
+            pt.normalize_filter_groups();
         }
         "values" => {
             if pt.values.len() >= pv::MAX_VALUE_FIELDS {
@@ -155,11 +160,16 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             pt.values.insert(at, v);
         }
         _ => {
-            take_from_axes(pt, &field);
+            // The field keeps its date grouping (a cache field's) in the Filters area.
             let existing = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
+            let group = match existing.and_then(|i| pt.filters.get(i)) {
+                Some(f) => pt.filter_group(f),
+                None => pt.field_group(&field),
+            };
+            take_from_axes(pt, &field);
             let entry = match existing {
-                Some(i) => pt.filters.remove(i),
-                None => PivotFilter { source_col: field, selected: None },
+                Some(i) => PivotFilter { hidden: false, date_group: group, ..pt.filters.remove(i) },
+                None => PivotFilter { source_col: field, selected: None, hidden: false, date_group: group },
             };
             let at = position.unwrap_or(pt.filters.len()).min(pt.filters.len());
             pt.filters.insert(at, entry);
@@ -168,11 +178,26 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
     Ok(())
 }
 
-/// Removes `field` from an area; returns the source field it referred to.
-fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> Result<String> {
+/// Whether a slicer on any sheet connects to this PivotTable and field.
+pub(super) fn has_connected_slicer(wb: &Workbook, sheet: usize, pt: &PivotTable, field: &str) -> bool {
+    let Some(sheet_name) = wb.sheet(sheet).map(|sh| sh.name.as_str()) else { return false };
+    wb.sheets.iter().any(|sh| {
+        sh.slicers.iter().any(|sl| match &sl.source {
+            SlicerSource::Pivot { pivots, field: slicer_field, .. } if slicer_field.eq_ignore_ascii_case(field) => {
+                pivots.iter().any(|p| p.sheet.eq_ignore_ascii_case(sheet_name) && p.name.eq_ignore_ascii_case(&pt.name))
+            }
+            _ => false,
+        })
+    })
+}
+
+fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str, keep_slicer: bool) -> Result<String> {
     match area {
         "rows" | "columns" => {
             let rows = area == "rows";
+            let held = keep_slicer
+                .then(|| pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(field)).map(|x| (x.selected.clone(), pt.filter_group(x))))
+                .flatten();
             let list = if rows { &mut pt.rows } else { &mut pt.columns };
             let i = list
                 .iter()
@@ -180,8 +205,14 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
                 .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the {area} area")))?;
             let f = list.remove(i);
             shift_values(pt, rows, i, false);
-            pt.filters.retain(|x| !x.source_col.eq_ignore_ascii_case(&f.source_col));
-            Ok(f.source_col)
+            let source = f.source_col;
+            pt.filters.retain(|x| !x.source_col.eq_ignore_ascii_case(&source));
+            if let Some((selected, date_group)) = held
+                && (selected.is_some() || date_group != PivotDateGroup::None)
+            {
+                pt.filters.push(PivotFilter { source_col: source.clone(), selected, hidden: true, date_group });
+            }
+            Ok(source)
         }
         "values" => {
             let i = pt
@@ -196,7 +227,7 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
             let i = pt
                 .filters
                 .iter()
-                .position(|f| f.source_col.eq_ignore_ascii_case(field) && !in_axes(pt, &f.source_col))
+                .position(|f| f.source_col.eq_ignore_ascii_case(field) && !f.hidden && !in_axes(pt, &f.source_col))
                 .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the filters area")))?;
             Ok(pt.filters.remove(i).source_col)
         }
@@ -251,7 +282,7 @@ pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                 if pt.values.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) {
                     areas.push("values");
                 }
-                if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) && !in_axes(pt, h) {
+                if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h) && !f.hidden) && !in_axes(pt, h) {
                     areas.push("filters");
                 }
                 json!({
@@ -385,15 +416,20 @@ pub(super) fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
         Some(a) => Some(area_param(C, Some(a))?),
         None => None,
     };
+    let (si, pi) = find_pivot(s, p)?;
+    let keep_slicer = {
+        let d = s.doc()?;
+        d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).is_some_and(|pt| has_connected_slicer(&d.wb, si, pt, &field))
+    };
     update(s, p, |pt, _, _| {
         match area {
             Some(a) => {
-                remove_from_area(C, pt, &field, a)?;
+                remove_from_area(C, pt, &field, a, keep_slicer)?;
             }
             None => {
                 let mut any = false;
                 for a in ["rows", "columns", "values", "filters"] {
-                    any |= remove_from_area(C, pt, &field, a).is_ok();
+                    any |= remove_from_area(C, pt, &field, a, keep_slicer).is_ok();
                 }
                 if !any {
                     return Err(bad(C, format!("`{field}` isn't in the PivotTable")));
@@ -410,6 +446,11 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let from = area_param(C, str_param(p, "from"))?;
     let to = area_param(C, str_param(p, "to"))?;
     let pos = position_param(p);
+    let keep_slicer = {
+        let d = s.doc()?;
+        let (si, pi) = find_pivot(s, p)?;
+        d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).is_some_and(|pt| has_connected_slicer(&d.wb, si, pt, &field))
+    };
     update(s, p, |pt, src, _| {
         if is_values_field(src, &field) {
             return move_values_field(C, pt, from, to, pos);
@@ -443,7 +484,7 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                     let i = pt
                         .filters
                         .iter()
-                        .position(|f| f.source_col.eq_ignore_ascii_case(&field))
+                        .position(|f| f.source_col.eq_ignore_ascii_case(&field) && !f.hidden && !in_axes(pt, &f.source_col))
                         .ok_or_else(|| bad(C, format!("`{field}` isn't in the filters area")))?;
                     let f = pt.filters.remove(i);
                     let at = pos.unwrap_or(pt.filters.len()).min(pt.filters.len());
@@ -452,22 +493,15 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
             }
             return Ok(json!({}));
         }
-        // Keep axis settings (sort, grouping) when moving between rows and columns.
-        let kept = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field)).cloned();
-        let hidden = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)).cloned();
-        let src_field = remove_from_area(C, pt, &field, from)?;
+        // Values in or out: the field leaves its area. Between Rows, Columns and Filters it moves
+        // the way addField moves it, keeping its axis settings, date grouping and filter
+        // selection (`from` is only checked).
+        let src_field = if from == "values" || to == "values" {
+            remove_from_area(C, pt, &field, from, keep_slicer)?
+        } else {
+            remove_from_area(C, &mut pt.clone(), &field, from, keep_slicer)?
+        };
         add_to_area(pt, src, AreaPlacement { cmd: C, field: &src_field, area: to, func: None, name: None, position: pos })?;
-        if matches!(to, "rows" | "columns") {
-            let list = if to == "rows" { &mut pt.rows } else { &mut pt.columns };
-            if let (Some(k), Some(slot)) = (kept, list.iter_mut().find(|f| f.source_col.eq_ignore_ascii_case(&src_field))) {
-                *slot = k;
-            }
-            if let Some(h) = hidden.filter(|h| h.selected.is_some())
-                && !pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&src_field))
-            {
-                pt.filters.push(h);
-            }
-        }
         Ok(json!({"field": src_field, "to": to}))
     })
 }

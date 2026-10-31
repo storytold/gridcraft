@@ -9,13 +9,13 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{
     Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
+    PivotSort, PivotTable, PivotValue, Sheet, SlicerSource, StyleId, Workbook,
 };
 use serde_json::{Value as Json, json};
 
 use super::{
-    CommandSpec, Ctx, EngineError, Result, Session, anchor_mode_param, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, str_param,
-    u32_param,
+    CommandSpec, Ctx, EngineError, Result, Session, anchor_mode_param, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, split_sheet,
+    str_param, u32_param,
 };
 use crate::pivot as pv;
 use crate::selection::current_region;
@@ -28,6 +28,8 @@ mod params;
 
 use charts::{insert_pivot_chart, recommended};
 use create::{insert_pivot, options, show_details, summarize_table};
+#[cfg(test)]
+use fields::has_connected_slicer;
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
 use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
 

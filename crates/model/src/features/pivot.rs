@@ -35,6 +35,19 @@ pub enum PivotDateGroup {
     Days,
 }
 
+impl PivotDateGroup {
+    /// Finest first: days, months, quarters, years, then ungrouped.
+    pub fn coarseness(self) -> u8 {
+        match self {
+            PivotDateGroup::Days => 0,
+            PivotDateGroup::Months => 1,
+            PivotDateGroup::Quarters => 2,
+            PivotDateGroup::Years => 3,
+            PivotDateGroup::None => 4,
+        }
+    }
+}
+
 /// A field placed in the Rows or Columns area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -97,6 +110,15 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// For a field outside Rows and Columns: it filters the PivotTable without being a report
+    /// filter (no filter cell above the table). Set by a slicer on a field the PivotTable doesn't
+    /// show, and read from files as hidden items of such a field.
+    pub hidden: bool,
+    /// The date grouping `selected` is in, when it isn't the first Rows/Columns field's on the
+    /// column (`None`): a field in no area keeps its cache field's grouping here (ECMA-376 puts
+    /// `fieldGroup` on the cache field), and on a field grouped at several levels it names the
+    /// level filtered. See [`PivotTable::filter_group`].
+    pub date_group: PivotDateGroup,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
@@ -147,6 +169,74 @@ pub struct PivotCalcField {
     pub name: String,
     /// Formula text, starting with `=`.
     pub formula: String,
+}
+
+impl PivotTable {
+    fn axis(&self) -> impl Iterator<Item = &PivotField> {
+        self.rows.iter().chain(self.columns.iter())
+    }
+
+    /// The grouping a filter on `col` gets when it names none: the first Rows/Columns field's.
+    pub fn implied_group(&self, col: &str) -> PivotDateGroup {
+        self.axis().find(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| f.date_group).unwrap_or_default()
+    }
+
+    /// The date grouping a filter's labels are in.
+    pub fn filter_group(&self, f: &PivotFilter) -> PivotDateGroup {
+        if f.date_group == PivotDateGroup::None { self.implied_group(&f.source_col) } else { f.date_group }
+    }
+
+    /// Clears each filter's `date_group` where the first Rows/Columns field implies it, so one
+    /// filter has one representation.
+    pub fn normalize_filter_groups(&mut self) {
+        let implied: Vec<PivotDateGroup> = self.filters.iter().map(|f| self.implied_group(&f.source_col)).collect();
+        for (f, g) in self.filters.iter_mut().zip(implied) {
+            if f.date_group == g {
+                f.date_group = PivotDateGroup::None;
+            }
+        }
+    }
+
+    /// The grouping of `col`'s base cache field: the finest of its Rows/Columns fields' and its
+    /// filter's, as a cache groups the base field by the finest level. A slicer on `col` lists
+    /// these items.
+    pub fn field_group(&self, col: &str) -> PivotDateGroup {
+        let filter = self.filters.iter().filter(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| self.filter_group(f));
+        let axis = self.axis().filter(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| f.date_group);
+        axis.chain(filter).min_by_key(|g| g.coarseness()).unwrap_or_default()
+    }
+
+    /// Sets the filter on `col` to `selected` (`None`: everything) with its labels in `group`,
+    /// adding a hidden filter for a field in no area. Clearing a filter removes it, except a
+    /// report filter and a filter that holds the field's grouping (none of its Rows/Columns
+    /// fields has it), which keep `selected: None`.
+    pub fn set_filter(&mut self, col: &str, selected: Option<Vec<String>>, group: PivotDateGroup) {
+        let on_axis = self.axis().any(|f| f.source_col.eq_ignore_ascii_case(col));
+        let date_group = if group == self.implied_group(col) { PivotDateGroup::None } else { group };
+        let i = self.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(col));
+        match (i, selected) {
+            (Some(i), None) => {
+                let Some(f) = self.filters.get(i) else { return };
+                let grouping = f.date_group != PivotDateGroup::None
+                    && !self.axis().any(|a| a.source_col.eq_ignore_ascii_case(col) && a.date_group == f.date_group);
+                if grouping || !(on_axis || f.hidden) {
+                    if let Some(f) = self.filters.get_mut(i) {
+                        f.selected = None;
+                    }
+                } else {
+                    self.filters.remove(i);
+                }
+            }
+            (Some(i), Some(sel)) => {
+                if let Some(f) = self.filters.get_mut(i) {
+                    f.selected = Some(sel);
+                    f.date_group = date_group;
+                }
+            }
+            (None, Some(sel)) => self.filters.push(PivotFilter { source_col: col.to_string(), selected: Some(sel), hidden: !on_axis, date_group }),
+            (None, None) => {}
+        }
+    }
 }
 
 impl Default for PivotTable {

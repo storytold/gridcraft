@@ -105,7 +105,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
-        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
+        && let Some((id, act)) = crate::chartview::slicer_click(app, geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_chart = Some(id);
         match act {
