@@ -211,5 +211,30 @@
     </dict>
   </array>
 
+  <!-- The save panel's format menu lists types this app exports. A document type alone is not
+       enough: macOS omits an extension it cannot resolve, so .xlsx never appeared next to CSV.
+       The system's own declaration of this identifier still wins when it has one. -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.spreadsheetml.sheet</string>
+      <key>UTTypeDescription</key>
+      <string>Excel Workbook</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.zip-archive</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>xlsx</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</string></array>
+      </dict>
+    </dict>
+  </array>
+
 </dict>
 </plist>

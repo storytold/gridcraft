@@ -23,6 +23,13 @@ impl SheetApp {
         if id.starts_with("file.") || switches_window {
             self.settle_drafts()?;
         }
+        // A macOS save sheet applies its path on a later frame. Closing that workbook first
+        // drops the write (#2791).
+        if let Some(doc) = self.workbook_close_target(id, &params)
+            && self.refuse_close_for_save_sheet(Some(doc))
+        {
+            return Err(super::save_pick::SAVE_SHEET_BUSY.into());
+        }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
@@ -87,6 +94,27 @@ impl SheetApp {
         r
     }
 
+    /// The workbook `file.close` or `window.close` would close. An extra window on a workbook
+    /// closes without closing the workbook, and then this is `None`.
+    fn workbook_close_target(&self, id: &str, params: &Json) -> Option<u64> {
+        let doc = match id {
+            "file.close" => self.session.active().map(|d| d.uid)?,
+            "window.close" => {
+                if let Some(id) = params.get("window").and_then(Json::as_u64) {
+                    self.session.window(id).map(|w| w.doc_uid)?
+                } else if let Some(doc) = params.get("doc").and_then(Json::as_u64) {
+                    doc
+                } else {
+                    self.session.active().map(|d| d.uid)?
+                }
+            }
+            _ => return None,
+        };
+        let whole_document = id == "file.close" && params.get("document").and_then(Json::as_bool) == Some(true);
+        let windows = self.session.windows().iter().filter(|w| w.doc_uid == doc).count();
+        if whole_document || windows <= 1 { Some(doc) } else { None }
+    }
+
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
@@ -98,7 +126,10 @@ impl SheetApp {
         }
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
-        if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
+        if id == "file.exportPdf"
+            && (self.services.pick_save.is_some() || self.services.pick_save_async.is_some())
+            && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty)
+        {
             return self.export_pdf_with_picker(params);
         }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
@@ -311,6 +342,8 @@ impl SheetApp {
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
+                } else if let Some(start) = &self.services.pick_open_async {
+                    start();
                 } else if let Some(pick) = &self.services.pick_open
                     && let Some(path) = pick()
                 {
@@ -318,11 +351,13 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
+                // An open CSV is titled `kit-prod.csv`. Save As writes a workbook, so the panel
+                // is offered `kit-prod.xlsx` and Excel Workbook is the first format (#2790).
+                let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                let suggested = format!("{}.xlsx", super::save_pick::file_stem(&title));
+                if self.services.pick_save_async.is_some() || self.services.pick_save.is_some() {
+                    if let Some(doc) = self.session.active().map(|d| d.uid) {
+                        self.start_save(&suggested, super::save_pick::SaveFollow::save_as(doc));
                     }
                 } else if self.services.download.is_some()
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))

@@ -70,6 +70,7 @@ mod clock;
 mod services;
 mod state;
 
+pub(crate) use app::save_pick::{SaveFollow, file_stem};
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
@@ -211,6 +212,8 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
+    /// A macOS save sheet is up. The chosen path is applied on a later frame (`save_pick`).
+    pub(crate) save_follow: Option<app::save_pick::SaveFollow>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).

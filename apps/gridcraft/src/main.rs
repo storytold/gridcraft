@@ -18,6 +18,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+#[cfg(target_os = "macos")]
+mod sheets;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -185,14 +187,12 @@ fn services() -> Services {
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
             let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-            // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
-            let ext = ext.unwrap_or_else(|| "xlsx".to_string());
+            let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
+            let filters = save_filters(ext.as_deref());
+            let ext = filters.first().map(|(_, x)| *x).unwrap_or("xlsx");
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
-                dialog = dialog.add_filter(*label, &[*x]);
+            for (label, x) in filters {
+                dialog = dialog.add_filter(label, &[x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
         })),
@@ -201,6 +201,24 @@ fn services() -> Services {
         print_native: Some(print::submit()),
         ..Default::default()
     }
+}
+
+/// Filters for the blocking save dialog. The suggested type comes first. A CSV, HTML, or PDF
+/// export offers only that type: the writer forces the extension, so another choice would
+/// confirm a path that is never written.
+fn save_filters(ext: Option<&str>) -> Vec<(&'static str, &'static str)> {
+    const TYPES: [(&str, &str); 4] =
+        [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+    let ext = ext.filter(|ext| TYPES.iter().any(|(_, name)| name == ext)).unwrap_or("xlsx");
+    if matches!(ext, "csv" | "html" | "pdf") {
+        return TYPES.iter().copied().filter(|(_, name)| *name == ext).collect();
+    }
+    let mut out = Vec::with_capacity(TYPES.len());
+    if let Some(first) = TYPES.iter().copied().find(|(_, name)| *name == ext) {
+        out.push(first);
+    }
+    out.extend(TYPES.iter().copied().filter(|(_, name)| *name != ext));
+    out
 }
 
 /// Opens a URL or file with the system's default application.
@@ -383,6 +401,9 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                // macOS file panels are sheets. A blocking NSSavePanel inside this callback aborts (#2790).
+                #[cfg(target_os = "macos")]
+                sheets::install(&mut app, cc.egui_ctx.clone());
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
@@ -444,5 +465,28 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+
+    /// The save panel lists a type only when this app exports it (or the system does). `.xlsx`
+    /// is not a system-exported UTI on every macOS, so the bundle has to export it (#2790).
+    #[test]
+    fn macos_exports_the_xlsx_workbook_type() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let exported = plist.split_once("<key>UTExportedTypeDeclarations</key>").map(|(_, rest)| rest).unwrap_or("");
+        assert!(!exported.is_empty(), "Info.plist.in has no UTExportedTypeDeclarations");
+        assert!(exported.contains("org.openxmlformats.spreadsheetml.sheet"), "{exported}");
+        assert!(exported.contains("<string>xlsx</string>"), "{exported}");
+        assert!(exported.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), "{exported}");
+    }
+
+    #[test]
+    fn an_export_save_dialog_offers_only_that_type() {
+        assert_eq!(super::save_filters(Some("pdf")), vec![("PDF (.pdf)", "pdf")]);
+        assert_eq!(super::save_filters(Some("csv")), vec![("CSV UTF-8 (.csv)", "csv")]);
+        assert_eq!(super::save_filters(Some("html")), vec![("Web Page (.html)", "html")]);
+        let workbook = super::save_filters(Some("xlsx"));
+        assert_eq!(workbook.len(), 4);
+        assert_eq!(workbook[0].1, "xlsx");
+        assert_eq!(super::save_filters(None).len(), 4);
     }
 }
