@@ -530,3 +530,16 @@ fn python_code_with_an_empty_value_counts_as_content() {
     s.execute("edit.copy", json!({"range": "T1"})).unwrap();
     assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
 }
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_python_cell() {
+    let mut s = s();
+    plant_empty(&mut s, "A1");
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org"})).unwrap();
+    assert_eq!(code(&s, 0, "A1"), Some("x = 1".into()));
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    let at = CellRef::parse("A1").unwrap();
+    assert_eq!(sh.value(at), Value::Empty);
+    assert_eq!(sh.hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
