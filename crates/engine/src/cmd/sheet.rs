@@ -185,7 +185,21 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.tables.retain(|t| t.range != RangeRef::default() && !t.columns.is_empty());
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range) {
-            Some(r) => af.range = r,
+            Some(r) => {
+                if axis == Axis::Cols {
+                    // Criteria are offsets from the first column: re-anchor them on their moved
+                    // columns and drop those whose column was deleted.
+                    let first = af.range.start.col;
+                    af.criteria = std::mem::take(&mut af.criteria)
+                        .into_iter()
+                        .filter_map(|(o, c)| {
+                            let n = map_line(first.checked_add(o)?)?;
+                            Some((n.checked_sub(r.start.col)?, c))
+                        })
+                        .collect();
+                }
+                af.range = r;
+            }
             None => sh.autofilter = None,
         }
     }
