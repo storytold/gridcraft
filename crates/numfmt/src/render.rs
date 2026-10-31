@@ -3,7 +3,7 @@
 use gridcraft_core::DateSystem;
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, max_serial};
 
-use crate::decimal::{decimal_digits, fixed, fixed_from_digits, format_general_fit};
+use crate::decimal::{decimal_digits, fixed, fixed_from_digits};
 use crate::parse::{DatePart, Section, Tok};
 
 /// Text being built plus the first repeat-fill position.
@@ -45,12 +45,13 @@ pub(crate) fn render_text(sec: &Section, text: &str) -> Out {
     out
 }
 
-/// Renders a number through a General section (literals around the General keyword).
-pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
+/// Renders a number through a General section: `general` (the number already written as General)
+/// with the section's literals around it.
+pub(crate) fn render_general(sec: &Section, general: &str) -> Out {
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
-            Tok::General => out.push(&format_general_fit(v, width).unwrap_or_else(|| "#".repeat(width.clamp(1, 11)))),
+            Tok::General => out.push(general),
             Tok::Fill(c) => out.fill(*c),
             other => out.push(&other.literal_text()),
         }
