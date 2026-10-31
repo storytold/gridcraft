@@ -532,7 +532,7 @@ fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
     // population size doesn't leak into it.
     s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 3"], "method": "simplex"})).unwrap();
     let m = model(&s, one).unwrap();
-    assert_eq!((m["objective"].as_str(), m["populationSize"].is_null()), (Some("B1"), true), "{m}");
+    assert_eq!((m["objective"].as_str(), m["populationSize"].as_f64()), (Some("B1"), Some(100.0)), "{m}");
     assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["masked"], true);
     assert_eq!(model(&s, one), None);
 }
@@ -877,7 +877,11 @@ fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
     )
     .ok();
     let saved = names(&s);
-    assert_eq!(saved.iter().filter(|n| n.starts_with("gridcraft_")).collect::<Vec<_>>(), ["gridcraft_solver_evals"], "{saved:?}");
+    assert_eq!(
+        saved.iter().filter(|n| n.starts_with("gridcraft_")).collect::<Vec<_>>(),
+        ["gridcraft_solver_evals", "gridcraft_solver_stall"],
+        "{saved:?}"
+    );
     s.execute("data.solver", model).unwrap();
     s.execute("data.solverReset", json!({})).unwrap();
     assert!(names(&s).is_empty(), "{:?}", names(&s));
@@ -892,6 +896,20 @@ fn integer_optimality_reads_a_percent_sign_as_percent() {
         let r = s.execute("data.solver", p).unwrap();
         assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(want), "{given}: {r}");
     }
+}
+
+#[test]
+fn evolutionary_options_survive_a_solve_with_another_method() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=3*A1")]);
+    let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "grg", "populationSize": 40, "mutationRate": 0.2, "randomSeed": 7, "convergence": 0.001, "generationsWithoutImprovement": 25, "requireBounds": false});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["model"]["populationSize"].as_f64(), Some(40.0), "{r}");
+    // The saved model keeps them for the next time the method is Evolutionary.
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    let f = |k: &str| m[k].as_f64();
+    assert_eq!((f("populationSize"), f("mutationRate"), f("randomSeed")), (Some(40.0), Some(0.2), Some(7.0)), "{m}");
+    assert_eq!((f("convergence"), f("generationsWithoutImprovement"), m["requireBounds"].as_bool()), (Some(0.001), Some(25.0), Some(false)));
 }
 
 #[test]

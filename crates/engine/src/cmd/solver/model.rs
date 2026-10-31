@@ -399,14 +399,14 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
     put("solver_eng".into(), eng.into());
     put(EVALS_NAME.into(), m.max_evals.to_string());
     put("solver_tol".into(), m.gap.to_string());
-    if m.method == Method::Evolutionary {
-        put("solver_ssz".into(), m.evo.population.to_string());
-        put("solver_mrt".into(), m.evo.mutation.to_string());
-        put("solver_rsd".into(), m.evo.seed.to_string());
-        put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
-        put("solver_cvg".into(), m.evo.convergence.to_string());
-        put(STALL_NAME.into(), m.evo.stall.to_string());
-    }
+    // The Evolutionary options are kept whatever the method, as Solver Options sets them, so
+    // switching methods doesn't lose them.
+    put("solver_ssz".into(), m.evo.population.to_string());
+    put("solver_mrt".into(), m.evo.mutation.to_string());
+    put("solver_rsd".into(), m.evo.seed.to_string());
+    put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
+    put("solver_cvg".into(), m.evo.convergence.to_string());
+    put(STALL_NAME.into(), m.evo.stall.to_string());
     put("solver_ver".into(), "3".into());
 }
 
@@ -514,15 +514,13 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         "maxEvaluations": m.max_evals,
         "integerOptimality": m.gap * 100.0,
     });
-    if m.method == Method::Evolutionary {
-        let e = &m.evo;
-        out["populationSize"] = json!(e.population);
-        out["mutationRate"] = json!(e.mutation);
-        out["randomSeed"] = json!(e.seed);
-        out["convergence"] = json!(e.convergence);
-        out["generationsWithoutImprovement"] = json!(e.stall);
-        out["requireBounds"] = json!(e.require_bounds);
-    }
+    let e = &m.evo;
+    out["populationSize"] = json!(e.population);
+    out["mutationRate"] = json!(e.mutation);
+    out["randomSeed"] = json!(e.seed);
+    out["convergence"] = json!(e.convergence);
+    out["generationsWithoutImprovement"] = json!(e.stall);
+    out["requireBounds"] = json!(e.require_bounds);
     out
 }
 
