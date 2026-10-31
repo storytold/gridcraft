@@ -1,5 +1,5 @@
 use super::about::about;
-use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
+use super::analysis::{analysis_toolpak, cancel_solver_options, goal_seek, in_solver_options, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
@@ -376,7 +376,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
-        open = false;
+        // In Solver Options, Escape (or closing the window) cancels the options only.
+        if in_solver_options(&d) {
+            cancel_solver_options(&mut d);
+        } else {
+            open = false;
+        }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));

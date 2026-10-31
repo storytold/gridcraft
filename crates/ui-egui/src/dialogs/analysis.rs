@@ -202,23 +202,37 @@ fn solver_options(ui: &mut egui::Ui, d: &mut Dialog, edit: impl Fn(&mut egui::Ui
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.button(" Cancel ").clicked() {
-            // Back to the parameters with the options as they were.
-            if let Some(old) = d.values.get("optionsBackup").and_then(Json::as_object).cloned() {
-                for (k, v) in old {
-                    d.values.insert(k, v);
-                }
-            }
-            done = true;
+            cancel_solver_options(d);
         }
         if ui.button("  OK  ").clicked() {
             done = true;
         }
     });
     if done {
-        d.values.insert("optionsView".into(), json!(false));
-        d.values.remove("optionsBackup");
-        d.title = "Solver Parameters".into();
+        close_solver_options(d);
     }
+}
+
+/// Whether the Solver dialog shows its Solver Options.
+pub(super) fn in_solver_options(d: &Dialog) -> bool {
+    d.name == "solver" && d.values.get("optionsView").and_then(Json::as_bool) == Some(true)
+}
+
+/// Solver Options › Cancel (also Escape or closing the window there): back to the parameters
+/// with the options as they were.
+pub(super) fn cancel_solver_options(d: &mut Dialog) {
+    if let Some(old) = d.values.get("optionsBackup").and_then(Json::as_object).cloned() {
+        for (k, v) in old {
+            d.values.insert(k, v);
+        }
+    }
+    close_solver_options(d);
+}
+
+fn close_solver_options(d: &mut Dialog) {
+    d.values.insert("optionsView".into(), json!(false));
+    d.values.remove("optionsBackup");
+    d.title = "Solver Parameters".into();
 }
 
 /// Removes the model's options (the Solver Options fields and Require Bounds) from the form. A

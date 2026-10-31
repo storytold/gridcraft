@@ -1004,6 +1004,29 @@ fn solver_reset_all_resets_the_options() {
 }
 
 #[test]
+fn escape_in_solver_options_cancels_the_options_only() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    // A parameter edited before opening Options stays; the option edited there is undone.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("constraints".into(), json!(["A1 <= 9"]));
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("maxEvaluations".into(), json!("7"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let d = h.state().dialog.as_ref().expect("Escape leaves the Solver dialog open");
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    assert_eq!(d.values.get("constraints"), Some(&json!(["A1 <= 9"])));
+    // In the parameters, Escape closes the dialog as before.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
