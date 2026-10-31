@@ -53,6 +53,7 @@ pub mod theme;
 mod updates_ui;
 pub mod widgets;
 mod window_ui;
+pub mod wordart;
 
 pub use window_ui::WindowUi;
 

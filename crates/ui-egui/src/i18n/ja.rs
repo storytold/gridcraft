@@ -104,6 +104,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Shapes", "図形"),
     ("Icons", "アイコン"),
     ("Text\nBox", "テキスト ボックス"),
+    ("Word\nArt", "ワードアート"),
+    ("Insert WordArt", "ワードアートの挿入"),
     ("Comment", "コメント"),
     ("New\nComment", "新しいコメント"),
     ("New Note", "新しいメモ"),
