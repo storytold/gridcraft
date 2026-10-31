@@ -56,6 +56,11 @@ pub struct KeptReader {
 }
 
 impl KeptReader {
+    /// Whether unmodelled content is kept for this package (not for Strict Open XML files).
+    pub fn keeps(&self) -> bool {
+        self.on
+    }
+
     pub fn new(cx: &mut Ctx<'_>) -> KeptReader {
         let mut k = KeptReader {
             on: true,
@@ -268,18 +273,8 @@ impl KeptReader {
             x.push_str("/>");
             p.elements.push(PreservedXml { slot: "fileVersion".into(), xml: x });
         }
-        let calc_features = wb_xml
-            .child("extLst")
-            .and_then(|l| l.kids("ext").find(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(CALC_FEATURES_URI))))
-            .and_then(|e| e.child("calcFeatures"));
-        if let Some(c) = calc_features {
-            let mut x = format!("<ext uri=\"{CALC_FEATURES_URI}\" xmlns:xcalcf=\"{NS_CALC_FEATURES}\"><xcalcf:calcFeatures>");
-            for name in c.kids("feature").filter_map(|f| f.attr("name")) {
-                let _ = write!(x, "<xcalcf:feature name=\"{}\"/>", esc_attr(name));
-            }
-            x.push_str("</xcalcf:calcFeatures></ext>");
-            p.elements.push(PreservedXml { slot: "ext".into(), xml: x });
-        }
+        // calcFeatures and the self-contained extensions (x14/x15 workbookPr, Mac entries).
+        crate::extlist::keep_workbook(cx, wb_xml.child("extLst"), &mut p);
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
