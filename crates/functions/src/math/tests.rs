@@ -180,7 +180,8 @@ fn arithmetic() {
     close(ev2("POWER", -2.0, 3.0), -8.0);
     is_err(ev2("POWER", 0.0, 0.0), Num);
     is_err(ev2("POWER", 0.0, -1.0), Div0);
-    is_err(ev2("POWER", -8.0, 1.0 / 3.0), Num);
+    is_err(ev2("POWER", -8.0, 2.0 / 3.0), Num);
+    is_err(ev2("POWER", -8.0, 0.25), Num);
     is_err(ev2("POWER", 10.0, 400.0), Num);
     close(ev1("EXP", 1.0), std::f64::consts::E);
     close(ev2("LOG", 8.0, 2.0), 3.0);
@@ -427,6 +428,50 @@ fn criteria_functions() {
     is_err(ev("SUMIFS", vec![rf(qty.clone()), rf(row(&[1.0, 2.0])), t("1")]), CellError::Value);
     is_err(ev("COUNTIFS", vec![rf(qty.clone()), t(">1"), rf(qty)]), CellError::Value);
     is_err(ev("SUMIF", vec![rf(col(&[1.0, 2.0])), t(">0"), rf(arr(vec![vec![Value::Error(NA)], vec![nv(1.0)]]))]), NA);
+}
+
+#[test]
+fn power_of_a_negative_base_takes_odd_roots() {
+    // Observed in Excel: the reciprocal of the power, at 15 significant digits, must be an odd
+    // whole number below 2147483647.
+    close(ev2("POWER", -8.0, 1.0 / 3.0), -2.0);
+    close(ev2("POWER", -27.0, 1.0 / 3.0), -3.0);
+    close(ev2("POWER", -32.0, 0.2), -2.0);
+    close(ev2("POWER", -8.0, -1.0 / 3.0), -0.5);
+    close(ev2("POWER", -8.0, 0.333_333_333_333_333), -2.0);
+    close(ev2("POWER", -8.0, 1.0 / 2_147_483_645.0), -1.000_000_000_968_32);
+    is_err(ev2("POWER", -8.0, 0.333_333_333_333_33), Num);
+    is_err(ev2("POWER", -8.0, 1.0 / 1.5), Num);
+    is_err(ev2("POWER", -8.0, 0.5), Num);
+    is_err(ev2("POWER", -8.0, 1.0 / 2_147_483_647.0), Num);
+    is_err(ev2("POWER", -8.0, 1e-15), Num);
+    // Whole powers of a negative base are unchanged.
+    close(ev2("POWER", -2.0, 3.0), -8.0);
+    close(ev2("POWER", -2.0, 2.0), 4.0);
+}
+
+#[test]
+fn criteria_range_ref_errors_are_the_result() {
+    let (names, qty) = data();
+    let refe = || e(CellError::Ref);
+    is_err(ev("SUMIFS", vec![refe(), rf(names.clone()), t("apple")]), CellError::Ref);
+    is_err(ev("SUMIFS", vec![refe(), refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("SUMIFS", vec![rf(qty.clone()), refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("SUMIFS", vec![rf(qty.clone()), rf(names.clone()), t("apple"), refe(), n(2.0)]), CellError::Ref);
+    is_err(ev("SUMIF", vec![refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("SUMIF", vec![rf(qty.clone()), n(1.0), refe()]), CellError::Ref);
+    is_err(ev("COUNTIF", vec![refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("COUNTIFS", vec![rf(qty.clone()), n(1.0), refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("AVERAGEIF", vec![refe(), n(1.0)]), CellError::Ref);
+    is_err(ev("AVERAGEIF", vec![rf(qty.clone()), n(1.0), refe()]), CellError::Ref);
+    is_err(ev("AVERAGEIFS", vec![refe(), rf(names.clone()), t("apple")]), CellError::Ref);
+    is_err(ev("MAXIFS", vec![refe(), rf(names.clone()), t("apple")]), CellError::Ref);
+    is_err(ev("MINIFS", vec![rf(qty.clone()), refe(), n(1.0)]), CellError::Ref);
+    // A #REF! criterion only matches nothing.
+    close(ev("SUMIFS", vec![rf(qty.clone()), rf(qty.clone()), refe()]), 0.0);
+    close(ev("COUNTIF", vec![rf(qty.clone()), refe()]), 0.0);
+    // A referenced cell that holds #REF! is a value in the range, as before.
+    close(ev("COUNTIF", vec![rf(Value::Error(CellError::Ref)), n(1.0)]), 0.0);
 }
 
 #[test]
