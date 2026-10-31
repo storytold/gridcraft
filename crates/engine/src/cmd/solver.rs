@@ -2,7 +2,7 @@
 //! or hit a value in an objective cell, subject to constraints.
 //!
 //! The workbook is the model: every evaluation sets the variable cells on a copy of the
-//! workbook and recalculates their dependents ([`Trial`]), so any formula works. Two methods:
+//! workbook and recalculates their dependents (`Trial`), so any formula works. Two methods:
 //!
 //! - **Simplex LP**: the model is linearised from `n + 1` evaluations and checked for linearity
 //!   at one more point; then a dense two-phase simplex (Dantzig's rule, Bland's rule when it

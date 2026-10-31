@@ -65,7 +65,7 @@ fn check_size(m: &Macro) -> Result<(), String> {
     Ok(())
 }
 
-/// Leaves out the last top-level steps of `m` until it fits the size [`check_size`] allows, and
+/// Leaves out the last top-level steps of `m` until it fits the size `check_size` allows, and
 /// returns how many steps it left out (a recording cut to fit, as at the step limit). Each step's
 /// JSON is measured once.
 pub fn fit_size(m: &mut Macro) -> usize {

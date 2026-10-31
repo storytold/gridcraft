@@ -117,7 +117,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
 
 /// Large split button (Formulas › AutoSum): the icon runs the default action, the label and its
 /// arrow open the menu. Returns the (main, arrow) responses; their accessible names are the label
-/// and "<label> options".
+/// and "`<label> options`".
 pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
     let label = tr(ui, label);

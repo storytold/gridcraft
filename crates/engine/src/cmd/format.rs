@@ -817,6 +817,22 @@ use sizes::{autofit_cols, autofit_rows, col_width, default_width, hide, row_heig
 
 #[cfg(test)]
 mod tests {
+    /// AutoFit sends the region-rendered cell text to the text-width callback.
+    #[test]
+    fn autofit_measures_the_text_in_the_display_region() {
+        let width = |tag: &str| {
+            let mut s = Session::new();
+            s.display_locale = gridcraft_numfmt::Locale::from_tag(tag);
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [[45292]]})).unwrap();
+            s.execute("home.numberFormat", json!({"range": "A1", "format": "m/d/yyyy"})).unwrap();
+            s.execute("home.autofitColumnWidth", json!({"cols": "A:A"})).unwrap();
+            s.active().unwrap().wb.active().unwrap().col_width(0)
+        };
+        // 01.01.2024 is wider than 1/1/2024.
+        assert!(width("de-CH") > width("en-US"));
+    }
+
     use super::*;
 
     #[test]

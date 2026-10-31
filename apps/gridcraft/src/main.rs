@@ -233,6 +233,7 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Launch the native workbook UI and initialize its regional display locale before painting.
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -312,6 +313,8 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    // Cells show numbers and dates in the system's region (separators, short date).
+    app.session.display_locale = gridcraft_ui_egui::grid::system_number_locale();
     app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;

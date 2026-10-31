@@ -94,6 +94,7 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
 }
 
 /// Text for a value with General narrowing to the available width.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -102,6 +103,7 @@ pub(super) fn display_text(
     st: &Style,
     width_px: f32,
     char_w: f32,
+    loc: &gridcraft_engine::numfmt::Locale,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -121,11 +123,11 @@ pub(super) fn display_text(
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
-            Some(t) => (t, None, true, None),
+            Some(t) => (gridcraft_engine::numfmt::localize_general(t, loc), None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
-    let f = gridcraft_engine::display::format(v, code, wb);
+    let f = gridcraft_engine::display::format_num_fmt_in(v, &st.num_fmt, wb, loc);
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 

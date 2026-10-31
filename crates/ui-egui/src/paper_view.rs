@@ -132,6 +132,8 @@ pub(crate) struct PagePaintInput<'a> {
     pub(crate) tokens: &'a Tokens,
 }
 
+/// Paint visible on-screen Page Layout cells using the session display locale
+/// and each page's content clipping; return their interaction regions.
 pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
     let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
@@ -162,7 +164,18 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(grid::QuadrantPaint { painter: &pc, geo, workbook: wb, sheet_index: si, sheet: sh, rows, cols, cf, tokens: t });
+        grid::paint_quadrant(grid::QuadrantPaint {
+            painter: &pc,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows,
+            cols,
+            cf,
+            tokens: t,
+            locale: &app.session.display_locale,
+        });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
@@ -690,7 +703,7 @@ const MIN_CONTENT_PT: f64 = 36.0;
 const EDGE_GRAB: f32 = 4.0;
 
 /// Margin (inches, rounded to 0.01) for an edge dragged to `rel_pt` points from the page's
-/// left/top edge. The margin stays on the page and leaves [`MIN_CONTENT_PT`] between the two
+/// left/top edge. The margin stays on the page and leaves `MIN_CONTENT_PT` between the two
 /// margins of its axis. `None` for NaN/infinite input or a page without a size.
 pub fn margin_from_drag(edge: Edge, rel_pt: f64, page_pt: (f32, f32), margins_in: [f32; 6]) -> Option<f32> {
     let page = f64::from(if edge.horizontal() { page_pt.0 } else { page_pt.1 });
