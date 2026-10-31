@@ -356,7 +356,7 @@ impl KeptReader {
                 Ok(()) => {
                     let xml = format!("<legacyDrawingHF xmlns:r=\"{NS_REL}\" r:id=\"{}\"/>", esc_attr(&r.id));
                     p.elements.push(PreservedXml { slot: "legacyDrawingHF".into(), xml });
-                    cx.warn(format!("sheet \"{name}\": pictures in the header and footer are printed and kept for saving, but not shown in Page Layout view and can't be edited"));
+                    cx.warn(format!("sheet \"{name}\": pictures in the header and footer print and show in Page Layout view where their section has &G and the image can be read; they are kept for saving but can't be edited"));
                 }
                 Err(why) => cx.warn(format!("sheet \"{name}\": header and footer pictures were dropped: {why}")),
             }

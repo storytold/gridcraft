@@ -1464,3 +1464,19 @@ fn a_picture_decoded_at_its_own_size_serves_every_larger_box() {
     assert_ne!(small, larger, "a shrunk picture is decoded again for a larger box");
     assert_eq!(cache.tries(), 3);
 }
+
+/// A section's lines split around its `&G`, and `&G` takes no room when there is no picture to
+/// draw.
+#[test]
+fn section_lines_split_around_the_picture() {
+    let cx = HfContext::default();
+    let [l, _, r] = expand_header_footer("&LTop\nA&GB&RNo&G", &cx);
+    let lines = section_lines(&l, true);
+    assert_eq!(
+        lines,
+        [HfLine { before: "Top".into(), after: String::new(), picture: false }, HfLine { before: "A".into(), after: "B".into(), picture: true },]
+    );
+    // Without a picture to draw, &G takes no room.
+    assert_eq!(section_lines(&l, false)[1], HfLine { before: "AB".into(), after: String::new(), picture: false });
+    assert_eq!(section_lines(&r, true), [HfLine { before: "No".into(), after: String::new(), picture: true }]);
+}
