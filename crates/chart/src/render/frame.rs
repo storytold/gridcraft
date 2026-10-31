@@ -97,144 +97,174 @@ impl ValAxis<'_> {
 }
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
-pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
+///
+/// Which category axis mirrors is decided here rather than by each caller: only a labelled one has
+/// an order for `orientation="maxMin"` to reverse, so a scatter's numeric x axis never mirrors
+/// (#1895).
+pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, chart: &Chart) -> Bx {
+    let cat_rev = chart.cat_reverse && matches!(cat, CatAxis::Labels(..));
+    if !horizontal { vertical_frame(ctx, area, cat, y, y2, chart, cat_rev) } else { horizontal_frame(ctx, area, cat, y, chart, cat_rev) }
+}
+
+/// The frame of a column, bar, line or area chart: value axis up the sheet, categories along its
+/// bottom (#1687, #1895).
+fn vertical_frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, chart: &Chart, cat_rev: bool) -> Bx {
+    let grid = chart.gridlines;
+    let val_rev = chart.val_reverse;
     let ls = LABEL_SIZE;
     let lh = ls * 1.4;
     let ylabels = y.labels();
     let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
-    if !horizontal {
-        let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
-        let y2labels = y2.map(ValAxis::labels);
-        let right = match (&y2labels, &cat) {
-            (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
-            (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
-            _ => 4.0,
-        };
-        let levels = match &cat {
-            CatAxis::Labels(_, o) => o.len() as f32,
-            CatAxis::Numeric(..) => 0.0,
-        };
-        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
-        if !plot.ok() {
-            return plot;
+    let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
+    let y2labels = y2.map(ValAxis::labels);
+    let right = match (&y2labels, &cat) {
+        (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
+        (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
+        _ => 4.0,
+    };
+    let levels = match &cat {
+        CatAxis::Labels(_, o) => o.len() as f32,
+        CatAxis::Numeric(..) => 0.0,
+    };
+    let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
+    if !plot.ok() {
+        return plot;
+    }
+    // `orientation="maxMin"` mirrors the scale (#1687).
+    let yf = |v: f64| if val_rev { 1.0 - y.scale.frac(v) } else { y.scale.frac(v) };
+    for (v, t) in &ylabels {
+        let yy = plot.bottom() - yf(*v) * plot.h;
+        if grid {
+            ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
         }
-        for (v, t) in &ylabels {
-            let yy = plot.bottom() - y.scale.frac(*v) * plot.h;
-            if grid {
-                ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
+        ctx.text(plot.x - 4.0, yy, t, ls, TEXT, (HAlign::Right, VAlign::Middle));
+    }
+    if let (Some(a), Some(l)) = (y2, &y2labels) {
+        for (v, t) in l {
+            let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
+            ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, (HAlign::Left, VAlign::Middle));
+        }
+    }
+    let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
+    let y0 = plot.bottom() - yf(zero) * plot.h;
+    ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
+    match cat {
+        CatAxis::Labels(l, outer) => {
+            let n = l.len().max(1);
+            let cw = plot.w / n as f32;
+            let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+            let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
+            for (j, t) in l.iter().enumerate().step_by(k) {
+                let jr = if cat_rev { n - 1 - j } else { j };
+                let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
+                ctx.text(plot.x + (jr as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
             }
-            ctx.text(plot.x - 4.0, yy, t, ls, TEXT, (HAlign::Right, VAlign::Middle));
-        }
-        if let (Some(a), Some(l)) = (y2, &y2labels) {
-            for (v, t) in l {
-                let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
-                ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, (HAlign::Left, VAlign::Middle));
-            }
-        }
-        let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
-        ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
-        match cat {
-            CatAxis::Labels(l, outer) => {
-                let n = l.len().max(1);
-                let cw = plot.w / n as f32;
-                let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
-                let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
-                for (j, t) in l.iter().enumerate().step_by(k) {
-                    let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
-                }
-                // Outer levels, one row each below the labels: a group's name centred under its
-                // categories, and a separator at each group boundary down through the rows.
-                for (i, level) in outer.iter().enumerate() {
-                    let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
-                    for (first, end) in level_groups(level, n) {
-                        let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
-                        if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                            let t = ctx.fit(t, ls, x1 - x0 - 2.0);
-                            ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
-                        }
-                        if first > 0 {
-                            ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
-                        }
+            // Outer levels, one row each below the labels: a group's name centred under its
+            // categories, and a separator at each group boundary down through the rows.
+            for (i, level) in outer.iter().enumerate() {
+                let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
+                for (first, end) in level_groups(level, n) {
+                    // A reversed axis mirrors the groups with their categories (#1687).
+                    let (a, b) = if cat_rev { (n - end, n - first) } else { (first, end) };
+                    let (x0, x1) = (plot.x + a as f32 * cw, plot.x + b as f32 * cw);
+                    if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                        let t = ctx.fit(t, ls, x1 - x0 - 2.0);
+                        ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
                     }
-                    ctx.vline(plot.right(), plot.bottom(), top + lh - 2.0, AXIS, 0.75);
+                    if a > 0 {
+                        ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
+                    }
                 }
-            }
-            CatAxis::Numeric(s, f) => {
-                let ticks = s.ticks();
-                let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, Some(s.step))).collect();
-                let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
-                let slot = plot.w / ticks.len().max(1) as f32;
-                let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
-                for (v, t) in ticks.iter().zip(&labels).step_by(k) {
-                    let xx = plot.x + s.frac(*v) * plot.w;
-                    ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
-                }
-                if s.min <= 0.0 && s.max >= 0.0 {
-                    let xx = plot.x + s.frac(0.0) * plot.w;
-                    ctx.vline(xx, plot.y, plot.bottom(), AXIS, 0.75);
-                }
+                ctx.vline(plot.right(), plot.bottom(), top + lh - 2.0, AXIS, 0.75);
             }
         }
-        plot
-    } else {
-        let (labels, outer): (Vec<String>, &[Vec<String>]) = match cat {
-            CatAxis::Labels(l, o) => (l.to_vec(), o),
-            CatAxis::Numeric(..) => (vec![], &[]),
-        };
-        let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
-        // Outer levels stand in columns left of the labels, each as wide as its longest name.
-        let level_w: Vec<f32> =
-            outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
-        let levels_w: f32 = level_w.iter().sum();
-        let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
-        let plot = Bx { x: area.x + lw + levels_w, y: area.y + 2.0, w: area.w - lw - levels_w - right, h: area.h - lh - 6.0 };
-        if !plot.ok() {
-            return plot;
-        }
-        let vw = maxw(ctx, &ylabels);
-        let slot = plot.w / ylabels.len().max(1) as f32;
-        let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
-        for (i, (v, t)) in ylabels.iter().enumerate() {
-            let xx = plot.x + y.scale.frac(*v) * plot.w;
-            if grid {
-                ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
-            }
-            if i % k == 0 {
+        CatAxis::Numeric(s, f) => {
+            let ticks = s.ticks();
+            let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, Some(s.step))).collect();
+            let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+            let slot = plot.w / ticks.len().max(1) as f32;
+            let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
+            let cf = |v: f64| if cat_rev { 1.0 - s.frac(v) } else { s.frac(v) };
+            for (v, t) in ticks.iter().zip(&labels).step_by(k) {
+                let xx = plot.x + cf(*v) * plot.w;
                 ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
             }
-        }
-        let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let x0 = plot.x + y.scale.frac(zero) * plot.w;
-        ctx.vline(x0, plot.y, plot.bottom(), AXIS, 0.75);
-        let n = labels.len().max(1);
-        let ch = plot.h / n as f32;
-        let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
-        for (j, t) in labels.iter().enumerate().step_by(k) {
-            let t = ctx.fit(t, ls, lw - 6.0);
-            ctx.text(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, (HAlign::Right, VAlign::Middle));
-        }
-        // Outer levels: a group's name centred beside its categories, separators at the
-        // boundaries running right to the axis.
-        let mut x1 = plot.x - lw;
-        for (level, w) in outer.iter().zip(&level_w) {
-            let x0 = x1 - w;
-            for (first, end) in level_groups(level, n) {
-                let (y0, y1) = (plot.bottom() - end as f32 * ch, plot.bottom() - first as f32 * ch);
-                if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                    let t = ctx.fit(t, ls, w - 4.0);
-                    ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, (HAlign::Center, VAlign::Middle));
-                }
-                if first > 0 {
-                    ctx.hline(x0, plot.x, y1, AXIS, 0.75);
-                }
+            if s.min <= 0.0 && s.max >= 0.0 {
+                let xx = plot.x + cf(0.0) * plot.w;
+                ctx.vline(xx, plot.y, plot.bottom(), AXIS, 0.75);
             }
-            ctx.hline(x0, plot.x, plot.y, AXIS, 0.75);
-            x1 = x0;
         }
-        plot
     }
+    plot
+}
+
+/// The frame of a horizontal chart: value axis across the sheet, categories down its left (#1687,
+/// #1895).
+fn horizontal_frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, chart: &Chart, cat_rev: bool) -> Bx {
+    let grid = chart.gridlines;
+    let val_rev = chart.val_reverse;
+    let ls = LABEL_SIZE;
+    let lh = ls * 1.4;
+    let ylabels = y.labels();
+    let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+    let (labels, outer): (Vec<String>, &[Vec<String>]) = match cat {
+        CatAxis::Labels(l, o) => (l.to_vec(), o),
+        CatAxis::Numeric(..) => (vec![], &[]),
+    };
+    let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
+    // Outer levels stand in columns left of the labels, each as wide as its longest name.
+    let level_w: Vec<f32> =
+        outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+    let levels_w: f32 = level_w.iter().sum();
+    let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
+    let plot = Bx { x: area.x + lw + levels_w, y: area.y + 2.0, w: area.w - lw - levels_w - right, h: area.h - lh - 6.0 };
+    if !plot.ok() {
+        return plot;
+    }
+    let vw = maxw(ctx, &ylabels);
+    let slot = plot.w / ylabels.len().max(1) as f32;
+    let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
+    let yf = |v: f64| if val_rev { 1.0 - y.scale.frac(v) } else { y.scale.frac(v) };
+    for (i, (v, t)) in ylabels.iter().enumerate() {
+        let xx = plot.x + yf(*v) * plot.w;
+        if grid {
+            ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
+        }
+        if i % k == 0 {
+            ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
+        }
+    }
+    let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
+    let x0 = plot.x + yf(zero) * plot.w;
+    ctx.vline(x0, plot.y, plot.bottom(), AXIS, 0.75);
+    let n = labels.len().max(1);
+    let ch = plot.h / n as f32;
+    let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
+    for (j, t) in labels.iter().enumerate().step_by(k) {
+        let jr = if cat_rev { n - 1 - j } else { j };
+        let t = ctx.fit(t, ls, lw - 6.0);
+        ctx.text(plot.x - 4.0, plot.bottom() - (jr as f32 + 0.5) * ch, &t, ls, TEXT, (HAlign::Right, VAlign::Middle));
+    }
+    // Outer levels: a group's name centred beside its categories, separators at the
+    // boundaries running right to the axis.
+    let mut x1 = plot.x - lw;
+    for (level, w) in outer.iter().zip(&level_w) {
+        let x0 = x1 - w;
+        for (first, end) in level_groups(level, n) {
+            let (a, b) = if cat_rev { (n - end, n - first) } else { (first, end) };
+            let (y0, y1) = (plot.bottom() - b as f32 * ch, plot.bottom() - a as f32 * ch);
+            if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                let t = ctx.fit(t, ls, w - 4.0);
+                ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, (HAlign::Center, VAlign::Middle));
+            }
+            if a > 0 {
+                ctx.hline(x0, plot.x, y1, AXIS, 0.75);
+            }
+        }
+        ctx.hline(x0, plot.x, plot.y, AXIS, 0.75);
+        x1 = x0;
+    }
+    plot
 }
 
 pub(super) fn value_range(it: impl Iterator<Item = f64>) -> Option<(f64, f64)> {

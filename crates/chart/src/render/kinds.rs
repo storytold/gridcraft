@@ -40,17 +40,24 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
     let fc = Fmt::new("General");
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart);
     if !plot.ok() {
         return;
     }
     let cw = plot.w / bins as f32;
     for (b, c) in counts.iter().enumerate() {
-        let top = plot.bottom() - ys.frac(*c as f64) * plot.h;
-        let x = plot.x + b as f32 * cw;
-        ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
+        // Bars grow from the zero baseline, which sits at the top when the axis is reversed.
+        let len = ys.frac(*c as f64) * plot.h;
+        let (top, label) = if chart.val_reverse {
+            (plot.y, (plot.y + len + 2.0, VAlign::Top))
+        } else {
+            (plot.bottom() - len, (plot.bottom() - len - 2.0, VAlign::Bottom))
+        };
+        let bi = if chart.cat_reverse { bins - 1 - b } else { b };
+        let x = plot.x + bi as f32 * cw;
+        ctx.rect(x, top, cw, len, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
-            ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            ctx.text(x + cw / 2.0, label.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, label.1));
         }
     }
 }
@@ -92,24 +99,32 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
     let f = Fmt::new(&s.number_format);
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart);
     if !plot.ok() {
         return;
     }
     let cw = plot.w / ncat as f32;
     let bw = cw / 1.5;
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for (j, (b, t, kind)) in bars.iter().enumerate() {
         let color = match kind {
             1 => UP,
             2 => DOWN,
             _ => s.color,
         };
-        let x = plot.x + (j as f32 + 0.5) * cw - bw / 2.0;
+        let jr = if chart.cat_reverse { ncat - 1 - j } else { j };
+        let x = plot.x + (jr as f32 + 0.5) * cw - bw / 2.0;
         let (yb, yt) = (vy(*b), vy(*t));
         ctx.rect(x, yb.min(yt), bw, (yb - yt).abs().max(0.5), color, None);
         if j + 1 < bars.len() && ncat <= 500 {
-            ctx.out.push(Prim::Line { pts: vec![[x + bw, yt], [x + cw, yt]], color: AXIS, width: 0.75, dash: true });
+            // Link this bar to the next one in display order: to its right normally, to its left when reversed.
+            let jr2 = if chart.cat_reverse { ncat - 2 - j } else { j + 1 };
+            let x2 = plot.x + (jr2 as f32 + 0.5) * cw - bw / 2.0;
+            let (a, e) = if chart.cat_reverse { (x, x2 + bw) } else { (x + bw, x2) };
+            ctx.out.push(Prim::Line { pts: vec![[a, yt], [e, yt]], color: AXIS, width: 0.75, dash: true });
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
@@ -387,14 +402,17 @@ pub(super) fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: 
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart);
     if !plot.ok() {
         return;
     }
     let n = data.series.len().max(1);
     let cw = plot.w / n as f32;
     let bw = (cw * 0.4).min(80.0);
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for (i, s) in data.series.iter().enumerate() {
         let mut v: Vec<f64> = s.values.iter().flatten().copied().collect();
         if v.is_empty() {
@@ -408,12 +426,14 @@ pub(super) fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: 
         let wlo = v.iter().copied().find(|x| *x >= flo).unwrap_or(q1);
         let whi = v.iter().rev().copied().find(|x| *x <= fhi).unwrap_or(q3);
         let mean = v.iter().sum::<f64>() / v.len() as f64;
-        let c = plot.x + (i as f32 + 0.5) * cw;
+        let ir = if chart.cat_reverse { n - 1 - i } else { i };
+        let c = plot.x + (ir as f32 + 0.5) * cw;
         ctx.vline(c, vy(whi), vy(q3), s.color, 1.25);
         ctx.vline(c, vy(q1), vy(wlo), s.color, 1.25);
         ctx.hline(c - bw / 4.0, c + bw / 4.0, vy(whi), s.color, 1.25);
         ctx.hline(c - bw / 4.0, c + bw / 4.0, vy(wlo), s.color, 1.25);
-        let (yt, yb) = (vy(q3), vy(q1));
+        // A reversed value axis puts q3 below q1: the box keeps its full height (#1895 review).
+        let (yt, yb) = (vy(q3).min(vy(q1)), vy(q3).max(vy(q1)));
         ctx.rect(c - bw / 2.0, yt, bw, (yb - yt).max(0.5), s.color, None);
         ctx.hline(c - bw / 2.0, c + bw / 2.0, vy(med), WHITE, 1.5);
         let (mx, my, d) = (c, vy(mean), 3.0);
@@ -436,7 +456,7 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart);
     if !plot.ok() {
         return;
     }
@@ -451,9 +471,13 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let get = |s: Option<&SeriesData>, j: usize| s.and_then(|s| s.values.get(j).copied().flatten());
     let cw = plot.w / ncat as f32;
     let tick = (cw * 0.25).max(1.0);
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for j in 0..ncat {
-        let c = plot.x + (j as f32 + 0.5) * cw;
+        let jr = if chart.cat_reverse { ncat - 1 - j } else { j };
+        let c = plot.x + (jr as f32 + 0.5) * cw;
         if let (Some(h), Some(l)) = (get(high, j), get(low, j)) {
             ctx.vline(c, vy(h), vy(l), STOCK, 1.25);
         }
