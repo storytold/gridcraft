@@ -160,7 +160,7 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     if !b.first().is_some_and(|c| c.is_ascii_digit() || *c == b'.') {
         return None;
     }
-    let mut n: f64 = digits.parse().ok()?;
+    let mut n: f64 = keep_15_digits(&digits).parse().ok()?;
     if !n.is_finite() {
         return None;
     }
@@ -183,6 +183,35 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
         None
     };
     Some((n, fmt))
+}
+
+/// Excel keeps the first 15 significant digits of a number as typed and drops the rest (it does not
+/// round): `12345678901234567890` is stored as `12345678901234500000`, `0.12345678901234567` as
+/// `0.123456789012345`. Takes plain ASCII number text (digits, `.`, an optional exponent).
+pub fn keep_15_digits(num: &str) -> String {
+    let (mant, exp) = num.find(['e', 'E']).map_or((num, ""), |i| num.split_at(i));
+    let (int, frac) = mant.split_once('.').map_or((mant, None), |(i, f)| (i, Some(f)));
+    let mut left = 15;
+    let mut seen = false;
+    let mut out = String::with_capacity(num.len());
+    let mut keep = |c: char, is_int: bool, out: &mut String| {
+        seen |= c != '0';
+        if seen && left == 0 {
+            if is_int {
+                out.push('0');
+            }
+        } else {
+            left -= usize::from(seen);
+            out.push(c);
+        }
+    };
+    int.chars().for_each(|c| keep(c, true, &mut out));
+    if let Some(f) = frac {
+        out.push('.');
+        f.chars().for_each(|c| keep(c, false, &mut out));
+    }
+    out.push_str(exp);
+    out
 }
 
 /// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
@@ -393,6 +422,23 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    /// Excel keeps 15 significant digits of typed numbers (measured through COM): `12345678901234567890`
+    /// is stored as 1.23456789012345E+19 and `0.12345678901234567` as 0.123456789012345.
+    #[test]
+    fn typed_numbers_keep_15_significant_digits() {
+        let n = |s: &str| p(s).value;
+        assert_eq!(n("12345678901234567890"), Value::number(12345678901234500000.0));
+        assert_eq!(n("0.12345678901234567"), Value::number(0.123456789012345));
+        assert_eq!(n("1234567890123456"), Value::number(1234567890123450.0));
+        assert_eq!(n("-1234567890123456"), Value::number(-1234567890123450.0));
+        assert_eq!(n("1.2345678901234567E5"), Value::number(123456.789012345));
+        assert_eq!(n("1.7976931348623157E308"), Value::number(1.79769313486231e308));
+        assert_eq!(n("123456789012345"), Value::number(123456789012345.0));
+        assert_eq!(n("0.1"), Value::number(0.1));
+        assert_eq!(parse_number_text("0.12345678901234567"), Some(0.123456789012345));
+        assert_eq!(n("0.000123456789012345678"), Value::number(0.000123456789012345));
     }
 
     /// #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
