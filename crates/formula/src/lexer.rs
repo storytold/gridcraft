@@ -127,12 +127,14 @@ fn error_literal(
     out: &mut Vec<Token>,
 ) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    // The entry language's spelling first (`#WERT!`), then the canonical one.
-    let spellings =
-        CellError::ALL.iter().map(|&error| (error, locale.error_name(error))).chain(CellError::ALL.iter().map(|&error| (error, error.as_str())));
-    let (error, text) = spellings
-        .into_iter()
-        .find(|(_, name)| rest.get(..name.len()).is_some_and(|text| text.eq_ignore_ascii_case(name)))
+    // The entry language's spelling first (`#WERT!`), then a canonical one that differs (`#VALUE!`).
+    let localized = CellError::ALL.iter().map(|&error| (error, locale.error_name(error)));
+    let canonical = CellError::ALL.iter().filter(|&&error| locale.error_name(error) != error.as_str()).map(|&error| (error, error.as_str()));
+    // Compare as many characters as the name has: `#überlauf!` is `#ÜBERLAUF!`.
+    let prefix = |name: &str| rest.char_indices().nth(name.chars().count()).map_or(rest, |(at, _)| rest.get(..at).unwrap_or(rest));
+    let (error, text) = localized
+        .chain(canonical)
+        .find(|(_, name)| crate::same_name(prefix(name), name))
         .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
     let end = i + text.chars().count();
     emit(src, chars, out, Tok::Error(error), start, end);

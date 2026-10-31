@@ -62,10 +62,10 @@ impl FormulaLocale {
         }
     }
     pub fn function_name(self, canonical: &str) -> &str {
-        self.names().iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, local)| *local).unwrap_or(canonical)
+        self.names().iter().find(|(en, _)| crate::same_name(en, canonical)).map(|(_, local)| *local).unwrap_or(canonical)
     }
     pub fn canonical_name(self, localized: &str) -> &str {
-        self.names().iter().find(|(_, local)| local.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized)
+        self.names().iter().find(|(_, local)| crate::same_name(local, localized)).map(|(en, _)| *en).unwrap_or(localized)
     }
     /// The error value as this language writes it (`#WERT!`); untranslated errors are canonical.
     pub fn error_name(self, error: CellError) -> &'static str {
@@ -151,9 +151,9 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
 pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
     if locale == FormulaLocale::En {
         None
-    } else if name.eq_ignore_ascii_case(locale.boolean_name(true)) {
+    } else if crate::same_name(name, locale.boolean_name(true)) {
         Some(true)
-    } else if name.eq_ignore_ascii_case(locale.boolean_name(false)) {
+    } else if crate::same_name(name, locale.boolean_name(false)) {
         Some(false)
     } else {
         None

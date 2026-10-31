@@ -161,12 +161,12 @@ impl EditState {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
-        let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let word: String = before.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        // Unicode upper case: `zä` finds `ZÄHLENWENN`.
+        let u = word.to_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
         self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
@@ -180,7 +180,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| is_name_char(*c)).map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -385,6 +385,11 @@ pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, ty
 
 /// The part of `full` after the `typed` prefix, counted in characters: case folding can change
 /// a character's byte length ("ß" is two bytes, "ẞ" three).
+/// A character of a function name being typed; localized names have letters such as `Ä`.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '.' || c == '_'
+}
+
 pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)
@@ -435,6 +440,16 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn autocomplete_takes_names_with_umlauts() {
+        let names: Vec<String> = ["ZÄHLENWENN", "ZÄHLENWENNS", "ZEILE"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=1+zä".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, ["ZÄHLENWENN", "ZÄHLENWENNS"]);
+        assert!(e.accept_autocomplete());
+        assert_eq!(e.text, "=1+ZÄHLENWENN(");
     }
 
     #[test]

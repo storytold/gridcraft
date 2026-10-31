@@ -30,7 +30,8 @@ arguments and points between array columns (`{1.2;3.4}`): `=WENN(WAHR;SUMME(1,5;
 Error values in formulas are German too: `#WERT!`, `#BEZUG!`, `#ZAHL!`, `#NV`, `#DATEN_ABRUFEN` and
 `#ÜBERLAUF!`; `#NULL!`, `#DIV/0!`, `#NAME?` and `#CALC!` are the same in both. The English spelling
 is still understood when typed. Error values shown as cell results, and table specifiers (`#Alle`,
-`#Daten`), are not translated yet.
+`#Daten`), are not translated yet. Typed cell numbers take the decimal comma (`1,5`) but not yet the
+German thousands point: `1.234` is 1.234, and `1.234,5` stays text (Spanish behaves the same).
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions

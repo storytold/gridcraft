@@ -438,6 +438,15 @@ mod tests {
     }
 
     #[test]
+    fn formula_syntax_follows_the_languages_with_a_table() {
+        use gridcraft_engine::formula::FormulaLocale;
+        assert_eq!(Language::De.formula_locale(), FormulaLocale::De);
+        assert_eq!(Language::Es.formula_locale(), FormulaLocale::Es);
+        assert_eq!(Language::En.formula_locale(), FormulaLocale::En);
+        assert_eq!(Language::Fr.formula_locale(), FormulaLocale::En);
+    }
+
+    #[test]
     fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));

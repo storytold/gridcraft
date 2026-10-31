@@ -19,6 +19,8 @@ fn german_names_and_separators() {
         ("RENDITEFÄLL(A1;A2;A3;A4;A5)", "YIELDMAT(A1,A2,A3,A4,A5)"),
         ("SUMME(1,5;2,25)", "SUM(1.5,2.25)"),
         ("=wahr", "TRUE"),
+        // Case folds beyond ASCII, as in Excel.
+        ("=zählenwenn(A1:A9;\">0\")+länge(\"a\")+Kürzen(1,5)", "COUNTIF(A1:A9,\">0\")+LEN(\"a\")+TRUNC(1.5)"),
         ("FALSCH()", "FALSE()"),
         // Names German Excel keeps in English stay as typed.
         ("MAX(1;2)+INDEX(A1:B2;1;2)", "MAX(1,2)+INDEX(A1:B2,1,2)"),
@@ -61,6 +63,7 @@ fn german_error_values() {
         ("{#BEZUG!.#ZAHL!;#DIV/0!.#NAME?}", "{#REF!,#NUM!;#DIV/0!,#NAME?}"),
         ("#DATEN_ABRUFEN", "#GETTING_DATA"),
         ("#ÜBERLAUF!", "#SPILL!"),
+        ("#überlauf!+#Wert!", "#SPILL!+#VALUE!"),
         ("#CALC!", "#CALC!"),
         // The canonical spelling is still understood.
         ("WENNFEHLER(#VALUE!;#N/A)", "IFERROR(#VALUE!,#N/A)"),

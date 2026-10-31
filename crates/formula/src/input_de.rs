@@ -10,7 +10,8 @@
 //! Separators: `;` between arguments, `,` decimal, `.` between array columns, `;` between rows.
 //! `#CALC!` stays English. German Excel does not take `#ÜBERLAUF!` or `#CALC!` as typed literals;
 //! GridCraft accepts them, as it accepts `#SPILL!` in English.
-//! `[#Diese Zeile]` is accepted when typed and shown in the `@` short form.
+//! Table specifiers (`#Alle`, `#Daten`, `#Kopfzeilen`, `#Ergebnisse`, `#Diese Zeile`) are not
+//! localized yet.
 
 use gridcraft_core::CellError;
 
