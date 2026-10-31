@@ -26,6 +26,10 @@ use serde_json::{Value as Json, json};
 
 use super::{Args, USAGE, number_text, pretty};
 
+#[cfg(test)]
+mod drawing_tests;
+mod drawings;
+
 mod calc;
 mod fidelity;
 mod package;
