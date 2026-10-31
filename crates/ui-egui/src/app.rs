@@ -44,6 +44,7 @@ impl SheetApp {
             synthetic: Default::default(),
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
+            control_click: false,
             control_rx: None,
             grid: grid::GridState {
                 last_border: "bottom".into(),
