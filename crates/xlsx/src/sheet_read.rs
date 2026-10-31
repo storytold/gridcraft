@@ -504,11 +504,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
     };
-    let picture = c.attr("vm").and_then(|vm| {
+    let block = c.attr("vm").and_then(|vm| vm.parse::<usize>().ok()).and_then(|n| n.checked_sub(1));
+    let record = block.and_then(|n| cx.linked_records.get(n)).cloned().flatten();
+    let picture = c.attr("vm").filter(|_| record.is_none()).and_then(|vm| {
         if vm == "0" {
             return None;
         }
-        let picture = vm.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
+        let picture = block.and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
         if picture.is_none() {
             cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
         }
@@ -525,7 +527,16 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    // A linked record's cell holds an error for other apps; GridCraft shows its display text.
+    let value = match &record {
+        Some(record) if formula.is_none() && !record.display.is_empty() => Value::text(record.display.as_str()),
+        _ => value,
+    };
+    let has_formula = formula.is_some();
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    if let Some(record) = record.filter(|_| !has_formula) {
+        sheet.linked_records.insert(pos, record);
+    }
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

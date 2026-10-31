@@ -62,6 +62,25 @@ impl<'h> Evaluator<'h> {
                     }
                 }
             }
+            "FIELDVALUE" => {
+                if args.len() != 2 {
+                    return err(CellError::Value);
+                }
+                let field = match self.arg_val(args, 1) {
+                    Some(Value::Text(field)) => field,
+                    Some(Value::Error(error)) => return err(error),
+                    _ => return err(CellError::Value),
+                };
+                let areas = match self.eval(&args[0]) {
+                    Ev::R(areas) => areas,
+                    Ev::V(Value::Error(e)) => return err(e),
+                    _ => return err(CellError::Value),
+                };
+                let Some(area) = areas.first() else { return err(CellError::Ref) };
+                let record = self.host.workbook().sheet(area.sheet).and_then(|sheet| sheet.linked_records.get(&area.range.start));
+                // Excel's #FIELD! has no error value here yet; a missing record or field is #VALUE!.
+                record.and_then(|record| record.field(&field)).map_or(err(CellError::Value), Ev::V)
+            }
             "SHEET" | "SHEETS" => self.sheet_call(name, args),
             "OFFSET" => self.offset(args),
             "INDIRECT" => self.indirect(args),

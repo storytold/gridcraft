@@ -191,6 +191,8 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     sh.cell_pictures =
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
+    sh.linked_records =
+        std::mem::take(&mut sh.linked_records).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
@@ -451,6 +453,8 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
                 sh.cell_pictures.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, picture)| (*cell, picture.clone())).collect();
+            let records: Vec<_> =
+                sh.linked_records.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, record)| (*cell, record.clone())).collect();
             let cells = sh.take_cells(source);
             let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
             let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
@@ -474,6 +478,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             for (cell, picture) in pictures {
                 let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
                 sh.cell_pictures.insert(dest, picture);
+            }
+            for (cell, record) in records {
+                let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
+                sh.linked_records.insert(dest, record);
             }
             for (offset, info) in moved_lines {
                 sh.cols.insert(destination + offset, info);
@@ -784,6 +792,8 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     }
     sh.cell_pictures =
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
+    sh.linked_records =
+        std::mem::take(&mut sh.linked_records).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     for sp in sh.sparklines.iter_mut() {
