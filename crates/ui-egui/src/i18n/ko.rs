@@ -212,6 +212,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "이름 상자",
         "Cell Editor" => "셀 편집기",
         "Font Size" => "글꼴 크기",
+        "Furigana" => "후리가나",
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
         "Zoom" => "확대/축소",

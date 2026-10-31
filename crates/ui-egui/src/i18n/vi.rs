@@ -215,6 +215,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Cỡ chữ",
         "Gridlines" => "Đường lưới",
         "Headings" => "Tiêu đề hàng/cột",
+        "Furigana" => "Furigana",
         "Zoom" => "Thu phóng",
         "100%" => "100%",
         "Zoom to\nSelection" => "Phóng to\nvùng chọn",

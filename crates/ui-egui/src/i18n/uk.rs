@@ -209,6 +209,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Розмір шрифту",
         "Gridlines" => "Сітка",
         "Headings" => "Заголовки",
+        "Furigana" => "Фуріґана",
         "Zoom" => "Масштаб",
         "100%" => "100%",
         "Zoom to\nSelection" => "Масштаб за\nвиділенням",

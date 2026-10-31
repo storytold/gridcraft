@@ -354,6 +354,12 @@ mod tests {
         assert_eq!(Language::parse("xx"), None);
     }
 
+    /// The Japanese catalog names the furigana view toggle added in #2143.
+    #[test]
+    fn japanese_furigana_label_is_translated() {
+        assert_eq!(Language::Ja.tr("Furigana"), "ふりがな表示");
+    }
+
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
     /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.

@@ -211,6 +211,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Dimensione carattere",
         "Gridlines" => "Griglia",
         "Headings" => "Intestazioni",
+        "Furigana" => "Furigana",
         "Zoom" => "Zoom",
         "100%" => "100%",
         "Zoom to\nSelection" => "Zoom sulla\nselezione",
