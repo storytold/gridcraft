@@ -61,6 +61,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
             egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {}
+            // A space on a checkbox cell toggles it (the `Key::Space` arm below). The same key
+            // press also arrives as text, and typing text starts editing the cell -- so the cell
+            // toggled *and* opened an editor holding a space, which Enter then committed over the
+            // checkbox (#1951).
+            egui::Event::Text(text) if text == " " && is_checkbox(sh, app) => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {
