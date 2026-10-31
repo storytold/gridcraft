@@ -131,24 +131,58 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            // Excel forms no array from a constant: every cell of the selection takes the value.
+            if cell.formula.is_none() && !range.is_single() {
+                if range.count() > crate::fill::MAX_FILL_CELLS {
+                    return Err(EngineError::Other("That selection is too large to fill.".into()));
+                }
+                for c in range.iter() {
+                    let filled = input_to_cell(&input, sheet, c, &mut cx.wb)?;
+                    let sh = cx.sheet_mut(sheet)?;
+                    match filled {
+                        Some(f) => sh.set_cell(c, f),
+                        None => {
+                            sh.remove_cell(c);
+                        }
+                    }
+                    cx.touch(sheet, c);
+                }
+                return Ok(Json::Null);
+            }
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
-            // The array takes the whole range: other cells in it lose their contents.
-            for c in range.iter().skip(1).take(1_000_000) {
-                if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
-                    let style = old.style;
-                    sh.set_cell(c, Cell { style, ..Cell::default() });
-                }
+            // The array takes the whole range: other cells in it lose their contents. Walk the
+            // cells the sheet holds rather than every address, so a whole-column array clears
+            // all of its area, and mark each cleared cell so formulas reading it recalculate.
+            let cleared: Vec<(CellRef, StyleId)> = sh
+                .cells
+                .iter_range(range)
+                .filter(|(c, x)| *c != range.start && (!x.value.is_empty() || x.formula.is_some()))
+                .map(|(c, x)| (c, x.style))
+                .collect();
+            for &(c, style) in &cleared {
+                sh.set_cell(c, Cell { style, ..Cell::default() });
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            // The array's results land in every cell of the range, stored or not, so readers of
+            // an empty result cell need the touch too. A huge range marks only the cells it held.
+            if range.count() <= 1_000_000 {
+                for c in range.iter() {
+                    cx.touch(sheet, c);
+                }
+            } else {
+                for (c, _) in cleared {
+                    cx.touch(sheet, c);
+                }
+            }
             return Ok(Json::Null);
         }
         let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
