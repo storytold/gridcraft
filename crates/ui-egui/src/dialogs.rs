@@ -72,6 +72,8 @@ pub struct Dialog {
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
+    /// The linked cell's initial display text; unchanged text must not replace a number or formula.
+    original_link_text: Option<String>,
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -165,6 +167,7 @@ impl Dialog {
         self.values.insert(pick.key.into(), json!(ed.text));
     }
 
+    /// Creates a command-backed form with its initial field values.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -183,9 +186,11 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
         }
     }
 
+    /// Creates a dialog whose body handles its own controls instead of a standard form.
     pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -204,9 +209,11 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
         }
     }
 
+    /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -494,17 +501,30 @@ impl Dialog {
                     json!({"url": url}),
                 )
             }
-            "insertLink" => Dialog::form(
-                "insertLink",
-                "Insert Hyperlink",
-                "insert.link",
-                vec![
-                    Text { key: "text", label: "Display:" },
-                    Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
-                    Text { key: "tooltip", label: "ScreenTip:" },
-                ],
-                json!({"target": "https://"}),
-            ),
+            "insertLink" => {
+                let mut d = Dialog::form(
+                    "insertLink",
+                    "Insert Hyperlink",
+                    "insert.link",
+                    vec![
+                        Text { key: "text", label: "Display:" },
+                        Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
+                        Text { key: "tooltip", label: "ScreenTip:" },
+                    ],
+                    json!({"target": "https://"}),
+                );
+                if let Some(doc) = app.session.active()
+                    && let Some(sheet) = doc.wb.active()
+                    && let Some(link) = sheet.hyperlinks.get(&doc.selection.active)
+                {
+                    let text = gridcraft_engine::display::cell_text(&doc.wb, sheet, doc.selection.active);
+                    d.values.insert("target".into(), json!(link.target));
+                    d.values.insert("text".into(), json!(text));
+                    d.values.insert("tooltip".into(), json!(link.tooltip));
+                    d.original_link_text = Some(text);
+                }
+                d
+            }
             "sparkline" => Dialog::form(
                 "sparkline",
                 "Create Sparklines",

@@ -101,6 +101,11 @@ fn rounding() {
     close(ev2("CEILING", 1.5, 0.1), 1.5);
     close(ev2("CEILING", 0.234, 0.01), 0.24);
     is_err(ev2("CEILING", 2.5, -1.0), Num);
+    // ECMA.CEILING is CEILING under a second name (Excel table from #2776).
+    close(ev2("ECMA.CEILING", 1.5, 1.0), 2.0);
+    close(ev2("ECMA.CEILING", -2.5, -2.0), -4.0);
+    close(ev2("ECMA.CEILING", 2.5, 0.0), 0.0);
+    is_err(ev2("ECMA.CEILING", 1.5, -1.0), Num);
     close(ev2("FLOOR", 3.7, 2.0), 2.0);
     close(ev2("FLOOR", -2.5, -2.0), -2.0);
     close(ev2("FLOOR", -2.5, 2.0), -4.0);

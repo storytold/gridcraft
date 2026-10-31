@@ -264,6 +264,23 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     if objects_hidden(wb) {
         return painted;
     }
+    // Source outlines stay in cell space beneath every floating object.
+    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart == Some(ch.id))
+        && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
+    {
+        for s in &ch.series {
+            if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
+                && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
+            {
+                let rr = geo.range_rect(sh, rf.range());
+                let color = Tokens::get(p.ctx()).ref_color(0, true);
+                for pane in geo.range_panes(rf.range()) {
+                    let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
+                    pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
+                }
+            }
+        }
+    }
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
@@ -365,23 +382,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if app.selected_chart == Some(ch.id) {
             selection_frame(p, r);
         }
-        // The source-data highlight below is in cell space: mirrored with the cells.
         done(start, r);
-        if app.selected_chart == Some(ch.id) {
-            // Highlight the source data like Excel does.
-            for s in &ch.series {
-                if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
-                    && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
-                {
-                    let rr = geo.range_rect(sh, rf.range());
-                    let color = Tokens::get(p.ctx()).ref_color(0, true);
-                    for pane in geo.range_panes(rf.range()) {
-                        let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
-                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
-                    }
-                }
-            }
-        }
     }
     paint_slicers(app, p, geo, wb, si, sh);
     painted
