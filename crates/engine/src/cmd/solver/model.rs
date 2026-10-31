@@ -294,7 +294,14 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     };
     let num = |k: &str| p.get(k).and_then(Json::as_f64).or_else(|| str_param(p, k).and_then(num_text)).filter(|v| v.is_finite());
     let max_evals = num("maxEvaluations").filter(|v| *v >= 1.0).map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
-    let gap = num("integerOptimality").map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    // Integer Optimality is in percent: "5" and "5%" both mean 5 % (number parsing would read
+    // "5%" as 0.05).
+    let percent = p
+        .get("integerOptimality")
+        .and_then(Json::as_f64)
+        .or_else(|| str_param(p, "integerOptimality").and_then(|t| num_text(t.trim().trim_end_matches('%'))))
+        .filter(|v| v.is_finite());
+    let gap = percent.map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
     Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p), max_evals, gap })
 }
 

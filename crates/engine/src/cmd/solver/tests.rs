@@ -884,6 +884,17 @@ fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
 }
 
 #[test]
+fn integer_optimality_reads_a_percent_sign_as_percent() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=3*A1")]);
+    for (given, want) in [(json!("5%"), 5.0), (json!(" 2.5 % "), 2.5), (json!("5"), 5.0), (json!(5), 5.0), (json!("150%"), 100.0)] {
+        let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4", "A1 int"], "method": "simplex", "integerOptimality": given});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(want), "{given}: {r}");
+    }
+}
+
+#[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
     // width ranges over 0..5, the area over 0..25.
