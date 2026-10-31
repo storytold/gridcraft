@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (Page Break Preview labels for 19 languages integrated with current main; previously minor: missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -110,6 +110,10 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | trivial | Integrate the separate Page Break Preview label translations with main 981fad14; preserve all 19 catalogs and first-repaint/Japanese font-transition regressions. |
+| 2026-10-30 | trivial | Integrate Page Break Preview labels (#2129) with current main, preserving all 19 interface languages and font-transition regressions. |
+| 2026-10-25 | trivial | Integrate Page Break Preview labels for 19 languages with current main, preserving newer behavior and progress history. |
+| 2026-10-21 | minor | Page Break Preview page-number overlays use the selected interface language, including all 11 shipped languages; switches with unchanged Han font order update cached page previews immediately; Japanese transitions wait for font activation |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
@@ -138,3 +142,5 @@ language (none so far) and of localized function names.
 | 2026-10-11 | minor | Czech (cs) ribbon table: 266 labels (~12%), menus only |
 | 2026-10-10 | minor | Re-measured after #31, #104, #82, #38 merged: ribbon translated into ja, zh, ko, pt-BR and ru (266–268 labels, ~12%), system-language default, CJK/Thai/Hebrew font fallback; ~10% ready, 100–165 h |
 | 2026-10-10 | major | Created: English only, no catalog, ~2,200 strings, script-support gaps, open language PRs |
+
+Page Break Preview labels update from the cached pagination in all 19 interface languages. A language switch with the same Han font order paints the translated label on the next frame. Switching to or from Japanese first activates egui font definitions, then paints the new label on the following frame; both directions have a regression test.

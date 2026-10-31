@@ -400,6 +400,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Imprimir toda a pasta de trabalho",
         "Fit Sheet on One Page" => "Ajustar planilha em uma página",
         "Page Setup…" => "Configurar página…",
+        "Page {page}" => "Página {page}",
         "Page {page} of {pages}" => "Página {page} de {pages}",
         "Nothing to print." => "Nada para imprimir.",
         "Previous page" => "Página anterior",

@@ -1,0 +1,4 @@
+# The generated checklist is compared byte-for-byte by cargo xtask ci.
+docs/parity-checklist.md text eol=lf
+crates/ui-egui/src/keytips/keytip_table/generated.rs text eol=lf
+crates/ui-egui/tests/it/keytips_generated.rs text eol=lf

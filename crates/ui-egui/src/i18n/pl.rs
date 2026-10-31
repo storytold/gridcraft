@@ -1,6 +1,7 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Page {page}" => "Strona {page}",
         "Paste" => "Wklej",
         "Paste Values" => "Wklej wartości",
         "Paste Formulas" => "Wklej formuły",

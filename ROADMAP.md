@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-30 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -244,6 +244,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | trivial | Integrate Page Break Preview labels (#2129) with current main, preserving all 19 interface languages and font-transition regressions. |
+| 2026-10-26 | trivial | Integrate page labels for all 19 languages with main f6b0cec6. |
+| 2026-10-25 | trivial | Integrate Page Break Preview labels for 19 languages with current main, preserving newer behavior and progress history. |
+| 2026-10-21 | minor | Page Break Preview page labels follow all 19 interface languages and update when switching language; translations are submitted separately for native-speaker review |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
@@ -298,3 +302,13 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+Page Break Preview labels update from the cached pagination in all 19 interface languages. A language switch with the same Han font order paints the translated label on the next frame. Switching to or from Japanese first activates egui font definitions, then paints the new label on the following frame; both directions have a regression test.
+
+Windows validation also keeps the CLI traversal parameter valid when Unix identity tracking is unavailable and exercises exclusive temporary-file creation without requiring Unix symlinks.
+
+An exclusive-create failure now leaves an already occupied temporary name untouched; the cross-platform save regression checks both the destination and that existing entry.
+
+The generated parity checklist keeps LF endings on Windows checkouts so the byte-for-byte CI check remains portable.
+
+Integrate page labels for all 19 languages with main f6b0cec6.

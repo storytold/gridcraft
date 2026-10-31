@@ -3,6 +3,7 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Page {page}" => "Pagina {page}",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",
