@@ -8,8 +8,11 @@
 //! FILTER, INDEX, LAMBDA, LET, MAP, MAX, MIN, TEXT and others).
 //!
 //! Separators: `;` between arguments, `,` decimal, `.` between array columns, `;` between rows.
-//! `#CALC!` stays English; `#ÜBERLAUF!` and `#CALC!` are display-only, not typed literals.
+//! `#CALC!` stays English. German Excel does not take `#ÜBERLAUF!` or `#CALC!` as typed literals;
+//! GridCraft accepts them, as it accepts `#SPILL!` in English.
 //! `[#Diese Zeile]` is accepted when typed and shown in the `@` short form.
+
+use gridcraft_core::CellError;
 
 /// Canonical function name → German name, in the format of `input::SPANISH`.
 pub(crate) const GERMAN: &[(&str, &str)] = &[
@@ -433,4 +436,14 @@ pub(crate) const GERMAN: &[(&str, &str)] = &[
     ("YIELDMAT", "RENDITEFÄLL"),
     ("Z.TEST", "G.TEST"),
     ("ZTEST", "GTEST"),
+];
+
+/// Error values as German Excel shows them; `#CALC!` (and `#CIRC!`) keep the English name.
+pub(crate) const GERMAN_ERRORS: &[(CellError, &str)] = &[
+    (CellError::Value, "#WERT!"),
+    (CellError::Ref, "#BEZUG!"),
+    (CellError::Num, "#ZAHL!"),
+    (CellError::NA, "#NV"),
+    (CellError::GettingData, "#DATEN_ABRUFEN"),
+    (CellError::Spill, "#ÜBERLAUF!"),
 ];

@@ -27,7 +27,10 @@ German uses the function names German Excel 365 shows, all 420 that differ from 
 (`crates/formula/src/input_de.rs`); the 99 others, such as `MAX`, `INDEX` and `FILTER`, keep their
 English name. `WAHR` and `FALSCH` are the booleans. German formulas use decimal commas, semicolon
 arguments and points between array columns (`{1.2;3.4}`): `=WENN(WAHR;SUMME(1,5;2,25);0)` is 3.75.
-Error values (`#WERT!`, `#NV`) and table specifiers (`#Alle`, `#Daten`) are not translated yet.
+Error values in formulas are German too: `#WERT!`, `#BEZUG!`, `#ZAHL!`, `#NV`, `#DATEN_ABRUFEN` and
+`#ÜBERLAUF!`; `#NULL!`, `#DIV/0!`, `#NAME?` and `#CALC!` are the same in both. The English spelling
+is still understood when typed. Error values shown as cell results, and table specifiers (`#Alle`,
+`#Daten`), are not translated yet.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions

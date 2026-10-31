@@ -1,7 +1,8 @@
 //! Localized aliases accepted at user-entry boundaries; file syntax stays English.
 
-use crate::input_de::GERMAN;
+use crate::input_de::{GERMAN, GERMAN_ERRORS};
 use crate::{Expr, ParseError, parser};
+use gridcraft_core::CellError;
 
 /// Formula-entry syntax selected by the interface language. Interface languages without a
 /// translation table use the canonical English syntax.
@@ -65,6 +66,14 @@ impl FormulaLocale {
     }
     pub fn canonical_name(self, localized: &str) -> &str {
         self.names().iter().find(|(_, local)| local.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized)
+    }
+    /// The error value as this language writes it (`#WERT!`); untranslated errors are canonical.
+    pub fn error_name(self, error: CellError) -> &'static str {
+        let names: &[(CellError, &str)] = match self {
+            Self::De => GERMAN_ERRORS,
+            Self::En | Self::Es => &[],
+        };
+        names.iter().find(|(e, _)| *e == error).map(|(_, name)| *name).unwrap_or(error.as_str())
     }
     /// The localized TRUE or FALSE, taken from the function table (TRUE() and FALSE() share them).
     fn boolean_name(self, value: bool) -> &'static str {
@@ -131,6 +140,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
                 out.push_str(text);
             }
             Tok::Number(_) => out.push_str(&text.replace('.', &locale.decimal_separator().to_string())),
+            Tok::Error(error) => out.push_str(locale.error_name(error)),
             Tok::Comma => out.push(if array_depth > 0 { locale.array_column_separator() } else { locale.list_separator() }),
             _ => out.push_str(text),
         }

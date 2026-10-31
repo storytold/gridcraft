@@ -52,3 +52,38 @@ fn german_display_of_canonical_formulas() {
         assert_eq!(input(&display(canonical)), canonical, "{canonical} round trip");
     }
 }
+
+#[test]
+fn german_error_values() {
+    for (src, expected) in [
+        ("WENNFEHLER(#WERT!;0)", "IFERROR(#VALUE!,0)"),
+        ("ISTNV(#nv)", "ISNA(#N/A)"),
+        ("{#BEZUG!.#ZAHL!;#DIV/0!.#NAME?}", "{#REF!,#NUM!;#DIV/0!,#NAME?}"),
+        ("#DATEN_ABRUFEN", "#GETTING_DATA"),
+        ("#ÜBERLAUF!", "#SPILL!"),
+        ("#CALC!", "#CALC!"),
+        // The canonical spelling is still understood.
+        ("WENNFEHLER(#VALUE!;#N/A)", "IFERROR(#VALUE!,#N/A)"),
+        // Text and sheet names are not error values.
+        ("\"#WERT!\"&A1", "\"#WERT!\"&A1"),
+    ] {
+        assert_eq!(input(src), expected, "{src}");
+    }
+    for (canonical, expected) in [
+        ("IFERROR(#VALUE!,#N/A)", "WENNFEHLER(#WERT!;#NV)"),
+        ("{#REF!,#NUM!;#NULL!,#SPILL!}", "{#BEZUG!.#ZAHL!;#NULL!.#ÜBERLAUF!}"),
+        ("#GETTING_DATA", "#DATEN_ABRUFEN"),
+        ("#CALC!", "#CALC!"),
+    ] {
+        assert_eq!(display(canonical), expected, "{canonical}");
+        assert_eq!(input(&display(canonical)), canonical, "{canonical} round trip");
+    }
+}
+
+#[test]
+fn other_languages_keep_canonical_error_values() {
+    let es = print_input(&parse("IFERROR(#VALUE!,#N/A)").unwrap(), FormulaLocale::Es, |_| false).unwrap();
+    assert_eq!(es, "IFERROR(#VALUE!;#N/A)");
+    assert!(parse("#WERT!").is_err());
+    assert!(parse_input("#WERT!", FormulaLocale::Es, |_| false).is_err());
+}
