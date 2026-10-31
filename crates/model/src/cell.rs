@@ -46,6 +46,16 @@ impl Formula {
     pub fn expr_arc(&self) -> Option<Arc<Expr>> {
         self.expr.clone().or_else(|| gridcraft_formula::parse(&self.text).ok().map(Arc::new))
     }
+    /// Runs `f` on the parsed expression, borrowing the cached tree or, after deserialization,
+    /// a freshly parsed one that is dropped afterwards. Unlike [`expr`](Self::expr) it never copies
+    /// the tree, and unlike [`expr_arc`](Self::expr_arc) it needs no reference count or `Arc`
+    /// allocation. `None` when the text does not parse.
+    pub fn with_expr<R>(&self, f: impl FnOnce(&Expr) -> R) -> Option<R> {
+        match &self.expr {
+            Some(e) => Some(f(e)),
+            None => gridcraft_formula::parse(&self.text).ok().map(|e| f(&e)),
+        }
+    }
 }
 
 /// A static picture stored as cell content, independent of floating drawing anchors.
