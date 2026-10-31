@@ -27,6 +27,7 @@ mod sheet_data_pin;
 mod sheet_names;
 mod smooth_roundtrip;
 mod trendline_roundtrip;
+mod xls_style_tests;
 mod xls_tests;
 mod xlsb_tests;
 mod zip_order;
