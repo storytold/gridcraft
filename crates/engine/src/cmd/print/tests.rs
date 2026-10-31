@@ -586,3 +586,38 @@ fn conditional_number_format_and_font_are_used_in_pdf() {
     assert!(look.style.font.bold);
     assert_eq!(look.style.font.size, 18.0);
 }
+
+#[test]
+fn checkbox_cells_print_as_boxes_not_true_false() {
+    // #2972: a checkbox cell printed its value as TRUE or FALSE.
+    let mut s = s();
+    s.execute("insert.checkbox", json!({"range": "A1:A2"})).unwrap();
+    s.execute("cell.toggleCheckbox", json!({"cell": "A2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "TRUE"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&pdf, "(FALSE) Tj"), "the unchecked box printed as FALSE");
+    // Only the plain TRUE in C1 prints as text; the checked box is a filled box.
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("(TRUE) Tj").count(), 1, "the checked box printed as TRUE");
+    assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
+    assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
+}
+
+/// An explicit automatic CF color clears a number-format color; absent color still inherits it.
+#[test]
+fn conditional_font_color_precedence_in_pdf() {
+    for (style, expected) in [
+        (json!({"font":{"color":"Auto"},"specified":["FontColor"]}), "0 0 0 rg"),
+        (json!({"font":{"color":{"Rgb":255}},"specified":["FontColor"]}), "0 0 1 rg"),
+        (json!({"font":{"bold":true},"specified":["Bold"]}), "1 0 0 rg"),
+    ] {
+        let mut session = s();
+        session.execute("cell.set", json!({"cell":"A1","input":"42"})).unwrap();
+        session.execute("home.numberFormat", json!({"range":"A1","code":"[Red]0"})).unwrap();
+        session.execute("home.conditionalFormat", json!({"rule":{"type":"expression","formula":"TRUE","style":style}})).unwrap();
+        let (pdf, _) = pdf_of(&mut session, json!({"range":"A1"}));
+        let text = String::from_utf8_lossy(&pdf);
+        let cell_text = text.split("BT\n").find(|block| block.contains("(42) Tj")).expect("printed cell text");
+        assert!(cell_text.starts_with(expected), "expected {expected}, got {cell_text}");
+    }
+}

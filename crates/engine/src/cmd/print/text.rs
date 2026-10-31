@@ -148,7 +148,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     let formatted = crate::display::format(&v, code, wb);
     let mut color = formatted.color.and_then(gridcraft_numfmt::FormatColor::rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
     if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.sets(StyleProperty::FontColor)) {
-        color = rgb_of(st.font.color, wb).unwrap_or(color);
+        color = rgb_of(st.font.color, wb).unwrap_or([0, 0, 0]);
     }
     let is_num = matches!(v, Value::Number(_));
     let wrap = st.align.wrap;

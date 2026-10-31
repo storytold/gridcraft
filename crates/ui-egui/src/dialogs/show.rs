@@ -15,9 +15,17 @@ use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
+/// Unchanged hyperlink display text is omitted so its number or formula stays intact.
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "insertLink" => {
+            if d.original_link_text.as_deref().is_some_and(|text| d.values.get("text").and_then(Json::as_str) == Some(text))
+                && let Some(m) = v.as_object_mut()
+            {
+                m.remove("text");
+            }
+        }
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
                 m.remove("action");
