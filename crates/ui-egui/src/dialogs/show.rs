@@ -4,6 +4,7 @@ use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
+use super::database::{db_import_params, from_database, run_confirmed, stop_waiting, wait_row};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
@@ -63,6 +64,17 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
             v["delimiters"] = Json::Array(delims);
+        }
+        "fromDatabase" => v = db_import_params(d),
+        "dbPassword" => {
+            if let Some(m) = v.as_object_mut() {
+                m.retain(|k, _| matches!(k.as_str(), "table" | "password"));
+            }
+        }
+        "dbTrust" => {
+            if let Some(m) = v.as_object_mut() {
+                m.retain(|k, _| matches!(k.as_str(), "table" | "trust"));
+            }
         }
         "removeDuplicates" | "subtotal" => {
             if let Some(t) = d.values.get("columnsText").and_then(Json::as_str).filter(|t| !t.trim().is_empty()) {
@@ -143,6 +155,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "fromDatabase" => 520.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -200,6 +213,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "fromDatabase" => from_database(app, ui, &mut d, &mut confirm, &mut open),
                 "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
@@ -356,6 +370,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
+            wait_row(app, ui, &mut d);
         });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
@@ -382,13 +397,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
-        match app.run(cmd, params) {
+    let ran = run_confirmed(app, &mut d, &mut confirm);
+    if let Some(result) = ran {
+        match result {
             Ok(r) => {
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
+                } else if matches!(d.name.as_str(), "dbPassword" | "dbTrust") && d.values.get("then").and_then(Json::as_str) == Some("refreshAll") {
+                    crate::refresh_all(app);
                 } else if d.name == "openPassword" {
                     let path = d.values.get("path").and_then(Json::as_str).map(str::to_string);
                     app.after_open(path.as_deref(), &r);
@@ -405,8 +422,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
-    } else if confirm {
+    } else if confirm && d.command.is_none() {
         open = false;
+    }
+    if !open {
+        stop_waiting(app, &d);
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new
@@ -515,7 +535,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .get(key)
                             .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| if v.is_null() { String::new() } else { v.to_string() }))
                             .unwrap_or_default();
-                        let multiline = key == "text";
+                        let multiline = key == "text" || key == "query";
                         let r = if multiline {
                             ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0)).labelled_by(label.id)
                         } else {
@@ -523,7 +543,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         };
                         take_first_focus(d, &r);
                         if r.changed() {
-                            d.values.insert(key.into(), json!(s));
+                            d.set_value(key, json!(s));
                         }
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());

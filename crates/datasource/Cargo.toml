@@ -1,0 +1,33 @@
+[package]
+name = "gridcraft-datasource"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft database drivers for Data › Get Data › From Database (native only)"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# ODBC through the system driver manager (unixODBC / iODBC / Windows ODBC). Off by default so a
+# plain build needs no system library; release builds turn it on.
+odbc = ["dep:odbc-api"]
+
+[dependencies]
+gridcraft-engine = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde_json = { workspace = true }
+uuid = { version = "1", default-features = false, features = ["std"] }
+mysql = { version = "28", default-features = false, features = ["minimal-rust", "rustls-tls-ring", "buffer-pool"] }
+rusqlite = { version = "0.40", features = ["bundled", "hooks", "column_decltype"] }
+# TLS for PostgreSQL (MySQL brings its own through `rustls-tls-ring`): the same rustls and ring.
+tokio-postgres-rustls = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+rustls-native-certs = "0.8"
+odbc-api = { version = "29", optional = true }

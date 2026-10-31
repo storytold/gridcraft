@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-30 · **Change:** minor (§12: From Database; earlier: §8: PivotTable Enable show details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -113,8 +113,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
-  data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
+- No Power Query editor, connections, From Web/folder sources, relationships or data model
+  (`data.fromWeb`, `data.relationships` missing). From Database (`data.fromDatabase`) runs one
+  SQL query, or a table and its chosen columns, against PostgreSQL, MySQL/MariaDB, SQLite or ODBC
+  (desktop and CLI, ODBC behind the `odbc` feature) into a new table sheet. The table keeps its
+  query in the workbook (custom XML part, no password), and Data › Refresh / Refresh All run it
+  again in place; connections can be saved in the preferences. No query editor yet (#1206, #1318).
+  **Estimate:** 55–95 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
@@ -183,6 +188,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | §12: From Database (`data.fromDatabase`): SQL import from PostgreSQL, MySQL/MariaDB, SQLite, ODBC; the table keeps its query (`data.refresh`, Refresh All), table/column picker, saved connections (#1206) |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

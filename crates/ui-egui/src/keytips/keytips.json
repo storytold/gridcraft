@@ -1941,9 +1941,8 @@
    "seq": "APND",
    "kind": "command",
    "target": "data.fromDatabase",
-   "pending": true,
    "excel": "From Database (Microsoft Query)",
-   "note": "gap #12; reserved until the command lands"
+   "note": "PostgreSQL, MySQL/MariaDB, SQLite and ODBC through the host's data source"
   },
   {
    "seq": "APNE",
@@ -2053,9 +2052,9 @@
   {
    "seq": "ARR",
    "kind": "command",
-   "target": "pivot.refresh",
+   "target": "data.refresh",
    "excel": "Refresh",
-   "note": ""
+   "note": "the database table at the selection, or the PivotTable"
   },
   {
    "seq": "ARS",

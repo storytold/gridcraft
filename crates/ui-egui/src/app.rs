@@ -82,6 +82,8 @@ impl SheetApp {
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
+            db_jobs: None,
+            db_waiting: None,
         }
     }
 
@@ -135,6 +137,9 @@ impl SheetApp {
         updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
+        // Database requests answered in the background.
+        self.install_db_jobs(ctx);
+        self.poll_db();
         self.autosave(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);

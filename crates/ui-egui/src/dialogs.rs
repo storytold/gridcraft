@@ -19,6 +19,7 @@ mod charts;
 mod command_search;
 mod cond_format_rules;
 mod data;
+mod database;
 mod find;
 mod format_cells;
 mod insert_function;
@@ -123,6 +124,13 @@ impl Dialog {
                 }
                 _ => {}
             }
+        }
+        // Typing a `mysql://` or `postgres://` URL picks the matching driver.
+        if self.name == "fromDatabase"
+            && key == "connection"
+            && let Some(driver) = value.as_str().and_then(gridcraft_engine::datasource::driver_for_connection)
+        {
+            self.values.insert("driver".into(), json!(driver));
         }
         self.values.insert(key.into(), value);
     }
@@ -615,6 +623,61 @@ impl Dialog {
                     }
                 }
                 d
+            }
+            "fromDatabase" => {
+                // Connection fields compose the connection; `connection` is a hand-written one
+                // that replaces it (and what `ui.dialog.set` and older scripts fill in).
+                let mut values = json!({
+                    "driver": "postgres", "host": "", "port": "", "database": "", "file": "", "dsn": "", "user": "", "password": "",
+                    "connection": "", "editConnection": false, "mode": "table", "tables": [], "tablesFor": "", "filter": "",
+                    "table": "", "schema": "", "columns": [], "selected": [], "query": "SELECT ", "sheet": "", "profile": "", "saveName": "",
+                });
+                if let (Some(v), Some(given)) = (values.as_object_mut(), params.as_object()) {
+                    v.extend(given.iter().map(|(k, x)| (k.clone(), x.clone())));
+                }
+                if values["connection"].as_str().is_some_and(|c| !c.is_empty()) {
+                    values["editConnection"] = json!(true);
+                }
+                let mut d = Dialog::custom("fromDatabase", "From Database", values);
+                d.command = Some("data.fromDatabase");
+                d
+            }
+            "dbPassword" => {
+                let lang = app.ui.language;
+                let user = p("user").as_str().map(|u| format!(" ({u})")).unwrap_or_default();
+                let text = format!(
+                    "{}: {}\n{}: {}{user}\n{}",
+                    lang.tr("Table"),
+                    p("table").as_str().unwrap_or(""),
+                    lang.tr("Connection"),
+                    p("connection").as_str().unwrap_or(""),
+                    lang.tr("Enter the password to refresh it (it is not saved).")
+                );
+                let mut values = params.clone();
+                values["password"] = json!("");
+                Dialog::form(
+                    "dbPassword",
+                    "Database Password",
+                    "data.refresh",
+                    vec![Note(text), Password { key: "password", label: "Password:" }],
+                    values,
+                )
+            }
+            "dbTrust" => {
+                // Excel's external data security warning: the connections and SQL come from the
+                // file, so nothing runs until the user enables them for this workbook.
+                let lang = app.ui.language;
+                let list: Vec<String> =
+                    p("connections").as_array().map(|a| a.iter().filter_map(Json::as_str).map(|c| format!("• {c}")).collect()).unwrap_or_default();
+                let text = format!(
+                    "{}\n{}\n{}",
+                    lang.tr("This workbook contains database connections saved in the file:"),
+                    list.join("\n"),
+                    lang.tr("Refresh connects to them and runs the SQL the file holds. Enable them only if you trust the source of this file.")
+                );
+                let mut values = params.clone();
+                values["trust"] = json!(true);
+                Dialog::form("dbTrust", "Security Warning", "data.refresh", vec![Note(text)], values)
             }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
