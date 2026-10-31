@@ -90,10 +90,10 @@ pub fn specs() -> Vec<CommandSpec> {
             format_cells
         ),
         // Alignment
-        cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left)),
-        cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center)),
-        cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
-        cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
+        cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?, on?}", has_doc, |s, p| halign(s, p, HAlign::Left)),
+        cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?, on?}", has_doc, |s, p| halign(s, p, HAlign::Center)),
+        cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?, on?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
+        cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?, on?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
         cmd!("home.alignTop", "Top Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Top)),
         cmd!("home.alignMiddle", "Middle Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Center)),
         cmd!("home.alignBottom", "Bottom Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Bottom)),
@@ -591,10 +591,19 @@ pub(crate) fn merge_json(mut base: Json, patch: &Json) -> Json {
 }
 
 fn halign(s: &mut Session, p: &Json, a: HAlign) -> Result<Json> {
-    // Clicking the active alignment again returns to General.
+    // Clicking the active alignment again returns to General; `on: false` does so only while it is the active one.
     let cur = active_style(s)?.align.h;
-    let a = if cur == a && p.get("on").is_none() { HAlign::General } else { a };
-    apply_style(s, p, |st| st.align.h = a)
+    let toggled = if cur == a { HAlign::General } else { a };
+    match p.get("on").map(Json::as_bool) {
+        None => apply_style(s, p, |st| st.align.h = toggled),
+        // Clear only the cells that already have `a`, and only while the active cell has it too.
+        Some(Some(false)) => apply_style(s, p, |st| {
+            if cur == a && st.align.h == a {
+                st.align.h = HAlign::General;
+            }
+        }),
+        Some(_) => apply_style(s, p, |st| st.align.h = a),
+    }
 }
 
 fn valign(s: &mut Session, p: &Json, a: VAlign) -> Result<Json> {

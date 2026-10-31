@@ -443,6 +443,7 @@ fn run(args: &[String]) -> Result<(), String> {
         };
         for (id, p, origin) in cmds {
             step += 1;
+            gridcraft_engine::check_params(&id, &p).map_err(|e| format!("step {step} ({origin}, {id}): {e}"))?;
             let r = exec(&mut s, &id, p).map_err(|e| format!("step {step} ({origin}, {id}): {e}"))?;
             if !quiet && !r.is_null() {
                 outln!("{}", serde_json::to_string(&json!({"command": id, "result": r})).unwrap_or_default());
