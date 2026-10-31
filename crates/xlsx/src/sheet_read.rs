@@ -38,8 +38,13 @@ struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
-    /// the anchor) are not stored, so the formula can fill them again.
+    /// the anchor) are not stored in the cells, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    /// The multi-cell dynamic-array spill ranges among them: their cached values go to
+    /// `Sheet::spill`, where readers see them before a recalculation lays the spill out again.
+    spills: Vec<RangeRef>,
+    /// The spill range of the dynamic-array formula just read, one cell or more, for its anchor.
+    last_spill: Option<RangeRef>,
     /// Cells inside the ranges above, for a cap before a pathological sheet proves it itself.
     dynamic_cells: u64,
     /// Row-membership checks served so far, for the work cap above.
@@ -60,6 +65,14 @@ fn in_dynamic(st: &mut RowState, pos: CellRef) -> bool {
     let hit = st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos);
     st.dynamic_checks = st.dynamic_checks.saturating_add(ranges as u64);
     hit
+}
+
+/// Whether `pos` lies in a dynamic-array spill range. Only asked for cells `in_dynamic` already
+/// blanked, and not charged to its work cap: `spills` holds only ranges `push_dynamic` kept, so
+/// this scan costs at most what `in_dynamic` just paid, and a large spill is blanked exactly as
+/// far as without it.
+fn in_spill(st: &RowState, pos: CellRef) -> bool {
+    st.spills.iter().any(|r| r.contains(pos))
 }
 
 /// Records a dynamic-array range, so its cells outside the anchor import as empty and the
@@ -524,7 +537,20 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.last_spill.take().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, r);
+    }
+    let value = if formula.is_none() && in_dynamic(st, pos) {
+        if !value.is_empty() && in_spill(st, pos) {
+            sheet.spill.insert(pos, value);
+        }
+        Value::Empty
+    } else {
+        value
+    };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
@@ -566,6 +592,14 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 push_dynamic(st, range);
+            }
+            // A one-cell dynamic result is a spill range too (`A1#` refers to it). A larger one
+            // counts only if `push_dynamic` kept it, so the caps above bound `spills` as well.
+            if dynamic && (range.is_single() || st.dynamic.last() == Some(&range)) {
+                st.last_spill = Some(range);
+                if !range.is_single() && st.spills.last() != Some(&range) {
+                    st.spills.push(range);
+                }
             }
             if !dynamic {
                 fm.array = Some(range);
