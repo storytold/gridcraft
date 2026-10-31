@@ -1,6 +1,6 @@
 use super::{
     INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
-    formula_locale, i18n, json, now_ms, printing,
+    formula_locale, i18n, json, now_ms, power_query, printing,
 };
 
 impl SheetApp {
@@ -123,7 +123,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
@@ -332,6 +332,32 @@ impl SheetApp {
                     let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
                     dl(&name, &b);
                 }
+            }
+            // Get Data's file sources: the file picker, then the Navigator.
+            "importFile" => power_query::import_file(self, &params),
+            "powerQueryEditor" => {
+                let name = params.get("query").and_then(Json::as_str).map(str::to_string);
+                power_query::open_editor(self, name.as_deref(), None);
+            }
+            "refreshStatus" => {
+                let lang = self.ui.language;
+                let status = self.session.run("data.refreshStatus", json!({})).unwrap_or(Json::Null);
+                let lines: Vec<String> = status["queries"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|q| {
+                        let name = q["query"].as_str().unwrap_or("");
+                        match (q["error"].as_str(), q["rows"].as_u64()) {
+                            (Some(e), _) => format!("{name}: {e}"),
+                            (None, Some(n)) => format!("{name}: {}", lang.tr("{n} rows loaded.").replace("{n}", &n.to_string())),
+                            _ => format!("{name}: {}", lang.tr("Not loaded yet.")),
+                        }
+                    })
+                    .collect();
+                let text = if lines.is_empty() { lang.tr("No refresh is in progress.").to_string() } else { lines.join("\n") };
+                self.message = Some((lang.tr("Refresh Status").into(), text));
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
             "options" => self.open_backstage(backstage::Page::Options),

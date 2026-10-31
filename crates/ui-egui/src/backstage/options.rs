@@ -1,7 +1,8 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
+/// Editing (AutoComplete), Save (the autosave checkbox toggling `app.ui.autosave`) and the Trust
+/// Center's data-connection setting, plus Formulas
 /// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
@@ -26,6 +27,8 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
+    ui.add_space(18.0);
+    trust_center(app, ui, lang);
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
@@ -33,6 +36,26 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     calc_options(app, ui, lang, &calc);
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// Trust Center › External Content: the security setting for data connections (Get & Transform
+/// queries and WEBSERVICE in workbooks opened from a file).
+fn trust_center(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    section(ui, lang, "Trust Center");
+    ui.label(lang.tr("Security settings for Data Connections"));
+    use gridcraft_engine::ExternalContent;
+    let mode = app.session.prefs.external_content;
+    for (value, id, label) in [
+        (ExternalContent::EnableAll, "enableAll", "Enable all Data Connections (not recommended)"),
+        (ExternalContent::Prompt, "prompt", "Prompt user about Data Connections"),
+        (ExternalContent::DisableAll, "disableAll", "Disable all Data Connections"),
+    ] {
+        if ui.radio(mode == value, lang.tr(label)).clicked() && mode != value {
+            app.run_or_alert("file.trustCenter", json!({"externalContent": id}));
+        }
+    }
+    ui.add_space(4.0);
+    dim(ui, lang.tr("Applies to Get & Transform queries and WEBSERVICE in workbooks opened from a file."));
 }
 
 /// The display theme and interface language controls of the General section.

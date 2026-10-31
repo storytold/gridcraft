@@ -34,6 +34,8 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }
+# Get & Transform's web and ODBC sources, and WEBSERVICE.
+gridcraft-external = { workspace = true }
 gridcraft-mcp = { workspace = true }
 # The control channel's token (OS random numbers); already in the tree.
 getrandom = "0.4"

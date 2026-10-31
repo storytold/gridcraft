@@ -8,7 +8,7 @@ use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    keytips, macro_ui, panes, pivot_pane, power_query, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
@@ -38,6 +38,8 @@ impl SheetApp {
             message: None,
             toast: None,
             notice: None,
+            power_query: None,
+            refresh_checked: 0.0,
             services,
             printing: Default::default(),
             print_feedback_seen: None,
@@ -144,6 +146,22 @@ impl SheetApp {
             self.session.new_workbook();
         }
         self.follow_active_window();
+        self.scheduled_refresh();
+    }
+
+    /// Query Properties › Refresh every N minutes: refreshes the queries that are due (looked for
+    /// about every five seconds; never while external content is disabled).
+    fn scheduled_refresh(&mut self) {
+        let now = now_ms();
+        if now - self.refresh_checked < 5_000.0 || now <= 0.0 {
+            return;
+        }
+        self.refresh_checked = now;
+        for name in gridcraft_engine::cmd::query::due_refreshes(&mut self.session, now) {
+            if let Err(e) = self.run("data.refresh", json!({"query": name})) {
+                self.toast = Some((format!("{name}: {}", clean_error(&e)), now));
+            }
+        }
     }
 
     /// Window title, next to the close/autosave state: `ViewportCommand::Title` is valid outside a
@@ -235,6 +253,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        power_query::show_editor(self, &ctx);
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
