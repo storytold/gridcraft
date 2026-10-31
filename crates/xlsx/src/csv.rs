@@ -275,7 +275,8 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
-            let cell = if opts.parse_values {
+            // The typed-entry apostrophe prefix means nothing in a file; it is data.
+            let cell = if opts.parse_values && !f.starts_with('\'') {
                 let p = parse_input(&f, opts.date_system);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {

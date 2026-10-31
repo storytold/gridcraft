@@ -37,7 +37,7 @@ fn values_and_formats() {
     let s = wb.sheet(0).unwrap();
     let st = wb.styles.get(s.cell(CellRef::new(0, 6)).unwrap().style);
     assert_ne!(st.num_fmt.as_str(), "General");
-    assert_eq!(v(&wb, 0, 8), Value::text("007"));
+    assert_eq!(v(&wb, 0, 8), Value::text("'007"));
     // 1904 dates differ from 1900 dates.
     let wb2 = read_csv(b"2026-03-04", &CsvOptions { date_system: DateSystem::D1904, ..Default::default() }).unwrap();
     assert_eq!(wb2.date_system, DateSystem::D1904);
@@ -325,4 +325,22 @@ fn parser_stops_collecting_fields_at_max_cols() {
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
+}
+
+#[test]
+fn leading_apostrophe_is_data() {
+    let wb = read_csv(b"'quoted' text,it's,'123\n", &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 0, 0), Value::text("'quoted' text"));
+    assert_eq!(v(&wb, 0, 1), Value::text("it's"));
+    assert_eq!(v(&wb, 0, 2), Value::text("'123"));
+    // A cell whose text starts with an apostrophe survives a CSV round trip.
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("'abc"));
+    let bytes = write_csv(&sheet, b',', |c| match sheet.value(c) {
+        Value::Text(t) => t.to_string(),
+        _ => String::new(),
+    })
+    .unwrap();
+    let back = read_csv(&bytes, &CsvOptions::default()).unwrap();
+    assert_eq!(v(&back, 0, 0), Value::text("'abc"));
 }
