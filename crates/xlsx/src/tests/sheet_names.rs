@@ -21,3 +21,17 @@ fn unrepresentable_sheet_names_are_refused() {
     }
     assert!(write_xlsx(&book(&["Data", "Other"])).is_ok());
 }
+
+/// A saved sheet keeps its `sheetId`; a copied or new sheet gets one no other sheet asks for.
+#[test]
+fn sheet_ids_survive_a_save() {
+    let mut wb = book(&["A", "B", "C", "D"]);
+    for (sheet, id) in wb.sheets.iter_mut().zip([3, 7, 0, 3]) {
+        Arc::make_mut(sheet).file_id = id;
+    }
+    let (read, _) = crate::read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let ids: Vec<u32> = read.sheets.iter().map(|s| s.file_id).collect();
+    assert_eq!(ids, [3, 7, 1, 2]);
+    let (again, _) = crate::read_xlsx(&write_xlsx(&read).unwrap()).unwrap();
+    assert_eq!(again.sheets.iter().map(|s| s.file_id).collect::<Vec<_>>(), ids);
+}

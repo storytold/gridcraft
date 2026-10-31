@@ -15,12 +15,12 @@ fn harness() -> Harness {
     session.execute("insert.link", json!({"cell": "B2", "target": "https://example.org/a"})).unwrap();
     session.execute("cell.set", json!({"cell": "B4", "input": "jump"})).unwrap();
     session.execute("insert.link", json!({"cell": "B4", "target": "Sheet1!F9"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h

@@ -1,22 +1,28 @@
 //! Ctrl+wheel zoom steps along a ladder of percentages that always comes back to 100%.
 
-use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, vec2};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
+/// Builds a mouse-wheel event from its unit, source, phase, delta and modifiers.
+fn wheel_event(unit: MouseWheelUnit, source: MouseWheelSource, phase: TouchPhase, delta: egui::Vec2, modifiers: Modifiers) -> Event {
+    Event::MouseWheel { unit, delta, phase, modifiers, source }
+}
+
+/// Builds a blank stepped harness and leaves the pointer centered over the grid.
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     let over_grid = h.state().grid.rect.unwrap().center();
@@ -40,7 +46,7 @@ fn wheel_turns(h: &mut Harness, turns: &[f32], frames: usize) {
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
     for &t in turns {
         let delta = vec2(0.0, t);
-        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers: Modifiers::COMMAND });
+        h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::COMMAND));
         h.run_steps(frames);
     }
     h.run_steps(60);
@@ -64,7 +70,7 @@ fn animated() -> Harness {
 fn turn_and_watch(h: &mut Harness, notches: f32, frames: usize) -> Vec<u16> {
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
     let delta = vec2(0.0, notches);
-    h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers: Modifiers::COMMAND });
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, delta, Modifiers::COMMAND));
     (0..frames)
         .map(|_| {
             h.step();
@@ -183,4 +189,90 @@ fn from_a_zoom_set_another_way_a_notch_goes_to_the_next_step_or_100() {
     set_zoom(&mut h, 121);
     wheel(&mut h, -2.0);
     assert_eq!(zoom(&h), 85);
+}
+
+/// One notch in `unit`: a line event or its equivalent in points (egui's 40-point line speed).
+fn turn_in_unit(h: &mut Harness, unit: MouseWheelUnit, delta: egui::Vec2, frames: usize) -> Vec<u16> {
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(wheel_event(unit, MouseWheelSource::Wheel, TouchPhase::Move, delta, Modifiers::COMMAND));
+    let seen = (0..frames)
+        .map(|_| {
+            h.step();
+            zoom(h)
+        })
+        .collect();
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    seen
+}
+
+/// A trackpad/momentum gesture: the starting phase carries no delta, the move does.
+fn gesture(h: &mut Harness, source: MouseWheelSource, delta: f32, frames: usize) -> Vec<u16> {
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Start, vec2(0.0, 0.0), Modifiers::COMMAND));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, source, TouchPhase::Move, vec2(0.0, delta), Modifiers::COMMAND));
+    let seen = (0..frames)
+        .map(|_| {
+            h.step();
+            zoom(h)
+        })
+        .collect();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    seen
+}
+
+#[test]
+/// A 40-point notch follows the same monotonic ladder and reaches 120%.
+fn point_units_use_the_same_zoom_ladder_as_lines() {
+    let mut h = animated();
+    // egui converts a line to 40 points (native); the same physical notch must reach 120%.
+    let seen = turn_in_unit(&mut h, MouseWheelUnit::Point, vec2(0.0, 40.0), 40);
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+    assert_eq!(seen.last(), Some(&120), "{seen:?}");
+}
+
+#[test]
+/// Trackpad and momentum sources follow the same monotonic ladder to 120%.
+fn trackpad_and_momentum_sources_keep_the_notch_ladder() {
+    for source in [MouseWheelSource::Trackpad, MouseWheelSource::Momentum] {
+        let mut h = animated();
+        let seen = gesture(&mut h, source, 40.0, 40);
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "{source:?}: {seen:?}");
+        assert_eq!(seen.last(), Some(&120), "{source:?}: {seen:?}");
+    }
+}
+
+#[test]
+/// A missing touch End is released by the idle timeout, so the next gesture still reaches 140%.
+fn a_trackpad_gesture_without_an_end_still_steps_on_after_the_idle_timeout() {
+    let mut h = animated();
+    let first = gesture(&mut h, MouseWheelSource::Trackpad, 40.0, 40);
+    assert_eq!(first.last(), Some(&120), "{first:?}");
+    // No `TouchPhase::End` arrives; egui's scroll-action timeout must still release the gesture.
+    h.run_steps(60);
+    let second = gesture(&mut h, MouseWheelSource::Trackpad, 40.0, 40);
+    assert_eq!(second.last(), Some(&140), "a stale trackpad gesture must not swallow the next notch: {second:?}");
+}
+
+#[test]
+/// A page-unit scroll moves roughly a viewport, while 40 points scroll less than a page.
+fn page_and_point_units_scroll_the_grid_by_their_converted_distance() {
+    let mut h = harness();
+    let grid = h.state().grid.cells_rect.unwrap();
+    let over = grid.center();
+    h.input_mut().events.push(Event::PointerMoved(over));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Page, MouseWheelSource::Wheel, TouchPhase::Move, vec2(0.0, -1.0), Modifiers::NONE));
+    h.run_steps(60);
+    let page = h.state().view().scroll.y;
+    assert!(page > 100.0, "one page down scrolls roughly a viewport, not zero: {page}");
+
+    h.state_mut().view_mut().unwrap().scroll.y = 0.0;
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(over));
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Point, MouseWheelSource::Trackpad, TouchPhase::Move, vec2(0.0, -40.0), Modifiers::NONE));
+    h.run_steps(60);
+    let point = h.state().view().scroll.y;
+    assert!(point > 0.0 && point < page, "40 points scroll less than a page: point {point}, page {page}");
 }

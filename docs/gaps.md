@@ -65,7 +65,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   equality (#57, so `=0.1+0.2=0.3` is TRUE and MATCH and COUNTIF agree), spill updates after
   structural edits and cleared blockers (#133, #139; PRs #148, #157), 3-D span deletion (#140),
   and qualified names after a sheet rename (#134). Iterative calculation for circular references
-  landed too (no Options dialog yet, which is §13's).
+  landed too, with its settings in File › Options › Formulas.
 - **Impact:** wrong numbers are worse than missing features, so this entry is kept until the
   oracle suite of §15 can say the category is clear rather than only these five reports being so.
 - **Estimate:** — [function-parity.md](function-parity.md#formula-language)
@@ -159,7 +159,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   **Estimate:** 15–23 h.
 
 ### 20. Multiple windows; pen pressure (H)
-- One window (#162, PR #171); no pressure or tilt in ink. **Estimate:** 10–14 h.
+- Desktop windows done: a native window per workbook window, New Window on the same workbook,
+  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web, no
+  pressure or tilt in ink. **Estimate:** 5–8 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
@@ -183,8 +185,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 |---|---|---|
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
+| 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
+| 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |

@@ -37,7 +37,7 @@ pub fn build(name: &str) -> Option<Workbook> {
         return None;
     }
     let mut wb = (*s.doc().ok()?.wb).clone();
-    wb.active_sheet = 0;
+    wb.set_active_sheet(0);
     if let Some(sh) = wb.sheet_mut(0) {
         sh.view_active = gridcraft_core::CellRef::default();
     }

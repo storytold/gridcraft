@@ -32,20 +32,11 @@ fn fixture_with(rtl: bool, setup: Option<serde_json::Value>) -> Harness {
     }
     session.execute("pageLayout.headerFooter", json!({"header": "&LLeft"})).unwrap();
     session.execute("view.pageLayout", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder()
-        .with_size(vec2(1200.0, 900.0))
-        .with_step_dt(1.0 / 60.0)
-        .with_os(egui::os::OperatingSystem::Mac)
-        .build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            SheetApp::new(session, Default::default()),
-        );
-    h.run_steps(4);
-    h
+    crate::common::harness_with(
+        crate::common::builder().with_size(vec2(1200.0, 900.0)).with_step_dt(1.0 / 60.0).with_os(egui::os::OperatingSystem::Mac),
+        crate::common::app(session),
+        4,
+    )
 }
 
 fn geo(h: &Harness) -> Geo {

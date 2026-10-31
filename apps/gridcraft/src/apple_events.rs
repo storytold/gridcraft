@@ -43,7 +43,8 @@ pub fn poll(inbox: &Inbox, app: &mut SheetApp, ctx: &egui::Context) {
                     app.open_path(p);
                 }
             }
-            Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // Quit from the Dock or the system: each unsaved workbook is asked about in its window.
+            Event::Quit => app.request_quit(ctx),
         }
     }
 }
