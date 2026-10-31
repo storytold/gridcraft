@@ -17,6 +17,7 @@ test-support = []
 gridcraft-core = { workspace = true }
 gridcraft-formula = { workspace = true }
 gridcraft-model = { workspace = true }
+encoding_rs = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }

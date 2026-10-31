@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; CSV/TSV encoding choice: Shift-JIS (CP932) and UTF-8 with BOM import and export; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -153,6 +153,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-22 | View › New Window opens a second window on the same workbook (it used to open a copy whose Save overwrote the original): each window has its own selection, active sheet and scroll, titles read "Book1:1" / "Book1:2", and Switch Windows, Hide, Unhide and Close act per window. The control channel, CLI `send` and MCP tools take an optional `window` or `doc` id and default to the active window; `window.list` (MCP `list_windows`) lists the windows |
 | 2026-10-22 | Typing in a cell and then choosing File › New no longer strands the first workbook: the entry is committed into its own workbook before any File or window command (a refused entry stays open and stops the command), View › Switch Windows and the macOS Window menu list the open workbooks with unsaved markers, `view.switchWindows {doc}` switches by a stable workbook id, and the macOS Quit item asks about unsaved workbooks |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
+| 2026-10-20 | CSV/TSV encoding choice: Shift-JIS (CP932) and UTF-8-with-BOM import and export, so a Japanese Excel CSV opens as Japanese and saves back as Shift-JIS; an `encoding` parameter on Open, Save, Save As, Save Bytes and Export as CSV, and the workbook remembers the encoding it was opened with (UTF-8 without BOM stays the default). `auto` reads a file as Shift-JIS only when the CP932 decode holds kana, or holds no kana but at least 80% of its non-ASCII bytes are double-byte pairs that outnumber Windows-1252 character + letter readings — so a kanji-only Japanese address column detects while a Western file is never respelled as Japanese. A character the code page cannot map is written as `?`, never an HTML character reference |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
@@ -255,6 +256,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-22 | minor | Progress log: New Window shares the workbook; window ids for scripts and MCP |
 | 2026-10-22 | minor | Progress log: drafts stay in their workbook, Switch Windows, macOS Quit asks to save |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
+| 2026-10-20 | minor | Progress log: CSV/TSV encoding choice (Shift-JIS/CP932 and UTF-8 with BOM) |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
 | 2026-10-19 | trivial | Progress log: desktop theme portal read timeout |

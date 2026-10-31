@@ -2125,6 +2125,7 @@ name = "gridcraft-xlsx"
 version = "0.14.1"
 dependencies = [
  "aes",
+ "encoding_rs",
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
