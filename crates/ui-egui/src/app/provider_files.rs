@@ -145,8 +145,6 @@ impl SheetApp {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
     use crate::file_providers::Host;
     use crate::{Services, SheetApp, json};
 
