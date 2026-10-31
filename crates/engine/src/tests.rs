@@ -1449,6 +1449,28 @@ fn case_sensitive_sort_puts_lowercase_first() {
 }
 
 #[test]
+fn data_sort_orders_vowelled_arabic_by_letters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["بيت"], ["بَاب"], ["تمر"], ["\u{200F}بحر"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["بَاب", "\u{200F}بحر", "بيت", "تمر"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_marks_and_digit_scripts_like_excel() {
+    // Excel 16.0 (build 20527, en-US) sorts this column, as text, into exactly this order.
+    let want = ["١٢", "۱۲", "ب\u{064E}1", "ب\u{064E}١", "بa", "\u{200F}باب", "ب\u{064B}اب", "ب\u{064E}اب", "ب\u{0652}اب", "ب\u{0651}اب"];
+    let mut s = s();
+    s.execute("home.numberFormat", json!({"range": "A1:A10", "code": "@"})).unwrap();
+    let input: Vec<Vec<&str>> = want.iter().rev().map(|t| vec![*t]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": input})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A10", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=10).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, want.map(Value::from));
+}
+
+#[test]
 fn sort_with_a_sheet_prefix_sorts_the_named_sheet() {
     let col = |s: &Session, sheet: &str| -> Vec<Value> {
         let wb = &s.doc().unwrap().wb;
