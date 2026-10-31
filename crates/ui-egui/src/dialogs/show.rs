@@ -378,6 +378,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
         open = false;
     }
+    if confirm && d.name == "unhideSheet" && d.values.get("sheet").and_then(Json::as_str).is_none() {
+        confirm = false;
+    }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
@@ -579,6 +582,64 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                                     d.set_value(key, json!(val));
                                 }
                             }
+                        }
+                    });
+                }
+                Field::SheetPicker { key, label, options } => {
+                    ui.vertical(|ui| {
+                        let field_label = ui.label(egui::RichText::new(lang.tr(label)).strong());
+                        let mut search = d.search.clone();
+                        let search_response = ui
+                            .add(egui::TextEdit::singleline(&mut search).hint_text("Search sheets…").desired_width(320.0))
+                            .labelled_by(field_label.id);
+                        take_first_focus(d, &search_response);
+                        let search_changed = search_response.changed();
+                        if search_changed {
+                            d.search = search;
+                            d.list_index = 0;
+                        }
+
+                        let query = d.search.to_lowercase();
+                        let matches: Vec<&String> = options.iter().filter(|name| name.to_lowercase().contains(&query)).collect();
+                        if matches.is_empty() {
+                            d.list_index = 0;
+                            d.values.remove(key);
+                        } else {
+                            d.list_index = d.list_index.min(matches.len() - 1);
+                            let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
+                            let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
+                            if up && d.list_index > 0 {
+                                d.list_index -= 1;
+                            }
+                            if down && d.list_index + 1 < matches.len() {
+                                d.list_index += 1;
+                            }
+                            if up || down {
+                                d.values.insert(key.into(), json!(matches[d.list_index]));
+                            }
+                            let row_height = ui.spacing().interact_size.y;
+                            let row_pitch = row_height + ui.spacing().item_spacing.y;
+                            let area = egui::ScrollArea::vertical().max_height(180.0);
+                            let area = if search_changed {
+                                area.vertical_scroll_offset(0.0)
+                            } else if up || down {
+                                area.vertical_scroll_offset(row_pitch * d.list_index as f32)
+                            } else {
+                                area
+                            };
+                            area.show_rows(ui, row_height, matches.len(), |ui, rows| {
+                                for index in rows {
+                                    let Some(name) = matches.get(index) else { continue };
+                                    let selected = d.list_index == index;
+                                    let response = ui.selectable_label(selected, name.as_str());
+                                    let clicked = response.clicked();
+                                    if clicked {
+                                        d.list_index = index;
+                                        d.values.insert(key.into(), json!(name.as_str()));
+                                    }
+                                }
+                            });
+                            d.values.insert(key.into(), json!(matches[d.list_index]));
                         }
                     });
                 }
