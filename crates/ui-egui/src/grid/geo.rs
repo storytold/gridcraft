@@ -33,14 +33,14 @@ pub struct Geo {
 
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
-        let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+        let zoom = sheet_zoom(sh);
         let z = zoom * DISPLAY_SCALE;
-        let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
+        let header_h = if sh.show_headings { (COL_HEADER_H * heading_zoom(zoom)).round() } else { 0.0 };
         let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
         let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
         let digits = (last_row as f32).log10().floor() as i32 + 1;
-        let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round() } else { 0.0 };
+        let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * heading_zoom(zoom)).round() } else { 0.0 };
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
@@ -91,8 +91,7 @@ impl Geo {
     /// on pages laid out by `grid`; frozen panes don't apply (as in Excel).
     pub fn paged(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
         let mut g = Geo::new(sh, rect, scroll);
-        let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
-        g.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
+        g.z = sheet_zoom(sh) * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
         (g.fr, g.fc, g.frozen_w, g.frozen_h) = (0, 0, 0.0, 0.0);
         g.paper = Some(grid);
         g

@@ -88,7 +88,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
-            let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
+            let z = if paper { make_geo(app, view.scroll).z } else { super::sheet_zoom(sh) * DISPLAY_SCALE };
             let mut d = scroll_delta;
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
@@ -107,7 +107,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.grid.touch_pan = true;
     }
     if app.grid.touch_pan && resp.dragged() && ui.input(|i| i.multi_touch().is_none()) {
-        let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
+        let z = if paper { make_geo(app, view.scroll).z } else { super::sheet_zoom(sh) * DISPLAY_SCALE };
         let mut d = resp.drag_delta();
         if sh.right_to_left {
             d.x = -d.x;
@@ -578,7 +578,7 @@ pub(crate) fn paint_headers(
                         // The name is cut off at the button, as a cell's text is at its neighbour.
                         let end = h.button.map_or(cr.right(), |b| b.left()) - 2.0;
                         let room = Rect::from_min_max(cr.min, pos2(end.max(cr.left()), cr.bottom())).intersect(pc.clip_rect());
-                        let pad = 4.0 * (geo.z / DISPLAY_SCALE).max(0.75);
+                        let pad = 4.0 * super::heading_zoom(geo.z / DISPLAY_SCALE);
                         pc.with_clip_rect(room).text(pos2(cr.left() + pad, cr.center().y), Align2::LEFT_CENTER, &h.name, font.clone(), color);
                         if let Some(b) = h.button {
                             paint_filter_button(&pc, b, h.filtered);

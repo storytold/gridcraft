@@ -194,6 +194,22 @@ impl SheetApp {
                     None => Err(format!("missing `percent` ({INTERFACE_SCALE_MIN}–{INTERFACE_SCALE_MAX}, or \"auto\")")),
                 }
             }
+            "view.gridScale" => {
+                // `{"percent": 130}` or `{"percent": "default"}`; out-of-range values are clamped.
+                let percent = match p.get("percent") {
+                    Some(Json::String(s)) if s.eq_ignore_ascii_case("default") || s.eq_ignore_ascii_case("auto") => Some(100),
+                    Some(v) => v.as_f64().and_then(clamp_grid_scale),
+                    None => None,
+                };
+                match percent {
+                    Some(v) => {
+                        self.ui.grid_scale = v;
+                        grid::set_grid_scale(self.ui.grid_factor());
+                        Ok(json!({"percent": v}))
+                    }
+                    None => Err(format!("missing `percent` ({GRID_SCALE_MIN}–{GRID_SCALE_MAX}, or \"default\")")),
+                }
+            }
             "app.language.set" => {
                 // `{"language": "ja"}`; `code` is accepted as an alias.
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");

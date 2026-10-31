@@ -46,6 +46,7 @@ impl SheetApp {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
+        grid::set_grid_scale(self.ui.grid_factor());
     }
 
     /// Look for a newer release once, in the background, as the desktop app starts (a no-op on the
