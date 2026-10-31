@@ -47,25 +47,39 @@ fn split_ssl_mode(url: &str) -> Result<(String, Option<SslMode>), String> {
 /// The TLS options of a connection, and whether it may fall back to an unencrypted session.
 /// Without an `ssl-mode`, TLS options written into the URL (`root_cert_path`,
 /// `danger_accept_invalid_certs=false`…) are used as written, so their certificate checks hold;
-/// with neither, the mode is PREFERRED.
-fn tls_opts(mode: Option<SslMode>, from_url: Option<SslOpts>) -> (Option<SslOpts>, bool) {
+/// with neither, the mode is PREFERRED. A verifying mode refuses URL options that would turn
+/// its checks off.
+fn tls_opts(mode: Option<SslMode>, from_url: Option<SslOpts>) -> Result<(Option<SslOpts>, bool), String> {
+    if let (Some(m @ (SslMode::VerifyCa | SslMode::VerifyIdentity)), Some(given)) = (mode, &from_url) {
+        let conflict = if given.accept_invalid_certs() {
+            Some("danger_accept_invalid_certs=true")
+        } else if m == SslMode::VerifyIdentity && given.skip_domain_validation() {
+            Some("danger_skip_domain_validation=true")
+        } else {
+            None
+        };
+        if let Some(option) = conflict {
+            let name = if m == SslMode::VerifyCa { "VERIFY_CA" } else { "VERIFY_IDENTITY" };
+            return Err(format!("ssl-mode={name} conflicts with {option} in the connection; remove one of them."));
+        }
+    }
     let mode = match (mode, from_url) {
-        (None, Some(given)) => return (Some(given), false),
+        (None, Some(given)) => return Ok((Some(given), false)),
         (mode, given) => (mode.unwrap_or(SslMode::Preferred), given.unwrap_or_default()),
     };
-    match mode {
+    Ok(match mode {
         (SslMode::Disabled, _) => (None, false),
         (SslMode::Preferred, given) => (Some(given.with_danger_accept_invalid_certs(true)), true),
         (SslMode::Required, given) => (Some(given.with_danger_accept_invalid_certs(true)), false),
         (SslMode::VerifyCa, given) => (Some(given.with_danger_skip_domain_validation(true)), false),
         (SslMode::VerifyIdentity, given) => (Some(given), false),
-    }
+    })
 }
 
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let (url, mode) = split_ssl_mode(&req.connection)?;
     let opts = Opts::from_url(&url).map_err(|e| format!("Invalid MySQL connection URL: {e}"))?;
-    let (tls, fallback) = tls_opts(mode, opts.get_ssl_opts().cloned());
+    let (tls, fallback) = tls_opts(mode, opts.get_ssl_opts().cloned())?;
     let timeout = Some(Duration::from_secs(req.timeout_secs));
     let mut b = OptsBuilder::from_opts(opts).tcp_connect_timeout(timeout).read_timeout(timeout).write_timeout(timeout);
     if let Some(u) = &req.user {
@@ -151,13 +165,21 @@ fn value(v: Value, ty: Option<ColumnType>) -> DbValue {
         }
         Value::Time(neg, days, h, m, s, us) => {
             if neg || days > 0 {
-                DbValue::Text(format!("{}{}:{m:02}:{s:02}", if neg { "-" } else { "" }, u64::from(days) * 24 + u64::from(h)))
+                DbValue::Text(long_time(neg, u64::from(days) * 24 + u64::from(h), m, s, us))
             } else {
                 DbValue::Time(h.into(), m.into(), f64::from(s) + f64::from(us) / 1e6)
             }
         }
         Value::Bytes(b) => bytes(b, ty),
     }
+}
+
+/// A TIME outside 0..24 h as text (`-0:00:00.123456`, `25:00:00.5`): it can't be a time of day.
+/// The microseconds are written as six digits, then trailing zeros dropped.
+fn long_time(neg: bool, hours: u64, m: u8, s: u8, us: u32) -> String {
+    let sign = if neg { "-" } else { "" };
+    let frac = if us == 0 { String::new() } else { format!(".{us:06}").trim_end_matches('0').to_string() };
+    format!("{sign}{hours}:{m:02}:{s:02}{frac}")
 }
 
 /// Text-protocol values and binary-protocol strings/decimals arrive as bytes.
@@ -174,7 +196,8 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
         Some(MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_INT24 | MYSQL_TYPE_LONGLONG | MYSQL_TYPE_YEAR) => {
             s.parse::<i64>().map_or(DbValue::Text(s), DbValue::Int)
         }
-        Some(MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL | MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE) => num().map_or(DbValue::Text(s), DbValue::Float),
+        Some(MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL) => crate::decimal(&s),
+        Some(MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE) => num().map_or(DbValue::Text(s), DbValue::Float),
         Some(MYSQL_TYPE_DATE | MYSQL_TYPE_DATETIME | MYSQL_TYPE_TIMESTAMP | MYSQL_TYPE_TIME) => crate::parse_temporal(&s).unwrap_or(DbValue::Text(s)),
         _ => DbValue::Text(s),
     }
@@ -183,6 +206,15 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_times_keep_their_fraction() {
+        assert_eq!(long_time(true, 0, 0, 0, 123_456), "-0:00:00.123456");
+        assert_eq!(long_time(false, 25, 0, 0, 500_000), "25:00:00.5");
+        assert_eq!(long_time(true, 1, 2, 3, 1), "-1:02:03.000001");
+        assert_eq!(long_time(false, 30, 0, 0, 0), "30:00:00");
+        assert_eq!(value(Value::Time(true, 0, 0, 0, 0, 120_000), None), DbValue::Text("-0:00:00.12".into()));
+    }
 
     #[test]
     fn bit_values_are_numbers() {
@@ -196,15 +228,36 @@ mod tests {
     fn url_tls_options_keep_their_certificate_checks() {
         // `root_cert_path` without `ssl-mode`: TLS required, the certificate checked.
         let opts = Opts::from_url("mysql://u@h/db?root_cert_path=/etc/ca.pem").unwrap();
-        let (tls, fallback) = tls_opts(None, opts.get_ssl_opts().cloned());
+        let (tls, fallback) = tls_opts(None, opts.get_ssl_opts().cloned()).unwrap();
         assert!(tls.is_some_and(|t| !t.accept_invalid_certs()) && !fallback);
         // An explicit mode still decides.
-        let (tls, _) = tls_opts(Some(SslMode::Required), opts.get_ssl_opts().cloned());
+        let (tls, _) = tls_opts(Some(SslMode::Required), opts.get_ssl_opts().cloned()).unwrap();
         assert!(tls.is_some_and(|t| t.accept_invalid_certs()));
         // Neither: PREFERRED, which may fall back.
-        let (tls, fallback) = tls_opts(None, None);
+        let (tls, fallback) = tls_opts(None, None).unwrap();
         assert!(tls.is_some() && fallback);
-        assert_eq!(tls_opts(Some(SslMode::Disabled), None), (None, false));
+        assert_eq!(tls_opts(Some(SslMode::Disabled), None), Ok((None, false)));
+    }
+
+    #[test]
+    fn verifying_modes_refuse_url_options_that_turn_checks_off() {
+        let opts = |q: &str| Opts::from_url(&format!("mysql://u:secret@h/db?{q}")).unwrap().get_ssl_opts().cloned();
+        let accept = opts("danger_accept_invalid_certs=true");
+        let skip = opts("danger_skip_domain_validation=true");
+        for (mode, url, bad) in [
+            (SslMode::VerifyCa, &accept, true),
+            (SslMode::VerifyIdentity, &accept, true),
+            (SslMode::VerifyIdentity, &skip, true),
+            // VERIFY_CA skips the host name check by design.
+            (SslMode::VerifyCa, &skip, false),
+            (SslMode::Required, &accept, false),
+        ] {
+            let r = tls_opts(Some(mode), url.clone());
+            assert_eq!(r.is_err(), bad, "{mode:?}");
+            if let Err(e) = r {
+                assert!(e.contains("danger_") && !e.contains("secret") && !e.contains("mysql://"), "{e}");
+            }
+        }
     }
 
     #[test]
