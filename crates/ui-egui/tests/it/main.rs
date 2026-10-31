@@ -74,6 +74,7 @@ mod page_layout_view;
 mod page_setup_margins;
 mod paste_names;
 mod paste_special_dialog;
+mod pivot_field_dragging;
 mod pivot_pane;
 mod pivot_show_details;
 mod pivot_show_details_menu;
