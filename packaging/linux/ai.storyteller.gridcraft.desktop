@@ -2,7 +2,9 @@
 Type=Application
 Name=GridCraft
 GenericName=Spreadsheet
+GenericName[de]=Tabellenkalkulation
 Comment=Calculate, analyse and chart data in workbooks
+Comment[de]=Daten in Arbeitsmappen berechnen, analysieren und darstellen
 Exec=gridcraft %F
 TryExec=gridcraft
 Icon=ai.storyteller.gridcraft
