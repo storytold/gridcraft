@@ -8,7 +8,7 @@ formulas.
 | Interface | Function names (e.g.) | Local names | Booleans | Errors (e.g.) | Arguments / decimal | Array columns / rows | Table specifiers (e.g.) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | English | `SUM`, `IF`, `VLOOKUP` | — | `TRUE`, `FALSE` | `#VALUE!`, `#N/A` | `,` / `.` | `,` / `;` | `#Headers`, `#This Row` |
-| Español | `SUMA`, `SI`, `BUSCARV` | 10 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
+| Español | `SUMA`, `SI`, `BUSCARV` | 15 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
 
 The Spanish function names:
 
@@ -22,6 +22,7 @@ The Spanish function names:
 | `CONTAR.SI` | `COUNTIF` |
 | `BUSCARV` | `VLOOKUP` |
 | `HOY` | `TODAY` |
+| `VNA`, `TIR`, `PAGO`, `VA`, `VF` | `NPV`, `IRR`, `PMT`, `PV`, `FV` |
 | `VERDADERO`, `FALSO` | `TRUE`, `FALSE` (literals or function calls) |
 | `#¡VALOR!`, `#N/D`, `#¿NOMBRE?`… | `#VALUE!`, `#N/A`, `#NAME?`… |
 | `[#Todo]`, `[#Datos]`, `[#Encabezados]`, `[#Totales]`, `[#Esta fila]` | `[#All]`, `[#Data]`, `[#Headers]`, `[#Totals]`, `[#This Row]` |
