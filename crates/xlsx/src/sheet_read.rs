@@ -97,7 +97,8 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
-fn read_sheet_format(e: &El, sheet: &mut Sheet) {
+/// `dw` is the digit width of the workbook's Normal font: the unit of the column widths read.
+fn read_sheet_format(e: &El, sheet: &mut Sheet, dw: f64) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
         let px = pt_to_px(h);
         if px > 0.0 {
@@ -105,13 +106,12 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
         }
     }
     if let Some(w) = e.attr_f64("defaultColWidth") {
-        let px = col_width_to_px(w);
+        let px = col_width_to_px(w, dw);
         if px > 0.0 {
             sheet.default_col_width = px;
         }
     } else if let Some(b) = e.attr_f64("baseColWidth") {
-        let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
-        sheet.default_col_width = px as f32;
+        sheet.default_col_width = gridcraft_model::base_col_width(b, dw);
     }
 }
 
@@ -119,6 +119,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
+    // Column widths count digits of the Normal font: a sheet without its own default width gets
+    // 8 of them (64 px for Calibri 11, 72 for Calibri 12).
+    sheet.default_col_width = gridcraft_model::base_col_width(8.0, digit_width(cx));
     let mut st = RowState::default();
     let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
         read_row(cx, &mut sheet, &mut st, &row);
@@ -152,7 +155,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetViews" => read_views(e, &mut sheet),
-            "sheetFormatPr" => read_sheet_format(e, &mut sheet),
+            "sheetFormatPr" => read_sheet_format(e, &mut sheet, digit_width(cx)),
             "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
@@ -367,7 +370,13 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// Digit width of the workbook's Normal font: the unit of the column widths being read.
+fn digit_width(cx: &Ctx<'_>) -> f64 {
+    gridcraft_model::digit_width(&cx.styles.get(gridcraft_model::StyleId::DEFAULT).font)
+}
+
 fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {
+    let dw = digit_width(cx);
     for c in e.kids("col") {
         let (Some(min), Some(max)) = (c.attr_u32("min"), c.attr_u32("max")) else { continue };
         if min == 0 || min > MAX_COLS || max < min {
@@ -377,7 +386,7 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
         let mut info = LineInfo::default();
         // A width without `customWidth` that equals the default is just the default.
         if let Some(w) = c.attr_f64("width") {
-            let px = col_width_to_px(w);
+            let px = col_width_to_px(w, dw);
             if c.flag("customWidth", false) || px != sheet.default_col_width {
                 info.size = Some(px);
             }
