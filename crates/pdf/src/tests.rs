@@ -332,3 +332,88 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
     Ok(())
 }
+
+#[test]
+fn latin_extended_letters_use_the_latin_font() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "tőrű ŐŰ");
+    let c = page_content(&doc).to_string();
+    assert!(!c.contains("<0151>") && !c.contains("<0171>"), "ő/ű set in the CJK font: {c}");
+    // ő, ű, Ő, Ű are bytes 0xD1, 0xF1, 0xD0, 0xF0 of the Helvetica Latin Extended-A resource.
+    // Resources: /F1../F12 the faces, /F13 the CID font, /F14../F25 their Latin Extended-A twins.
+    let ext = "/F14";
+    let expected =
+        format!("/F1 10 Tf\n(t) Tj\n{ext} 10 Tf\n<D1> Tj\n/F1 10 Tf\n(r) Tj\n{ext} 10 Tf\n<F1> Tj\n/F1 10 Tf\n( ) Tj\n{ext} 10 Tf\n<D0F0> Tj\n");
+    assert!(c.contains(&expected), "ő/ű not set through the Latin resource: {c}");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "CJK font used for Latin letters");
+    for name in ["/ohungarumlaut", "/uhungarumlaut", "/Ohungarumlaut", "/Uhungarumlaut"] {
+        assert!(find(&pdf, name.as_bytes()).is_some(), "missing glyph name {name}");
+    }
+    assert_eq!(text_width(Font::Helvetica, 10.0, "ő"), text_width(Font::Helvetica, 10.0, "o"));
+    assert_eq!(text_width(Font::TimesBold, 10.0, "Ű"), text_width(Font::TimesBold, 10.0, "U"));
+    assert_eq!(text_width(Font::Courier, 10.0, "ł"), 6.0);
+}
+
+/// Romanian: ă/Ă are Latin Extended-A, ș ț Ș Ț (comma below) are Latin Extended-B. All of them
+/// are set in the Latin face, none in the CJK font (which has no glyph for them: printed boxes).
+#[test]
+fn romanian_letters_use_the_latin_font() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::HelveticaBold, [0, 0, 0], "Comandă științe ȘȚ");
+    let c = page_content(&doc).to_string();
+    // HelveticaBold is /F2; its Latin Extended twin is /F15. ă = 0x83, ș ț = 0x02 0x04, Ș Ț = 0x01 0x03.
+    let expected = "/F2 10 Tf\n(Comand) Tj\n/F15 10 Tf\n<83> Tj\n/F2 10 Tf\n( ) Tj\n/F15 10 Tf\n<02> Tj\n/F2 10 Tf\n(tiin) Tj\n/F15 10 Tf\n<04> Tj\n/F2 10 Tf\n(e ) Tj\n/F15 10 Tf\n<0103> Tj\n";
+    assert!(c.contains(expected), "Romanian letters not set through the Latin resource: {c}");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "CJK font used for Romanian letters");
+    // Measured like their base letters, not as a full-em CJK glyph.
+    assert_eq!(text_width(Font::HelveticaBold, 10.0, "ș"), text_width(Font::HelveticaBold, 10.0, "s"));
+    assert_eq!(text_width(Font::Helvetica, 10.0, "Ț"), text_width(Font::Helvetica, 10.0, "T"));
+    // The letters next to the block stay out of it.
+    for c in ['\u{0217}', '\u{021C}'] {
+        assert_eq!(ext_code(c), None, "{c:?}");
+    }
+    // The resource carries the advances (a viewer's standard metrics have no `uni0219`): ș at
+    // code 2 advances like s, ă at 0x83 like a, and unused codes by nothing.
+    let widths: Vec<u16> = ext_widths(Font::HelveticaBold).split(' ').map(|w| w.parse().unwrap()).collect();
+    assert_eq!(widths.len(), 255);
+    assert_eq!(widths[2 - 1], Font::HelveticaBold.char_width('s'));
+    assert_eq!(widths[0x83 - 1], Font::HelveticaBold.char_width('a'));
+    assert_eq!(widths[0x20 - 1], 0);
+    // Œ is WinAnsi (0x8C there), so its Latin Extended-A slot (0xD2) is unused.
+    assert_eq!(widths[0xD2 - 1], 0);
+    for code in 1..=255u8 {
+        if let Some(c) = ext_char(code) {
+            assert_eq!(ext_code(c), Some(code), "{c:?}");
+        }
+    }
+}
+
+#[test]
+fn latin_extended_letters_use_each_faces_own_resource() {
+    // Every face routed to a `/Differences` resource has the Latin glyphs; the symbolic standard
+    // fonts (Symbol, ZapfDingbats) lack them and must never be in this list.
+    for face in Font::ALL {
+        let name = face.base_name();
+        assert!(!name.starts_with("Symbol") && !name.starts_with("ZapfDingbats"), "{name}");
+        let mut doc = PdfDoc::new();
+        let p = doc.add_page(612.0, 792.0);
+        p.text(10.0, 20.0, 10.0, face, [0, 0, 0], "ő");
+        let ext = Font::ALL.len() + 2 + face.index();
+        let c = page_content(&doc).to_string();
+        assert!(c.contains(&format!("/F{ext} 10 Tf\n<D1> Tj\n")), "{name}: {c}");
+        let pdf = doc.finish();
+        check_xref(&pdf);
+        let dict = format!("/BaseFont /{name} /FirstChar 1 /LastChar 255 /Widths [");
+        assert!(find(&pdf, dict.as_bytes()).is_some(), "{name}: no widths for the Latin Extended resource");
+        let enc = "/Encoding << /Type /Encoding /Differences [1 /uni0218 /uni0219 /uni021A /uni021B 128 /Amacron";
+        assert!(find(&pdf, enc.as_bytes()).is_some(), "{name}: no Latin Extended-A encoding");
+        assert!(find(&pdf, format!("/F{ext} ").as_bytes()).is_some(), "{name}: resource missing");
+        assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "{name}: CJK font used");
+    }
+}
