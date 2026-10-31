@@ -133,14 +133,17 @@ fn run_length_roundtrip() {
         while i < d.len() {
             let l = d[i];
             i += 1;
-            if l == 128 {
-                break;
-            } else if l < 128 {
-                out.extend_from_slice(&d[i..i + l as usize + 1]);
-                i += l as usize + 1;
-            } else {
-                out.extend(std::iter::repeat_n(d[i], 257 - l as usize));
-                i += 1;
+            match l.cmp(&128) {
+                std::cmp::Ordering::Equal => break,
+                std::cmp::Ordering::Less => {
+                    let len = usize::from(l) + 1;
+                    out.extend_from_slice(&d[i..i + len]);
+                    i += len;
+                }
+                std::cmp::Ordering::Greater => {
+                    out.extend(std::iter::repeat_n(d[i], 257 - usize::from(l)));
+                    i += 1;
+                }
             }
         }
         out
@@ -150,8 +153,8 @@ fn run_length_roundtrip() {
         vec![1],
         vec![1, 1],
         vec![1, 2, 3, 3, 3, 3, 4, 5, 5],
-        (0..1000).map(|i| (i / 7) as u8).collect(),
-        (0..1000).map(|i| (i * 31 % 251) as u8).collect(),
+        (0..1000).map(|i| u8::try_from(i / 7).unwrap_or(u8::MAX)).collect(),
+        (0..1000).map(|i| u8::try_from(i * 31 % 251).unwrap_or(u8::MAX)).collect(),
         vec![9; 300],
     ];
     for c in cases {
@@ -163,9 +166,9 @@ fn run_length_roundtrip() {
 fn widths() {
     assert!((text_width(Font::Helvetica, 10.0, "Hello") - 22.78).abs() < 0.01);
     assert!(text_width(Font::HelveticaBold, 10.0, "Hello") > text_width(Font::Helvetica, 10.0, "Hello"));
-    assert_eq!(text_width(Font::Courier, 10.0, "abc"), 18.0);
+    assert!((text_width(Font::Courier, 10.0, "abc") - 18.0).abs() < f32::EPSILON);
     assert!(text_width(Font::TimesRoman, 12.0, "é") > 0.0);
-    assert_eq!(text_width(Font::Helvetica, 10.0, ""), 0.0);
+    assert!(text_width(Font::Helvetica, 10.0, "").abs() < f32::EPSILON);
     assert_eq!(Font::family_for("Calibri"), Family::Sans);
     assert_eq!(Font::family_for("Times New Roman"), Family::Serif);
     assert_eq!(Font::family_for("Consolas"), Family::Mono);
@@ -329,6 +332,6 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     assert!(find(&pdf, b"( 2) Tj").is_some());
     assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some());
     // Measured as full-width glyphs, matching the CID font's default width.
-    assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
+    assert!((text_width(Font::Helvetica, 10.0, "签字") - 20.0).abs() < f32::EPSILON);
     Ok(())
 }
