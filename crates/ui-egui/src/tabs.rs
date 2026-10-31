@@ -319,6 +319,163 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// The tab strip appears once at least this many workbooks are showing.
+const MIN_DOCUMENT_TABS: usize = 2;
+const DOC_TAB_H: f32 = 30.0;
+const DOC_TAB_MIN_W: f32 = 110.0;
+const DOC_TAB_MAX_W: f32 = 240.0;
+const DOC_TAB_CLOSE: f32 = 18.0;
+
+/// The windows to show as tabs, as `(window id, title, unsaved changes)`: one tab per window, so a
+/// workbook with several windows (View › New Window) has several, titled `Name:1`, `Name:2`.
+/// Windows hidden with View › Hide stay off the strip; View › Unhide brings them back.
+fn document_tab_items(session: &gridcraft_engine::Session) -> Vec<(u64, String, bool)> {
+    let dirty = |uid: u64| session.documents().iter().any(|d| d.uid == uid && d.is_dirty());
+    session.windows().iter().filter(|w| !w.hidden).filter_map(|w| Some((w.id, session.window_title(w.id)?, dirty(w.doc_uid)))).collect()
+}
+
+/// Switches to window `id` from its tab. The cell being edited belongs to the window it was typed
+/// in, so it is committed first; an entry that doesn't commit keeps the user where they are.
+fn activate_document(app: &mut SheetApp, id: u64) {
+    if app.session.active_window() == Some(id) {
+        return;
+    }
+    if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+        return;
+    }
+    app.run_or_alert("window.activate", json!({"window": id}));
+}
+
+/// Closes window `id` the way its close button does (`window.close`): a workbook's last window
+/// asks about unsaved changes (the Save Changes dialog) before the workbook goes.
+fn close_document(app: &mut SheetApp, id: u64) {
+    if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+        return;
+    }
+    app.run_or_alert("window.close", json!({"window": id}));
+}
+
+/// Draws the window tab strip under the title bar when several windows are open: click a tab to
+/// switch, its × (or a middle click) to close it, + for a new workbook. A workbook with unsaved
+/// changes shows a dot in place of the ×. With native windows (the desktop) every window has its
+/// own OS window and there is no strip.
+pub fn document_tabs(app: &mut SheetApp, ui: &mut Ui) {
+    if app.native_windows {
+        return;
+    }
+    let items = document_tab_items(&app.session);
+    if items.len() < MIN_DOCUMENT_TABS {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let active = app.session.active_window();
+    // The active tab is brought into view when the active window or the set of tabs changes, not on
+    // every frame, so the strip can still be scrolled to the tabs beyond it.
+    let reveal_key = egui::Id::unique((active, items.iter().map(|(id, ..)| *id).collect::<Vec<_>>()));
+    let reveal_id = ui.scope_id().with("document_tabs_reveal");
+    let reveal_active = ui.ctx().data_mut(|d| {
+        let changed = d.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
+        d.insert_temp(reveal_id, reveal_key);
+        changed
+    });
+    let (mut activate, mut close, mut new) = (None, None, false);
+    egui::Panel::top("document_tabs").exact_size(DOC_TAB_H + 2.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
+        let rect = ui.max_rect();
+        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.ribbon_border));
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(8.0);
+            let new_w = 32.0;
+            let strip_w = (ui.available_width() - new_w - 8.0).max(DOC_TAB_MIN_W);
+            ui.allocate_ui_with_layout(vec2(strip_w, DOC_TAB_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("document_tabs_horizontal")
+                    .auto_shrink([true, false])
+                    .min_scrolled_width(0.0)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for (i, title, dirty) in &items {
+                                let (i, dirty, is_active) = (*i, *dirty, Some(*i) == active);
+                                let font = if is_active { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
+                                let text_w = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text).size().x;
+                                let w = (text_w + 20.0 + DOC_TAB_CLOSE + 8.0).clamp(DOC_TAB_MIN_W, DOC_TAB_MAX_W);
+                                let (r, resp) = ui.allocate_exact_size(vec2(w, DOC_TAB_H), Sense::click());
+                                if is_active && reveal_active {
+                                    resp.scroll_to_me(None);
+                                }
+                                let tab = Rect::from_min_max(pos2(r.left(), r.top() + 3.0), r.max);
+                                if is_active {
+                                    ui.painter().rect_filled(tab, 4.0, t.tab_active);
+                                    ui.painter().rect_stroke(tab, 4.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+                                    let band = Rect::from_min_size(pos2(tab.left() + 6.0, tab.top()), vec2(tab.width() - 12.0, 2.5));
+                                    ui.painter().rect_filled(band, 1.0, t.accent);
+                                } else if resp.hovered() {
+                                    ui.painter().rect_filled(tab, 4.0, t.hover);
+                                }
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, is_active, title.as_str()));
+                                // The title leaves room for the close button and is cut with an ellipsis.
+                                let mut job =
+                                    egui::text::LayoutJob::simple_singleline(title.clone(), font, if is_active { t.accent } else { t.text });
+                                job.wrap.max_width = w - 20.0 - DOC_TAB_CLOSE;
+                                job.wrap.max_rows = 1;
+                                job.wrap.break_anywhere = true;
+                                job.wrap.overflow_character = Some('…');
+                                let galley = ui.painter().layout_job(job);
+                                let at = pos2(tab.left() + 10.0, tab.center().y + 1.0 - galley.size().y / 2.0);
+                                ui.painter().galley(at, galley, t.text);
+                                // The close button sits on top of the tab, so it takes its own clicks.
+                                let close_rect = Rect::from_center_size(
+                                    pos2(tab.right() - 6.0 - DOC_TAB_CLOSE / 2.0, tab.center().y + 1.0),
+                                    vec2(DOC_TAB_CLOSE, DOC_TAB_CLOSE),
+                                );
+                                let close_name = app.ui.language.tr("Close");
+                                let close_resp = ui.interact(close_rect, resp.id.with("close"), Sense::click());
+                                close_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, close_name));
+                                if dirty && !resp.hovered() && !close_resp.hovered() {
+                                    ui.painter().circle_filled(close_rect.center(), 4.0, t.text_dim);
+                                } else {
+                                    if close_resp.hovered() {
+                                        ui.painter().rect_filled(close_rect, 3.0, t.pressed);
+                                    }
+                                    icons::paint(ui.painter(), close_rect.shrink(3.0), Icon::Close, t.text_dim);
+                                }
+                                let close_resp = close_resp.on_hover_text(close_name);
+                                if close_resp.clicked() || resp.middle_clicked() {
+                                    close = Some(i);
+                                } else if resp.clicked() || (resp.secondary_clicked() && !is_active) {
+                                    activate = Some(i);
+                                }
+                                resp.context_menu(|ui| {
+                                    if ui.button(app.ui.language.tr("Close")).clicked() {
+                                        close = Some(i);
+                                        ui.close();
+                                    }
+                                });
+                            }
+                        });
+                    });
+            });
+            let new_name = app.ui.language.tr("New Workbook");
+            let plus = crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, new_name, vec2(24.0, 24.0));
+            plus.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, new_name));
+            if plus.clicked() {
+                new = true;
+            }
+        });
+    });
+    if let Some(i) = activate {
+        activate_document(app, i);
+    }
+    if let Some(i) = close {
+        close_document(app, i);
+    }
+    if new && (app.editor.is_none() || app.commit_edit(0, 0, false, false)) {
+        app.run_or_alert("file.new", json!({}));
+    }
+}
+
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
