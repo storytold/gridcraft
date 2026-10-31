@@ -1,3 +1,7 @@
+use gridcraft_engine::DocState;
+use gridcraft_engine::cmd::print::{self as pr, HfContext, HfFrame, HfItem};
+use gridcraft_engine::model::HfPage;
+
 use super::{
     Align2, Backstage, Icon, Json, Outcome, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme, vec2,
 };
@@ -77,6 +81,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             if let Some(d) = app.session.active() {
                 paint_page(p, rect, w, page, &d.wb, &t);
+                paint_header_footer(p, rect, (w, h), page, pages.len(), d, &t);
             }
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
@@ -98,6 +103,69 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             });
         });
     });
+}
+
+/// Draws a preview page's header and footer in miniature, laid out as printing lays them out
+/// (`layout_header_footer`, with the geometry `file.printPreview` gives the page): text with
+/// its fields filled in, and the pictures (`&G`) the sheet keeps from its file (#1257).
+fn paint_header_footer(p: &egui::Painter, rect: Rect, (paper_w, paper_h): (f32, f32), page: &Json, pages: usize, d: &DocState, t: &Tokens) {
+    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| d.wb.sheet_index(n)).and_then(|i| d.wb.sheets.get(i)) else { return };
+    if !sh.print.has_header_footer() {
+        return;
+    }
+    let num = |v: Option<&Json>, default: f32, max: f32| {
+        v.and_then(Json::as_f64).filter(|v| v.is_finite() && *v >= 0.0).map_or(default, |v| v as f32).min(max)
+    };
+    let frame = HfFrame {
+        page_w: paper_w,
+        page_h: paper_h,
+        header_margin: num(page.get("headerMargin"), 21.6, paper_h),
+        footer_margin: num(page.get("footerMargin"), 21.6, paper_h),
+        sides: (num(page.pointer("/hfSides/0"), 50.4, paper_w), num(page.pointer("/hfSides/1"), 50.4, paper_w)),
+        text_scale: num(page.get("hfScale"), 1.0, 4.0).max(0.1),
+    };
+    let which = page.get("hfPage").and_then(Json::as_str).and_then(HfPage::parse).unwrap_or(HfPage::Odd);
+    let (date, time) = pr::hf_date_time(&d.wb);
+    let cx = HfContext {
+        page: page.get("page").and_then(Json::as_u64).map_or(1, |n| n.min(u64::from(u32::MAX)) as usize),
+        pages,
+        sheet: sh.name.clone(),
+        file: d.display_title(),
+        path: d.path.clone().unwrap_or_default(),
+        date,
+        time,
+    };
+    let per_pt = rect.width() / paper_w;
+    // The pictures this kind of page shows, with their textures (one that can't be decoded
+    // takes no room, as on paper).
+    let pictures: Vec<_> = pr::hf_pictures(sh)
+        .into_iter()
+        .filter(|q| q.page == which)
+        .filter_map(|q| {
+            let size = vec2(q.width, q.height) * frame.text_scale * per_pt;
+            let tex = crate::floating_pictures::header_footer_texture(p.ctx(), d.uid, &q.data, Rect::from_min_size(pos2(0.0, 0.0), size))?;
+            Some((q, tex))
+        })
+        .collect();
+    let picture = |footer: bool, section: usize| pictures.iter().find(|(q, _)| q.footer == footer && q.section == section);
+    let items = pr::layout_header_footer(&frame, &sh.print, which, &cx, |f, s| picture(f, s).map(|(q, _)| (q.width, q.height)));
+    let p = p.with_clip_rect(rect);
+    let at = |x: f32, y: f32| pos2(rect.left() + x * per_pt, rect.top() + y * per_pt);
+    for item in items {
+        match item {
+            HfItem::Text { x, baseline, size, bold, text, .. } => {
+                let px = (size * per_pt).clamp(2.0, 40.0);
+                let font = if bold { theme::ui_bold(px) } else { theme::ui_font(px) };
+                p.text(at(x, baseline), Align2::LEFT_BOTTOM, text, font, t.cell_text);
+            }
+            HfItem::Picture { x, y, width, height, footer, section } => {
+                if let Some((_, tex)) = picture(footer, section) {
+                    let r = Rect::from_min_size(at(x, y), vec2(width, height) * per_pt);
+                    p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                }
+            }
+        }
+    }
 }
 
 /// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
