@@ -183,6 +183,8 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        // Step by step: a rename and a new sheet undone together match up only one step apart.
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -203,6 +205,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);

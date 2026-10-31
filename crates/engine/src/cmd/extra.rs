@@ -28,7 +28,7 @@ use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline}
 pub(crate) use scripts::has_scripts;
 use scripts::{all_scripts, delete_script, new_script, record, run_script, stop_action, trust_scripts};
 use window::{arrange_all, custom_views, hide_window, new_window, ruler, set_view, split, switch_windows, unhide_window, watch_window};
-pub(crate) use window::{keep_watch_list, window_param};
+pub(crate) use window::{keep_view_modes, keep_watch_list, window_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

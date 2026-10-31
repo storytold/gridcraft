@@ -5234,3 +5234,72 @@ fn unique_nonce() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
+
+/// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
+/// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
+/// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).
+#[test]
+fn undo_and_redo_keep_each_sheets_view() {
+    use gridcraft_model::SheetViewMode;
+    let view = |s: &Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().view;
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview, "undo leaves the view alone");
+    s.execute("view.pageLayout", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(view(&s, 0), SheetViewMode::PageLayout, "redo leaves the view alone");
+
+    // Undoing a rename: the sheet is found at its position under the restored name.
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(s.doc().unwrap().wb.sheet(0).unwrap().name, "Renamed");
+    assert_eq!(view(&s, 0), SheetViewMode::Normal);
+
+    // Undoing a new sheet: the other sheets keep theirs.
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_multi_step_undo_keeps_views_through_each_step() {
+    // A rename and a new sheet undone in one call: neither the name nor the sheet count matches
+    // between the first and last workbook, so the view is carried step by step.
+    let mut s = s();
+    let first = s.doc().unwrap().wb.sheet(0).unwrap().name.clone();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 1);
+    assert_eq!(d.wb.sheet(0).unwrap().name, first);
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.sheets.len(), d.wb.sheet(0).unwrap().name.as_str()), (2, "Renamed"));
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
+}
