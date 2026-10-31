@@ -263,11 +263,14 @@ mod tests {
     fn a_cancelled_worker_cannot_fill_a_new_request() {
         let jobs = DbJobs::default();
         let calls = Arc::new(AtomicU64::new(0));
-        let n = calls.clone();
-        // The first answer is slow and stale; the second is quick.
+        // The first worker waits at this gate until the test opens it.
+        let gate = Arc::new(AtomicBool::new(false));
+        let (n, g) = (calls.clone(), gate.clone());
         let inner: DataSource = Arc::new(move |_: &DbRequest| {
             let k = n.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(if k == 0 { 150 } else { 10 }));
+            while k == 0 && !g.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
             Ok(DbTable { columns: vec![format!("answer{k}")], rows: vec![], truncated: false })
         });
         let source = jobs.wrap(inner, Arc::new(|| {}));
@@ -283,13 +286,18 @@ mod tests {
         };
         jobs.defer.store(true, Ordering::SeqCst);
         assert!(source(&req).is_err());
+        while calls.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Cancel, and start the same request again: its worker answers at once.
         jobs.clear();
         assert!(source(&req).is_err());
         while jobs.busy() {
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(2));
         }
-        // Wait for the stale worker too, then check it changed nothing.
-        std::thread::sleep(Duration::from_millis(200));
+        // The cancelled worker answers last; its answer must not replace the new one.
+        gate.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
         assert_eq!(source(&req).map(|t| t.columns), Ok(vec!["answer1".to_string()]));
     }
 
