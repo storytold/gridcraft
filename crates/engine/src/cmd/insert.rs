@@ -147,7 +147,15 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
         cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
-        cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!(
+            "object.move",
+            "Move Object",
+            [],
+            None,
+            "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?, rotation?: degrees clockwise (shapes, not ink)}",
+            has_doc,
+            move_object
+        ),
         cmd!(
             "object.setAnchorMode",
             "Object Properties",
