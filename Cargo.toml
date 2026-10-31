@@ -39,7 +39,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std", "clo
 web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
-quick-xml = "0.41"
+quick-xml = "0.42"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
 # Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).

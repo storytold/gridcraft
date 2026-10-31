@@ -18,11 +18,11 @@ use crate::package::{MAX_ENTRIES, Package};
 use crate::{IoError, ReadReport};
 
 const MIME: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
-const OFFICE: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:office:1.0";
-const TABLE: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:table:1.0";
-const TEXT: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:text:1.0";
-const CALC_EXT: &[u8] = b"urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0";
-const MANIFEST: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+const OFFICE: &str = "urn:oasis:names:tc:opendocument:xmlns:office:1.0";
+const TABLE: &str = "urn:oasis:names:tc:opendocument:xmlns:table:1.0";
+const TEXT: &str = "urn:oasis:names:tc:opendocument:xmlns:text:1.0";
+const CALC_EXT: &str = "urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0";
+const MANIFEST: &str = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
 const MAX_CELLS: u64 = 1_000_000;
 const MAX_MERGES: u64 = 100_000;
 const MAX_CELL_TEXT: usize = 1024 * 1024;
@@ -64,11 +64,11 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     Ok((import.wb, import.report))
 }
 
-fn is_ns(ns: ResolveResult<'_>, expected: &[u8]) -> bool {
+fn is_ns(ns: ResolveResult<'_>, expected: &str) -> bool {
     matches!(ns, ResolveResult::Bound(n) if n.as_ref() == expected)
 }
 
-fn attr(reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>, ns: &[u8], name: &[u8]) -> Result<Option<String>, IoError> {
+fn attr(reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>, ns: &str, name: &str) -> Result<Option<String>, IoError> {
     let mut found = None;
     for a in e.attributes() {
         let a = a.map_err(|e| IoError::Xml(e.to_string()))?;
@@ -108,11 +108,11 @@ fn check_manifest(bytes: &[u8]) -> Result<(), IoError> {
         match &event {
             Event::Start(e) | Event::Empty(e) => {
                 let (ns, name) = reader.resolver_mut().resolve_element(e.name());
-                if is_ns(ns.clone(), MANIFEST) && name.as_ref() == b"encryption-data" {
+                if is_ns(ns.clone(), MANIFEST) && name.as_ref() == "encryption-data" {
                     return Err(IoError::Format("encrypted ODS files are not supported".into()));
                 }
                 if depth == 0 {
-                    if root_seen || !is_ns(ns, MANIFEST) || name.as_ref() != b"manifest" {
+                    if root_seen || !is_ns(ns, MANIFEST) || name.as_ref() != "manifest" {
                         return Err(xml_error("expected one manifest:manifest root"));
                     }
                     root_seen = true;
@@ -159,29 +159,29 @@ fn tag(reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>) -> Tag {
     let local = name.as_ref();
     if is_ns(ns.clone(), OFFICE) {
         return match local {
-            b"document-content" => Tag::Document,
-            b"body" => Tag::Body,
-            b"spreadsheet" => Tag::Spreadsheet,
+            "document-content" => Tag::Document,
+            "body" => Tag::Body,
+            "spreadsheet" => Tag::Spreadsheet,
             _ => Tag::Other,
         };
     }
     if is_ns(ns.clone(), TABLE) {
         return match local {
-            b"table" => Tag::Table,
-            b"table-row-group" | b"table-header-rows" | b"table-rows" => Tag::Rows,
-            b"table-row" => Tag::Row,
-            b"table-cell" => Tag::Cell,
-            b"covered-table-cell" => Tag::Covered,
+            "table" => Tag::Table,
+            "table-row-group" | "table-header-rows" | "table-rows" => Tag::Rows,
+            "table-row" => Tag::Row,
+            "table-cell" => Tag::Cell,
+            "covered-table-cell" => Tag::Covered,
             _ => Tag::Other,
         };
     }
     if is_ns(ns, TEXT) {
         return match local {
-            b"p" | b"h" => Tag::Paragraph,
-            b"span" | b"a" | b"meta" | b"meta-field" | b"ruby" | b"ruby-base" => Tag::Inline,
-            b"s" => Tag::Space,
-            b"tab" => Tag::Tab,
-            b"line-break" => Tag::Break,
+            "p" | "h" => Tag::Paragraph,
+            "span" | "a" | "meta" | "meta-field" | "ruby" | "ruby-base" => Tag::Inline,
+            "s" => Tag::Space,
+            "tab" => Tag::Tab,
+            "line-break" => Tag::Break,
             _ => Tag::Other,
         };
     }
@@ -270,22 +270,22 @@ impl Import {
                 }
                 Event::End(_) => self.end()?,
                 Event::Text(t) => {
-                    let text = t.xml_content(XmlVersion::Explicit1_0).map_err(xml_error)?;
+                    let text = t.xml_content(XmlVersion::Explicit1_0);
                     if self.stack.is_empty() && !text.trim().is_empty() {
                         return Err(xml_error("text outside the document"));
                     }
                     self.append(&text)?;
                 }
-                Event::CData(t) => self.append(&t.decode().map_err(xml_error)?)?,
+                Event::CData(t) => self.append(&t)?,
                 Event::GeneralRef(r) => {
                     let ch = match r.resolve_char_ref().map_err(xml_error)? {
                         Some(c) => c,
                         None => match r.as_ref() {
-                            b"amp" => '&',
-                            b"lt" => '<',
-                            b"gt" => '>',
-                            b"apos" => '\'',
-                            b"quot" => '"',
+                            "amp" => '&',
+                            "lt" => '<',
+                            "gt" => '>',
+                            "apos" => '\'',
+                            "quot" => '"',
                             _ => return Err(xml_error("unsupported XML entity")),
                         },
                     };
@@ -316,7 +316,7 @@ impl Import {
                 if self.wb.sheets.len() >= MAX_SHEETS {
                     return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
                 }
-                let original = attr(reader, e, TABLE, b"name")?.unwrap_or_default();
+                let original = attr(reader, e, TABLE, "name")?.unwrap_or_default();
                 let mut name = crate::read::unique_name(&self.wb, original.trim_matches('\''), self.wb.sheets.len());
                 if self.wb.check_sheet_name(&name, None).is_err() {
                     name = self.wb.next_sheet_name();
@@ -328,30 +328,30 @@ impl Import {
             }
             Tag::Row if self.sheet.as_ref().is_some_and(|s| self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) => {
                 self.row =
-                    Some(RowDraft { depth, repeat: positive(attr(reader, e, TABLE, b"number-rows-repeated")?, 1, u32::MAX)?, col: 0, cells: vec![] });
+                    Some(RowDraft { depth, repeat: positive(attr(reader, e, TABLE, "number-rows-repeated")?, 1, u32::MAX)?, col: 0, cells: vec![] });
             }
             Tag::Cell | Tag::Covered if self.row.as_ref().is_some_and(|r| depth == r.depth + 1) => {
-                let kind = if attr(reader, e, CALC_EXT, b"value-type")?.as_deref() == Some("error") {
+                let kind = if attr(reader, e, CALC_EXT, "value-type")?.as_deref() == Some("error") {
                     Some("error".into())
                 } else {
-                    attr(reader, e, OFFICE, b"value-type")?
+                    attr(reader, e, OFFICE, "value-type")?
                 };
-                let key: &[u8] = match kind.as_deref() {
-                    Some("boolean") => b"boolean-value",
-                    Some("date") => b"date-value",
-                    Some("time") => b"time-value",
-                    Some("string") => b"string-value",
-                    _ => b"value",
+                let key: &str = match kind.as_deref() {
+                    Some("boolean") => "boolean-value",
+                    Some("date") => "date-value",
+                    Some("time") => "time-value",
+                    Some("string") => "string-value",
+                    _ => "value",
                 };
                 self.cell = Some(CellDraft {
                     depth,
-                    repeat: positive(attr(reader, e, TABLE, b"number-columns-repeated")?, 1, u32::MAX)?,
-                    width: positive(attr(reader, e, TABLE, b"number-columns-spanned")?, 1, MAX_COLS)?,
-                    height: positive(attr(reader, e, TABLE, b"number-rows-spanned")?, 1, MAX_ROWS)?,
+                    repeat: positive(attr(reader, e, TABLE, "number-columns-repeated")?, 1, u32::MAX)?,
+                    width: positive(attr(reader, e, TABLE, "number-columns-spanned")?, 1, MAX_COLS)?,
+                    height: positive(attr(reader, e, TABLE, "number-rows-spanned")?, 1, MAX_ROWS)?,
                     covered: t == Tag::Covered,
                     kind,
                     raw: attr(reader, e, OFFICE, key)?,
-                    formula: attr(reader, e, TABLE, b"formula")?.is_some(),
+                    formula: attr(reader, e, TABLE, "formula")?.is_some(),
                     text: String::new(),
                     paragraph: None,
                     paragraphs: 0,
@@ -372,7 +372,7 @@ impl Import {
             }
             Tag::Space | Tag::Tab | Tag::Break if self.captures_text() => {
                 let count = if t == Tag::Space {
-                    let n = attr(reader, e, TEXT, b"c")?.map(|s| s.parse::<u32>()).transpose().map_err(xml_error)?.unwrap_or(1);
+                    let n = attr(reader, e, TEXT, "c")?.map(|s| s.parse::<u32>()).transpose().map_err(xml_error)?.unwrap_or(1);
                     if n as usize > MAX_CELL_TEXT {
                         return Err(IoError::TooLarge("ODS repeated spaces exceed 1 MiB".into()));
                     }

@@ -1992,7 +1992,7 @@ dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
  "log",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde_json",
  "zip 3.0.0",
 ]
@@ -2130,7 +2130,7 @@ dependencies = [
  "gridcraft-formula",
  "gridcraft-functions",
  "gridcraft-model",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "thiserror 2.0.21",
