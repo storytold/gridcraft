@@ -628,8 +628,8 @@ fn header_and_footer_pictures_print_where_their_g_is() {
     assert_eq!(text.matches("/Subtype /Image").count(), 2, "{text}");
     // Letter paper, default margins (left 0.7 in, header and footer 0.3 in): the letterhead's top
     // sits on the header margin, the footer picture's bottom on the footer margin.
-    assert!(text.contains("q 120 0 0 40 50.4 730.4 cm /Im"), "{text}");
-    assert!(text.contains(" 21.6 cm /Im") && text.contains("q 80 0 0 20 "), "{text}");
+    assert!(text.contains("q 120 0 0 40 50.4 730.4 cm /Sh"), "{text}");
+    assert!(text.contains(" 21.6 cm /Sh") && text.contains("q 80 0 0 20 "), "{text}");
     assert!(text.contains("(Invoice) Tj") && text.contains("(Page 1 ) Tj"));
 }
 
@@ -663,7 +663,7 @@ fn first_page_pictures_print_on_the_first_page_only() {
     keep_hf_pictures(&mut s, &[("CHFIRST", "width:50pt;height:50pt", png(5, 5))]);
     let (pdf, pages) = pdf_of(&mut s, json!({}));
     assert!(pages > 1);
-    assert_eq!(String::from_utf8_lossy(&pdf).matches(" cm /Im").count(), 1);
+    assert_eq!(String::from_utf8_lossy(&pdf).matches(" cm /Sh").count(), 1);
 }
 
 #[test]
@@ -673,4 +673,83 @@ fn g_marks_where_the_picture_goes() {
     assert_eq!((l.text.as_str(), l.picture), ("ABCD", Some(2)));
     assert_eq!((c.text.as_str(), c.picture), ("", Some(0)));
     assert_eq!(r.picture, None);
+}
+
+/// Like [`keep_hf_pictures`], but every shape shows the same image part.
+fn keep_one_hf_image(s: &mut Session, ids: &[&str], style: &str, data: Vec<u8>) {
+    use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
+    let rel = |id: &str, target: &str| PreservedRel { id: id.into(), rel_type: "x/image".into(), target: target.into(), external: false };
+    let vml: String = ids.iter().map(|id| format!(r##"<v:shape id="{id}" style="{style}"><v:imagedata o:relid="rId1"/></v:shape>"##)).collect();
+    let kept = Preserved {
+        rels: vec![rel("rId9", "xl/drawings/hf.vml")],
+        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
+        parts: vec![
+            PreservedPart { name: "xl/media/logo.png".into(), content_type: "image/png".into(), data: data.as_slice().into(), rels: vec![] },
+            PreservedPart {
+                name: "xl/drawings/hf.vml".into(),
+                content_type: String::new(),
+                data: vml.as_bytes().into(),
+                rels: vec![rel("rId1", "xl/media/logo.png")],
+            },
+        ],
+        ..Preserved::default()
+    };
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+}
+
+#[test]
+fn a_header_picture_is_one_image_object_for_every_page() {
+    let mut s = s();
+    for r in [1, 100, 200] {
+        s.execute("cell.set", json!({"cell": format!("A{r}"), "input": "x"})).unwrap();
+    }
+    // The same logo in all six sections.
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&C&G&R&G", "footer": "&L&G&C&G&R&G"})).unwrap();
+    keep_one_hf_image(&mut s, &["LH", "CH", "RH", "LF", "CF", "RF"], "width:20pt;height:20pt", png(6, 6));
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(pages >= 3);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once");
+    assert_eq!(text.matches("/Sh1 Do").count(), 6 * pages as usize, "drawn six times on every page");
+}
+
+#[test]
+fn only_header_pictures_a_page_prints_are_decoded() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    // RH has no &G; the first-page and even-page pictures belong to options that are off.
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&RRight", "firstHeader": "&C&G", "evenHeader": "&C&G"})).unwrap();
+    keep_hf_pictures(
+        &mut s,
+        &[
+            ("LH", "width:20pt;height:20pt", png(4, 4)),
+            ("RH", "width:20pt;height:20pt", png(5, 5)),
+            ("CHFIRST", "width:20pt;height:20pt", png(6, 6)),
+            ("CHEVEN", "width:20pt;height:20pt", png(7, 7)),
+        ],
+    );
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "{text}");
+    assert!(text.contains("/Width 4 /Height 4"));
+}
+
+#[test]
+fn header_pictures_share_a_decoding_budget() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&C&G&R&G", "footer": "&C&G"})).unwrap();
+    // Four distinct 4000 × 4000 pictures printed 22 in wide: decoded at 150 dpi (3300 px, about
+    // 44 MB each), so the 128 MB budget takes three of them and leaves the fourth out.
+    let big = |c: u8| {
+        let img = image::RgbaImage::from_pixel(4000, 4000, image::Rgba([c, 0, 0, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let style = "width:1584pt;height:1584pt";
+    keep_hf_pictures(&mut s, &[("LH", style, big(10)), ("CH", style, big(20)), ("RH", style, big(30)), ("CF", style, big(40))]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 3);
 }

@@ -103,12 +103,13 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
     let mut pics = PicCache::new();
+    let mut hf_budget = header_footer::HF_DECODE_BUDGET;
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
         let k = lay.k();
         let (aw, ah) = lay.avail();
-        let hf_pics = header_footer::hf_images(sh, lay.hf_text_scale());
+        let hf_pics = header_footer::hf_images(sh, lay.hf_text_scale(), &mut doc, &mut hf_budget);
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };

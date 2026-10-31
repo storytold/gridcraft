@@ -1,5 +1,5 @@
 use super::layout::SheetLayout;
-use super::{Font, Page, Rect, Value, Workbook};
+use super::{Font, Page, PdfDoc, Rect, Value, Workbook};
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
 pub(super) const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
@@ -235,33 +235,67 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
 }
 
 /// A header or footer picture ready to print: where it goes, its printed size in points (before
-/// Scale with Document) and its decoded RGBA pixels.
+/// Scale with Document) and the document image it draws.
 pub(super) struct HfImage {
     pub page: gridcraft_model::HfPage,
     pub footer: bool,
     pub section: usize,
     pub width: f32,
     pub height: f32,
-    pub rgba: Vec<u8>,
-    pub pixels: [u32; 2],
+    pub id: gridcraft_pdf::ImageId,
 }
 
 /// Largest header/footer picture decoded, in bytes of the encoded file and in pixels.
 const HF_MAX_BYTES: usize = 16 * 1024 * 1024;
 const HF_MAX_SIDE_PX: u32 = 8192;
+/// Decoded header/footer pixels (RGBA bytes) one export may hold, all sheets together.
+pub(super) const HF_DECODE_BUDGET: usize = 128 * 1024 * 1024;
 
-/// Decodes the header and footer pictures a sheet keeps (#1257), once per print. Pictures that
-/// can't be decoded within the limits are left out, as if their `&G` weren't there.
-pub(super) fn hf_images(sh: &gridcraft_model::Sheet, scale: f32) -> Vec<HfImage> {
+/// The header and footer pictures sheet `sh` prints (#1257), each distinct image decoded once
+/// and added once to `doc`, so every page draws the same image object. Only pictures a page
+/// prints are decoded: their section has `&G` in the header or footer of a page kind the sheet
+/// uses (odd pages always; the first page and even pages when their options are on). Pictures
+/// that can't be decoded within the limits, or past `budget` (decoded bytes left for the
+/// export), are left out, as if their `&G` weren't there.
+pub(super) fn hf_images(sh: &gridcraft_model::Sheet, scale: f32, doc: &mut PdfDoc, budget: &mut usize) -> Vec<HfImage> {
+    use gridcraft_model::HfPage;
     let Some(kept) = sh.preserved.as_deref() else { return vec![] };
-    gridcraft_xlsx::header_footer_pictures(kept)
-        .into_iter()
-        .filter_map(|p| {
-            // About 150 dpi at the printed size is plenty.
-            let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
-            let (rgba, w, h) = decode_limited(&p.data, px(p.width), px(p.height))?;
-            Some(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, rgba, pixels: [w, h] })
-        })
+    let pr = &sh.print;
+    let used = |page: HfPage| match page {
+        HfPage::Odd => true,
+        HfPage::First => pr.different_first,
+        HfPage::Even => pr.different_odd_even,
+    };
+    let has_g = |page: HfPage, footer: bool, section: usize| {
+        let spec = pr.hf(page, footer);
+        !spec.is_empty() && expand_header_footer(spec, &HfContext::default()).get(section).is_some_and(|s| s.picture.is_some())
+    };
+    let pictures: Vec<_> =
+        gridcraft_xlsx::header_footer_pictures(kept).into_iter().filter(|p| used(p.page) && has_g(p.page, p.footer, p.section)).collect();
+    // About 150 dpi at the printed size is plenty.
+    let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
+    let same = |a: &gridcraft_xlsx::HfPicture, b: &gridcraft_xlsx::HfPicture| std::sync::Arc::ptr_eq(&a.data, &b.data);
+    let mut ids: Vec<Option<gridcraft_pdf::ImageId>> = Vec::with_capacity(pictures.len());
+    for (i, p) in pictures.iter().enumerate() {
+        // An image several sections show is decoded once, at the largest size it prints.
+        if let Some(first) = pictures.iter().position(|q| same(p, q))
+            && first < i
+        {
+            ids.push(ids.get(first).copied().flatten());
+            continue;
+        }
+        let users = pictures.iter().filter(|q| same(p, q));
+        let (w, h) = users.fold((1, 1), |(w, h), q| (w.max(px(q.width)), h.max(px(q.height))));
+        let id = decode_limited(&p.data, w, h).and_then(|(rgba, pw, ph)| {
+            *budget = budget.checked_sub(rgba.len())?;
+            doc.add_image(&rgba, [pw, ph])
+        });
+        ids.push(id);
+    }
+    pictures
+        .iter()
+        .zip(ids)
+        .filter_map(|(p, id)| Some(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id: id? }))
         .collect()
 }
 
@@ -335,7 +369,7 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
                     pg.text(x, base, size, font, [0, 0, 0], &ln.before);
                 }
                 if let Some((im, w, h)) = ln.picture {
-                    pg.image_rgba(Rect::new(x + bw, top + lh - h, w, h), &im.rgba, im.pixels);
+                    pg.image_shared(Rect::new(x + bw, top + lh - h, w, h), im.id);
                 }
                 if !ln.after.is_empty() {
                     pg.text(x + bw + pic_w, base, size, font, [0, 0, 0], &ln.after);
