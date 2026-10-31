@@ -4,6 +4,7 @@ use super::{
     Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
     VAlign, auto_name, series_color,
 };
+use crate::points;
 use gridcraft_model::LegendPos;
 
 /// How a legend entry's swatch is drawn.
@@ -21,8 +22,10 @@ pub(super) fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
 }
 
 /// Colour of point `j` for charts that colour by point (pie, doughnut, treemap, sunburst).
-pub(super) fn point_color(data: &ChartData, j: usize) -> Rgba {
+pub(super) fn point_color(chart: &Chart, data: &ChartData, j: usize) -> Rgba {
     match (j, data.series.first()) {
+        // Pie and doughnut slices: the point's own fill, vary colors, else the series colour.
+        (_, Some(s)) if matches!(chart.kind, ChartKind::Pie | ChartKind::Doughnut) => points::fill(data, s, j, None).0,
         (0, Some(s)) => s.color,
         _ => j.checked_rem(data.palette.len()).and_then(|k| data.palette.get(k)).copied().unwrap_or_else(|| series_color(&Theme::default(), j)),
     }
@@ -44,7 +47,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
     match chart.kind {
         ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
             let n = first_len(data).min(MAX_CATS);
-            (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
+            (0..n).map(|j| (cat_label(data, j), point_color(chart, data, j), Swatch::Box)).collect()
         }
         ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock => vec![],
         ChartKind::Waterfall => {
@@ -54,20 +57,26 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let total = data.series.first().map(|s| s.color).unwrap_or(TEXT);
             vec![("Increase".into(), UP, Swatch::Box), ("Decrease".into(), DOWN, Swatch::Box), ("Total".into(), total, Swatch::Box)]
         }
+        // The only series of a chart that varies colours by point, or whose points have formats
+        // of their own: one entry per point, as Excel lists them.
+        _ if data.legend_by_point && data.series.len() == 1 => {
+            let Some(s) = data.series.first() else { return vec![] };
+            let sw = swatch_of(plot_kind(chart, s));
+            let n = s.values.len().max(data.categories.len()).min(MAX_CATS);
+            (0..n)
+                .map(|j| {
+                    let c = match sw {
+                        Swatch::Box => points::fill(data, s, j, None).0,
+                        Swatch::Line => points::line(data, s, j),
+                        Swatch::LineMarker | Swatch::Marker => points::marker_fill(data, s, j),
+                    };
+                    (cat_label(data, j), c, sw)
+                })
+                .collect()
+        }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
-            let mut out: Vec<(String, Rgba, Swatch)> = series
-                .clone()
-                .map(|s| {
-                    let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
-                        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
-                        _ => Swatch::Box,
-                    };
-                    (s.name.clone(), s.color, sw)
-                })
-                .collect();
+            let mut out: Vec<(String, Rgba, Swatch)> = series.clone().map(|s| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s)))).collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
             for s in series.filter(|s| supports_trendline(plot_kind(chart, s))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
@@ -76,6 +85,15 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             }
             out
         }
+    }
+}
+
+fn swatch_of(k: ChartKind) -> Swatch {
+    match k {
+        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
+        ChartKind::LineMarkers => Swatch::LineMarker,
+        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
+        _ => Swatch::Box,
     }
 }
 

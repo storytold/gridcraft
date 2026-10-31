@@ -1,5 +1,6 @@
 use super::frame::Bx;
 use super::{Ctx, MAX_LINE_PTS, MAX_MARKERS, Prim, Rgba, WHITE};
+use crate::{ChartData, SeriesData, points};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------- helpers
@@ -128,6 +129,50 @@ pub(super) fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r
         if seen.insert(((p[0] * 0.5) as i32, (p[1] * 0.5) as i32)) {
             ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(color), stroke: Some((WHITE, 0.75)) });
         }
+    }
+}
+
+/// Markers of a series whose points differ (own formats or vary colors), point `j` at `pts[j]`.
+pub(super) fn draw_point_markers(ctx: &mut Ctx, data: &ChartData, s: &SeriesData, pts: &[Option<[f32; 2]>], r: f32) {
+    if !points::varies(data, s) {
+        draw_markers(ctx, pts.iter().flatten().copied(), r, s.color);
+        return;
+    }
+    let mut seen = HashSet::new();
+    for (j, p) in pts.iter().enumerate() {
+        let Some(p) = p else { continue };
+        if seen.len() >= MAX_MARKERS {
+            break;
+        }
+        // A point with its own format is always drawn, even over a neighbour.
+        if (seen.insert(((p[0] * 0.5) as i32, (p[1] * 0.5) as i32)) || points::point(s, j).is_some())
+            && let Some(m) = points::mark(data, s, j, r)
+        {
+            points::draw_mark(&mut ctx.out, *p, &m);
+        }
+    }
+}
+
+/// Redraws the segments of a line whose points differ: the segment ending at point `j` takes
+/// point `j`'s line colour (or its vary-colors colour). Long series only redraw the points
+/// with their own format.
+pub(super) fn draw_point_segments(ctx: &mut Ctx, data: &ChartData, s: &SeriesData, pts: &[Option<[f32; 2]>], width: f32) {
+    if !points::varies(data, s) {
+        return;
+    }
+    let all = data.vary_colors && !s.explicit_color && pts.len() <= MAX_LINE_PTS;
+    let mut draw = |j: usize| {
+        if let (Some(Some(a)), Some(Some(b))) = (j.checked_sub(1).and_then(|i| pts.get(i)), pts.get(j)) {
+            let c = points::line(data, s, j);
+            if c != s.color {
+                ctx.line(vec![*a, *b], c, width);
+            }
+        }
+    };
+    if all {
+        (1..pts.len()).for_each(&mut draw);
+    } else {
+        s.points.iter().filter(|p| p.line.is_some()).map(|p| p.index).for_each(draw);
     }
 }
 
