@@ -288,8 +288,15 @@ row in `ATTRIBUTION.md` (`cargo xtask assets`).
 - `.github/workflows/windows-arm64.yml` (on `release` pushes): packages ARM64 on x64, then
   installs, runs and uninstalls the MSI on a Windows 11 ARM64 runner.
 - `.github/workflows/freebsd.yml`: FreeBSD build + tests (manual run from `release`).
+- `.github/workflows/fuzz.yml` (nightly at 03:17 UTC, or run it by hand from the Actions tab): builds
+  in release and soaks the command-sequence fuzzer at 200 seeds by 200 steps with
+  `GRIDCRAFT_FUZZ_KEEP_GOING` and `GRIDCRAFT_FUZZ_SHRINK`. It is not a required check; a pull request that touches the workflow
+  or the fuzz harness runs it at 20 seeds by 50 steps. A failure fails that run only (never `main`) and uploads the `fuzz-failures`
+  artifact: the full log, `failing-seeds.txt` and each failing seed's shrunk command sequence. Replay
+  with the `GRIDCRAFT_FUZZ_SEED=<seed>` line in the run summary.
 
-**Only the `release` branch builds.** No build workflow runs on `main` or pull requests; every
-build job checks `github.ref == 'refs/heads/release'`, so a manual run from another branch is
-skipped. Only `packaging-lint.yml` (no build, no secrets) runs on `main` and PRs.
+**Only the `release` branch builds installers.** No installer build workflow runs on `main` or pull
+requests; every build job checks `github.ref == 'refs/heads/release'`, so a manual run from another
+branch is skipped. Only `packaging-lint.yml` (no build, no secrets) runs on `main` and PRs, besides
+the CI gate and the test-only `fuzz.yml` (nightly, and on PRs that touch it or the fuzz harness).
 - Locally: `cargo xtask ci` (fmt, clippy, tests, assets, layers, wasm, parity check).

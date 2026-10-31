@@ -1,0 +1,97 @@
+name: Fuzz
+
+# Nightly soak of the command-sequence fuzzer (`crates/engine/tests/it/command_sequence_fuzz.rs`):
+# random command sequences checked against undo/redo, XLSX round-trip and full-recalc invariants.
+# `cargo xtask ci` runs it with a tiny budget; this job runs 200 seeds of 200 steps so a sequence bug
+# is found without anyone remembering to soak by hand. It is not a required check. A failing seed
+# fails this run only (the job and the Actions tab), never `main`, and uploads the failing seeds with
+# their shrunk command sequences as an artifact. A pull request that touches this file or the harness
+# runs a small budget (20 by 50) so the workflow is exercised before it reaches `main`.
+on:
+  pull_request:
+    paths: [".github/workflows/fuzz.yml", "crates/engine/tests/it/command_sequence_fuzz.rs"]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: "Seeds to run (GRIDCRAFT_FUZZ_SEEDS)"
+        default: "200"
+      steps:
+        description: "Commands per seed (GRIDCRAFT_FUZZ_STEPS)"
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      RUST_BACKTRACE: 1
+      # The engine and its dependencies have no egui, fonts or system libraries, so no apt packages
+      # and no craft-fonts checkout.
+      GRIDCRAFT_FUZZ_SEEDS: ${{ inputs.seeds || (github.event_name == 'pull_request' && '20' || '200') }}
+      GRIDCRAFT_FUZZ_STEPS: ${{ inputs.steps || (github.event_name == 'pull_request' && '50' || '200') }}
+      GRIDCRAFT_FUZZ_KEEP_GOING: "1"
+      GRIDCRAFT_FUZZ_SHRINK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The channel in rust-toolchain.toml wins, as in the suite's gate workflow.
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          toolchain=stable
+          if [ -f rust-toolchain.toml ]; then
+            channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+            toolchain=${channel:-$toolchain}
+          fi
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          rustup default "$toolchain"
+          rustc --version
+
+      # Only the default branch writes the cache, so manual runs on other branches only read it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: fuzz-rust
+          key: ${{ hashFiles('Cargo.toml') }}
+          save-if: ${{ github.ref_name == github.event.repository.default_branch }}
+          cache-on-failure: true
+
+      - name: Fuzz command sequences
+        run: |
+          set -o pipefail
+          mkdir -p fuzz-out
+          # A zero count builds an empty seed list and passes without running anything.
+          for count in "$GRIDCRAFT_FUZZ_SEEDS" "$GRIDCRAFT_FUZZ_STEPS"; do
+            if [[ ! "$count" =~ ^[0-9]+$ ]] || (( 10#$count == 0 )); then
+              echo "Fuzz counts must be positive integers, got '$count'" >&2
+              exit 1
+            fi
+          done
+          cargo test --release -p gridcraft-engine --test it command_sequence_fuzz:: 2>&1 | tee fuzz-out/fuzz.log
+
+      - name: Collect failing seeds
+        if: failure()
+        run: |
+          grep -oE '^command-sequence fuzz failure: seed [0-9]+' fuzz-out/fuzz.log | grep -oE '[0-9]+$' > fuzz-out/failing-seeds.txt || true
+          echo "Failing seeds: $(tr '\n' ' ' < fuzz-out/failing-seeds.txt)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Replay one with: GRIDCRAFT_FUZZ_SEED=<seed> GRIDCRAFT_FUZZ_STEPS=$GRIDCRAFT_FUZZ_STEPS GRIDCRAFT_FUZZ_SHRINK=1 cargo test -p gridcraft-engine --test it command_sequence_fuzz::" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-failures
+          path: fuzz-out/
+          retention-days: 30
