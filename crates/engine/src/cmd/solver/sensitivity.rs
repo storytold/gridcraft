@@ -278,7 +278,9 @@ fn optimal_point(c: &[f64], rows: &[LpRow], (lo, hi): (&[f64], &[f64]), x: &[f64
         v.is_finite() && near(l - v, v.abs()) && near(v - h, v.abs())
     });
     let (value, size) = dot(c);
-    rows_hold && bounds_hold && near(value - best, size + best.abs())
+    // Two-sided: a point just outside a bound can beat the optimum by far more than the
+    // precision when its costs are large.
+    rows_hold && bounds_hold && near((value - best).abs(), size + best.abs())
 }
 
 fn entry(tab: &FinalTableau, r: usize, col: usize) -> f64 {

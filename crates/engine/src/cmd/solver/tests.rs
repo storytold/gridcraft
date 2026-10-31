@@ -516,6 +516,21 @@ fn simplex_sensitivity_report_needs_an_optimal_point() {
 }
 
 #[test]
+fn simplex_sensitivity_report_refuses_a_point_that_beats_the_optimum() {
+    // min 1E+9·A1 with A1 ≥ 0: the optimum is 0. A1 = -1E-7 is outside the bound by less than
+    // the precision, yet its objective is -100, far from the optimum.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1E+9*A1")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"], "method": "simplex"});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": -1e-7}})).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": 0}})).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
 fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
     // The largest rectangle with perimeter at most 20: the area (P/4)² grows by P/8 = 2.5 per
     // unit of perimeter, and both reduced gradients are 0.
