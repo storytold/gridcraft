@@ -28,7 +28,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "review.deleteComment", json!({}));
     }
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         for (icon, label, tip, id) in
             [(Icon::Left, "Previous", "Previous Comment", "review.previousComment"), (Icon::Right, "Next", "Next Comment", "review.nextComment")]
         {
@@ -51,7 +51,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     }
     let notes = big_button(ui, Icon::Note, "Notes", "Notes", true);
     anchor_keytip(app, ui, &notes, &["review.nextComment"]);
-    egui::Popup::menu(&notes).show(|ui| {
+    crate::rtl::menu(&notes).show(|ui| {
         menu_items(
             app,
             ui,

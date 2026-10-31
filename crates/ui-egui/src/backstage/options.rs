@@ -11,19 +11,19 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     general_options(app, ui, lang);
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
-    if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
+    if crate::rtl::checkbox(ui, &mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
-    if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
+    if crate::rtl::checkbox(ui, &mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.ui.autosave;
-    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
+    if crate::rtl::checkbox(ui, &mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
@@ -37,7 +37,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
 
 /// The display theme and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
-    egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)), |ui| {
         let label = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
         let current = match mode {
@@ -83,13 +83,13 @@ fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraf
         (CalcMode::AutomaticExceptTables, "automaticExceptTables", "Automatic Except for Data Tables"),
         (CalcMode::Manual, "manual", "Manual"),
     ] {
-        if ui.radio(calc.mode == mode, lang.tr(label)).clicked() && calc.mode != mode {
+        if crate::rtl::radio(ui, calc.mode == mode, lang.tr(label)).clicked() && calc.mode != mode {
             app.run_or_alert("formulas.calculationOptions", json!({"mode": id}));
         }
     }
     ui.add_space(4.0);
     let mut iterative = calc.iterative;
-    if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).changed() {
+    if crate::rtl::checkbox(ui, &mut iterative, lang.tr("Enable iterative calculation")).changed() {
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
     // Maximum Iterations and Maximum Change apply only while iteration is on, as in Excel.
@@ -103,7 +103,7 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
     ui.add_enabled_ui(iterative, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            egui::Grid::new("backstage_options_iteration").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new("backstage_options_iteration").num_columns(2).spacing(vec2(12.0, 6.0)), |ui| {
                 let label = ui.label(lang.tr("Maximum Iterations:"));
                 let id = ui.make_persistent_id("backstage_max_iterations");
                 // Text left in the field when iteration is switched off (it loses focus) is dropped.

@@ -45,6 +45,7 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
+pub mod rtl;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;

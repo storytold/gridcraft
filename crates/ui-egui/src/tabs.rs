@@ -75,9 +75,22 @@ fn dragged_share(x: f32, bar: (f32, f32), right: f32) -> f32 {
     ((x - left) / width).clamp(min, max)
 }
 
+/// The bar's left edge. A row that flows right to left has no left bound in its cursor (it reads
+/// as minus infinity), so the free rectangle's edge stands in for it.
+fn bar_left(rtl: bool, cursor_left: f32, free_left: f32) -> f32 {
+    if rtl { free_left } else { cursor_left }
+}
+
+/// `x` as it would be in a left-to-right bar: in a mirrored window the tabs start at the bar's right
+/// edge, so a point's distance from that edge is what [`dragged_share`] measures.
+fn from_leading_edge(rtl: bool, bar: (f32, f32), x: f32) -> f32 {
+    if rtl { 2.0 * bar.0 + bar.1 - x } else { x }
+}
+
 /// The handle at the left edge of the horizontal scrollbar: dragging it gives the sheet tabs more
 /// or less of the bar, as in Excel, for the workbook `uid`.
 fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32), right: f32, uid: u64, t: &Tokens) {
+    let rtl = crate::rtl::on(ui.ctx());
     app.grid.tab_split = Some(split);
     let resp = ui.interact(split, ui.scope_id().with("tab_split"), Sense::drag());
     let name = app.ui.language.tr("Split tabs");
@@ -88,7 +101,7 @@ fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32
     if resp.dragged()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        app.grid.tab_shares.insert(uid, dragged_share(p.x - SPLIT_WIDTH / 2.0, bar, right));
+        app.grid.tab_shares.insert(uid, dragged_share(from_leading_edge(rtl, bar, p.x) - SPLIT_WIDTH / 2.0, bar, right));
         ui.ctx().request_repaint();
     }
     let color = if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled };
@@ -101,82 +114,90 @@ fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
-        let rect = ui.max_rect();
-        ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, t.ribbon_border));
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.add_space(8.0);
-            if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.previous", json!({}));
-            }
-            if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.next", json!({}));
-            }
-            let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
-            all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
-            let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
-            let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
-            let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
-            if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
-                && let Ok(i) = i.parse::<usize>()
-            {
-                activate_sheet(app, i);
-            }
-            ui.add_space(8.0);
-            let Some(d) = app.session.active() else { return };
-            let (bar_left, bar_width) = (ui.cursor().left(), ui.available_width());
-            let uid = d.uid;
-            // The track ends where the grid does, so it stops under the vertical scrollbar. A share
-            // dragged in a wider window is held to the same limits as a drag at this width.
-            let bar_right = app.grid.rect.map_or(bar_left + bar_width, |r| r.right()).min(bar_left + bar_width);
-            let share = app.grid.tab_shares.get(&uid).map(|&share| dragged_share(bar_left + bar_width * share, (bar_left, bar_width), bar_right));
-            let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
-                d.wb.sheets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| s.visibility == Visibility::Visible)
-                    .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet()))
-                    .collect();
-            // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
-            // tabs get up to 60% of the bar and the grid's horizontal scrollbar the rest; a strip
-            // that needs less shrinks to its tabs, so New sheet (+) sits right after the last one.
-            // After the handle at the scrollbar's left edge is dragged, the tabs and New sheet
-            // take the share it was dragged to.
-            let tabs_width = match share {
-                Some(share) => (bar_width * share - NEW_SHEET_WIDTH).max(0.0),
-                None => (bar_width * 0.6).max(100.0),
-            };
-            // Reveal the selected sheet after navigation or layout changes, but
-            // allow browsing other tabs without snapping back on every frame.
-            let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
-            let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
-            let reveal_active = ui.ctx().data_mut(|data| {
-                let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
-                data.insert_temp(reveal_id, reveal_key);
-                changed
-            });
-            ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // Translate vertical wheel movement into horizontal
-                // worksheet-tab scrolling.
-                let wheel_scroll = if ui.rect_contains_pointer(ui.max_rect()) {
-                    ui.input(|i| {
-                        let d = i.smooth_scroll_delta;
-                        if d.x.abs() > d.y.abs() { d.x } else { d.y }
-                    })
-                } else {
-                    0.0
+        crate::rtl::root(ui, |ui| {
+            let rect = ui.max_rect();
+            let rtl = crate::rtl::on(ui.ctx());
+            ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, t.ribbon_border));
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(8.0);
+                // The arrows point the way reading goes.
+                let (back, forward) = if rtl { (Icon::Right, Icon::Left) } else { (Icon::Left, Icon::Right) };
+                if crate::widgets::icon_button(ui, back, t.text_dim, "Previous sheet", vec2(24.0, 24.0)).clicked() {
+                    app.run_or_alert("sheet.previous", json!({}));
+                }
+                if crate::widgets::icon_button(ui, forward, t.text_dim, "Next sheet", vec2(24.0, 24.0)).clicked() {
+                    app.run_or_alert("sheet.next", json!({}));
+                }
+                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, "All sheets", vec2(24.0, 24.0));
+                all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
+                let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
+                let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
+                let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
+                if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
+                    && let Ok(i) = i.parse::<usize>()
+                {
+                    activate_sheet(app, i);
+                }
+                ui.add_space(8.0);
+                let Some(d) = app.session.active() else { return };
+                // A row that flows right to left has no left bound in its cursor: the free rectangle's edge is the bar's.
+                let bar_left = bar_left(rtl, ui.cursor().left(), ui.available_rect_before_wrap().left());
+                let bar_width = ui.available_width();
+                let uid = d.uid;
+                // The track ends where the grid does, so it stops under the vertical scrollbar. A share
+                // dragged in a wider window is held to the same limits as a drag at this width.
+                // In a mirrored window the track runs to the far (left) end of the bar, which no scrollbar crosses.
+                let bar_right =
+                    if rtl { bar_left + bar_width } else { app.grid.rect.map_or(bar_left + bar_width, |r| r.right()).min(bar_left + bar_width) };
+                let share = app.grid.tab_shares.get(&uid).map(|&share| dragged_share(bar_left + bar_width * share, (bar_left, bar_width), bar_right));
+                let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
+                    d.wb.sheets
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.visibility == Visibility::Visible)
+                        .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet()))
+                        .collect();
+                // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
+                // tabs get up to 60% of the bar and the grid's horizontal scrollbar the rest; a strip
+                // that needs less shrinks to its tabs, so New sheet (+) sits right after the last one.
+                // After the handle at the scrollbar's left edge is dragged, the tabs and New sheet
+                // take the share it was dragged to.
+                let tabs_width = match share {
+                    Some(share) => (bar_width * share - NEW_SHEET_WIDTH).max(0.0),
+                    None => (bar_width * 0.6).max(100.0),
                 };
+                // Reveal the selected sheet after navigation or layout changes, but
+                // allow browsing other tabs without snapping back on every frame.
+                let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
+                let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
+                let reveal_active = ui.ctx().data_mut(|data| {
+                    let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
+                    data.insert_temp(reveal_id, reveal_key);
+                    changed
+                });
+                ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), crate::rtl::row_layout(ui, egui::Align::Center), |ui| {
+                    // Translate vertical wheel movement into horizontal
+                    // worksheet-tab scrolling.
+                    let wheel_scroll = if ui.rect_contains_pointer(ui.max_rect()) {
+                        ui.input(|i| {
+                            let d = i.smooth_scroll_delta;
+                            if d.x.abs() > d.y.abs() { d.x } else { d.y }
+                        })
+                    } else {
+                        0.0
+                    };
 
-                egui::ScrollArea::horizontal()
-                    .id_salt("worksheet_tabs_horizontal")
-                    .auto_shrink([true, false])
-                    .min_scrolled_width(0.0)
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .show(ui, |ui| {
+                    let area = egui::ScrollArea::horizontal()
+                        .id_salt("worksheet_tabs_horizontal")
+                        .auto_shrink([true, false])
+                        .min_scrolled_width(0.0)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                    crate::rtl::scroll_row(ui, "worksheet_tabs", area, None, false, |ui| {
                         if wheel_scroll.abs() > 0.0 {
                             ui.scroll_with_delta(vec2(wheel_scroll, 0.0));
                         }
-                        ui.horizontal(|ui| {
+                        {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             for (i, name, color, active) in sheets {
                                 let renaming = app.grid.renaming_tab == Some(i);
@@ -242,13 +263,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 if resp.drag_stopped()
                                     && let Some(p) = ui.input(|inp| inp.pointer.interact_pos())
                                 {
-                                    let dx = p.x - r.center().x;
+                                    let dx = if rtl { r.center().x - p.x } else { p.x - r.center().x };
                                     let steps = (dx / w).round() as i64;
                                     if let Some(params) = tab_drop(i, steps, copy) {
                                         app.run_or_alert("sheet.move", params);
                                     }
                                 }
-                                resp.context_menu(|ui| {
+                                crate::rtl::context_menu(&resp, |ui| {
                                     ui.set_min_width(180.0);
                                     if ui.button(app.ui.language.tr("Insert Sheet")).clicked() {
                                         app.run_or_alert("home.insertSheet", json!({"before": i}));
@@ -297,25 +318,35 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     }
                                 });
                             }
-                        });
+                        }
                     });
+                });
+                ui.add_space(6.0);
+                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "New sheet (⇧F11)", vec2(26.0, 26.0)).clicked() {
+                    app.run_or_alert("home.insertSheet", json!({}));
+                }
+                // The track ends where the grid does, so it stops under the vertical scrollbar.
+                let avail = ui.available_rect_before_wrap();
+                let right = app.grid.rect.map_or(avail.right(), |r| r.right()).min(avail.right());
+                // The handle sits at the track's left edge. With a dragged share, the room the tabs
+                // don't fill stays empty before it.
+                let split_left = if rtl {
+                    // The tabs start at the right edge, so the handle sits at their far end and the track runs left from it.
+                    let end = avail.right() - SPLIT_WIDTH;
+                    share.map_or(end, |share| (bar_left + bar_width * (1.0 - share) - SPLIT_WIDTH).max(avail.left() + MIN_TRACK).min(end))
+                } else {
+                    share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()))
+                };
+                let split = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_left + SPLIT_WIDTH, avail.bottom()));
+                tab_split_handle(app, ui, split, (bar_left, bar_width), bar_right, uid, &t);
+                let track = if rtl {
+                    Rect::from_min_max(pos2(avail.left(), avail.center().y - 7.0), pos2(split.left(), avail.center().y + 7.0))
+                } else {
+                    Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0))
+                };
+                crate::grid::horizontal_scrollbar(app, ui, track, &t);
             });
-            ui.add_space(6.0);
-            if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
-                app.run_or_alert("home.insertSheet", json!({}));
-            }
-            // The track ends where the grid does, so it stops under the vertical scrollbar.
-            let avail = ui.available_rect_before_wrap();
-            let right = app.grid.rect.map_or(avail.right(), |r| r.right()).min(avail.right());
-            // The handle sits at the track's left edge. With a dragged share, the room the tabs
-            // don't fill stays empty before it.
-            let split_left =
-                share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()));
-            let split = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_left + SPLIT_WIDTH, avail.bottom()));
-            tab_split_handle(app, ui, split, (bar_left, bar_width), right, uid, &t);
-            let track = Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
-            crate::grid::horizontal_scrollbar(app, ui, track, &t);
-        });
+        })
     });
 }
 
@@ -325,112 +356,133 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
         |ui| {
-            // A right-click anywhere on the status bar opens the statistics menu, the text included, so its labels are not
-            // selectable. The zoom and view controls sense clicks and handle their own.
-            let background = ui.interact(ui.max_rect(), egui::Id::unique("gridcraft.status_bar"), Sense::click());
-            background.context_menu(|ui| status_bar_menu(app, ui));
-            let text = |ui: &mut Ui, rich: egui::RichText| {
-                ui.add(egui::Label::new(rich).selectable(false));
-            };
-            ui.horizontal_centered(|ui| {
-                let mode = match app.session.mode {
-                    gridcraft_engine::Mode::Ready => "Ready",
-                    gridcraft_engine::Mode::Enter => "Enter",
-                    gridcraft_engine::Mode::Edit => "Edit",
-                    gridcraft_engine::Mode::Point => "Point",
+            crate::rtl::root(ui, |ui| {
+                let rtl = crate::rtl::on(ui.ctx());
+                let lang = app.ui.language;
+                // A right-click anywhere on the status bar opens the statistics menu, the text included, so its labels are not
+                // selectable. The zoom and view controls sense clicks and handle their own.
+                let background = ui.interact(ui.max_rect(), egui::Id::unique("gridcraft.status_bar"), Sense::click());
+                crate::rtl::context_menu(&background, |ui| status_bar_menu(app, ui));
+                let text = |ui: &mut Ui, rich: egui::RichText| {
+                    ui.add(egui::Label::new(rich).selectable(false));
                 };
-                text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
-                crate::macro_ui::status(app, ui);
-                if let Some(d) = app.session.active() {
-                    if d.wb.vba_project.is_some() {
-                        ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
-                    }
-                    if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
-                        ui.add_space(12.0);
-                        text(ui, egui::RichText::new(app.ui.language.tr("Calculate")).font(theme::ui_font(12.5)).color(t.text_dim));
-                    }
-                    if !d.calc.circular.is_empty() {
-                        ui.add_space(12.0);
-                        // Only a loop on the active sheet is named, so the address needs no sheet.
-                        let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
-                        };
-                        text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
-                    }
-                    if app.session.clipboard.is_some() && app.editor.is_none() {
-                        ui.add_space(12.0);
-                        text(
-                            ui,
-                            egui::RichText::new(app.ui.language.tr("Select destination and press Enter or choose Paste"))
-                                .font(theme::ui_font(12.5))
-                                .color(t.text_dim),
-                        );
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Zoom percentage and slider.
-                    let zoom = app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100);
-                    let zl = ui.add(
-                        egui::Label::new(egui::RichText::new(format!("{zoom}%")).font(theme::ui_font(12.5)).color(t.text_dim)).sense(Sense::click()),
-                    );
-                    if zl.clicked() {
-                        app.open_dialog("zoom", json!({}));
-                    }
-                    ui.add_space(4.0);
-                    if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "Zoom In", vec2(18.0, 18.0)).clicked() {
-                        let z = ((zoom as f32 / 10.0).floor() * 10.0 + 10.0).min(400.0);
-                        app.run_or_alert("view.zoom", json!({"percent": z}));
-                    }
-                    let mut z = zoom as f32;
-                    let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
-                    ui.ctx().accesskit_node_builder(slider.id, |node| node.set_label(app.ui.language.tr("Zoom")));
-                    if slider.changed() {
-                        let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
-                    }
-                    if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, "Zoom Out", vec2(18.0, 18.0)).clicked() {
-                        let z = ((zoom as f32 / 10.0).ceil() * 10.0 - 10.0).max(10.0);
-                        app.run_or_alert("view.zoom", json!({"percent": z}));
-                    }
-                    ui.add_space(10.0);
-                    for (icon, tip, mode, cmd) in [
-                        (Icon::PageBreak, "Page Break Preview", "pageBreakPreview", "view.pageBreakPreview"),
-                        (Icon::PageLayout, "Page Layout", "pageLayout", "view.pageLayout"),
-                        (Icon::Normal, "Normal", "normal", "view.normal"),
-                    ] {
-                        let (r, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
-                        let cur = app.session.active().and_then(|d| d.wb.active().map(|s| s.view.as_str())).unwrap_or("normal");
-                        if cur == mode {
-                            ui.painter().rect_filled(r, 3.0, t.pressed);
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(r, 3.0, t.hover);
+                ui.horizontal_centered(|ui| {
+                    let mode = match app.session.mode {
+                        gridcraft_engine::Mode::Ready => "Ready",
+                        gridcraft_engine::Mode::Enter => "Enter",
+                        gridcraft_engine::Mode::Edit => "Edit",
+                        gridcraft_engine::Mode::Point => "Point",
+                    };
+                    text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                    crate::macro_ui::status(app, ui);
+                    if let Some(d) = app.session.active() {
+                        if d.wb.vba_project.is_some() {
+                            ui.add_space(12.0);
+                            text(ui, egui::RichText::new(lang.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger));
                         }
-                        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
-                            app.run_or_alert(cmd, json!({}));
+                        if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
+                            ui.add_space(12.0);
+                            text(ui, egui::RichText::new(app.ui.language.tr("Calculate")).font(theme::ui_font(12.5)).color(t.text_dim));
+                        }
+                        if !d.calc.circular.is_empty() {
+                            ui.add_space(12.0);
+                            // Only a loop on the active sheet is named, so the address needs no sheet.
+                            let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
+                                Some((_, c)) => lang.tr_with("Circular References: {cell}", &[("cell", &c.a1())]),
+                                None => lang.tr("Circular References").to_owned(),
+                            };
+                            text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
+                        }
+                        if app.session.clipboard.is_some() && app.editor.is_none() {
+                            ui.add_space(12.0);
+                            text(
+                                ui,
+                                egui::RichText::new(app.ui.language.tr("Select destination and press Enter or choose Paste"))
+                                    .font(theme::ui_font(12.5))
+                                    .color(t.text_dim),
+                            );
                         }
                     }
-                    ui.add_space(16.0);
-                    // The layout runs right to left, so the last statistic is drawn first.
-                    // Clicking a statistic copies its value (without the label) to the clipboard.
-                    for p in selection_statistics(app).into_iter().rev() {
-                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
-                        let resp = ui.add(
-                            egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
-                                .selectable(false)
+                    ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                        // Zoom percentage and slider.
+                        let zoom = app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100);
+                        let zl = ui.add(
+                            egui::Label::new(egui::RichText::new(format!("{zoom}%")).font(theme::ui_font(12.5)).color(t.text_dim))
                                 .sense(Sense::click()),
                         );
-                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(app.ui.language.tr("Click to copy"));
-                        if resp.clicked() {
-                            ui.ctx().copy_text(value);
+                        if zl.clicked() {
+                            app.open_dialog("zoom", json!({}));
                         }
-                        // The label senses clicks, so it also has to open the statistics menu on right-click.
-                        resp.context_menu(|ui| status_bar_menu(app, ui));
+                        ui.add_space(4.0);
+                        // The slider keeps its own direction (smaller at the left); its buttons sit at its ends.
+                        let zoom_in = |ui: &mut egui::Ui, app: &mut SheetApp| {
+                            if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "Zoom In", vec2(18.0, 18.0)).clicked() {
+                                let z = ((zoom as f32 / 10.0).floor() * 10.0 + 10.0).min(400.0);
+                                app.run_or_alert("view.zoom", json!({"percent": z}));
+                            }
+                        };
+                        let zoom_out = |ui: &mut egui::Ui, app: &mut SheetApp| {
+                            if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, "Zoom Out", vec2(18.0, 18.0)).clicked() {
+                                let z = ((zoom as f32 / 10.0).ceil() * 10.0 - 10.0).max(10.0);
+                                app.run_or_alert("view.zoom", json!({"percent": z}));
+                            }
+                        };
+                        let slider = |ui: &mut egui::Ui, app: &mut SheetApp| {
+                            let mut z = zoom as f32;
+                            let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
+                            ui.ctx().accesskit_node_builder(slider.id, |node| node.set_label(app.ui.language.tr("Zoom")));
+                            if slider.changed() {
+                                let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
+                            }
+                        };
+                        if rtl {
+                            zoom_out(ui, app);
+                            slider(ui, app);
+                            zoom_in(ui, app);
+                        } else {
+                            zoom_in(ui, app);
+                            slider(ui, app);
+                            zoom_out(ui, app);
+                        }
                         ui.add_space(10.0);
-                    }
+                        for (icon, tip, mode, cmd) in [
+                            (Icon::PageBreak, "Page Break Preview", "pageBreakPreview", "view.pageBreakPreview"),
+                            (Icon::PageLayout, "Page Layout", "pageLayout", "view.pageLayout"),
+                            (Icon::Normal, "Normal", "normal", "view.normal"),
+                        ] {
+                            let (r, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
+                            let cur = app.session.active().and_then(|d| d.wb.active().map(|s| s.view.as_str())).unwrap_or("normal");
+                            if cur == mode {
+                                ui.painter().rect_filled(r, 3.0, t.pressed);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(r, 3.0, t.hover);
+                            }
+                            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
+                            if resp.on_hover_text(tip).clicked() {
+                                app.run_or_alert(cmd, json!({}));
+                            }
+                        }
+                        ui.add_space(16.0);
+                        // The layout runs right to left, so the last statistic is drawn first.
+                        // Clicking a statistic copies its value (without the label) to the clipboard.
+                        for p in selection_statistics(app).into_iter().rev() {
+                            let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                            let resp = ui.add(
+                                egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
+                                    .selectable(false)
+                                    .sense(Sense::click()),
+                            );
+                            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(lang.tr("Click to copy"));
+                            if resp.clicked() {
+                                ui.ctx().copy_text(value);
+                            }
+                            // The label senses clicks, so it also has to open the statistics menu on right-click.
+                            crate::rtl::context_menu(&resp, |ui| status_bar_menu(app, ui));
+                            ui.add_space(10.0);
+                        }
+                    });
                 });
-            });
+            })
         },
     );
 }
@@ -445,6 +497,7 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         return vec![];
     }
     let on = app.session.prefs.status_bar;
+    let lang = app.ui.language;
     let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
@@ -455,22 +508,22 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(lang.tr_with("Average: {value}", &[("value", &fmt(a))]));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(lang.tr_with("Count: {value}", &[("value", &st.count.to_string())]));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(lang.tr_with("Numerical Count: {value}", &[("value", &st.numeric.to_string())]));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(lang.tr_with("Minimum: {value}", &[("value", &fmt(st.min))]));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(lang.tr_with("Maximum: {value}", &[("value", &fmt(st.max))]));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(lang.tr_with("Sum: {value}", &[("value", &fmt(st.sum))]));
     }
     parts
 }
@@ -487,7 +540,7 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
         ("maximum", "Maximum", st.maximum),
         ("sum", "Sum", st.sum),
     ] {
-        if ui.checkbox(&mut on, app.ui.language.tr(label)).changed() {
+        if crate::rtl::checkbox(ui, &mut on, app.ui.language.tr(label)).changed() {
             app.run_or_alert("view.statusBar", json!({ key: on }));
         }
     }
@@ -496,7 +549,8 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop,
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, bar_left, dragged_share, drop_copies_sheet, from_leading_edge, navigator_items,
+        rename_needs_focus, tab_drop,
     };
     use crate::SheetApp;
     use egui::Modifiers;
@@ -606,6 +660,27 @@ mod tests {
         assert_eq!(app.session.active().unwrap().wb.active_sheet(), 1, "the corrected value commits and the sheet changes");
         let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
         assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
+    }
+
+    #[test]
+    fn a_mirrored_row_takes_its_left_edge_from_the_free_rectangle() {
+        assert_eq!(bar_left(true, f32::NEG_INFINITY, 120.0), 120.0);
+        assert_eq!(bar_left(false, 40.0, 120.0), 40.0, "left to right is unchanged");
+        assert_eq!(dragged_share(600.0, (bar_left(true, f32::NEG_INFINITY, 100.0), 1000.0), 1100.0), 0.5);
+    }
+
+    #[test]
+    fn in_a_mirrored_bar_the_share_is_measured_from_the_right_edge() {
+        let bar = (100.0, 1000.0);
+        // The handle's right edge at x = 300 leaves the tabs 800 of the bar's 1000 points, from the right.
+        let x = from_leading_edge(true, bar, 300.0 - SPLIT_WIDTH / 2.0) - SPLIT_WIDTH / 2.0;
+        assert_eq!(dragged_share(x, bar, 1100.0), 0.8);
+        // Dragged all the way to the left end, the track keeps its minimum.
+        let x = from_leading_edge(true, bar, 100.0) - SPLIT_WIDTH / 2.0;
+        assert_eq!(dragged_share(x, bar, 1100.0), (1000.0 - SPLIT_WIDTH - MIN_TRACK) / 1000.0);
+        // To the right end, New sheet stays shown.
+        assert_eq!(dragged_share(from_leading_edge(true, bar, 1100.0), bar, 1100.0), NEW_SHEET_WIDTH / 1000.0);
+        assert_eq!(from_leading_edge(false, bar, 300.0), 300.0, "left to right is unchanged");
     }
 
     #[test]

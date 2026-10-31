@@ -53,10 +53,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** CJK font fallback, complex shaping (Arabic in cells and exports, Devanagari, Thai), bidi, non-Latin PDF.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); the Arabic interface
+  (`ar`) is shaped, laid out right to left and mirrored, but Arabic and Hebrew text inside cells has no
+  bidi (#696) and Devanagari has no shaping; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 

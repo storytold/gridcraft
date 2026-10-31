@@ -23,11 +23,11 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
             // Column by column, as Excel fills them.
             let rows = options.len().div_ceil(2);
-            egui::Grid::new(("paste_special", key)).num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new(("paste_special", key)).num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)), |ui| {
                 for r in 0..rows {
                     for c in 0..2 {
                         if let Some((value, text)) = options.get(c * rows + r) {
-                            if ui.radio(cur == *value, lang.tr(text)).clicked() {
+                            if crate::rtl::radio(ui, cur == *value, lang.tr(text)).clicked() {
                                 d.set_value(key, json!(value));
                             }
                         } else {
@@ -42,10 +42,10 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
     ui.add_space(8.0);
     // In the same columns as the options above.
     egui::Frame::new().inner_margin(egui::Margin::symmetric(11, 0)).show(ui, |ui| {
-        egui::Grid::new("paste_special_checks").num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("paste_special_checks").num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)), |ui| {
             for (key, label) in [("skipBlanks", "Skip blanks"), ("transpose", "Transpose (E)")] {
                 let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                if ui.checkbox(&mut b, lang.tr(label)).changed() {
+                if crate::rtl::checkbox(ui, &mut b, lang.tr(label)).changed() {
                     d.values.insert(key.into(), json!(b));
                 }
             }
@@ -62,7 +62,7 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             d.values.insert("link".into(), json!(true));
             *confirm = true;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
             if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 *confirm = true;

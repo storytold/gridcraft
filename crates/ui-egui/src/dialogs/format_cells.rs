@@ -27,22 +27,24 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     match d.tab.as_str() {
         "Number" => {
             let mut code = st.num_fmt.as_str().to_string();
+            // Mirrored, the first column is the right-hand one.
+            let (first, second) = if crate::rtl::on(ui.ctx()) { (1, 0) } else { (0, 1) };
             ui.columns(2, |cols| {
-                cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
+                cols[first].label(egui::RichText::new(lang.tr("Category:")).strong());
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
                     let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
-                    if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
+                    if cols[first].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
                     }
                 }
-                cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
+                cols[second].label(egui::RichText::new(lang.tr("Sample")).strong());
                 let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
-                cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
-                cols[1].add_space(8.0);
-                let label = cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+                cols[second].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
+                cols[second].add_space(8.0);
+                let label = cols[second].label(lang.tr("Type (custom format code):"));
+                cols[second].text_edit_singleline(&mut code).labelled_by(label.id);
                 for c in [
                     "0",
                     "0.00",
@@ -61,7 +63,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "[h]:mm:ss",
                     "@",
                 ] {
-                    if cols[1].small_button(c).clicked() {
+                    if cols[second].small_button(c).clicked() {
                         code = c.to_string();
                     }
                 }
@@ -82,7 +84,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     (HAlign::CenterAcross, "Center Across Selection"),
                     (HAlign::Distributed, "Distributed"),
                 ] {
-                    ui.radio_value(&mut st.align.h, h, lang.tr(n));
+                    crate::rtl::radio_value(ui, &mut st.align.h, h, lang.tr(n));
                 }
             });
             ui.label(egui::RichText::new(lang.tr("Vertical")).strong());
@@ -94,7 +96,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     (VAlign::Justify, "Justify"),
                     (VAlign::Distributed, "Distributed"),
                 ] {
-                    ui.radio_value(&mut st.align.v, v, lang.tr(n));
+                    crate::rtl::radio_value(ui, &mut st.align.v, v, lang.tr(n));
                 }
             });
             let mut indent = st.align.indent as f32;
@@ -103,8 +105,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             let mut rot = if st.align.rotation == 255 { 0.0 } else { st.align.rotation as f32 };
             ui.add(egui::Slider::new(&mut rot, -90.0..=90.0).text(lang.tr("Orientation (degrees)")));
             st.align.rotation = rot as i16;
-            ui.checkbox(&mut st.align.wrap, lang.tr("Wrap text"));
-            ui.checkbox(&mut st.align.shrink, lang.tr("Shrink to fit"));
+            crate::rtl::checkbox(ui, &mut st.align.wrap, lang.tr("Wrap text"));
+            crate::rtl::checkbox(ui, &mut st.align.shrink, lang.tr("Shrink to fit"));
         }
         "Font" => {
             craft_ui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
@@ -114,9 +116,9 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             });
             ui.add(egui::Slider::new(&mut st.font.size, 6.0..=72.0).text(lang.tr("Size")));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut st.font.bold, lang.tr("Bold"));
-                ui.checkbox(&mut st.font.italic, lang.tr("Italic"));
-                ui.checkbox(&mut st.font.strike, lang.tr("Strikethrough"));
+                crate::rtl::checkbox(ui, &mut st.font.bold, lang.tr("Bold"));
+                crate::rtl::checkbox(ui, &mut st.font.italic, lang.tr("Italic"));
+                crate::rtl::checkbox(ui, &mut st.font.strike, lang.tr("Strikethrough"));
             });
             use gridcraft_engine::model::{Underline, VertAlign};
             ui.horizontal(|ui| {
@@ -127,17 +129,17 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     (Underline::SingleAccounting, "Single Accounting"),
                     (Underline::DoubleAccounting, "Double Accounting"),
                 ] {
-                    ui.radio_value(&mut st.font.underline, u, lang.tr(n));
+                    crate::rtl::radio_value(ui, &mut st.font.underline, u, lang.tr(n));
                 }
             });
             ui.horizontal(|ui| {
-                ui.radio_value(&mut st.font.vert, VertAlign::Baseline, lang.tr("Normal"));
-                ui.radio_value(&mut st.font.vert, VertAlign::Superscript, lang.tr("Superscript"));
-                ui.radio_value(&mut st.font.vert, VertAlign::Subscript, lang.tr("Subscript"));
+                crate::rtl::radio_value(ui, &mut st.font.vert, VertAlign::Baseline, lang.tr("Normal"));
+                crate::rtl::radio_value(ui, &mut st.font.vert, VertAlign::Superscript, lang.tr("Superscript"));
+                crate::rtl::radio_value(ui, &mut st.font.vert, VertAlign::Subscript, lang.tr("Subscript"));
             });
             ui.label(lang.tr("Color:"));
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic")) {
+            if let Some(c) = crate::widgets::color_palette(ui, &colors, "Automatic") {
                 st.font.color =
                     if c == "none" { gridcraft_engine::model::Color::Auto } else { gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default() };
             }
@@ -192,7 +194,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
             ui.label(lang.tr("Background Color:"));
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
+            if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color") {
                 st.fill = if c == "none" {
                     Default::default()
                 } else {
@@ -201,8 +203,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             }
         }
         "Protection" => {
-            ui.checkbox(&mut st.protection.locked, lang.tr("Locked"));
-            ui.checkbox(&mut st.protection.hidden, lang.tr("Hidden"));
+            crate::rtl::checkbox(ui, &mut st.protection.locked, lang.tr("Locked"));
+            crate::rtl::checkbox(ui, &mut st.protection.hidden, lang.tr("Hidden"));
             ui.label(
                 egui::RichText::new(
                     lang.tr("Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)."),

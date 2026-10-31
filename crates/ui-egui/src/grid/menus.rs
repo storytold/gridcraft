@@ -45,69 +45,72 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            let ascending = ui.button("↑  Sort Ascending");
-            if ascending.clicked() {
-                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
-                close = true;
-            }
-            let descending = ui.button("↓  Sort Descending");
-            if descending.clicked() {
-                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
-                close = true;
-            }
-            ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
-            // A search narrows the list; Select All and Apply then only cover the matches.
-            let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
-            if !was_open {
-                field.request_focus();
-            }
-            let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
-            let mut all_new = all;
-            let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    c.1 = all_new;
-                }
-            }
-            // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
-            // worked over the values themselves (#432).
-            egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, v.as_str());
-                }
-            });
-            ui.ctx().data_mut(|d| {
-                d.insert_temp(key, checks.clone());
-                d.insert_temp(search_key, search.clone());
-            });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
-            ui.separator();
-            ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
-                if clear.clicked() {
-                    let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
+            crate::rtl::root(ui, |ui| {
+                let lang = crate::i18n::current(ui.ctx());
+                let ascending = ui.button(format!("↑  {}", lang.tr("Sort Ascending")));
+                if ascending.clicked() {
+                    let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                     close = true;
                 }
-                // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(|(_, on)| *on);
-                let apply = ui.button("Apply");
-                ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
-                if apply.clicked() || (enter && any) {
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
-                        json!({"column": col_to_letters(col), "clear": true})
-                    } else {
-                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
-                    };
-                    let _ = app.run("data.filterBy", p);
+                let descending = ui.button(format!("↓  {}", lang.tr("Sort Descending")));
+                if descending.clicked() {
+                    let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                     close = true;
                 }
+                ui.separator();
+                ui.label(egui::RichText::new(lang.tr("Filter")).strong());
+                let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+                // A search narrows the list; Select All and Apply then only cover the matches.
+                let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
+                let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(lang.tr("Search")).desired_width(f32::INFINITY));
+                if !was_open {
+                    field.request_focus();
+                }
+                let needle = search.trim().to_lowercase();
+                let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
+                let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+                let mut all_new = all;
+                let label = lang.tr(if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" });
+                if crate::rtl::checkbox(ui, &mut all_new, label).changed() {
+                    for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
+                        c.1 = all_new;
+                    }
+                }
+                // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
+                // worked over the values themselves (#432).
+                egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+                    for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
+                        crate::rtl::checkbox(ui, on, v.as_str());
+                    }
+                });
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(key, checks.clone());
+                    d.insert_temp(search_key, search.clone());
+                });
+                let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let clear = ui.button(lang.tr("Clear Filter"));
+                    if clear.clicked() {
+                        let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
+                        close = true;
+                    }
+                    // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
+                    let any = checks.iter().any(|(_, on)| *on);
+                    let apply = ui.button(lang.tr("Apply"));
+                    ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
+                    if apply.clicked() || (enter && any) {
+                        let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
+                        let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
+                        let p = if checks.iter().all(|(_, b)| *b) {
+                            json!({"column": col_to_letters(col), "clear": true})
+                        } else {
+                            json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
+                        };
+                        let _ = app.run("data.filterBy", p);
+                        close = true;
+                    }
+                });
             });
         });
     });
@@ -127,77 +130,80 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
-            let insert_copied = insert_copied_item(app);
-            let mut items: Vec<(&str, &str)> = vec![
-                ("Cut", "edit.cut"),
-                ("Copy", "edit.copy"),
-                ("Paste", "edit.paste"),
-                ("Paste Special…", "ui:pasteSpecial"),
-                ("-", ""),
-                ("Insert…", "ui:insertCells"),
-                ("Delete…", "ui:deleteCells"),
-                ("Clear Contents", "edit.clearContents"),
-                ("-", ""),
-                ("Filter by Selected Cell's Value", "ui:filterValue"),
-                ("Sort A to Z", "data.sortAscending"),
-                ("Sort Z to A", "data.sortDescending"),
-                ("-", ""),
-                ("New Comment", "ui:newComment"),
-                ("New Note", "ui:newNote"),
-                ("-", ""),
-                ("Format Cells…", "ui:formatCells"),
-                ("Pick From Drop-down List…", "ui:pickList"),
-                ("Define Name…", "ui:defineName"),
-                ("Link…", "ui:insertLink"),
-            ];
-            if let Some(item) = insert_copied {
-                items.insert(6, item);
-            }
-            if show_details_offered(app)
-                && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
-            {
-                items.insert(i + 1, ("-", ""));
-                items.insert(i + 2, ("Show Details", "pivot.showDetails"));
-            }
-            let lang = crate::i18n::current(ui.ctx());
-            for (label, id) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
+            // The mirrored column hugs the right edge of the room it is given: give it the menu's width.
+            ui.set_width(200.0);
+            crate::rtl::root(ui, |ui| {
+                let insert_copied = insert_copied_item(app);
+                let mut items: Vec<(&str, &str)> = vec![
+                    ("Cut", "edit.cut"),
+                    ("Copy", "edit.copy"),
+                    ("Paste", "edit.paste"),
+                    ("Paste Special…", "ui:pasteSpecial"),
+                    ("-", ""),
+                    ("Insert…", "ui:insertCells"),
+                    ("Delete…", "ui:deleteCells"),
+                    ("Clear Contents", "edit.clearContents"),
+                    ("-", ""),
+                    ("Filter by Selected Cell's Value", "ui:filterValue"),
+                    ("Sort A to Z", "data.sortAscending"),
+                    ("Sort Z to A", "data.sortDescending"),
+                    ("-", ""),
+                    ("New Comment", "ui:newComment"),
+                    ("New Note", "ui:newNote"),
+                    ("-", ""),
+                    ("Format Cells…", "ui:formatCells"),
+                    ("Pick From Drop-down List…", "ui:pickList"),
+                    ("Define Name…", "ui:defineName"),
+                    ("Link…", "ui:insertLink"),
+                ];
+                if let Some(item) = insert_copied {
+                    items.insert(6, item);
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
-                    close = true;
-                    match id {
-                        "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
-                        "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
-                        "ui:insertCells" => app.open_dialog("insertCells", json!({})),
-                        "ui:deleteCells" => app.open_dialog("deleteCells", json!({})),
-                        "ui:formatCells" => app.open_dialog("formatCells", json!({})),
-                        "ui:newComment" => app.open_dialog("comment", json!({"threaded": true})),
-                        "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
-                        "ui:defineName" => app.open_dialog("defineName", json!({})),
-                        "ui:insertLink" => app.open_dialog("insertLink", json!({})),
-                        "ui:pickList" => app.open_dialog("pickList", json!({})),
-                        "ui:filterValue" => {
-                            if let Some(d) = app.session.active() {
-                                let a = d.selection.active;
-                                let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
-                                let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
-                                if !has {
-                                    let _ = app.run("data.filter", json!({}));
+                if show_details_offered(app)
+                    && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
+                {
+                    items.insert(i + 1, ("-", ""));
+                    items.insert(i + 2, ("Show Details", "pivot.showDetails"));
+                }
+                let lang = crate::i18n::current(ui.ctx());
+                for (label, id) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(crate::rtl::item(ui, lang.tr(label), vec2(190.0, 20.0))).clicked() {
+                        close = true;
+                        match id {
+                            "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
+                            "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
+                            "ui:insertCells" => app.open_dialog("insertCells", json!({})),
+                            "ui:deleteCells" => app.open_dialog("deleteCells", json!({})),
+                            "ui:formatCells" => app.open_dialog("formatCells", json!({})),
+                            "ui:newComment" => app.open_dialog("comment", json!({"threaded": true})),
+                            "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
+                            "ui:defineName" => app.open_dialog("defineName", json!({})),
+                            "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                            "ui:pickList" => app.open_dialog("pickList", json!({})),
+                            "ui:filterValue" => {
+                                if let Some(d) = app.session.active() {
+                                    let a = d.selection.active;
+                                    let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
+                                    let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
+                                    if !has {
+                                        let _ = app.run("data.filter", json!({}));
+                                    }
+                                    app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
                                 }
-                                app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
                             }
+                            "edit.copy" | "edit.cut" => {
+                                app.copy_to_clipboard(ui.ctx(), id);
+                            }
+                            "edit.paste" => app.paste_from_clipboard(),
+                            other => app.run_or_alert(other, json!({})),
                         }
-                        "edit.copy" | "edit.cut" => {
-                            app.copy_to_clipboard(ui.ctx(), id);
-                        }
-                        "edit.paste" => app.paste_from_clipboard(),
-                        other => app.run_or_alert(other, json!({})),
                     }
                 }
-            }
+            });
         });
     });
     // A quick right-click presses and releases in one frame, and the menu's corner snaps to the
@@ -311,10 +317,10 @@ pub(super) fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo,
     ));
     let mut chosen = None;
     let modes = fill_modes(app, tag.src);
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::rtl::menu(&resp).show(|ui| {
         ui.set_min_width(190.0);
         for (label, mode) in modes {
-            if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+            if ui.add(crate::rtl::item(ui, lang.tr(label), vec2(180.0, 20.0))).clicked() {
                 chosen = Some(mode);
                 ui.close();
             }
@@ -344,24 +350,26 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     items.extend([("-", ""), ("Series…", "ui:series")]);
     let response = egui::Area::new(egui::Id::unique("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(190.0);
-            let lang = crate::i18n::current(ui.ctx());
-            for (label, mode) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
-                    close = true;
-                    if mode == "ui:series" {
-                        let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
-                        let direction = if target.width() != src.width() { "rows" } else { "columns" };
-                        app.open_dialog("series", json!({"direction": direction}));
-                    } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
-                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+            ui.set_width(190.0);
+            crate::rtl::root(ui, |ui| {
+                let lang = crate::i18n::current(ui.ctx());
+                for (label, mode) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(crate::rtl::item(ui, lang.tr(label), vec2(180.0, 20.0))).clicked() {
+                        close = true;
+                        if mode == "ui:series" {
+                            let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
+                            let direction = if target.width() != src.width() { "rows" } else { "columns" };
+                            app.open_dialog("series", json!({"direction": direction}));
+                        } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
+                            app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                        }
                     }
                 }
-            }
+            });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
@@ -375,29 +383,31 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
-            let mut items = vec![("Delete", "object.delete")];
-            if kind == "chart" {
-                items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
-            }
-            let lang = crate::i18n::current(ui.ctx());
-            for (label, action) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
+            ui.set_width(200.0);
+            crate::rtl::root(ui, |ui| {
+                let mut items = vec![("Delete", "object.delete")];
+                if kind == "chart" {
+                    items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
-                    close = true;
-                    match action {
-                        "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
-                        "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
-                        _ => {
-                            app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_chart = None;
+                let lang = crate::i18n::current(ui.ctx());
+                for (label, action) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(crate::rtl::item(ui, lang.tr(label), vec2(190.0, 20.0))).clicked() {
+                        close = true;
+                        match action {
+                            "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
+                            "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+                            _ => {
+                                app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+                                app.selected_chart = None;
+                            }
                         }
                     }
                 }
-            }
+            });
         });
     });
     if close
@@ -445,7 +455,7 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
         Stroke::NONE,
     ));
     p.text(c, egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(10.0), t.warning_ink);
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::rtl::menu(&resp).show(|ui| {
         ui.label(egui::RichText::new(lang.tr("Number Stored as Text")).strong());
         ui.separator();
         if ui.button(lang.tr("Convert to Number")).clicked() {
@@ -461,68 +471,71 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
     let mut close = false;
     let response = egui::Area::new(egui::Id::unique("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(190.0);
-            let insert_copied = insert_copied_item(app);
-            let mut items: Vec<(&str, &str)> = if rows {
-                vec![
-                    ("Cut", "edit.cut"),
-                    ("Copy", "edit.copy"),
-                    ("Paste", "edit.paste"),
-                    ("-", ""),
-                    ("Insert", "home.insertRows"),
-                    ("Delete", "home.deleteRows"),
-                    ("Clear Contents", "edit.clearContents"),
-                    ("-", ""),
-                    ("Format Cells…", "ui:formatCells"),
-                    ("Row Height…", "ui:rowHeight"),
-                    ("AutoFit Row Height", "home.autofitRowHeight"),
-                    ("Hide", "home.hideRows"),
-                    ("Unhide", "home.unhideRows"),
-                    ("Group", "data.group"),
-                ]
-            } else {
-                vec![
-                    ("Cut", "edit.cut"),
-                    ("Copy", "edit.copy"),
-                    ("Paste", "edit.paste"),
-                    ("-", ""),
-                    ("Insert", "home.insertColumns"),
-                    ("Delete", "home.deleteColumns"),
-                    ("Clear Contents", "edit.clearContents"),
-                    ("-", ""),
-                    ("Format Cells…", "ui:formatCells"),
-                    ("Column Width…", "ui:columnWidth"),
-                    ("AutoFit Column Width", "home.autofitColumnWidth"),
-                    ("Hide", "home.hideColumns"),
-                    ("Unhide", "home.unhideColumns"),
-                    ("Sort A to Z", "data.sortAscending"),
-                    ("Group", "data.group"),
-                ]
-            };
-            if let Some(item) = insert_copied {
-                items.insert(5, item);
-            }
-            let lang = crate::i18n::current(ui.ctx());
-            for (label, id) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
+            // The mirrored column hugs the right edge of the room it is given: give it the menu's width.
+            ui.set_width(190.0);
+            crate::rtl::root(ui, |ui| {
+                let insert_copied = insert_copied_item(app);
+                let mut items: Vec<(&str, &str)> = if rows {
+                    vec![
+                        ("Cut", "edit.cut"),
+                        ("Copy", "edit.copy"),
+                        ("Paste", "edit.paste"),
+                        ("-", ""),
+                        ("Insert", "home.insertRows"),
+                        ("Delete", "home.deleteRows"),
+                        ("Clear Contents", "edit.clearContents"),
+                        ("-", ""),
+                        ("Format Cells…", "ui:formatCells"),
+                        ("Row Height…", "ui:rowHeight"),
+                        ("AutoFit Row Height", "home.autofitRowHeight"),
+                        ("Hide", "home.hideRows"),
+                        ("Unhide", "home.unhideRows"),
+                        ("Group", "data.group"),
+                    ]
+                } else {
+                    vec![
+                        ("Cut", "edit.cut"),
+                        ("Copy", "edit.copy"),
+                        ("Paste", "edit.paste"),
+                        ("-", ""),
+                        ("Insert", "home.insertColumns"),
+                        ("Delete", "home.deleteColumns"),
+                        ("Clear Contents", "edit.clearContents"),
+                        ("-", ""),
+                        ("Format Cells…", "ui:formatCells"),
+                        ("Column Width…", "ui:columnWidth"),
+                        ("AutoFit Column Width", "home.autofitColumnWidth"),
+                        ("Hide", "home.hideColumns"),
+                        ("Unhide", "home.unhideColumns"),
+                        ("Sort A to Z", "data.sortAscending"),
+                        ("Group", "data.group"),
+                    ]
+                };
+                if let Some(item) = insert_copied {
+                    items.insert(5, item);
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0))).clicked() {
-                    close = true;
-                    match id {
-                        "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
-                        "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
-                        "ui:formatCells" => app.open_dialog("formatCells", json!({})),
-                        "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
-                        "edit.copy" | "edit.cut" => {
-                            app.copy_to_clipboard(ui.ctx(), id);
+                let lang = crate::i18n::current(ui.ctx());
+                for (label, id) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(crate::rtl::item(ui, lang.tr(label), vec2(180.0, 20.0))).clicked() {
+                        close = true;
+                        match id {
+                            "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
+                            "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
+                            "ui:formatCells" => app.open_dialog("formatCells", json!({})),
+                            "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
+                            "edit.copy" | "edit.cut" => {
+                                app.copy_to_clipboard(ui.ctx(), id);
+                            }
+                            "edit.paste" => app.paste_from_clipboard(),
+                            other => app.run_or_alert(other, json!({})),
                         }
-                        "edit.paste" => app.paste_from_clipboard(),
-                        other => app.run_or_alert(other, json!({})),
                     }
                 }
-            }
+            });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
