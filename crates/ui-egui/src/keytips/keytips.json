@@ -1659,6 +1659,13 @@
    "target": "formulas.moreFunctions"
   },
   {
+   "seq": "MR",
+   "kind": "control",
+   "excel": "Recently Used Menu",
+   "note": "opens the Recently Used menu",
+   "target": "formulas.recentlyUsed"
+  },
+  {
    "seq": "MS",
    "kind": "continue",
    "excel": "Use in Formula Menu",
