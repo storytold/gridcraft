@@ -140,8 +140,16 @@ fn cell_result(v: Value) -> Value {
 // ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
+/// Excel: a number that is neither an array nor a reference is no lookup array (`#N/A`).
+fn not_an_array(a: &Arg) -> bool {
+    !a.from_ref && matches!(a.value, Value::Number(_))
+}
+
 fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     let x = needle(args, 0)?;
+    if not_an_array(arg(args, 1)?) {
+        return Err(CellError::NA);
+    }
     let table = as_array(&arg(args, 1)?.value);
     if let Value::Error(e) = &arg(args, 1)?.value {
         return Err(*e);
@@ -210,6 +218,9 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
+    if not_an_array(arg(args, 1)?) {
+        return Err(CellError::NA);
+    }
     let av = &arg(args, 1)?.value;
     if let Value::Error(e) = av {
         return Err(*e);
@@ -746,6 +757,20 @@ mod tests {
 
     fn table_rows3() -> Value {
         arr(vec![vec![nv(1.0), tv("one"), nv(10.0)], vec![nv(2.0), tv("two"), nv(20.0)], vec![nv(3.0), tv("three"), nv(30.0)]])
+    }
+
+    #[test]
+    fn scalar_number_is_no_lookup_array() {
+        // Excel 16: a literal or computed number is #N/A, a one-cell reference or array still works.
+        is_err(ev("MATCH", vec![n(1.0), n(1.0)]), CellError::NA);
+        is_err(ev("MATCH", vec![n(1.0), n(1.0), n(0.0)]), CellError::NA);
+        is_err(ev("VLOOKUP", vec![n(1.0), n(1.0), n(1.0)]), CellError::NA);
+        is_err(ev("VLOOKUP", vec![n(1.0), n(1.0), n(1.0), b(false)]), CellError::NA);
+        is_err(ev("HLOOKUP", vec![n(1.0), n(1.0), n(1.0)]), CellError::NA);
+        close(ev("MATCH", vec![n(1.0), rf(Value::Number(1.0))]), 1.0);
+        close(ev("VLOOKUP", vec![n(1.0), rf(Value::Number(1.0)), n(1.0)]), 1.0);
+        close(ev("HLOOKUP", vec![n(1.0), rf(Value::Number(1.0)), n(1.0)]), 1.0);
+        close(ev("MATCH", vec![n(1.0), av(arr(vec![vec![Value::Number(1.0)]]))]), 1.0);
     }
 
     #[test]
