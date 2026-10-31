@@ -48,6 +48,8 @@ when it starts so switching the preference cannot reinterpret unfinished input.
 Workbook/sheet names, table names, LET bindings and LAMBDA parameters take precedence over
 aliases. Text, sheet names and table column names are unchanged. When a localized spelling
 would collide with a name, displayed formulas retain the canonical spelling to preserve meaning.
+A typed local function name always means the built-in, as its canonical name does in a call:
+`LET(SUM;LAMBDA(x;x*2);SUMA(3))` is 3.
 
 Stored formulas, XLSX import/export, engine commands, control/API calls, CLI evaluation and
 clipboard exchange retain strict English syntax. This also applies to advanced dialogs such as

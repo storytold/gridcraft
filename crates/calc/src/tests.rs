@@ -968,6 +968,9 @@ fn let_lambda() {
     // Variable names ignore case in any script, so a localized call can name a LET lambda.
     t.set("A6", "=LET(zählenwenn,LAMBDA(x,x*2),ZÄHLENWENN(3))");
     assert_eq!(t.num("A6"), 6.0);
+    // A built-in function's name calls the built-in even where a LET binding takes it.
+    t.set("A7", "=LET(SUM,LAMBDA(x,x*2),SUM(3))");
+    assert_eq!(t.num("A7"), 3.0);
 }
 
 #[test]

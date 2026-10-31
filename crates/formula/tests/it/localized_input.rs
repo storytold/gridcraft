@@ -80,6 +80,9 @@ fn functions_passed_by_name_are_spelled_in_the_language() {
     let known = |name: &str| name == "SUMA";
     assert_eq!(print(&parse_input("BYROW(A1:B3;SUMA)", Es, known).unwrap()), "BYROW(A1:B3,SUMA)");
     assert_eq!(print_input(&parse("BYROW(A1:B3,SUM)").unwrap(), Es, known).unwrap(), "BYROW(A1:B3;SUM)");
+    // A local function name is the built-in even where its canonical name is bound, as the
+    // canonical name is in a call (the evaluator calls the built-in SUM before a binding).
+    assert_eq!(canonical("LET(SUM;LAMBDA(x;x*2);SUMA(3))", Es), "LET(SUM,LAMBDA(x,x*2),SUM(3))");
 }
 
 /// Each table is sorted by canonical name, has no two functions sharing a local name, and only
