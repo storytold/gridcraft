@@ -1,4 +1,4 @@
-//! German (de-DE) formula words, staged for German formula entry; not wired in yet.
+//! German (de-DE) function names for formula entry and display.
 //!
 //! Taken from PR #1201 by Herr-Enklo (`crates/formula/src/input/de.rs`), which observed them
 //! black-box in Excel 365 (German interface, de-DE regional format) on 2026-10-13 through its
@@ -434,21 +434,3 @@ pub(crate) const GERMAN: &[(&str, &str)] = &[
     ("Z.TEST", "G.TEST"),
     ("ZTEST", "GTEST"),
 ];
-
-/// Canonical error literal → German.
-pub(crate) const GERMAN_ERRORS: &[(&str, &str)] = &[
-    ("#NULL!", "#NULL!"),
-    ("#DIV/0!", "#DIV/0!"),
-    ("#VALUE!", "#WERT!"),
-    ("#REF!", "#BEZUG!"),
-    ("#NAME?", "#NAME?"),
-    ("#NUM!", "#ZAHL!"),
-    ("#N/A", "#NV"),
-    ("#GETTING_DATA", "#DATEN_ABRUFEN"),
-    ("#SPILL!", "#ÜBERLAUF!"),
-    ("#CALC!", "#CALC!"),
-];
-
-/// Canonical structured-reference specifier → German.
-pub(crate) const GERMAN_TABLE_ITEMS: &[(&str, &str)] =
-    &[("#All", "#Alle"), ("#Data", "#Daten"), ("#Headers", "#Kopfzeilen"), ("#Totals", "#Ergebnisse"), ("#This Row", "#Diese Zeile")];
