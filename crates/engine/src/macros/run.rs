@@ -539,7 +539,8 @@ impl Guard {
             }
             objects += deleted(&ss.charts, &ps.charts, &sa.charts, |o| o.id)
                 + deleted(&ss.images, &ps.images, &sa.images, |o| o.id)
-                + deleted(&ss.shapes, &ps.shapes, &sa.shapes, |o| o.id);
+                + deleted(&ss.shapes, &ps.shapes, &sa.shapes, |o| o.id)
+                + deleted(&ss.controls, &ps.controls, &sa.controls, |o| o.id);
         }
         if objects > 0 {
             parts.push(format!("{objects} object{}", if objects == 1 { "" } else { "s" }));

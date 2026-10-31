@@ -2489,3 +2489,28 @@ fn an_output_override_is_checked_and_protected_like_the_macros_own_anchor() {
     }
     assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &before));
 }
+
+/// After a partial footprint (Solver can't be previewed), a later step that deletes a form
+/// control is caught by the check of each step, as one that deletes a chart or a picture is.
+#[test]
+fn a_step_that_deletes_a_form_control_after_a_partial_footprint_is_caught() {
+    let mut s = s();
+    set(&mut s, "A1", "1");
+    set(&mut s, "C1", "=A1");
+    let control = s.execute("insert.spinButton", json!({"at": "E2"})).unwrap()["control"].as_u64().unwrap();
+    let solver = json!({"command": "data.solver", "params": {"objective": "C1", "variables": "A1", "constraints": ["A1 <= 5"], "method": "simplex", "saveModel": false}});
+    let delete = json!({"command": "object.delete", "params": {"kind": "control", "id": control}});
+    put(&mut s, json!({"name": "Drop", "inputs": [{"name": "Input"}], "steps": [solver, delete]}));
+    let start = s.doc().unwrap().wb.clone();
+    for rule in ["fail", "ask"] {
+        let r = s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "onConflict": rule}));
+        let e = match (rule, r) {
+            ("fail", Err(EngineError::Other(e))) | ("ask", Err(EngineError::Confirm(e))) => e,
+            (_, r) => panic!("{rule}: {r:?}"),
+        };
+        assert!(e.contains("Step 2 (object.delete): It would write over data (1 object)"), "{e}");
+        assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &start), "{rule}: rolled back");
+    }
+    s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "overwrite": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().controls.is_empty());
+}
