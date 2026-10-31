@@ -767,3 +767,55 @@ fn section_lines_split_around_the_picture() {
     assert_eq!(section_lines(&l, false)[1], HfLine { before: "AB".into(), after: String::new(), picture: false });
     assert_eq!(section_lines(&r, true), [HfLine { before: "No".into(), after: String::new(), picture: true }]);
 }
+
+#[test]
+fn print_preview_pages_carry_their_header_footer_geometry() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A200", "input": "y"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&CTitle", "differentFirst": true, "differentOddEven": true})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    let pages = pv["pageList"].as_array().unwrap();
+    assert!(pages.len() >= 3);
+    let kinds: Vec<&str> = pages.iter().take(3).map(|p| p["hfPage"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["first", "even", "odd"]);
+    // Letter, default margins: header and footer 0.3 in, sides 0.7 in, text at 100%.
+    let p = &pages[0];
+    let near = |v: &Json, want: f64| v.as_f64().is_some_and(|v| (v - want).abs() < 1e-3);
+    assert!(near(&p["headerMargin"], 21.6) && near(&p["footerMargin"], 21.6), "{p}");
+    assert!(near(&p["hfSides"][0], 50.4) && near(&p["hfSides"][1], 50.4), "{p}");
+    assert!(near(&p["hfScale"], 1.0));
+}
+
+#[test]
+fn header_footer_layout_is_what_printing_draws() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&CInvoice", "footer": "&CPage &P &G"})).unwrap();
+    let d = s.doc().unwrap();
+    let lay = layout_sheet(&d.wb, 0, &PrintOptions::default(), None).unwrap();
+    let cx = HfContext { page: 1, pages: 1, ..HfContext::default() };
+    let size = |footer: bool, section: usize| match (footer, section) {
+        (false, 0) => Some((120.0, 40.0)),
+        (true, 1) => Some((80.0, 20.0)),
+        _ => None,
+    };
+    let items = layout_header_footer(&lay.hf_frame(), &lay.settings, gridcraft_model::HfPage::Odd, &cx, size);
+    // The letterhead's top on the header margin, the footer picture's bottom on the footer
+    // margin, as `header_and_footer_pictures_print_where_their_g_is` finds them in the PDF.
+    let at = |x: f32, want: f32| (x - want).abs() < 1e-3;
+    assert!(
+        items.iter().any(|i| matches!(i, HfItem::Picture { x, y, width, height, footer: false, section: 0 }
+            if at(*x, 50.4) && at(*y, 21.6) && at(*width, 120.0) && at(*height, 40.0))),
+        "{items:?}"
+    );
+    assert!(
+        items.iter().any(|i| matches!(i, HfItem::Picture { footer: true, section: 1, y, height, .. } if (y + height - (792.0 - 21.6)).abs() < 1e-3))
+    );
+    assert!(items.iter().any(|i| matches!(i, HfItem::Text { text, .. } if text == "Invoice")));
+    assert!(items.iter().any(|i| matches!(i, HfItem::Text { text, .. } if text == "Page 1 ")));
+    // Without pictures to draw, &G takes no room and nothing else is laid out.
+    let plain = layout_header_footer(&lay.hf_frame(), &lay.settings, gridcraft_model::HfPage::Odd, &cx, |_, _| None);
+    assert!(plain.iter().all(|i| matches!(i, HfItem::Text { .. })));
+    assert_eq!(plain.len(), 2);
+}

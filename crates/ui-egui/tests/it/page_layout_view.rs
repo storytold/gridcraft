@@ -475,3 +475,38 @@ fn header_pictures_need_their_g_and_a_readable_picture_on_screen_too() {
     h.run_steps(4);
     assert!(picture_rects(&h).is_empty());
 }
+
+/// Text painted in the last frame.
+fn painted_text(h: &Harness) -> Vec<String> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn print_preview_draws_headers_footers_and_their_pictures() {
+    let mut h = picture_fixture("&L&G&CTitle &P/&N", &[("LH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(2);
+    let on_sheet = picture_rects(&h).len();
+    h.state_mut().run("ui.backstage", json!({"page": "print"})).unwrap();
+    h.run_steps(4);
+    assert!(painted_text(&h).iter().any(|t| t == "Title 1/2"), "{:?}", painted_text(&h));
+    let rects = picture_rects(&h);
+    assert_eq!(rects.len(), 1, "the preview page's picture, not the sheet's ({on_sheet} there)");
+    // The picture keeps its proportions in miniature.
+    assert!((rects[0].width() / rects[0].height() - 3.0).abs() < 0.05, "{rects:?}");
+}
+
+#[test]
+fn print_preview_without_headers_draws_none() {
+    let mut h = picture_fixture("", &[("LH", "width:120pt;height:40pt", png(30, 10))]);
+    h.state_mut().run("ui.backstage", json!({"page": "print"})).unwrap();
+    h.run_steps(4);
+    assert!(picture_rects(&h).is_empty());
+    assert!(!painted_text(&h).iter().any(|t| t.starts_with("Title")));
+}

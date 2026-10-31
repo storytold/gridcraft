@@ -354,40 +354,74 @@ pub fn section_lines(sec: &HfSection, with_picture: bool) -> Vec<HfLine> {
     out
 }
 
-pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext, images: &[HfImage]) {
-    let [_, _, _, _, hm, fm] = lay.margins;
-    let (l, r) = lay.hf_sides();
-    let text_scale = lay.hf_text_scale();
-    let pw = lay.page_w;
-    let ph = lay.page_h;
-    for (spec, header) in [(lay.settings.hf(which, false), true), (lay.settings.hf(which, true), false)] {
+/// The page geometry headers and footers are laid out in, in points: the paper, the header and
+/// footer margins, the side margins sections line up with, and the text scale (the print scale
+/// with Scale with Document on, else 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HfFrame {
+    pub page_w: f32,
+    pub page_h: f32,
+    pub header_margin: f32,
+    pub footer_margin: f32,
+    pub sides: (f32, f32),
+    pub text_scale: f32,
+}
+
+/// One thing to draw in a header or footer, in points from the page's top-left corner.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HfItem {
+    /// A run of text: `baseline` is the text's baseline; `size` is in points (scaled).
+    Text { x: f32, baseline: f32, size: f32, bold: bool, italic: bool, text: String },
+    /// The picture of a section, drawn in the box.
+    Picture { x: f32, y: f32, width: f32, height: f32, footer: bool, section: usize },
+}
+
+/// Lays out the header and footer of a page of kind `which` (#1257): each section's lines, the
+/// picture inline where its `&G` is, the header growing down from the header margin and the
+/// footer up from the footer margin. `picture(footer, section)` gives a section's picture size
+/// in points (before the text scale), or `None` when it has none to draw (its `&G` then takes no
+/// room). Printing draws these items; the print preview draws them in miniature.
+pub fn layout_header_footer(
+    frame: &HfFrame,
+    settings: &gridcraft_model::PrintSettings,
+    which: gridcraft_model::HfPage,
+    cx: &HfContext,
+    picture: impl Fn(bool, usize) -> Option<(f32, f32)>,
+) -> Vec<HfItem> {
+    let HfFrame { page_w: pw, page_h: ph, header_margin: hm, footer_margin: fm, sides: (l, r), text_scale } = *frame;
+    let mut out = vec![];
+    for (spec, header) in [(settings.hf(which, false), true), (settings.hf(which, true), false)] {
         if spec.is_empty() {
             continue;
         }
         let secs = expand_header_footer(spec, cx);
         for (i, sec) in secs.iter().enumerate() {
-            let image = sec.picture.and_then(|_| images.iter().find(|im| im.page == which && im.footer == !header && im.section == i));
-            if sec.text.trim().is_empty() && image.is_none() {
+            let pic = sec
+                .picture
+                .and_then(|_| picture(!header, i))
+                .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0)
+                .map(|(w, h)| (w * text_scale, h * text_scale));
+            if sec.text.trim().is_empty() && pic.is_none() {
                 continue;
             }
             let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
-            let lines = section_lines(sec, image.is_some());
-            let pic = image.map(|im| (im, im.width * text_scale, im.height * text_scale));
+            let lines = section_lines(sec, pic.is_some());
             // Text sits this far above the bottom of its line (as it always has).
             let descent = if header { 0.4 } else { 0.22 } * size;
             let line_h = |ln: &HfLine| match pic {
-                Some((_, _, h)) if ln.picture => h.max(size * 1.2),
+                Some((_, h)) if ln.picture => h.max(size * 1.2),
                 _ => size * 1.2,
             };
             let total: f32 = lines.iter().map(line_h).sum();
             // Headers grow down from the header margin, footers up from the footer margin.
             let mut top = if header { hm } else { ph - fm - total };
+            let text = |x: f32, baseline: f32, t: &str| HfItem::Text { x, baseline, size, bold: sec.bold, italic: sec.italic, text: t.to_string() };
             for ln in &lines {
                 let lh = line_h(ln);
                 let bw = gridcraft_pdf::text_width(font, size, &ln.before);
                 let shown = pic.filter(|_| ln.picture);
-                let pic_w = shown.map_or(0.0, |(_, w, _)| w);
+                let pic_w = shown.map_or(0.0, |(w, _)| w);
                 let lw = bw + pic_w + if ln.after.is_empty() { 0.0 } else { gridcraft_pdf::text_width(font, size, &ln.after) };
                 let x = match i {
                     0 => l,
@@ -396,15 +430,33 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
                 };
                 let base = top + lh - descent;
                 if !ln.before.is_empty() {
-                    pg.text(x, base, size, font, [0, 0, 0], &ln.before);
+                    out.push(text(x, base, &ln.before));
                 }
-                if let Some((im, w, h)) = shown {
-                    pg.image_shared(Rect::new(x + bw, top + lh - h, w, h), im.id);
+                if let Some((w, h)) = shown {
+                    out.push(HfItem::Picture { x: x + bw, y: top + lh - h, width: w, height: h, footer: !header, section: i });
                 }
                 if !ln.after.is_empty() {
-                    pg.text(x + bw + pic_w, base, size, font, [0, 0, 0], &ln.after);
+                    out.push(text(x + bw + pic_w, base, &ln.after));
                 }
                 top += lh;
+            }
+        }
+    }
+    out
+}
+
+pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext, images: &[HfImage]) {
+    let image = |footer: bool, section: usize| images.iter().find(|im| im.page == which && im.footer == footer && im.section == section);
+    let items = layout_header_footer(&lay.hf_frame(), &lay.settings, which, cx, |f, s| image(f, s).map(|im| (im.width, im.height)));
+    for item in items {
+        match item {
+            HfItem::Text { x, baseline, size, bold, italic, text } => {
+                pg.text(x, baseline, size, Font::styled(gridcraft_pdf::Family::Sans, bold, italic), [0, 0, 0], &text);
+            }
+            HfItem::Picture { x, y, width, height, footer, section } => {
+                if let Some(im) = image(footer, section) {
+                    pg.image_shared(Rect::new(x, y, width, height), im.id);
+                }
             }
         }
     }
