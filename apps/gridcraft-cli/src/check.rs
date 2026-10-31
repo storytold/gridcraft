@@ -21,10 +21,13 @@ use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::formula::{Expr, quote_sheet};
-use gridcraft_engine::model::{Cell, Sheet, Workbook};
+use gridcraft_engine::model::{Cell, CfOperator, Sheet, Validation, ValidationKind, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{Args, USAGE, number_text, pretty};
+
+#[cfg(test)]
+mod validation_tests;
 
 mod calc;
 mod fidelity;
