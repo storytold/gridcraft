@@ -21,7 +21,11 @@ mod special;
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
-pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
+pub use special::{NameCache, NameIndex, SPECIAL_FUNCTIONS, is_known_function, precedents, precedents_with, resized_sum_range};
+
+/// A defined name as [`Host::name_expr`] finds it: the parsed formula (`None` when it doesn't parse)
+/// and the sheet the name is scoped to (`None` for a workbook-wide name).
+pub type ParsedName = (Option<Arc<Expr>>, Option<usize>);
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
@@ -104,6 +108,15 @@ pub trait Host {
     /// Values of a block, row-major. Hosts can override with a sparse fast path.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
+    }
+    /// The parsed formula of a defined name visible from `scope_sheet`, with the sheet its
+    /// unqualified references refer to: `Some((Some(expr), scope))` for a name that parses,
+    /// `Some((None, scope))` for one that doesn't (it evaluates to `#NAME?`), and `None` for no
+    /// such name. The default parses on every call; a recalc pass caches per name, since a
+    /// formula column calling a LAMBDA name re-parses that name once per cell otherwise.
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<ParsedName> {
+        let def = self.workbook().name(name, scope_sheet)?;
+        Some((gridcraft_formula::parse_name(&def.formula).ok().map(Arc::new), def.scope))
     }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
@@ -358,38 +371,35 @@ impl<'h> Evaluator<'h> {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
             return v.clone();
         }
-        let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
         let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
+            Some((s, b)) => match self.host.workbook().sheet_index(&gridcraft_core::unquote_sheet(s)) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
             None => (self.sheet, n),
         };
-        if let Some(def) = wb.name(bare, scope_sheet) {
-            let text = def.formula.clone();
-            let scope = def.scope.unwrap_or(self.sheet);
-            return match gridcraft_formula::parse_name(&text) {
-                Ok(expr) => {
-                    // Relative references in a name are relative to A1: used here, they move by
-                    // this cell's offset from it.
-                    let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
-                        gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
-                    } else {
-                        expr
-                    };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
-                    self.sheet = scope;
-                    let r = self.eval(&expr);
-                    self.sheet = saved;
-                    r
-                }
-                Err(_) => err(CellError::Name),
+        if let Some((parsed, def_scope)) = self.host.name_expr(bare, scope_sheet) {
+            let scope = def_scope.unwrap_or(self.sheet);
+            let Some(expr) = parsed else { return err(CellError::Name) };
+            // Relative references in a name are relative to A1: used here, they move by this
+            // cell's offset from it. Only then is the shared parse copied.
+            let shifted;
+            let expr: &Expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
+                shifted = gridcraft_formula::adjust::shift_relative_wrapping((*expr).clone(), self.at.row as i64, self.at.col as i64);
+                &shifted
+            } else {
+                &expr
             };
+            let saved = self.sheet;
+            // Unqualified references in a name refer to the scope sheet.
+            self.sheet = scope;
+            let r = self.eval(expr);
+            self.sheet = saved;
+            return r;
         }
         // A table name alone means its data body.
+        let wb = self.host.workbook();
         if let Some((si, ti)) = wb.table(bare)
             && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
             && let Some(d) = t.data_range()
