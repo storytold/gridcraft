@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; Japanese 和暦 date formats; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -96,7 +96,8 @@ added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
+The remaining dialogs, menus and messages are English; formulas and other locales' number formats
+are en-US only, except Japanese 和暦 dates (`[$-411]`, era tokens, gannen 元年), which landed 10-20.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -153,6 +154,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-22 | View › New Window opens a second window on the same workbook (it used to open a copy whose Save overwrote the original): each window has its own selection, active sheet and scroll, titles read "Book1:1" / "Book1:2", and Switch Windows, Hide, Unhide and Close act per window. The control channel, CLI `send` and MCP tools take an optional `window` or `doc` id and default to the active window; `window.list` (MCP `list_windows`) lists the windows |
 | 2026-10-22 | Typing in a cell and then choosing File › New no longer strands the first workbook: the entry is committed into its own workbook before any File or window command (a refused entry stays open and stops the command), View › Switch Windows and the macOS Window menu list the open workbooks with unsaved markers, `view.switchWindows {doc}` switches by a stable workbook id, and the macOS Quit item asks about unsaved workbooks |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
+| 2026-10-20 | Japanese 和暦 number formats: a `[$-411]`/`[$-ja-JP]` date section renders era names (`g`/`gg`/`ggg`), era years (`e`/`ee`) and 元年 with the gannen tag, on day-accurate era boundaries; other locale tags stay ignored |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
