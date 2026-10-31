@@ -196,6 +196,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Tamaño de fuente",
         "Gridlines" => "Líneas de cuadrícula",
         "Headings" => "Encabezados",
+        "Focus Cell" => "Enfocar celda",
         "Zoom" => "Zoom",
         "Magnification" => "Ampliación",
         "Fit selection" => "Ajustar la selección",

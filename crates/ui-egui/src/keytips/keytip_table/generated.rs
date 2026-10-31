@@ -351,7 +351,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WS", Entry::Finish(Action::Command("view.split"))),           // Excel: Split
     ("WT", Entry::Finish(Action::Pending("view.resetWindowPosition"))), // pending; Excel: Reset Window Position; reserved until the command lands
     ("WU", Entry::Finish(Action::Command("view.unhideWindow"))),    // Excel: Unhide Window
-    ("WVC", Entry::Finish(Action::Pending("view.focusCell"))),      // pending; Excel: Focus Cell Menu; Focus Cell; reserved until the command lands
+    ("WVC", Entry::Finish(Action::Command("view.focusCell"))),      // Excel: Focus Cell Menu; Focus Cell; toggles the tint on the active sheet
     ("WVF", Entry::Finish(Action::Control("view.formulaBar"))),     // Excel: Toggle Formula Bar; toggles the formula bar
     ("WVH", Entry::Finish(Action::Command("view.headings"))),       // Excel: Toggle Headings; containment(Headings)
     ("WVN", Entry::Finish(Action::Pending("view.navigation"))),     // pending; Excel: Navigation; Navigation pane; reserved until the command lands

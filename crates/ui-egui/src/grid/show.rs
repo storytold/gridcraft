@@ -2,6 +2,7 @@
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
+use super::focus::focus_tint;
 use super::geo::Geo;
 use super::interact::{interact, paint_freeze_handles};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
@@ -194,7 +195,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Headers.
     if sh.show_headings {
         let headings = table_headings(&geo, sh, sel.active);
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
+        paint_headers(HeaderPaint {
+            painter: &painter,
+            geo: &geo,
+            workbook: &wb,
+            sheet: sh,
+            selection: &sel,
+            tokens: &t,
+            quads: &quads,
+            headings: &headings,
+        });
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
@@ -403,7 +413,18 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(QuadrantPaint { painter: &p, geo, workbook: wb, sheet_index: si, sheet: sh, rows: *rows, cols: *cols, cf, tokens: t });
+        paint_quadrant(QuadrantPaint {
+            painter: &p,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            active: sel.active,
+            rows: *rows,
+            cols: *cols,
+            cf,
+            tokens: t,
+        });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
     // Freeze lines.
@@ -522,15 +543,19 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     }
 }
 
-pub(crate) fn paint_headers(
-    p: &Painter,
-    geo: &Geo,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    t: &Tokens,
-    quads: &[PaneQuad],
-    headings: &[TableHeading],
-) {
+pub(crate) struct HeaderPaint<'a> {
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) workbook: &'a Workbook,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) tokens: &'a Tokens,
+    pub(crate) quads: &'a [PaneQuad],
+    pub(crate) headings: &'a [TableHeading],
+}
+
+pub(crate) fn paint_headers(input: HeaderPaint<'_>) {
+    let HeaderPaint { painter: p, geo, workbook: wb, sheet: sh, selection: sel, tokens: t, quads, headings } = input;
     let font = theme::ui_font(heading_font_size(geo.z));
     // The headers' own area: inside the outline bands.
     let r = Rect::from_min_max(pos2(geo.head_left(), geo.head_top()), geo.rect.max);
@@ -544,6 +569,8 @@ pub(crate) fn paint_headers(
     let full_col = |c: u32| sel.ranges.iter().any(|x| x.is_full_cols() && c >= x.start.col && c <= x.end.col);
     let full_row = |rr: u32| sel.ranges.iter().any(|x| x.is_full_rows() && rr >= x.start.row && rr <= x.end.row);
     let _ = bounds;
+    // Focus Cell marks the active cell's own header, as Excel does.
+    let focus = (sh.focus_cell).then(|| focus_tint(sh, wb, t));
     // Hidden columns and rows leave a double divider where they sit, as in Excel.
     let hidden_mark = Stroke::new(1.0, t.header_text.gamma_multiply(0.6));
     let mut done_cols = std::collections::HashSet::new();
@@ -563,6 +590,14 @@ pub(crate) fn paint_headers(
                 let cr = Rect::from_min_size(pos2(x, top.top()), vec2(w, top.height()));
                 if col_sel(c) {
                     pc.rect_filled(cr, 0.0, if full_col(c) { t.header_all_bg } else { t.header_sel_bg });
+                }
+                // Over the selection fill: the active column is always selected.
+                if c == sel.active.col
+                    && let Some(focus) = focus
+                {
+                    pc.rect_filled(cr, 0.0, focus);
+                }
+                if col_sel(c) {
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
                 }
                 pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
@@ -604,6 +639,14 @@ pub(crate) fn paint_headers(
                 let cr = Rect::from_min_size(pos2(left.left(), y), vec2(left.width(), h));
                 if row_sel(rr) {
                     pr.rect_filled(cr, 0.0, if full_row(rr) { t.header_all_bg } else { t.header_sel_bg });
+                }
+                // Over the selection fill: the active row is always selected.
+                if rr == sel.active.row
+                    && let Some(focus) = focus
+                {
+                    pr.rect_filled(cr, 0.0, focus);
+                }
+                if row_sel(rr) {
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));
                 }
                 pr.line_segment([pos2(cr.left() + 3.0, cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.header_line));

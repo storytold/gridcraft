@@ -309,6 +309,8 @@ Implemented:
 - `view.customViews` Custom Views (Workbook Views)
 - `view.ruler` Ruler (Show)
 - `view.formulaBar` Formula Bar (Show)
+- `view.focusCell` Focus Cell (Show)
+- `view.focusCellColor` Focus Cell Color (Show)
 - `view.zoom` Zoom (Zoom)
 - `view.zoom100` 100% (Zoom)
 - `view.zoomToSelection` Zoom to Selection (Zoom)
