@@ -1960,6 +1960,9 @@ dependencies = [
  "serde_json",
  "winit",
  "winresource",
+ "x11-dl",
+ "x11rb",
+ "xkbcommon-dl",
 ]
 
 [[package]]

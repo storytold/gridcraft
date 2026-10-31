@@ -233,6 +233,211 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Whether to open the window on X11 (XWayland) rather than Wayland. winit has no file
+/// drag-and-drop on Wayland (only on X11), so dropping files from the file manager showed a "no"
+/// cursor. And GNOME's compositor draws no frames for Wayland clients, so there winit falls back to
+/// its own bare frame: a plain strip with square buttons and no title; through XWayland, GNOME
+/// draws its own title bar, themed and with the user's button layout. `GRIDCRAFT_WAYLAND=1` keeps
+/// the native Wayland backend.
+///
+/// winit builds one event loop per process, so a failed X11 start can't fall back to Wayland:
+/// X11 is only chosen when `usable` (`x11_usable`) confirms that it will start on the local
+/// display. It is only asked on Wayland, without the opt-out.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn prefer_x11(var: impl Fn(&str) -> Option<String>, usable: impl FnOnce(&str) -> bool) -> bool {
+    let wayland = var("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty());
+    let opt_out = var("GRIDCRAFT_WAYLAND").is_some_and(|v| !v.is_empty() && v != "0");
+    // Only a local display (`:0`, `:0.0`), the session's XWayland; remote displays aren't tried.
+    // x11rb's TCP addressing adds the number to port 6000 in a u16, which overflows (a panic)
+    // past 59535; the probe doesn't use TCP, but the bound keeps the number safe either way.
+    let local = var("DISPLAY").filter(|d| {
+        let n = d.strip_prefix(':').and_then(|s| s.split('.').next()).unwrap_or_default();
+        n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u16>().is_ok_and(|n| n <= 59535)
+    });
+    wayland && !opt_out && local.is_some_and(|d| usable(&d))
+}
+
+/// How long `x11_usable` waits for the X server to accept the connection and answer its setup
+/// request. GNOME can start XWayland on demand at the first connection, which takes about a
+/// second; past this a server that accepted but never answers counts as unusable and the window
+/// stays on Wayland.
+#[cfg(all(unix, not(target_os = "macos")))]
+const X11_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether winit's X11 backend will start on `display`: the libraries it loads are there
+/// (`x11_libs_present`) and the server accepts an authorized connection (`x11_connects`). A socket
+/// that exists proves neither.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_usable(display: &str) -> bool {
+    if !x11_libs_present() {
+        log::info!("X11 libraries missing; staying on Wayland");
+        return false;
+    }
+    x11_connects(display, X11_PROBE_TIMEOUT)
+}
+
+/// Whether the libraries winit's X11 backend loads are there: without them it fails, or panics for
+/// libxkbcommon-x11.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_libs_present() -> bool {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    Xlib::open().is_ok()
+        && Xcursor::open().is_ok()
+        && Xlib_xcb::open().is_ok()
+        && XInput2::open().is_ok()
+        && xkbcommon_dl::x11::xkbcommon_x11_option().is_some()
+}
+
+/// Whether the X server of `display` accepts a connection over its Unix socket and completes the
+/// setup handshake, with the session's Xauthority cookie, within `timeout` (`x11_handshake`).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_connects(display: &str, timeout: std::time::Duration) -> bool {
+    x11_connects_with(display, timeout, x11_handshake)
+}
+
+/// `x11_connects` with the handshake given. Waits no longer than `timeout` whatever the server
+/// does: the handshake runs on its own thread, since a blocking Unix `connect` has no timeout of
+/// its own (Linux blocks it while the server's listen backlog is full), and the handshake gives up
+/// at the same deadline, so on a silent server the thread closes its socket and ends. Only a
+/// `connect` still blocked in the kernel outlives the wait; that thread sleeps until the server
+/// accepts or goes away, then finds the deadline passed and closes the socket without sending
+/// anything. The probe runs once per process, so at most one such thread exists, and it ends with
+/// the process.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[allow(clippy::disallowed_methods)] // the desktop app (native only): wasm never runs it
+fn x11_connects_with(
+    display: &str,
+    timeout: std::time::Duration,
+    handshake: fn(&str, std::time::Instant) -> Result<(), x11rb::errors::ConnectError>,
+) -> bool {
+    let Some(deadline) = std::time::Instant::now().checked_add(timeout) else {
+        return false;
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let probe_display = display.to_owned();
+    let spawned = std::thread::Builder::new().name("x11-probe".into()).spawn(move || {
+        // The receiver is gone once the caller stopped waiting; nothing left to tell.
+        let _ = sender.send(handshake(&probe_display, deadline));
+    });
+    if let Err(e) = spawned {
+        log::info!("X11 probe thread failed to start ({e}); staying on Wayland");
+        return false;
+    }
+    match receiver.recv_timeout(timeout) {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            log::info!("X11 display {display} unusable ({e}); staying on Wayland");
+            false
+        }
+        Err(_) => {
+            log::info!("X11 display {display} did not answer within {timeout:?}; staying on Wayland");
+            false
+        }
+    }
+}
+
+/// Connects to `display`'s Unix socket (the abstract one first on Linux, then the file, as Xlib
+/// does) and completes the X11 setup handshake by `deadline`, sending the session's Xauthority
+/// cookie as x11rb would. Never TCP: x11rb's `connect` falls back to localhost:6000+N, which could
+/// pass for a server winit can't reach and would hand the cookie to whatever listens on that port.
+/// The connection is closed on return.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_handshake(display: &str, deadline: std::time::Instant) -> Result<(), x11rb::errors::ConnectError> {
+    use std::os::fd::AsFd as _;
+    use x11rb::reexports::x11rb_protocol::{
+        parse_display::{ConnectAddress, parse_display},
+        xauth::get_auth,
+    };
+    use x11rb::rust_connection::{DefaultStream, RustConnection};
+
+    let parsed = parse_display(Some(display))?;
+    let mut error = None;
+    for address in parsed.connect_instruction().filter(|a| matches!(a, ConnectAddress::Socket(_))) {
+        match DefaultStream::connect(&address) {
+            Ok((stream, (family, peer))) => {
+                // x11rb's stream waits for the server without a timeout; hand its socket to one
+                // that stops at the deadline (a duplicate descriptor, the original closed here).
+                let socket = std::os::unix::net::UnixStream::from(stream.as_fd().try_clone_to_owned()?);
+                drop(stream);
+                socket.set_nonblocking(false)?;
+                // As x11rb: an unreadable Xauthority means connecting without a cookie.
+                let (auth_name, auth_data) = get_auth(family, &peer, parsed.display).unwrap_or(None).unwrap_or_default();
+                let stream = DeadlineStream { socket, deadline };
+                RustConnection::connect_to_stream_with_auth_info(stream, parsed.screen.into(), auth_name, auth_data)?;
+                return Ok(());
+            }
+            Err(e) => error = Some(e),
+        }
+    }
+    Err(error.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no Unix socket for this display")).into())
+}
+
+/// An x11rb stream over a blocking Unix socket whose reads and writes give up at `deadline` with
+/// `TimedOut`. Only used for the setup handshake (`connect_to_stream_with_auth_info`), where x11rb
+/// polls and then reads or writes, and retries only on `WouldBlock`; the reads and writes here
+/// wait themselves, bounded by the deadline, so `poll` doesn't. That bends `Stream`'s
+/// "never blocks" rule, which matters for a connection shared between threads; this one is
+/// dropped as soon as the handshake ends, and every call, however x11rb sequences them, returns
+/// by the deadline. Past it, `poll` fails before anything (the cookie included) is written.
+#[cfg(all(unix, not(target_os = "macos")))]
+struct DeadlineStream {
+    socket: std::os::unix::net::UnixStream,
+    deadline: std::time::Instant,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl DeadlineStream {
+    /// The time left before the deadline, or `TimedOut` once it has passed.
+    #[allow(clippy::disallowed_methods)] // the desktop app (native only): wasm never runs it
+    fn remaining(&self) -> std::io::Result<std::time::Duration> {
+        self.deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "the X server did not answer in time"))
+    }
+
+    /// Runs one read or write with the socket's timeout set to the time left, retrying when
+    /// interrupted. A socket timeout (`WouldBlock` on Unix) becomes `TimedOut`, which x11rb
+    /// doesn't retry.
+    fn bounded(
+        &self,
+        set_timeout: impl Fn(Option<std::time::Duration>) -> std::io::Result<()>,
+        mut io: impl FnMut() -> std::io::Result<usize>,
+    ) -> std::io::Result<usize> {
+        use std::io::ErrorKind;
+        loop {
+            set_timeout(Some(self.remaining()?))?;
+            match io() {
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    return Err(std::io::Error::new(ErrorKind::TimedOut, "the X server did not answer in time"));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl x11rb::rust_connection::Stream for DeadlineStream {
+    fn poll(&self, _mode: x11rb::rust_connection::PollMode) -> std::io::Result<()> {
+        self.remaining().map(drop)
+    }
+
+    fn read(&self, buf: &mut [u8], _fds: &mut Vec<x11rb::utils::RawFdContainer>) -> std::io::Result<usize> {
+        use std::io::Read as _;
+        self.bounded(|t| self.socket.set_read_timeout(t), || (&self.socket).read(buf))
+    }
+
+    fn write(&self, buf: &[u8], fds: &mut Vec<x11rb::utils::RawFdContainer>) -> std::io::Result<usize> {
+        use std::io::Write as _;
+        if !fds.is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "the X11 probe sends no file descriptors"));
+        }
+        self.bounded(|t| self.socket.set_write_timeout(t), || (&self.socket).write(buf))
+    }
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -342,17 +547,17 @@ fn main() -> eframe::Result<()> {
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     #[cfg(all(unix, not(target_os = "macos")))]
-    let mut options = options;
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
+    let options = {
+        let mut options = options;
+        if prefer_x11(|k| std::env::var(k).ok(), x11_usable) {
+            log::info!("Wayland: using X11 (XWayland) for file drag-and-drop and the desktop's title bar (GRIDCRAFT_WAYLAND=1 keeps Wayland)");
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use winit::platform::x11::EventLoopBuilderExtX11 as _;
+                builder.with_x11();
+            }));
+        }
+        options
+    };
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -416,6 +621,283 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod backend_tests {
+    use std::cell::Cell;
+    #[cfg(target_os = "linux")]
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixStream;
+    #[cfg(target_os = "linux")]
+    use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
+
+    use super::{DeadlineStream, prefer_x11, x11_connects, x11_connects_with};
+
+    /// `prefer_x11` with these environment variables and a probe answering `usable`; also returns
+    /// the display the probe was asked about, if it was asked.
+    fn prefer(vars: &[(&str, &str)], usable: bool) -> (bool, Option<String>) {
+        let asked = Cell::new(None);
+        let x11 = prefer_x11(
+            |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()),
+            |d| {
+                asked.set(Some(d.to_string()));
+                usable
+            },
+        );
+        (x11, asked.take())
+    }
+
+    const GNOME_WAYLAND: &[(&str, &str)] = &[("XDG_CURRENT_DESKTOP", "ubuntu:GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")];
+
+    /// Wayland sessions go through XWayland when X11 will start there: file drag-and-drop on
+    /// every desktop, and GNOME's own title bar on GNOME.
+    #[test]
+    fn wayland_uses_a_usable_x11() {
+        assert_eq!(prefer(GNOME_WAYLAND, true), (true, Some(":0".into())));
+        let kde = [("XDG_CURRENT_DESKTOP", "KDE"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")];
+        assert_eq!(prefer(&kde, true), (true, Some(":0".into())));
+        let screen = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1.0")];
+        assert_eq!(prefer(&screen, true), (true, Some(":1.0".into())));
+        let zero = [GNOME_WAYLAND, &[("GRIDCRAFT_WAYLAND", "0")]].concat();
+        assert!(prefer(&zero, true).0);
+    }
+
+    /// A missing socket, a refused authorization or missing libraries all make the probe say
+    /// no; the window then stays on Wayland, which still starts (an X11 failure couldn't fall back).
+    #[test]
+    fn unusable_x11_stays_on_wayland() {
+        assert_eq!(prefer(GNOME_WAYLAND, false), (false, Some(":0".into())));
+    }
+
+    /// Everything else keeps winit's default backend, without even probing the X server.
+    #[test]
+    fn other_sessions_keep_the_default_backend() {
+        let x11_session = [("XDG_CURRENT_DESKTOP", "GNOME"), ("DISPLAY", ":0")];
+        assert_eq!(prefer(&x11_session, true), (false, None), "an X11 session already uses X11");
+        let opt_out = [GNOME_WAYLAND, &[("GRIDCRAFT_WAYLAND", "1")]].concat();
+        assert_eq!(prefer(&opt_out, true), (false, None));
+        let no_display = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert_eq!(prefer(&no_display, true), (false, None));
+        for remote in ["host:0", ":", ":x", ":+1", "unix:/tmp/sock", ":59536", ":65000", ":99999999999"] {
+            let vars = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", remote)];
+            assert_eq!(prefer(&vars, true), (false, None), "{remote}");
+        }
+    }
+
+    /// The connection probe on its own, whatever X11 libraries this machine has: a display with no
+    /// server behind it is unusable, and the probe returns rather than hanging or panicking. The
+    /// highest display number `prefer_x11` passes on doesn't overflow x11rb's TCP port.
+    #[test]
+    fn probe_rejects_a_display_without_a_server() {
+        assert!(!x11_connects(":59535", TEST_TIMEOUT));
+    }
+
+    /// The probe never connects over TCP: a listener on localhost:6000+N, with no Unix socket for
+    /// `:N`, gets no connection (and so never sees the Xauthority cookie).
+    #[test]
+    fn probe_never_uses_tcp() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let Some((n, listener)) = (500..600u16).find_map(|n| {
+            let free = !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists();
+            free.then(|| std::net::TcpListener::bind(("127.0.0.1", 6000 + n)).ok().map(|l| (n, l))).flatten()
+        }) else {
+            return; // No free port to listen on; nothing to check.
+        };
+        let connected = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&connected);
+        // Closes each connection at once, so a regression fails fast instead of hanging. Left
+        // blocked in accept when nothing connects; the test process ends it.
+        std::thread::spawn(move || {
+            for _ in listener.incoming() {
+                seen.store(true, Ordering::SeqCst);
+            }
+        });
+        assert!(!x11_connects(&format!(":{n}"), TEST_TIMEOUT));
+        assert!(!connected.load(Ordering::SeqCst), "the probe connected to TCP port {}", 6000 + n);
+    }
+
+    /// The caller's wait is bounded even when the handshake itself never returns (a Unix `connect`
+    /// blocked in the kernel, say): the probe gives up at its timeout.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn probe_waits_no_longer_than_its_timeout() {
+        let start = Instant::now();
+        assert!(!x11_connects_with(":0", TEST_TIMEOUT, |_, _| {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(())
+        }));
+        let waited = start.elapsed();
+        assert!(waited >= TEST_TIMEOUT && waited < TEST_TIMEOUT + Duration::from_secs(2), "waited {waited:?}");
+    }
+
+    /// The handshake stream gives up on a server that never answers, at its deadline.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn handshake_times_out_on_silence() {
+        let Ok((client, _server)) = UnixStream::pair() else {
+            return;
+        };
+        let Ok(()) = client.set_nonblocking(false) else {
+            return;
+        };
+        let start = Instant::now();
+        let Some(deadline) = start.checked_add(TEST_TIMEOUT) else {
+            return;
+        };
+        let stream = DeadlineStream { socket: client, deadline };
+        let result = x11rb::rust_connection::RustConnection::connect_to_stream(stream, 0);
+        let waited = start.elapsed();
+        assert!(result.is_err());
+        assert!(waited >= TEST_TIMEOUT && waited < TEST_TIMEOUT + Duration::from_secs(2), "waited {waited:?}");
+    }
+
+    /// A handshake that starts after the deadline (its `connect` was stuck until then) fails
+    /// without writing anything, so the server never gets the Xauthority cookie.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only test: the clock is read off wasm
+    fn late_handshake_sends_nothing() {
+        use std::io::Read as _;
+        let Ok((client, mut server)) = UnixStream::pair() else {
+            return;
+        };
+        let stream = DeadlineStream { socket: client, deadline: Instant::now() };
+        let cookie = (b"MIT-MAGIC-COOKIE-1".to_vec(), vec![7u8; 16]);
+        let result = x11rb::rust_connection::RustConnection::connect_to_stream_with_auth_info(stream, 0, cookie.0, cookie.1);
+        assert!(result.is_err());
+        drop(result);
+        let mut sent = Vec::new();
+        assert!(server.read_to_end(&mut sent).is_ok());
+        assert!(sent.is_empty(), "sent {} bytes after the deadline", sent.len());
+    }
+
+    /// The probe's timeout in these tests; long enough for a local socket, short enough to wait
+    /// out.
+    const TEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// A fake X server for display `:N` on the abstract Unix socket `/tmp/.X11-unix/XN`, which the
+    /// probe tries first, as Xlib does; needs no file in `/tmp/.X11-unix`. `serve` handles the one
+    /// connection it accepts. Returns the display and the server thread, or `None` when no display
+    /// number is free.
+    #[cfg(target_os = "linux")]
+    fn fake_server<T: Send + 'static>(serve: impl FnOnce(UnixStream) -> T + Send + 'static) -> Option<(String, JoinHandle<Option<T>>)> {
+        use std::os::linux::net::SocketAddrExt as _;
+        use std::os::unix::net::{SocketAddr, UnixListener};
+        let (n, listener) = (40000..41000u16).find_map(|n| {
+            let path = format!("/tmp/.X11-unix/X{n}");
+            if std::path::Path::new(&path).exists() {
+                return None;
+            }
+            let address = SocketAddr::from_abstract_name(path.as_bytes()).ok()?;
+            UnixListener::bind_addr(&address).ok().map(|l| (n, l))
+        })?;
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().ok()?;
+            // A regression that never closes the connection fails the test instead of hanging it.
+            stream.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+            Some(serve(stream))
+        });
+        Some((format!(":{n}"), server))
+    }
+
+    /// Reads the client's setup request (12 bytes, then the padded authorization name and data);
+    /// whether it was one.
+    #[cfg(target_os = "linux")]
+    fn read_setup_request(mut stream: &UnixStream) -> bool {
+        let mut head = [0u8; 12];
+        if stream.read_exact(&mut head).is_err() {
+            return false;
+        }
+        let u16_at = |i: usize| match head[0] {
+            b'l' => u16::from_le_bytes([head[i], head[i + 1]]),
+            _ => u16::from_be_bytes([head[i], head[i + 1]]),
+        };
+        let padded = |n: u16| usize::from(n).div_ceil(4) * 4;
+        let mut auth = vec![0u8; padded(u16_at(6)) + padded(u16_at(8))];
+        matches!(head[0], b'l' | b'B') && u16_at(2) == 11 && stream.read_exact(&mut auth).is_ok()
+    }
+
+    /// Answers the setup request with `reply`, its length field filled in (the client sends its
+    /// own byte order, and serializing uses this machine's, the same).
+    #[cfg(target_os = "linux")]
+    fn answer(mut stream: &UnixStream, reply: &[u8]) -> bool {
+        let mut reply = reply.to_vec();
+        let words = u16::try_from((reply.len() - 8) / 4).unwrap_or_default();
+        reply[6..8].copy_from_slice(&words.to_ne_bytes());
+        read_setup_request(stream) && stream.write_all(&reply).is_ok()
+    }
+
+    /// Reads until the client closes the connection; whether it did.
+    #[cfg(target_os = "linux")]
+    fn closed_by_client(mut stream: &UnixStream) -> bool {
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).is_ok()
+    }
+
+    /// A server that completes the setup handshake is usable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_accepts_a_server_that_completes_setup() {
+        use x11rb::protocol::xproto::{Screen, Setup};
+        use x11rb::x11_utils::Serialize as _;
+        let setup = Setup {
+            status: 1,
+            protocol_major_version: 11,
+            resource_id_base: 0x0400_0000,
+            resource_id_mask: 0x001f_ffff,
+            maximum_request_length: 0xffff,
+            roots: vec![Screen::default()],
+            ..Setup::default()
+        };
+        let Some((display, server)) = fake_server(move |s| answer(&s, &setup.serialize()) && closed_by_client(&s)) else {
+            return;
+        };
+        assert!(x11_connects(&display, TEST_TIMEOUT));
+        assert_eq!(server.join().ok().flatten(), Some(true), "handshake answered, then the probe closed its connection");
+    }
+
+    /// A server that refuses the connection (wrong cookie, say) is unusable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_rejects_a_refused_setup() {
+        use x11rb::protocol::xproto::SetupFailed;
+        use x11rb::x11_utils::Serialize as _;
+        let failed = SetupFailed { status: 0, protocol_major_version: 11, reason: b"access denied by key".to_vec(), ..SetupFailed::default() };
+        let Some((display, server)) = fake_server(move |s| answer(&s, &failed.serialize())) else {
+            return;
+        };
+        assert!(!x11_connects(&display, TEST_TIMEOUT));
+        assert_eq!(server.join().ok().flatten(), Some(true));
+    }
+
+    /// A server that hangs up during the handshake is unusable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_rejects_a_dropped_connection() {
+        let Some((display, server)) = fake_server(|s| read_setup_request(&s)) else {
+            return;
+        };
+        assert!(!x11_connects(&display, TEST_TIMEOUT));
+        assert_eq!(server.join().ok().flatten(), Some(true));
+    }
+
+    /// A server that accepts the connection but never answers the setup request: the probe gives up
+    /// at its timeout instead of blocking start-up, and its thread then closes the connection.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn probe_times_out_on_a_silent_server() {
+        let Some((display, server)) = fake_server(|s| read_setup_request(&s) && closed_by_client(&s)) else {
+            return;
+        };
+        let start = Instant::now();
+        assert!(!x11_connects(&display, TEST_TIMEOUT));
+        let waited = start.elapsed();
+        assert!(waited >= TEST_TIMEOUT && waited < TEST_TIMEOUT + Duration::from_secs(2), "waited {waited:?}");
+        assert_eq!(server.join().ok().flatten(), Some(true), "the probe closed its connection after the timeout");
+    }
 }
 
 #[cfg(test)]
