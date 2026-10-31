@@ -113,11 +113,14 @@ impl Evaluator<'_> {
             }
         }
         // The report's value cells. A pivot loaded without them builds them once; a stored report
-        // that no longer matches its source gets an empty index (#REF! until refreshed) instead of
-        // positions from the changed source.
+        // that no longer matches its source gets no index at all, so the lookup is #REF! until a
+        // refresh — never an index cached from a failed build, because the shared lookup keeps
+        // the first one set and undo or reopen could then never rebuild it.
         if pt.data_index.cells().is_none() {
             let build = PIVOT_INDEXER.get().ok_or(CellError::Ref)?;
-            pt.data_index.set_cells(build(wb, area.sheet, pt).unwrap_or_default());
+            if let Ok(cells) = build(wb, area.sheet, pt) {
+                pt.data_index.set_cells(cells);
+            }
         }
         let cell = find(&pt.data_index, &data_field, &axis_pairs).ok_or(CellError::Ref)?;
         // The value is the one the sheet shows, so the formula and the report cell always agree.

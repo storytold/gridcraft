@@ -258,16 +258,20 @@ impl std::fmt::Debug for PivotLookup {
 }
 
 /// Saved as the list of value cells (or nothing before the first refresh); the hash is rebuilt.
+/// An empty list is never saved: it is no index, and restoring one would lock the shared lookup
+/// against the lazy rebuild that a reopened workbook needs.
 impl Serialize for PivotLookup {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.cells().serialize(s)
+        self.cells().filter(|cells| !cells.is_empty()).serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for PivotLookup {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let l = PivotLookup::default();
-        if let Some(cells) = Option::<Vec<PivotDataCell>>::deserialize(d)? {
+        if let Some(cells) = Option::<Vec<PivotDataCell>>::deserialize(d)?
+            && !cells.is_empty()
+        {
             l.set_cells(cells);
         }
         Ok(l)
@@ -358,5 +362,17 @@ mod pivot_lookup_tests {
         assert_eq!(back.find("Sales", &[("Region", "East", false)]).unwrap().row, 1);
         let none: PivotLookup = serde_json::from_str(&serde_json::to_string(&PivotLookup::default()).unwrap()).unwrap();
         assert!(none.cells().is_none());
+    }
+
+    #[test]
+    fn an_empty_lookup_is_saved_as_no_index() {
+        // An empty cell list is no index, so it must not be saved as an empty one: restoring an
+        // empty index counts as an initialized lookup, which blocks the lazy rebuild.
+        let l = PivotLookup::default();
+        l.set_cells(vec![]);
+        let saved = serde_json::to_string(&l).unwrap();
+        assert_eq!(saved, "null", "an empty lookup saves no index: {saved}");
+        let back: PivotLookup = serde_json::from_str("[]").unwrap();
+        assert!(back.cells().is_none(), "an empty saved list restores no index");
     }
 }

@@ -41,7 +41,8 @@ pub const MAX_OUTPUT_CELLS: u64 = 2_000_000;
 pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
-/// Most report value cells kept for GETPIVOTDATA (bigger reports aren't indexed).
+/// Most report value cells a report may have (every one is indexed for GETPIVOTDATA; bigger
+/// reports are rejected).
 pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

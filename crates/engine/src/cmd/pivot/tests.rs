@@ -662,6 +662,53 @@ fn reopen(s: &mut Session) {
 }
 
 #[test]
+fn getpivotdata_retries_after_a_lazy_build_fails() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // A pivot read from a file carries no index, so the first lookup builds one.
+    reopen(&mut s);
+    assert!(pt(&s).data_index.cells().is_none());
+    // The source changes, so the stored report is stale and the build finds nothing to trust.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    assert!(pt(&s).data_index.cells().is_none(), "the failed build caches nothing");
+    // The lookup is shared, so caching a failure as an empty index would leave every state that
+    // shares it #REF! for good. Restoring the source lets the lookup build the index.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "East"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    assert!(pt(&s).data_index.cells().is_some(), "the lookup rebuilt after the failure");
+}
+
+#[test]
+fn getpivotdata_saves_no_index_when_the_lazy_build_fails() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // A pivot read from a file carries no index; a source change makes the stored report stale,
+    // so the lazy build fails and the lookup is #REF!.
+    reopen(&mut s);
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    // Saving the pivot must save no index at all, not an empty one: restoring an empty index
+    // would count as an index and lock the reopened pivot against the lazy rebuild.
+    let json = serde_json::to_string(&pt(&s)).unwrap();
+    let back: gridcraft_model::PivotTable = serde_json::from_str(&json).unwrap();
+    assert!(json.contains(r#""data_index":null"#), "a failed build saves no index, not an empty one: {json}");
+    assert!(back.data_index.cells().is_none());
+    // Reopened with the source restored, the lookup builds the index.
+    reopen(&mut s);
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "East"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+}
+
+#[test]
 fn getpivotdata_keeps_the_refreshed_report_when_an_item_is_inserted() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
