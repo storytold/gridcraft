@@ -948,12 +948,13 @@ impl Dialog {
                     let si = doc.wb.active_sheet();
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
-                    let data = gridcraft_chart::resolve(&doc.wb, si, ch);
+                    // Hidden series included, so the names line up with `Chart.series` (`removeSeries` indices).
+                    let data = gridcraft_chart::resolve(&doc.wb, si, &gridcraft_engine::model::Chart { show_hidden_data: true, ..ch.clone() });
                     let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
-                    Some((ch.source.clone().unwrap_or_default(), cats, names))
+                    Some((ch.source.clone().unwrap_or_default(), cats, names, ch.show_hidden_data))
                 });
-                let Some((range, cats, names)) = found else {
+                let Some((range, cats, names, hidden)) = found else {
                     app.message = Some(("Select Data".into(), "Select a chart first.".into()));
                     return None;
                 };
@@ -961,7 +962,7 @@ impl Dialog {
                 Dialog::custom(
                     "selectData",
                     "Select Data Source",
-                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "remove": []}),
+                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "remove": [], "hidden": hidden, "hidden0": hidden}),
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),

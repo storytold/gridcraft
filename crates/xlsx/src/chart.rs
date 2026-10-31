@@ -275,6 +275,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        show_hidden_data: chart.child("plotVisOnly").is_some_and(|e| !e.flag("val", true)),
     })
 }
 
@@ -877,6 +878,6 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if let Some(p) = pos {
         let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    let _ = write!(s, "<c:plotVisOnly val=\"{}\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>", u8::from(!ch.show_hidden_data));
     s
 }

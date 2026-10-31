@@ -560,6 +560,11 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Select Data ▸ Hidden and Empty Cells ▸ Show data in hidden rows and columns (`c:plotVisOnly`
+    /// off). Off (the default, as in Excel) plots visible cells only: rows hidden by hand or by a
+    /// filter, and hidden columns, leave the chart.
+    #[serde(default)]
+    pub show_hidden_data: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
