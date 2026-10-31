@@ -364,11 +364,10 @@ impl Calc {
         self.last_recalc_cells = 0;
         // Former areas of formulas still in the workbook (a deleted formula's area is free), when
         // they are still in place.
-        let mut former: HashMap<Key, RangeRef> = if prior.areas_in_place {
-            prior.spilled.iter().filter(|(k, _)| self.graph.nodes.contains_key(*k)).map(|(k, r)| (*k, *r)).collect()
-        } else {
-            HashMap::default()
-        };
+        let mut former = Former::default();
+        if prior.areas_in_place {
+            former.areas = prior.spilled.iter().filter(|(k, _)| self.graph.nodes.contains_key(*k)).map(|(k, r)| (*k, *r)).collect();
+        }
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -445,15 +444,14 @@ impl Calc {
     }
 
     /// Writes results and lays out spills. `former` holds the areas a full recalculation cleared
-    /// whose formulas are not laid out yet: as in an incremental recalculation, where those cells
-    /// are still filled, another array can't take them.
+    /// whose formulas are not laid out yet.
     fn write_back(
         &mut self,
         wb: &mut Workbook,
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
-        former: &mut HashMap<Key, RangeRef>,
+        former: &mut Former,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
@@ -466,7 +464,7 @@ impl Calc {
             }
         }
         for key in dirty {
-            let own_former = former.remove(key);
+            let own_former = former.take(key);
             let new = spills.get(key);
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             let old = sheet.spill_ranges.get(&key.1).copied();
@@ -490,9 +488,7 @@ impl Calc {
                 let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
                 let range = RangeRef::new(key.1, end);
                 let blocked = spill_is_blocked(sheet, key.1, range, end)
-                    || (!former.is_empty()
-                        && own_former.is_none_or(|f| !f.contains_range(&range))
-                        && former.iter().any(|(other, area)| other.0 == key.0 && area.intersects(&range)));
+                    || (own_former.is_none_or(|f| !f.contains_range(&range)) && former.reaches(key.0, range));
                 if blocked {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
@@ -532,6 +528,39 @@ impl Calc {
             }
         }
         spill_changes
+    }
+}
+
+/// Spill areas a full recalculation cleared, of formulas not laid out yet: as in an incremental
+/// recalculation, where those cells are still filled, another array can't take them.
+#[derive(Default)]
+struct Former {
+    areas: HashMap<Key, RangeRef>,
+    /// The cells of `areas`, built when an array first needs more cells than its own former area
+    /// (so each check costs what checking the cells themselves does, however many areas there are).
+    cells: Option<HashSet<Key>>,
+}
+
+impl Former {
+    /// Frees `key`'s former area, as it is laid out now.
+    fn take(&mut self, key: &Key) -> Option<RangeRef> {
+        let area = self.areas.remove(key)?;
+        if let Some(cells) = &mut self.cells {
+            for cell in area.iter() {
+                cells.remove(&(key.0, cell));
+            }
+        }
+        Some(area)
+    }
+
+    /// Whether `range` on `sheet` reaches a former area that is still taken.
+    fn reaches(&mut self, sheet: usize, range: RangeRef) -> bool {
+        if self.areas.is_empty() {
+            return false;
+        }
+        let areas = &self.areas;
+        let cells = self.cells.get_or_insert_with(|| areas.iter().flat_map(|(k, area)| area.iter().map(move |cell| (k.0, cell))).collect());
+        range.iter().any(|cell| cells.contains(&(sheet, cell)))
     }
 }
 
