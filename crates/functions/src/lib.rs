@@ -109,8 +109,9 @@ pub trait Ctx {
     fn random(&mut self) -> f64;
     /// For the database functions: whether the formula in the criteria cell at (`row`, `col`) holds
     /// for `record` (a row of `db` below its labels). `None` when that cell holds no formula or the
-    /// criteria didn't come from a reference.
-    fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
+    /// criteria didn't come from a reference. `Err(#CALC!)` when evaluating it ran out of budget:
+    /// the database function must then fail rather than treat the record as a non-match.
+    fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<Result<bool, CellError>> {
         None
     }
     /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).

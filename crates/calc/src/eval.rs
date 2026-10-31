@@ -39,6 +39,10 @@ const MAX_DEPTH: usize = 400;
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
 /// or nest `MAP` into `MAP`) then stops at the same bound instead of squaring.
 const LAMBDA_FUEL: u64 = MAX_CELLS;
+/// Array cells one formula may materialize in total (range reads and elementwise results). Each
+/// array is capped at `MAX_CELLS`, but a formula can build many of them (`A:A*B:B*C:C*…`), so
+/// the sum is capped too; past it the formula answers `#CALC!` (#2157).
+const CELL_BUDGET: u64 = 8 * MAX_CELLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Area {
@@ -139,6 +143,8 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Array cells this cell still may materialize ([`CELL_BUDGET`]).
+    cells: u64,
 }
 
 struct FnCtx<'a, 'h> {
@@ -165,7 +171,7 @@ impl Ctx for FnCtx<'_, '_> {
     /// outside both the database and the criteria cell's own precedents (say `=G2<H2` with column H
     /// outside the database) is read here but not tracked, so editing that cell doesn't recalculate
     /// the D-function until something else does.
-    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
+    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<Result<bool, CellError>> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
         let expr = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?.expr_arc()?;
@@ -187,11 +193,17 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            cells: self.ev.cells,
         };
-        let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
+        let v = ev.value(&shifted).scalar().to_bool();
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
-        Some(v)
+        self.ev.cells = ev.cells;
+        // Other errors just fail the criterion, as in Excel.
+        Some(match v {
+            Err(CellError::Calc) => Err(CellError::Calc),
+            v => Ok(matches!(v, Ok(true))),
+        })
     }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
@@ -210,7 +222,7 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, cells: CELL_BUDGET }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -254,6 +266,17 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Spends `n` cells of the budget; false when it is gone.
+    fn charge_cells(&mut self, n: u64) -> bool {
+        match self.cells.checked_sub(n) {
+            Some(left) => {
+                self.cells = left;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
@@ -269,6 +292,9 @@ impl<'h> Evaluator<'h> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
+        }
+        if !self.charge_cells((h as u64) * (w as u64)) {
+            return Value::Error(CellError::Calc);
         }
         let data = self.host.range_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
@@ -604,6 +630,11 @@ impl<'h> Evaluator<'h> {
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    if let Value::Array(arr) = &acc
+                        && !self.charge_cells(arr.data.len() as u64)
+                    {
+                        return err(CellError::Calc);
+                    }
                 }
                 Ev::V(acc)
             }
@@ -664,6 +695,20 @@ mod fuel_tests {
         let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
         ev.fuel = fuel;
         ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    #[test]
+    fn array_cells_spend_a_per_formula_budget() {
+        let run = |cells: u64, src: &str| {
+            let mut host = Empty { wb: Workbook::default() };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(0, 0));
+            ev.cells = cells;
+            ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
+        };
+        // Two products of 4 cells each fit in 8 and run out at 7.
+        let src = "=({1,2,3,4}*2)*3";
+        assert!(matches!(run(8, src), Value::Array(_)));
+        assert!(matches!(run(7, src), Value::Error(CellError::Calc)));
     }
 
     #[test]
