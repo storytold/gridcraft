@@ -129,6 +129,18 @@ cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sa
 You need [trunk](https://trunk-rs.github.io/trunk/) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
 
+A same-origin parent can embed the editor with `?host=parent` and open complete native JSON
+with `gridcraft:open` (`name: "workbook.json"`, `bytes: ArrayBuffer`). After `gridcraft:ready`,
+send `gridcraft:export-native` with an opaque string `requestId`; `gridcraft:native-exported`
+returns that ID, the exported `document` and `revision`, and complete native JSON `bytes`, or `error`.
+The revision identifies the state after any pending draft was committed. Export commits pending drafts
+through the engine and leaves the unsaved state intact: the host remains responsible for durable
+storage. `gridcraft:changed` reports every active document revision, including further edits while
+already dirty. `gridcraft:validate-native` (`requestId`, `bytes`) returns
+`gridcraft:native-validated` (`requestId`, `valid`, `error`) without changing the document.
+These messages are accepted only from the same-origin parent. They do not grant permission to
+store a document or turn the ordinary XLSX Save action into a durable acknowledgement.
+
 ### Ribbon access keys
 
 Press and release **left Alt** on Windows/Linux/BSD, or press **F10** on any platform,
