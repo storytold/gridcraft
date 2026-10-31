@@ -109,7 +109,19 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+YIELD) are the highest-risk for last-digit differences. XIRR follows Excel's own solver,
+reconstructed from observation: a sign-only search that brackets the root from the guess
+(doubling, halving towards 0, or stepping halfway to -100%) and bisects until half the bracket is
+under 1e-8 x (|rate| + 0.5) and XNPV is under 2e-8 x the first value, so its answer is the same
+midpoint as Excel's, about 1e-8 from the exact root, bit for bit in 888 of 910 synthetic cases
+with an answer (97.7% agreement on 1,283 cases including `#NUM!`). A 0 or blank first flow
+gives the tiny value Excel gives (the guess halved until the step is under the tolerance: about
+2.98e-9 for the default guess, `#NUM!` for a negative guess). Known differences: flows with
+several sign changes where Excel returns about 3e-9 (a halving that reached 0), or `#NUM!` for
+two roots close to the guess. IRR uses Newton on the discount factor 1/(1+rate), at most 100 steps,
+stopping at a step under 1e-8; Excel's last digits differ by about 1e-12 (its exact iteration is
+not reconstructed) and a few far-from-guess cases differ in `#NUM!` (93.5% agreement on 708
+cases, from 88%).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -157,6 +169,8 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-19 | minor | Long flat operator chains (#916): 4,096 operands (Excel's 8,192-character limit) no longer overflow the stack when entered, filled, adjusted or saved; chains past 64 operands are no longer saved as dynamic-array formulas; Spanish entry no longer refuses chains past 256 operands |
 | 2026-10-17 | minor | 15-significant-digit comparison moved from missing to done (#57), and the resolved caveats on the 3-D reference, dynamic-array and legacy-array rows cleared (#140, #133, #139, #156) |
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
+| 2026-10-15 | minor | XIRR follows Excel's bisection (answers bit for bit, about 1e-8 from the exact root; dates before the first allowed; guess <= -1 is `#NUM!`); IRR uses Newton on the discount factor (`IRR` of -100, 19 zeros, 1E-5 is `#NUM!` like Excel; guess <= -1 is `#VALUE!`) |
+| 2026-10-20 | minor | XIRR counts a blank cash-flow cell as 0 and ignores a blank date next to a blank or 0 flow, instead of returning `#VALUE!`; XNPV now returns the `#NUM!` Excel gives for a blank or text value or a blank date after the first row, and `#VALUE!` for a blank value or date in the first row (observed on synthetic workbooks); XIRR with a 0 or blank first flow returns Excel's tiny value (about 2.98e-9), and a first nonzero flow with a blank date reads the date as day 0 |
 | 2026-10-15 | minor | Iterative calculation: Maximum Iterations and Maximum Change are set in File › Options › Formulas (dropped "no Options dialog yet") |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
