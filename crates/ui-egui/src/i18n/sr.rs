@@ -398,6 +398,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Štampaj aktivne listove",
         "Print Entire Workbook" => "Štampaj celu radnu svesku",
         "Fit Sheet on One Page" => "Uklopi list na jednu stranicu",
+        "Pages" => "Stranice",
+        "Print pages|to" => "do",
         "Page Setup…" => "Podešavanje stranice…",
         "Page {page} of {pages}" => "Stranica {page} od {pages}",
         "Nothing to print." => "Nema ničega za štampu.",

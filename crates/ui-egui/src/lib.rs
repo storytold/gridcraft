@@ -217,6 +217,8 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,
+    /// File › Print's page range (Pages … to …), set there or by `ui.printSettings`.
+    pub print_pages: printing::PageRange,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,

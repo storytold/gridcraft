@@ -202,12 +202,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 (
                     "ui.printSettings",
                     "Print Settings",
-                    "{printer?: discovered name, copies?: 1..999, duplex?: printerDefault|off|longEdge|shortEdge|null, grayscale?: bool, refresh?: bool} → {printer,copies,duplex,grayscale,printers,ready,busy,discovering,status,detail}; {} inspects without submitting",
+                    "{printer?: discovered name, copies?: 1..999, duplex?: printerDefault|off|longEdge|shortEdge|null, grayscale?: bool, from?: page (1-based)|null, to?: page|null, refresh?: bool} → {printer,copies,duplex,grayscale,from,to,printers,ready,busy,discovering,status,detail}; from/to are the Print view's page range (null clears a bound); {} inspects without submitting",
                 ),
                 (
                     "ui.printSubmit",
                     "Submit Print Job",
-                    "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
+                    "existing file.print sheet/pagination params; without from/to, the page range of ui.printSettings → {printing,bytes,pending}; submits without opening a dialog",
                 ),
                 ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),

@@ -307,6 +307,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Etkin Sayfaları Yazdır",
         "Print Entire Workbook" => "Tüm Çalışma Kitabını Yazdır",
         "Fit Sheet on One Page" => "Sayfayı Bir Sayfaya Sığdır",
+        "Pages" => "Sayfalar",
+        "Print pages|to" => "-",
         "Page Setup…" => "Sayfa Yapısı…",
         "Page {page} of {pages}" => "Sayfa {page} / {pages}",
         "Nothing to print." => "Yazdırılacak bir şey yok.",

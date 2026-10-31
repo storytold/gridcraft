@@ -394,6 +394,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Imprimare foi active",
         "Print Entire Workbook" => "Imprimare tot registrul",
         "Fit Sheet on One Page" => "Încadrare foaie pe o pagină",
+        "Pages" => "Pagini",
+        "Print pages|to" => "la",
         "Page Setup…" => "Configurare pagină…",
         "Page {page} of {pages}" => "Pagina {page} din {pages}",
         "Nothing to print." => "Nimic de imprimat.",

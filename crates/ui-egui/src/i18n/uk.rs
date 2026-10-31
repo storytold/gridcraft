@@ -392,6 +392,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Надрукувати активні аркуші",
         "Print Entire Workbook" => "Надрукувати всю книгу",
         "Fit Sheet on One Page" => "Вмістити аркуш на одну сторінку",
+        "Pages" => "Сторінки",
+        "Print pages|to" => "по",
         "Page Setup…" => "Параметри сторінки…",
         "Page {page} of {pages}" => "Сторінка {page} з {pages}",
         "Nothing to print." => "Немає що друкувати.",

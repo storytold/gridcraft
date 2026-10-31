@@ -136,8 +136,18 @@ lists `ui.printSettings` and `ui.printSubmit` with their parameter and result fi
 printer, copies, duplex, grayscale, discovery/submission status and backend receipt/error.
 `{"refresh":true}` starts background discovery; poll the same command until `discovering` is
 false. Set `printer` to a discovered name, integer `copies` from 1 to 999, `duplex` to
-`printerDefault`, `off`, `longEdge` or `shortEdge`, and boolean `grayscale`. Invalid updates are
-rejected without changing earlier settings. `ui.printSubmit` explicitly submits the current
-print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
-and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
-GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+`printerDefault`, `off`, `longEdge` or `shortEdge`, and boolean `grayscale`. `from` and `to`
+are the Print view's page range (Pages … to …): whole page numbers from 1, counted over the
+whole print job in sheet order, or `null` to clear a bound; the result reports both. Invalid
+updates are rejected without changing earlier settings. `ui.printSubmit` explicitly submits the
+current print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes
+false and check `status`/`detail`. The browser keeps its own print hook. PDF export remains
+separate. GridCraft accepts the existing `file.print` sheet/pagination params on
+`ui.printSubmit`, and the page range of `ui.printSettings` when the call names neither `from` nor
+`to`; the engine `file.print` command returns the PDF without spooling.
+
+`file.print`, `file.exportPdf` and `file.printPreview` take the same `from` and `to`. Only those
+pages print, and their headers and footers keep the whole job's `&P` and `&N`. A range that
+starts after the last page is an error, `to` past the last page stops there, and `from` greater
+than `to` prints the pages between them. `file.printPreview` then lists only the pages that
+print, each under its number in the job, with the job's page count as `total`.

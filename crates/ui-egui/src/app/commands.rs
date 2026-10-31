@@ -140,8 +140,13 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
-            "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
-            "ui.printSubmit" => self.submit_print(p.clone()),
+            "ui.printSettings" => printing::settings(&mut self.printing, &mut self.print_pages, p, self.services.printers.as_ref()),
+            "ui.printSubmit" => {
+                // The Print view's page range applies unless the call names its own.
+                let mut params = p.clone();
+                self.print_pages.apply(&mut params);
+                self.submit_print(params)
+            }
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
                 Ok(Json::Null)

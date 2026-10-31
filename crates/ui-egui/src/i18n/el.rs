@@ -292,6 +292,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Εκτύπωση ενεργών φύλλων",
         "Print Entire Workbook" => "Εκτύπωση ολόκληρου βιβλίου εργασίας",
         "Fit Sheet on One Page" => "Προσαρμογή φύλλου σε μία σελίδα",
+        "Pages" => "Σελίδες",
+        "Print pages|to" => "έως",
         "Page Setup…" => "Διαμόρφωση σελίδας…",
         "Page {page} of {pages}" => "Σελίδα {page} από {pages}",
         "Nothing to print." => "Δεν υπάρχει περιεχόμενο για εκτύπωση.",

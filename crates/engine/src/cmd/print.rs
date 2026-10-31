@@ -7,7 +7,8 @@
 //! borders, formatted text (fonts mapped to the standard 14 PDF fonts), merged cells, wrapping,
 //! overflow into empty neighbours, conditional formats, table styles, charts, images, shapes and
 //! sparklines. Headers and footers support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z`
-//! codes.
+//! codes. A page range (`from`/`to`, File › Print's Pages … to …) prints some of the job's pages,
+//! each still numbered as in the whole job.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
@@ -51,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool, from?: page (1-based, counted over the whole job in sheet order), to?: page} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup. A page range prints only its pages, and their headers and footers keep the whole job's &P and &N; `from` after the last page is an error, `to` past it stops at the last page, and `from` greater than `to` prints the pages between them.",
             has_doc,
             export_pdf
         ),
@@ -60,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, from?: page (1-based, over the whole job), to?: page} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog; a page range works as in file.exportPdf",
             has_doc,
             print
         ),
@@ -69,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?, from?: page, to?: page} → {pages, total, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}; with a page range, pageList holds only the pages that print, under their numbers in the whole job of `total` pages",
             has_doc,
             print_preview
         ),
@@ -90,8 +91,9 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
-/// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+/// Renders laid-out sheets to a PDF: the pages numbered `pages` (1-based, over the whole job).
+/// Pages outside it are skipped, and `&P` and `&N` keep the numbers of the whole job.
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, pages: std::ops::RangeInclusive<usize>) -> (Vec<u8>, usize) {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -110,6 +112,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
+            if !pages.contains(&page_no) {
+                continue;
+            }
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
@@ -176,8 +181,9 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
+    let (first, last) = opts.page_span(lays.iter().map(|l| l.pages.len()).sum(), cmd)?;
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path, first..=last))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -201,16 +207,24 @@ fn print(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 
+/// The pages a print would print, each with its number in the whole job: a page range lists only
+/// the pages in it, under their own numbers.
 fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
-    let opts = PrintOptions::from_params(p, "file.printPreview")?;
+    const CMD: &str = "file.printPreview";
+    let opts = PrintOptions::from_params(p, CMD)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
+    let total: usize = lays.iter().map(|l| l.pages.len()).sum();
+    let (first, last) = opts.page_span(total, CMD)?;
     let mut list = Vec::new();
     let mut n = 0usize;
     for lay in &lays {
         let name = d.wb.sheet(lay.sheet).map(|s| s.name.clone()).unwrap_or_default();
         for (ri, ci) in &lay.pages {
             n += 1;
+            if !(first..=last).contains(&n) {
+                continue;
+            }
             let (Some(rb), Some(cb)) = (lay.row_bands.get(*ri), lay.col_bands.get(*ci)) else { continue };
             let r = RangeRef::new(CellRef::new(rb.0, cb.0), CellRef::new(rb.1, cb.1));
             list.push(json!({
@@ -228,11 +242,18 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     if let Some(page) = u32_param(p, "page") {
-        let one =
-            list.get((page as usize).saturating_sub(1)).cloned().ok_or_else(|| bad("file.printPreview", format!("there are only {n} pages")))?;
-        return Ok(json!({"pages": n, "page": one}));
+        let page = (page as usize).max(1);
+        if page > total {
+            return Err(bad(CMD, format!("there are only {total} pages")));
+        }
+        let one = list
+            .iter()
+            .find(|pg| pg["page"].as_u64() == Some(page as u64))
+            .cloned()
+            .ok_or_else(|| bad(CMD, format!("page {page} is outside the pages to print ({first} to {last})")))?;
+        return Ok(json!({"pages": list.len(), "total": total, "page": one}));
     }
-    Ok(json!({"pages": n, "pageList": list}))
+    Ok(json!({"pages": list.len(), "total": total, "pageList": list}))
 }
 
 fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {

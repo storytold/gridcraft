@@ -399,6 +399,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Print Active Sheets", "作業中のシートを印刷"),
     ("Print Entire Workbook", "ブック全体を印刷"),
     ("Fit Sheet on One Page", "シートを 1 ページに印刷"),
+    ("Pages", "ページ指定"),
+    ("Print pages|to", "～"),
     ("Page Setup…", "ページ設定…"),
     ("Page {page} of {pages}", "{page} / {pages} ページ"),
     ("Nothing to print.", "印刷する内容がありません。"),

@@ -406,6 +406,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "활성 시트 인쇄",
         "Print Entire Workbook" => "전체 통합 문서 인쇄",
         "Fit Sheet on One Page" => "한 페이지에 시트 맞추기",
+        "Pages" => "페이지",
+        "Print pages|to" => "~",
         "Page Setup…" => "페이지 설정…",
         "Page {page} of {pages}" => "{page}/{pages} 페이지",
         "Nothing to print." => "인쇄할 내용이 없습니다.",
