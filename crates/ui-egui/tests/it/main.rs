@@ -57,6 +57,7 @@ mod in_cell_editor_size;
 mod in_cell_editor_wrap;
 mod insert_copied_cells;
 mod interaction;
+mod interaction_bench;
 mod interface_scale;
 mod keyboard_shortcuts;
 mod keytips_generated;
