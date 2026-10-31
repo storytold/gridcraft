@@ -1,6 +1,6 @@
 use super::calc::formula_text;
 use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
-use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
+use super::{BTreeSet, Category, Cell, CellError, CellRef, Comment, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
 // ---------------------------------------------------------------- round trip
 
@@ -68,6 +68,37 @@ fn cond_format_list(s: &Sheet) -> Vec<String> {
 fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
     if a != b {
         d.push(|| format!("{sheet}: {a} → {b}"));
+    }
+}
+
+fn canonical_comment(c: &Comment) -> Comment {
+    let mut c = c.clone();
+    // Missing timestamps and trailing unknown timestamps both read back as an absent suffix.
+    // Interior gaps identify the reply a later timestamp belongs to, so retain those slots.
+    while c.dates.last().is_some_and(String::is_empty) {
+        c.dates.pop();
+    }
+    c
+}
+
+fn diff_comments(d: &mut Diffs, sheet: &str, a: &Sheet, b: &Sheet) {
+    let mut compare = |cell: &CellRef| {
+        let (before, after) = (a.comments.get(cell), b.comments.get(cell));
+        if before == after {
+            return;
+        }
+        if let (Some(x), Some(y)) = (before, after)
+            && canonical_comment(x) == canonical_comment(y)
+        {
+            return;
+        }
+        d.push(|| format!("{sheet}!{}: {before:?} → {after:?}", cell.a1()));
+    };
+    for cell in a.comments.keys() {
+        compare(cell);
+    }
+    for cell in b.comments.keys().filter(|cell| !a.comments.contains_key(cell)) {
+        compare(cell);
     }
 }
 
@@ -152,7 +183,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         if ca != cb {
             charts.push(|| format!("{name}: {ca:?} → {cb:?}"));
         }
-        diff_count(&mut comments, &name, sa.comments.len(), sb.comments.len());
+        diff_comments(&mut comments, &name, sa, sb);
         diff_count(&mut hyperlinks, &name, sa.hyperlinks.len(), sb.hyperlinks.len());
         diff_count(&mut pivots, &name, sa.pivots.len(), sb.pivots.len());
     }
