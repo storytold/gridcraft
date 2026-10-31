@@ -256,11 +256,11 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         ),
         f!(
             "ACCRINTM",
-            3,
+            4,
             5,
             Financial,
             S,
-            "ACCRINTM(issue, settlement, rate, [par], [basis])",
+            "ACCRINTM(issue, settlement, rate, par, [basis])",
             "Accrued interest of a security paying interest at maturity.",
             accrintm
         ),
