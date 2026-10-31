@@ -73,6 +73,46 @@ fn averages_and_counts() {
     assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 2.0, 3.0])])), vec![vec![nv(2.0)], vec![nv(3.0)]]);
 }
 
+#[test]
+fn a_aggregates_distinguish_literal_arrays_references_and_scalars() {
+    let literal = arr(vec![vec![Value::Bool(true), nv(2.0)]]);
+    let reference = arr(vec![vec![Value::Bool(true), tv("text"), nv(2.0)]]);
+
+    close(ev("MAXA", vec![av(arr(vec![vec![Value::Bool(true), Value::Bool(false)]]))]), 0.0);
+    close(ev("MAXA", vec![av(arr(vec![vec![Value::Bool(false), nv(-1.0)]]))]), -1.0);
+    close(ev("MAXA", vec![av(arr(vec![vec![tv("text"), nv(-1.0)]]))]), -1.0);
+    close(ev("MAXA", vec![av(literal.clone())]), 2.0);
+    close(ev("MAXA", vec![rf(reference.clone())]), 2.0);
+    close(ev("MAXA", vec![b(true), b(false)]), 1.0);
+
+    close(ev("MINA", vec![av(literal.clone())]), 2.0);
+    close(ev("MINA", vec![rf(reference.clone())]), 0.0);
+    close(ev("MINA", vec![b(true), n(2.0)]), 1.0);
+
+    close(ev("AVERAGEA", vec![av(literal.clone())]), 2.0);
+    close(ev("AVERAGEA", vec![av(arr(vec![vec![Value::Empty, nv(2.0)]]))]), 2.0);
+    close(ev("AVERAGEA", vec![rf(reference.clone())]), 1.0);
+    close(ev("AVERAGEA", vec![b(true), n(2.0)]), 1.5);
+
+    is_err(ev("VARA", vec![av(literal.clone())]), CellError::Div0);
+    close(ev("VARA", vec![rf(reference.clone())]), 1.0);
+    close(ev("VARA", vec![b(true), n(2.0)]), 0.5);
+    close(ev("VARPA", vec![av(literal.clone())]), 0.0);
+    close(ev("VARPA", vec![rf(reference.clone())]), 2.0 / 3.0);
+    close(ev("VARPA", vec![b(true), n(2.0)]), 0.25);
+
+    is_err(ev("STDEVA", vec![av(literal.clone())]), CellError::Div0);
+    close(ev("STDEVA", vec![rf(reference.clone())]), 1.0);
+    close(ev("STDEVA", vec![b(true), n(2.0)]), 0.5f64.sqrt());
+    close(ev("STDEVPA", vec![av(literal)]), 0.0);
+    close(ev("STDEVPA", vec![rf(reference)]), (2.0f64 / 3.0).sqrt());
+    close(ev("STDEVPA", vec![b(true), n(2.0)]), 0.5);
+
+    let error_array = arr(vec![vec![Value::Error(CellError::NA), nv(2.0)]]);
+    is_err(ev("MAXA", vec![av(error_array.clone())]), CellError::NA);
+    is_err(ev("MAXA", vec![rf(error_array)]), CellError::NA);
+}
+
 /// MODE argument semantics in Excel 365, on the inputs of FormulaEvalTestData (row "Mode"):
 /// text is skipped, typed or referenced, but a single-cell reference to a blank cell is
 /// `#VALUE!`; the first error from the left wins. The values cached in POI's file come from an
