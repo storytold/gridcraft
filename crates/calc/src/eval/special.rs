@@ -85,7 +85,7 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
     (out, dynamic)
 }
 
-fn is_special(n: &str) -> bool {
+pub(super) fn is_special(n: &str) -> bool {
     matches!(
         n,
         "IF" | "IFS"
