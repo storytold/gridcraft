@@ -224,5 +224,20 @@ fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     votes > 0
 }
 
+/// Sort and Remove Duplicates move whole lines of `body`. A legacy multi-cell array there can only
+/// travel whole, one line thick: Excel refuses ("You can't change part of an array.") when an
+/// array in the block spans several lines or reaches past the block, even if nothing would move.
+fn check_moving_arrays(sh: &Sheet, body: RangeRef, by_cols: bool) -> Result<()> {
+    let thick = |a: &RangeRef| if by_cols { a.width() > 1 } else { a.height() > 1 };
+    let split =
+        sh.cells.iter().filter_map(|(_, x)| x.formula.as_ref()?.array).any(|a| a.intersects(&body) && (!body.contains_range(&a) || thick(&a)));
+    if split { Err(EngineError::Other("You can't change part of an array.".into())) } else { Ok(()) }
+}
+
+/// A legacy array's range after its formula cell moved by `dr` rows and `dc` columns.
+fn moved_array(a: Option<RangeRef>, dr: i64, dc: i64) -> Option<RangeRef> {
+    a.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)))
+}
+
 #[cfg(test)]
 mod tests;
