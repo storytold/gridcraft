@@ -445,12 +445,12 @@ mod tests {
     fn autocomplete_and_hints_take_local_names_in_any_script() {
         // Local names arrive in English order (ZÄHLENWENNS is COUNTIFS); the list shows them sorted.
         let names: Vec<String> = ["ZÄHLENWENNS", "ZÄHLENWENN", "ZEIT", "СУММ"].iter().map(|s| s.to_string()).collect();
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=zähl".into(), true, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=zähl".into(), true, false);
         e.update_autocomplete(&names);
         assert_eq!(e.autocomplete, ["ZÄHLENWENN", "ZÄHLENWENNS"]);
         assert!(e.accept_autocomplete());
         assert_eq!(e.text, "=ZÄHLENWENN(");
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=SI(A1>0;año(B1;".into(), true, false);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SI(A1>0;año(B1;".into(), true, false);
         e.locale = gridcraft_engine::formula::FormulaLocale::Es;
         assert_eq!(e.current_function(), Some(("AÑO".into(), 1)));
     }

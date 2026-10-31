@@ -118,7 +118,14 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
     let mut found = CellError::ALL
         .iter()
@@ -137,7 +144,14 @@ fn error_literal(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocal
     Ok(end)
 }
 
-fn structured_ref(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn structured_ref(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let mut depth = 0;
     let mut j = i;
     loop {
