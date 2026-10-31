@@ -680,41 +680,34 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".gridcraft-save-").suffix(".sctmp");
+    #[cfg(unix)]
+    if let Some(p) = prior {
+        builder.permissions(p.clone());
+    }
+    let temp = builder.tempfile_in(parent)?;
+    #[cfg(not(unix))]
+    if let Some(p) = prior {
+        let _ = temp.as_file().set_permissions(p.clone());
+    }
+    Ok(temp)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     script_sandbox_check(path)?;
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    // The temporary file is created exclusively, so an existing file or symlink at that
-    // path (planted by another local user) makes the save fail instead of truncating the
-    // link's target; and it inherits the destination's access restrictions, so saving a
-    // private workbook doesn't widen who can read it.
-    let tmp = format!("{path}.sctmp");
+    // An exclusively created, unique sibling prevents stale files from blocking later
+    // saves. RAII removes only our own temporary file if writing or replacement fails;
+    // an open failure never removes somebody else's path. A crash may leave this unique
+    // file behind, but cannot leave a partially written destination workbook.
     let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    if let Some(p) = &prior {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
-    }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    #[cfg(not(unix))]
-    if let Some(p) = &prior {
-        let _ = f.set_permissions(p.clone());
-    }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // A write or rename that fails (full disk, the workbook locked by another app) leaves
-        // no temporary file beside the user's workbook.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })
+    let mut temp = create_save_temp(std::path::Path::new(path), prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
 }
 
 #[cfg(target_arch = "wasm32")]
