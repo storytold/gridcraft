@@ -3,6 +3,11 @@ use super::{
     split_sheet, str_param, target_ranges, target_sheet,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- links & comments
 
 pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
