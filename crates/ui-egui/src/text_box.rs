@@ -17,6 +17,13 @@ pub struct EditState {
     rect: Option<Rect>,
 }
 
+impl EditState {
+    /// The native pending text differs from the engine's original text box.
+    pub fn is_modified(&self) -> bool {
+        self.text != self.original
+    }
+}
+
 /// Returns the stable id for the text-box editor.
 pub(crate) fn editor_id() -> egui::Id {
     egui::Id::unique("gridcraft.text_box_editor")

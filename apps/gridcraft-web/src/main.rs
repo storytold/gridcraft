@@ -16,8 +16,16 @@
 //! interface size, editing options…) are kept in `localStorage` (`prefs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod draft_state;
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(any(target_arch = "wasm32", test))]
+mod managed_save;
+#[cfg(any(target_arch = "wasm32", test))]
+mod native_document;
+#[cfg(any(target_arch = "wasm32", test))]
+mod port_handshake;
 #[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
 #[cfg(target_arch = "wasm32")]

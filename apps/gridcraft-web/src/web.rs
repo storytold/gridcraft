@@ -39,7 +39,12 @@ pub fn start() {
         }
         // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
         // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        let managed = query_param("save").as_deref() == Some("managed");
+        let bridge = match query_param("host").as_deref() {
+            Some("parent") => crate::host::Bridge::new(managed),
+            Some("port") => query_param("parent_origin").and_then(|origin| crate::host::Bridge::new_port(managed, &origin)),
+            _ => None,
+        };
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
