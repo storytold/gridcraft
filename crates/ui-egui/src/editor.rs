@@ -213,8 +213,7 @@ impl EditState {
             return false;
         }
         let head = before.strip_suffix('(').unwrap_or(before);
-        let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let name: String = head.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
@@ -454,6 +453,10 @@ mod tests {
         let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SI(A1>0;año(B1;".into(), true, false);
         e.locale = gridcraft_engine::formula::FormulaLocale::Es;
         assert_eq!(e.current_function(), Some(("AÑO".into(), 1)));
+        // Ctrl+Shift+A reads the whole name before the caret in any script: `ÁSUMIF` is no SUMIF.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=ÁSUMIF(".into(), true, false);
+        assert!(!e.insert_argument_names(crate::i18n::Language::En));
+        assert_eq!(e.text, "=ÁSUMIF(");
     }
 
     #[test]
