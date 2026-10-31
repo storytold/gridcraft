@@ -279,6 +279,122 @@ fn closing_the_window_can_save_first_and_a_saved_workbook_closes_at_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A `data.csv` holding `a,b` / `1,2`, opened by path (a double-click), in a folder of its own.
+fn open_csv(test: &str) -> (std::path::PathBuf, String, egui_kittest::Harness<'static, SheetApp>) {
+    let dir = std::env::temp_dir().join(format!("gridcraft-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("data.csv").to_string_lossy().into_owned();
+    std::fs::write(&path, "a,b\r\n1,2\r\n").unwrap();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.open", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    (dir, path, h)
+}
+
+fn is_open(h: &egui_kittest::Harness<'static, SheetApp>, path: &str) -> bool {
+    h.state().session.documents().iter().any(|d| d.path.as_deref() == Some(path))
+}
+
+/// #2607: a CSV keeps its workbook "edited" after a save, since the file holds only the active
+/// sheet's values; Save in the close question still writes it and closes it, instead of asking again
+/// on every close. Bounded to three rounds: on the bug each round asks again and never closes.
+#[test]
+fn closing_the_window_saves_a_csv_and_closes_instead_of_asking_again() {
+    let (dir, path, mut h) = open_csv("close-csv-window");
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A2", "input": "5"})).unwrap();
+    h.state_mut().run("file.save", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+    assert!(std::fs::read_to_string(&path).unwrap().starts_with("a,b\r\n5,2"), "Ctrl+S wrote the CSV");
+    assert!(h.state().session.active().unwrap().is_dirty(), "a CSV save still leaves the workbook edited");
+
+    let (mut asked, mut closed) = (0, false);
+    for _ in 0..3 {
+        let sent = request_window_close(&mut h);
+        if !sent.contains(&egui::ViewportCommand::CancelClose) {
+            closed = true;
+            break;
+        }
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+        asked += 1;
+        if click_commands(&mut h, "Save").contains(&egui::ViewportCommand::Close) {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "Save never closed the window: asked {asked} times");
+    assert_eq!(asked, 1, "asked once, and Save closed the window");
+    assert!(std::fs::read_to_string(&path).unwrap().starts_with("a,b\r\n5,2"), "the CSV holds the change");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File › Close on an edited CSV: Cancel keeps it open and unwritten; Save writes it and closes it.
+#[test]
+fn file_close_then_save_writes_a_csv_and_closes_it() {
+    let (dir, path, mut h) = open_csv("close-csv-file");
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    click(&mut h, "Cancel");
+    assert!(is_open(&h, &path), "Cancel keeps the workbook open");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a,b\r\n1,2\r\n", "Cancel writes nothing");
+
+    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    click(&mut h, "Save");
+    assert!(!is_open(&h, &path), "Save wrote the CSV and closed the workbook");
+    assert!(h.state().dialog.is_none() && h.state().message.is_none());
+    assert!(std::fs::read_to_string(&path).unwrap().starts_with("a,b\r\n1,7"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A CSV holds one sheet. With a second sheet, Save in the close question still writes the active
+/// sheet, but the workbook stays open and says why, so the other sheet isn't lost without asking;
+/// Don't Save then closes it. Quitting stops there too.
+#[test]
+fn save_keeps_a_csv_with_more_sheets_open_and_says_why() {
+    let (dir, path, mut h) = open_csv("close-csv-sheets");
+    h.state_mut().run("home.insertSheet", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "kept"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().wb.sheets.len(), 2);
+
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    let sent = click_commands(&mut h, "Save");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the quit stops: {sent:?}");
+    assert!(is_open(&h, &path), "the workbook stays open");
+    assert!(h.state().dialog.is_none(), "the question is answered");
+    let message = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
+    assert!(message.contains("only the active sheet"), "{message:?}");
+    assert!(std::fs::read_to_string(&path).unwrap().starts_with("kept"), "the active sheet was written");
+    h.state_mut().message = None;
+
+    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    click(&mut h, "Don't Save");
+    assert!(!is_open(&h, &path), "Don't Save closes it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A workbook that was never saved has no file for Save to write: it asks where, and stays open.
+#[test]
+fn file_close_then_save_on_a_new_workbook_asks_where_and_stays_open() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    click(&mut h, "Save");
+    assert_eq!(h.state().session.documents().len(), 1, "still open");
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert!(h.state().message.is_none());
+}
+
 #[test]
 fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
     let mut h = harness(Services::default());
