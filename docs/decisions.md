@@ -30,6 +30,10 @@ Names are resolved using workbook/sheet scope, and structured references disting
 
 This is a writer policy; interpreting implicit intersection in imported legacy formulas remains separate work. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
 
+## Whole-row references under scalar operators intersect implicitly (#3030)
+
+One narrow exception to the array-semantics stance above: a whole-row reference (`1:30`) used as an operand of a unary or binary operator is reduced by implicit intersection — the band's cell in the formula's own column, on the formula's row clamped into the band — instead of being read as an array. A full-width array can only spill sideways over the formula's neighbours, and the size of that spill depended on the sheet's used range; Excel for the web shows a single value for `=-1:30` both inside the band and below it. When the intersection lands on the formula's own cell, the stored value is read directly, so the self-read is not reported circular. Bounded ranges and whole columns keep their array behaviour, and function arguments are unaffected.
+
 ## Static cell pictures
 
 Store immutable picture payloads in `Sheet::cell_pictures`, a sparse map keyed by `CellRef`,

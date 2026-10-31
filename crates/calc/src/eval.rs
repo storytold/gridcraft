@@ -219,6 +219,39 @@ impl<'h> Evaluator<'h> {
         self.deref(ev)
     }
 
+    /// Evaluates one operand of a scalar operator (a unary operator, or one side of a
+    /// binary operator). A whole-row reference (`1:30`, `2:2`) spans the sheet's full
+    /// width, so read as an array it can only spill sideways over the formula's
+    /// neighbours; Excel instead reduces it by implicit intersection in a scalar
+    /// context. The intersection takes the band's cell in the formula's own column,
+    /// on the formula's row clamped into the band, so a formula below the band reads
+    /// the band's last row rather than erroring (Excel for the web shows 0 for
+    /// `=-1:30` both inside the band and below it, #3030). When that cell is the
+    /// formula's own cell, its stored value is read directly: Excel does not call
+    /// an implicit-intersection self-read circular, while the host's on-demand
+    /// calculation would report `#CIRC!`. Every other operand goes through
+    /// [`Evaluator::deref`] unchanged, so bounded ranges and whole columns keep
+    /// their array behaviour (`=-A1:A3` and `SUMPRODUCT((A:A=1)*B:B)` still work
+    /// elementwise).
+    pub fn operand_value(&mut self, e: &Expr) -> Value {
+        let ev = self.eval(e);
+        if let Ev::R(areas) = &ev
+            && let [a] = areas.as_slice()
+        {
+            let r = a.range;
+            if r.start.col == 0 && r.end.col == MAX_COLS - 1 {
+                let row = self.at.row.clamp(r.start.row, r.end.row);
+                let cell = CellRef::new(row, self.at.col);
+                return if a.sheet == self.sheet && cell == self.at {
+                    self.host.workbook().sheet(a.sheet).map_or(Value::Empty, |s| s.value(cell))
+                } else {
+                    self.host.cell_value(a.sheet, cell)
+                };
+            }
+        }
+        self.deref(ev)
+    }
+
     fn resolve_sheet(&self, s: &SheetSel) -> Result<Vec<usize>, CellError> {
         let wb = self.host.workbook();
         match s {
@@ -505,7 +538,7 @@ impl<'h> Evaluator<'h> {
                 l => l,
             };
         }
-        let v = self.value(x);
+        let v = self.operand_value(x);
         let sys = self.host.workbook().date_system;
         Ev::V(map_unary(
             &v,
@@ -600,9 +633,9 @@ impl<'h> Evaluator<'h> {
                     rest.push((*o, r.as_ref()));
                     left = l.as_ref();
                 }
-                let mut acc = self.value(left);
+                let mut acc = self.operand_value(left);
                 while let Some((o, r)) = rest.pop() {
-                    let y = self.value(r);
+                    let y = self.operand_value(r);
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)

@@ -68,6 +68,58 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn whole_row_references_intersect_implicitly_in_scalar_contexts() {
+    // #3030: `=-1:30` in Excel shows one value (implicit intersection); it used to
+    // spill a used-range-sized array over the neighbours, with #SPILL!/#CIRC!.
+    let mut t = T::new();
+    t.set("B2", "5");
+    t.set("A3", "9");
+    // The formula sits inside the band, so the intersection is its own cell: blank,
+    // negated to 0. Nothing spills into the neighbours.
+    t.set("B3", "=-1:30");
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("A3"), Value::Number(9.0));
+    assert_eq!(t.get("B2"), Value::Number(5.0));
+    assert_eq!(t.get("C3"), Value::Empty);
+    assert_eq!(t.get("B4"), Value::Empty);
+
+    // A one-row band intersects at the formula's column, wherever the formula sits.
+    t.set("C1", "7");
+    t.set("C5", "=-1:1");
+    assert_eq!(t.get("C5"), Value::Number(-7.0));
+    assert_eq!(t.get("D5"), Value::Empty);
+
+    // Both sides of a binary operator, and the left side of a folded chain.
+    t.set("C6", "=1+1:1");
+    assert_eq!(t.get("C6"), Value::Number(8.0));
+    t.set("C7", "=1:1+1");
+    assert_eq!(t.get("C7"), Value::Number(8.0));
+
+    // A formula below the band reads the band's last row in its own column:
+    // Excel for the web shows a single value for B40 as well, not an error.
+    t.set("B30", "4");
+    t.set("B40", "=-1:30");
+    assert_eq!(t.get("B40"), Value::Number(-4.0));
+
+    // The reporter's exact setup, with a bare `1:30` sitting in B2: both
+    // negations show 0 and neither is circular.
+    let mut t = T::new();
+    t.set("B2", "=1:30");
+    t.set("B3", "=-1:30");
+    t.set("B40", "=-1:30");
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("B40"), Value::Number(0.0));
+
+    // Bounded ranges still spill as arrays, exactly as before.
+    let mut t = T::new();
+    t.set("A1", "10");
+    t.set("A2", "20");
+    t.set("A3", "30");
+    t.set("B1", "=-A1:A3");
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("B3")), (-10.0, -20.0, -30.0));
+}
+
+#[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
     let mut t = T::new();
