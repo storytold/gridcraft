@@ -104,6 +104,7 @@ mod text_box_editing;
 mod text_overflow_scroll;
 mod touch_pan;
 mod trace_navigation;
+mod trackpad_scroll;
 mod translated_form_fields;
 mod ui_clock;
 mod undo_while_grouping;
