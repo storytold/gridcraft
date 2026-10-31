@@ -370,6 +370,9 @@ const MODIFIED_W: f32 = 150.0;
 /// Recent workbooks, newest first, each with when it was last changed. Opening one is the user's
 /// explicit choice.
 fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize) {
+    if let Some(host) = &app.services.file_providers {
+        host.recent_ui(ui);
+    }
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     if app.ui.recent.is_empty() {
@@ -696,6 +699,10 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
+            if app.choose_provider_save(true) {
+                out.close = true;
+                return;
+            }
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             app.open_dialog("saveAs", json!({}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));

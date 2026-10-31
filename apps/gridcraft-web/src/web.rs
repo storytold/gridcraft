@@ -56,6 +56,11 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    let provider = gridcraft_ui_egui::file_providers::Host::default();
+                    if let Err(error) = crate::file_providers::install(provider.clone(), cc.egui_ctx.clone()) {
+                        log::error!("file providers are unavailable: {error:?}");
+                    }
+                    services.file_providers = Some(provider);
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -154,6 +159,9 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
@@ -177,6 +185,9 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host);
+        }
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
         }
@@ -187,6 +198,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
+        provider_download: Some(Box::new(download)),
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();

@@ -5,10 +5,15 @@ type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
+type ProviderDownload = Box<dyn Fn(&str, &[u8]) -> Result<(), String>>;
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
 pub struct Services {
+    /// Trusted host capability, disconnected and inactive by default.
+    pub file_providers: Option<crate::file_providers::Host>,
+    /// Device copies bypass provider persistence and the optional legacy parent-frame writer.
+    pub provider_download: Option<ProviderDownload>,
     /// Desktop: discover configured printers on a worker.
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
