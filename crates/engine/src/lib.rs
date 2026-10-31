@@ -40,6 +40,7 @@ pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use gridcraft_pdf as pdf;
 pub use selection::Selection;
 pub use windows::{Target, TargetGuard, WindowState, WindowView};
 

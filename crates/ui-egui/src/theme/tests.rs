@@ -177,6 +177,46 @@ fn fallback_faces_load_each_file_once() {
 }
 
 #[test]
+fn pdf_font_reads_reject_oversized_and_non_regular_inputs() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-pdf-font-reader-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("font.ttf");
+    std::fs::write(&path, b"small input").unwrap();
+    assert_eq!(read_pdf_font(path.to_str().unwrap()), Some(b"small input".to_vec()));
+    assert!(read_pdf_font(dir.to_str().unwrap()).is_none());
+    std::fs::File::create(&path).unwrap().set_len(gridcraft_engine::pdf::MAX_FONT_BYTES as u64 + 1).unwrap();
+    assert!(read_pdf_font(path.to_str().unwrap()).is_none());
+    #[cfg(unix)]
+    assert!(read_pdf_font("/dev/zero").is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pdf_unicode_fonts_set_cyrillic_in_real_glyphs() {
+    // Real-font check, like `fallback_covers_its_script`: skips on a machine with no cell font
+    // that has Cyrillic, fails if one is installed but printing would still lose the text.
+    use gridcraft_engine::pdf::UnicodeFont;
+    let samples = ["Добар дан, Ђорђе! Љубав, њива, џеп, ћуп", "Съешь же ещё этих мягких булок"];
+    let has_cyrillic =
+        |role: &str| candidates(role).iter().filter_map(|(p, _)| read_pdf_font(p)).filter_map(UnicodeFont::parse).any(|f| f.has('Ж') && f.has('џ'));
+    let selected = pdf_unicode_fonts();
+    for (i, role) in ["cell", "cell-bold"].into_iter().enumerate() {
+        if !has_cyrillic(role) {
+            continue; // no Cyrillic face for this role here; nothing to assert
+        }
+        let font =
+            [i, i + 2].into_iter().filter_map(|slot| selected.get(slot)?.clone()).filter_map(UnicodeFont::parse).find(|f| f.has('Ж') && f.has('џ'));
+        let font = font.unwrap_or_else(|| panic!("a {role} candidate has Cyrillic but none was picked for PDF"));
+        assert!(pdf_font_covers_greek_or_cyrillic(&font));
+        for text in samples {
+            for c in text.chars().filter(|c| c.is_alphabetic()) {
+                assert!(font.has(c), "the {role} PDF font lacks {c:?} (U+{:04X}) from {text:?}", c as u32);
+            }
+        }
+    }
+}
+
+#[test]
 /// Checks that the proportional and cell families have glyphs for every present script sample; samples with no system or craft face are printed as skipped.
 fn fallback_covers_its_script() {
     // Real glyph check, per script: the proportional family (what cells and the UI use) must

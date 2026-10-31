@@ -101,6 +101,9 @@ real_name = "Helen Kwok"
 real_name = "Robert Lee"
 sync_github_name = true
 
+[people.uwe-schwarz]
+real_name = "Uwe Schwarz"
+
 [people.dylanmtaylor]
 sync_github_name = true
 

@@ -16,8 +16,14 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-mcp = { workspace = true }
+# Only `theme::pdf_unicode_fonts`: the system fonts `file.exportPdf`/`file.print` embed for Greek
+# and Cyrillic, the same ones the desktop app picks. No window, no egui context is created.
+gridcraft-ui-egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+
+[dev-dependencies]
+gridcraft-pdf = { workspace = true, features = ["test-support"] }

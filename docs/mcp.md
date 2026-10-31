@@ -84,6 +84,25 @@ methods `-32601`.
 ← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\n  \"range\": \"B4\", ... \"values\": [[1600.0]]\n}"}],"isError":false}}
 ```
 
+## PDF export with custom fonts
+
+Use `execute_command` with `file.exportPdf` (or `file.print`) and per-request family mappings to
+preserve multiple workbook fonts in one PDF:
+
+```json
+{"name":"execute_command","arguments":{"command":"file.exportPdf","params":{"path":"/path/to/report.pdf","fontFamilies":{"Body Sans":{"regular":"/path/to/Body-Regular.ttf","bold":"/path/to/Body-Bold.ttf"},"Heading Sans":{"regular":"/path/to/Heading-Regular.ttf","italic":"/path/to/Heading-Italic.ttf"}}}}}
+```
+
+Keys match the family names stored in the workbook, case-insensitively after trimming. Each family
+requires `regular` and can supply `bold`, `italic` and `boldItalic`; omitted styles use that family's
+regular face. Mapped families retain independent faces and text widths. Unmapped families use the
+existing PDF fonts, or the optional global `fonts` object (same four fields) if supplied.
+
+Paths belong to the host running the engine, including a desktop reached through `mcp --connect`.
+Omit `path` to receive PDF bytes as base64. Fonts apply only to that export. Invalid or unsupported
+fonts and missing glyphs are tool errors; no dialog opens and no output is written. See
+[CLI PDF fonts](cli.md#pdf-fonts) for limits, examples and shaping restrictions.
+
 ## Embedding
 
 `gridcraft-mcp` is a library: `Server::new(Box::new(Headless::new()))` or

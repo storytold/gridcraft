@@ -598,6 +598,50 @@ fn invalid_sort_keys_are_invalid_params() {
 }
 
 #[test]
+fn execute_command_exports_with_per_request_pdf_fonts() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-mcp-pdf-fonts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let font = dir.join("custom.ttf");
+    std::fs::write(&font, gridcraft_pdf::test_support::tiny_ttf(&['A'], 500, 0)).unwrap();
+    let mut s = server();
+    ok(&mut s, "execute_command", json!({"command": "cell.set", "params": {"cell": "A1", "input": "A"}}));
+    let r = ok(&mut s, "execute_command", json!({"command": "file.exportPdf", "params": {"fonts": {"regular": font}}}));
+    let bytes = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert!(bytes.windows(10).any(|w| w == b"/FontFile2"));
+    let r = ok(&mut s, "execute_command", json!({"command": "file.exportPdf"}));
+    let bytes = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"/FontFile2"));
+    let r = call(&mut s, "execute_command", json!({"command": "file.exportPdf", "params": {"fonts": {"regular": dir.join("missing.ttf")}}}));
+    assert_eq!(r["isError"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn execute_command_preserves_two_named_pdf_families() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-mcp-families-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = dir.join("body.ttf");
+    let heading = dir.join("heading.ttf");
+    std::fs::write(&body, gridcraft_pdf::test_support::tiny_ttf(&['A'], 400, 0)).unwrap();
+    std::fs::write(&heading, gridcraft_pdf::test_support::tiny_ttf(&['A'], 800, 0)).unwrap();
+    let mut s = server();
+    ok(&mut s, "write_range", json!({"range": "A1:B1", "values": [["A", "A"]]}));
+    for (range, name) in [("A1", "Body"), ("B1", "Heading")] {
+        ok(&mut s, "execute_command", json!({"command": "home.fontName", "params": {"range": range, "name": name}}));
+    }
+    let r = ok(
+        &mut s,
+        "execute_command",
+        json!({"command": "file.exportPdf", "params": {"fontFamilies": {"Body": {"regular": body}, "Heading": {"regular": heading}}}}),
+    );
+    let bytes = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 2);
+    assert!(bytes.windows(4).any(|w| w == b"/U5 "));
+    assert!(bytes.windows(4).any(|w| w == b"/U9 "));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_window_argument_routes_tools_to_that_window() {
     let mut s = server();
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "book one"}));
