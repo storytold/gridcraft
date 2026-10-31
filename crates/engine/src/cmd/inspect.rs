@@ -85,7 +85,7 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
         Some(_) => target_range(s, p)?,
         None => match sh.used_range() {
             Some(r) => r,
-            None => return Ok(json!({"range": null, "values": []})),
+            None => return Ok(json!({"range": null, "sheet": sh.name, "visibility": format!("{:?}", sh.visibility), "values": []})),
         },
     };
     let r = match sh.used_range() {
