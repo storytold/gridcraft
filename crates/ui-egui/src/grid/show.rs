@@ -337,6 +337,15 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }
+    if previous_popups.0 != app.grid.filter_menu
+        && let Some((col, _, _)) = previous_popups.0
+    {
+        ui.ctx().data_mut(|d| {
+            d.remove::<Vec<(String, bool)>>(egui::Id::unique(("filter_sel", col)));
+            d.remove::<String>(egui::Id::unique(("filter_search", col)));
+            d.remove::<Vec<egui::Id>>(egui::Id::unique(("filter_buttons", col)));
+        });
+    }
     update_cursor(app, ui, resp, geo, sh);
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
