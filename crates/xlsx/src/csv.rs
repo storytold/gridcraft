@@ -152,8 +152,11 @@ pub fn decode_text(bytes: &[u8]) -> String {
 
 /// Picks comma, semicolon or tab: the candidate with the most consistent count per line
 /// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
+/// Semicolons on every line win over commas that all sit between two digits: those are decimal
+/// commas (`1,5;2,25`), as in the files GridCraft's and Excel's semicolon CSVs hold.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     let mut best = (b',', 0usize, 0usize);
+    let mut semicolons = false;
     for d in [',', ';', '\t'] {
         let mut counts = vec![];
         let mut n = 0usize;
@@ -186,11 +189,70 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
         }
         let min = counts.iter().copied().min().unwrap_or(0);
         let total: usize = counts.iter().sum();
+        if d == ';' {
+            semicolons = min > 0;
+        }
         if min > 0 && (min, total) > (best.1, best.2) {
             best = (d as u8, min, total);
         }
     }
+    if best.0 == b',' && semicolons && commas_are_decimal(text, quote) {
+        return b';';
+    }
     best.0
+}
+
+/// Whether every comma outside quotes in the lines [`sniff_delimiter`] looks at has a digit on
+/// both sides.
+fn commas_are_decimal(text: &str, quote: char) -> bool {
+    let mut in_q = false;
+    let mut lines = 0usize;
+    let mut prev = '\n';
+    let mut chars = text.chars().take(64 * 1024).peekable();
+    while let Some(ch) = chars.next() {
+        if ch == quote {
+            in_q = !in_q;
+        } else if !in_q && ch == '\n' {
+            lines += 1;
+            if lines >= 20 {
+                break;
+            }
+        } else if !in_q && ch == ',' && !(prev.is_ascii_digit() && chars.peek().is_some_and(char::is_ascii_digit)) {
+            return false;
+        }
+        prev = ch;
+    }
+    true
+}
+
+/// A field of a semicolon CSV written with a decimal comma (`1,5`, `-1.234,50`, `12,5%`) in the
+/// form [`parse_input`] reads (`1.5`, `-1234.50`, `12.5%`); `None` for anything else, which is read
+/// as it is. Only a single comma with digits on both sides counts, and dots only as thousands
+/// groups before it, so text, dates and plain integers are untouched.
+fn decimal_comma_number(field: &str) -> Option<String> {
+    let t = field.trim();
+    let (sign, rest) = match t.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", t.strip_prefix('+').unwrap_or(t)),
+    };
+    let (body, pct) = match rest.strip_suffix('%') {
+        Some(b) => (b, "%"),
+        None => (rest, ""),
+    };
+    let (int, frac) = body.split_once(',')?;
+    if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) || int.is_empty() {
+        return None;
+    }
+    let mut groups = int.split('.');
+    let first = groups.next()?;
+    let grouped = int.contains('.');
+    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_digit()) || (grouped && first.len() > 3) {
+        return None;
+    }
+    if !groups.all(|g| g.len() == 3 && g.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    Some(format!("{sign}{}.{frac}{pct}", int.replace('.', "")))
 }
 
 /// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
@@ -262,6 +324,8 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
+    // A semicolon file is one from a decimal-comma region: `1,5` is a number there.
+    let decimal_comma = delim == ';';
     parse_records(&text, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
@@ -276,7 +340,10 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&f, opts.date_system);
+                let p = match decimal_comma.then(|| decimal_comma_number(&f)).flatten() {
+                    Some(n) => parse_input(&n, opts.date_system),
+                    None => parse_input(&f, opts.date_system),
+                };
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
