@@ -32,8 +32,8 @@ use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, mak
 pub use gridcraft_xlsx::HfPicture;
 use header_footer::draw_header_footer;
 pub use header_footer::{
-    HF_FIELDS, HfContext, HfLine, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, hf_pictures, join_header_footer,
-    section_lines, split_header_footer,
+    HF_FIELDS, HfContext, HfFrame, HfItem, HfLine, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, hf_pictures,
+    join_header_footer, layout_header_footer, section_lines, split_header_footer,
 };
 /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
 type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
@@ -47,6 +47,7 @@ use objects::draw_objects;
 #[cfg(test)]
 use text::{center_across_width, wrap_lines};
 
+/// The printing commands: print, export as PDF, the print preview and Page Setup.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -72,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height, hfPage: odd|first|even, headerMargin, footerMargin, hfSides: [left, right], hfScale}]} in print order",
             has_doc,
             print_preview
         ),
@@ -214,6 +215,8 @@ fn print(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 
+/// `file.printPreview`: the pages printing would give, each with the header/footer geometry
+/// (`hfPage`, margins, `hfSides`, `hfScale`) the preview draws it with.
 fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let opts = PrintOptions::from_params(p, "file.printPreview")?;
     let d = s.doc()?;
@@ -222,7 +225,8 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let mut n = 0usize;
     for lay in &lays {
         let name = d.wb.sheet(lay.sheet).map(|s| s.name.clone()).unwrap_or_default();
-        for (ri, ci) in &lay.pages {
+        let frame = lay.hf_frame();
+        for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             n += 1;
             let (Some(rb), Some(cb)) = (lay.row_bands.get(*ri), lay.col_bands.get(*ci)) else { continue };
             let r = RangeRef::new(CellRef::new(rb.0, cb.0), CellRef::new(rb.1, cb.1));
@@ -238,6 +242,12 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "pageOrder": lay.settings.page_order.id(),
                 "width": lay.page_w,
                 "height": lay.page_h,
+                // What the page's header and footer are laid out with (`layout_header_footer`).
+                "hfPage": lay.settings.hf_page(pi == 0, n).id(),
+                "headerMargin": frame.header_margin,
+                "footerMargin": frame.footer_margin,
+                "hfSides": [frame.sides.0, frame.sides.1],
+                "hfScale": frame.text_scale,
             }));
         }
     }
