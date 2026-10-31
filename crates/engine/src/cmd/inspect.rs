@@ -8,7 +8,7 @@ use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
-        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
+        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool, includeHidden?: bool} → rows of values (includeHidden: read hidden rows, hidden columns and hidden sheets too — default false: the read sees what a viewer of the sheet sees; the response's visibility field says when it doesn't)", has_doc, read),
         cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
@@ -97,10 +97,17 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let formulas = bool_param(p, "formulas").unwrap_or(false);
     let formatted = bool_param(p, "formatted").unwrap_or(false);
+    let include_hidden = bool_param(p, "includeHidden").unwrap_or(false);
     let mut rows = Vec::with_capacity(r.height() as usize);
     for row in r.start.row..=r.end.row {
+        if !include_hidden && sh.is_row_hidden(row) {
+            continue;
+        }
         let mut cols = Vec::with_capacity(r.width() as usize);
         for col in r.start.col..=r.end.col {
+            if !include_hidden && sh.is_col_hidden(col) {
+                continue;
+            }
             let c = CellRef::new(row, col);
             let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
                 json!(format!("={}", f.text))
@@ -113,7 +120,7 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
         }
         rows.push(Json::Array(cols));
     }
-    Ok(json!({"range": r.a1(), "sheet": sh.name, "values": rows}))
+    Ok(json!({"range": r.a1(), "sheet": sh.name, "visibility": format!("{:?}", sh.visibility), "values": rows}))
 }
 
 fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
@@ -127,6 +134,8 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
         "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
+        "hiddenRow": sh.is_row_hidden(c.row),
+        "hiddenCol": sh.is_col_hidden(c.col),
         "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
         "text": crate::display::cell_text(&d.wb, sh, c),
         "input": sh.input_text(c),

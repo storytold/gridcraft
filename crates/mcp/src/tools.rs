@@ -173,13 +173,16 @@ fn base_tool_definitions() -> Vec<Value> {
             "Read range",
             "Read cell values from a range as rows (2-D array). Numbers/booleans/strings are returned as JSON values, empty cells as \
              null, errors as {\"error\":\"#DIV/0!\"}. Without `range`, reads the sheet's used range. formulas:true returns formula \
-             text (\"=SUM(B2:B4)\") for formula cells; formatted:true returns the displayed text (\"$1,234.00\", \"12%\").",
+             text (\"=SUM(B2:B4)\") for formula cells; formatted:true returns the displayed text (\"$1,234.00\", \"12%\"). Hidden rows, \
+             columns and sheets are read only with includeHidden:true (default false: the read sees what a viewer of the sheet sees); \
+             the response's visibility field says when it doesn't.",
             obj(
                 json!({
                     "range": string(RANGE),
                     "sheet": string("Sheet name (default: the active sheet)"),
                     "formulas": boolean("Return formulas instead of computed values for formula cells"),
                     "formatted": boolean("Return display text with number formats applied"),
+                    "includeHidden": boolean("Read hidden rows, hidden columns and hidden sheets too"),
                 }),
                 &[],
             ),
@@ -636,7 +639,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),
         "list_windows" => exec(b, "window.list", json!({})),
         "inspect_workbook" => b.call("document.inspect", json!({})),
-        "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted"])),
+        "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted", "includeHidden"])),
         "write_range" => exec(b, "range.setValues", pick(a, &["range", "values"])),
         "set_cell" => exec(b, "cell.set", pick(a, &["cell", "input"])),
         "get_cell" => exec(b, "cell.get", pick(a, &["cell"])),
