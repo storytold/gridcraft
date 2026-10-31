@@ -33,7 +33,7 @@ const FULL_SIZE_CELLS: u64 = 16_384;
 /// of the sheet (`A:A`, `A2:A1048576`, several whole rows) and larger blocks stop at the sheet's used
 /// range, so that formulas over them stay fast.
 const FULL_SIZE_BOUNDED_CELLS: u64 = 1_048_576;
-const MAX_DEPTH: usize = 400;
+const MAX_DEPTH: usize = 460;
 /// Lambda invocations one cell may make. A semantically bounded formula in Excel can invoke
 /// its lambda at most once per cell of an array (capped here by `MAX_CELLS`), so this covers
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
@@ -71,9 +71,9 @@ fn err(e: CellError) -> Ev {
 }
 
 /// LAMBDA calls that one formula may have in progress at once, counted the same way on every build.
-/// The next call answers `#NUM!`. A countdown from 131, the deepest that `MAX_DEPTH` allows, has 132
+/// The next call answers `#NUM!`. A countdown from 151, the deepest that `MAX_DEPTH` allows, has 152
 /// calls in progress, so it still runs.
-const MAX_LAMBDA_CALLS: usize = 140;
+const MAX_LAMBDA_CALLS: usize = 160;
 
 /// Native stack, in bytes, that one formula's evaluation may use below its first `eval`. Past it,
 /// `eval` answers `#NUM!`. It guards the stack and leaves 128 KiB of a 1 MiB thread for the frames
