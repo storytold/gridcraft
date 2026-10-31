@@ -165,14 +165,23 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// A session wired for web imports.
+fn session() -> Session {
     let mut s = Session::new();
+    s.web_source = Some(gridcraft_webquery::provider());
+    s
+}
+
+/// A session with the file at `path` open, wired for web imports.
+fn open(path: &str) -> Result<Session, String> {
+    let mut s = session();
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
 
+/// A session with a fresh workbook, wired for web imports.
 fn blank() -> Session {
-    let mut s = Session::new();
+    let mut s = session();
     s.new_workbook();
     s
 }
@@ -418,7 +427,7 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
-            let mut s = Session::new();
+            let mut s = session();
             exec(&mut s, "file.new", json!({"sample": name}))?;
             s
         }
@@ -540,7 +549,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
-                    let mut s = Session::new();
+                    let mut s = session();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
                     s
                 }

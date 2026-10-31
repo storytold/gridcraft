@@ -181,6 +181,9 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// Saved From Web connections (Data ▸ Get Data ▸ From Web), one per imported table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_queries: Vec<crate::features::WebQuery>,
     /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
     /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
     #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
@@ -292,6 +295,7 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            web_queries: Vec::new(),
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),

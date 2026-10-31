@@ -10,6 +10,7 @@ use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
+use super::web::{from_web, queries_connections};
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
@@ -178,6 +179,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
+                "fromWeb" => from_web(app, ui, &mut d, &mut confirm, &mut open),
+                "queriesConnections" => queries_connections(app, ui, &mut d, &mut confirm, &mut open),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),

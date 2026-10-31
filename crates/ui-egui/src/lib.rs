@@ -50,6 +50,10 @@ pub mod tabs;
 pub mod text_box;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
+mod web_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+pub use web_fetch::PendingFetch;
+#[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
 pub mod widgets;
 mod window_ui;
@@ -229,6 +233,9 @@ pub struct SheetApp {
     /// without reaching input handling, so the hook must offer the same step again.
     pub(crate) synthetic_injected_at_pass: Option<u64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The From Web page fetch running on a worker thread (native only; see `web_fetch`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fetch: Option<PendingFetch>,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
@@ -309,6 +316,34 @@ pub fn clean_error(e: &str) -> String {
         return rest.to_string();
     }
     e.to_string()
+}
+
+/// A URL safe to show in the UI: the origin and path, without its query string.
+pub fn clean_url_for_display(url: &str) -> String {
+    url.split(['?', '#']).next().unwrap_or(url).to_string()
+}
+
+/// A last-synced timestamp as a local-time string ("2026-10-25 14:32").
+pub fn format_sync_time(ms: u64) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // std has no local-time formatting; show the offset from now in human terms.
+        let now = now_ms() as u64;
+        if ms <= now {
+            let ago = (now - ms) / 1000;
+            match ago {
+                0..=59 => return "just now".into(),
+                60..=3599 => return format!("{} minute(s) ago", ago / 60),
+                3600..=86399 => return format!("{} hour(s) ago", ago / 3600),
+                _ => return format!("{} day(s) ago", ago / 86400),
+            }
+        }
+        "just now".into()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        "synced".into()
+    }
 }
 
 pub fn cell(r: u32, c: u32) -> CellRef {

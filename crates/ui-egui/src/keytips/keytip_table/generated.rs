@@ -271,7 +271,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AFF", Entry::Finish(Action::Command("edit.flashFill"))),     // Excel: Flash Fill
     ("AFO", Entry::Finish(Action::Pending("data.fromOtherSources"))), // pending; Excel: Get External Data: From Other Sources; gap #12; reserved until the command lands
     ("AFT", Entry::Finish(Action::Pending("data.fromText"))), // pending; Excel: Get External Data: From Text; gap #12; reserved until the command lands
-    ("AFW", Entry::Finish(Action::Pending("data.fromWeb"))),  // pending; Excel: Get External Data: From Web; reserved until the command lands
+    ("AFW", Entry::Finish(Action::Command("data.fromWeb"))),  // Excel: Get External Data: From Web; From Web Navigator dialog
     ("AG", Entry::Continue),                                  // Excel: Group Menu; group level: containment(Group)
     ("AGA", Entry::Finish(Action::Pending("data.autoOutline"))), // pending; Excel: Auto Outline; Auto Outline; reserved until the command lands
     ("AGG", Entry::Finish(Action::Command("data.group"))),    // Excel: Group

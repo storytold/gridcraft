@@ -113,8 +113,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
-  data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
+- No Power Query editor, connections, From Database/folder sources, relationships or data model
+  (`data.fromDatabase`, `data.relationships` missing). From Web (`data.fromWeb`) fetches an https
+  page, lists its detected tables in a Navigator dialog and loads the selected one into a new
+  table sheet, saving the connection; `data.webRefresh` re-fetches and rewrites the table in
+  place (desktop and CLI). **Estimate:** 50–90 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
@@ -190,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
+| 2026-10-15 | minor | §12: From Web (`data.fromWeb`): web table import with Navigator preview and one-click refresh (#1356) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |

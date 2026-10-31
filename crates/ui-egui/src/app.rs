@@ -45,6 +45,8 @@ impl SheetApp {
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            fetch: None,
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -236,6 +238,37 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        // A From Web background fetch the open dialog did not consume (ribbon Refresh All,
+        // or a dialog closed while its fetch ran): a refresh is applied and reported here; a
+        // preview or import whose dialog is gone is dropped — its result has nowhere to land.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.fetching() {
+                ctx.request_repaint();
+            } else if self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh") {
+                if let Some((_, r)) = self.poll_fetch() {
+                    match r {
+                        Ok(res) => dialogs::report_refresh_all(self, &res),
+                        Err(e) => self.message = Some(("From Web".into(), crate::clean_error(&e))),
+                    }
+                }
+            } else if self.fetch.is_some() {
+                // Only the From Web dialog polls a finished preview or import into place;
+                // Queries & Connections polls its own refreshes too (routed by command in
+                // `poll_refresh_fetch`). Any other state joins the finished worker so its
+                // result is freed, then drops it.
+                let polls = self.dialog.as_ref().is_some_and(|d| {
+                    d.name == "fromWeb" || (d.name == "queriesConnections" && self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh"))
+                });
+                if polls {
+                    ctx.request_repaint();
+                } else {
+                    // Discard, don't run: a canceled import (Load, then the dialog closed)
+                    // must not create its sheet and connection behind the user's back.
+                    self.discard_fetch();
+                }
+            }
+        }
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
