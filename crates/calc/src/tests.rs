@@ -738,6 +738,36 @@ fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
 }
 
 #[test]
+fn a_full_recalc_lays_out_arrays_as_an_automatic_one_when_one_shrinks_for_another() {
+    // C1 grows into C3, which A3's array fills, and A3 grows into E3, which E1's array leaves.
+    // Automatic recalculation lays them out in reading order with each former area still filled:
+    // C1 is #SPILL! and A3 takes A3:E3. A full recalculation after the same edit in manual
+    // calculation gives the same sheet.
+    let build = |manual: bool| {
+        let mut t = T::new();
+        t.set("J1", "2");
+        t.set("C1", "=SEQUENCE(J1)");
+        t.set("A3", "=SEQUENCE(1,J1+1)");
+        t.set("E1", "=SEQUENCE(5-J1)");
+        assert_eq!([t.num("C2"), t.num("C3"), t.num("E3")], [2.0, 3.0, 3.0]);
+        if manual {
+            t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+        }
+        t.set("J1", "4");
+        if manual {
+            t.calc.recalc_all(&mut t.wb);
+        }
+        t
+    };
+    let (automatic, full) = (build(false), build(true));
+    assert_eq!(automatic.get("C1"), Value::Error(CellError::Spill));
+    assert_eq!([automatic.num("A3"), automatic.num("C3"), automatic.num("E3")], [1.0, 3.0, 5.0]);
+    for cell in ["A1", "C1", "C2", "C3", "C4", "E1", "E2", "A3", "B3", "C3", "D3", "E3"] {
+        assert_eq!(full.get(cell), automatic.get(cell), "{cell}");
+    }
+}
+
+#[test]
 fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     // Two arrays of one recalculation want the same empty cell: the one laid out second is
     // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
