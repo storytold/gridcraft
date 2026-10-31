@@ -1,5 +1,6 @@
 # GridCraft roadmap
 
+> **PR update:** 2026-10-29 · Integrate draggable print-area borders and page breaks with main 2ff75179; retain the updated grid reference flow, boundary cache, cursor priority and drag-threshold regressions. Readiness estimates unchanged.
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
@@ -244,6 +245,11 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | trivial | Integrate draggable print-area borders and page breaks with main 2ff75179; retain the updated grid reference flow, boundary cache, cursor priority and drag-threshold regressions. |
+| 2026-10-26 | trivial | A stationary boundary click never snaps narrow cells, including held and same-frame clicks; frame and drag preview use the active theme palette. |
+| 2026-10-26 | trivial | Integrate draggable page boundaries and resize-cursor priority with main f6b0cec6. |
+| 2026-10-25 | trivial | Integrate Page Break Preview boundary dragging with current main, preserving newer behavior and progress history. |
+| 2026-10-21 | minor | Page Break Preview: draggable print-area frame and internal page breaks, cell snapping, cancellation and one-step undo; outward moves fit the preceding band by reducing print scale |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
@@ -298,3 +304,15 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+Page Break Preview boundary dragging is integrated with current main, retaining PivotTable field and Show Details caches.
+
+Windows validation also keeps the CLI traversal parameter valid when Unix identity tracking is unavailable and exercises exclusive temporary-file creation without requiring Unix symlinks.
+
+An exclusive-create failure now leaves an already occupied temporary name untouched; the cross-platform save regression checks both the destination and that existing entry.
+
+The generated parity checklist keeps LF endings on Windows checkouts so the byte-for-byte CI check remains portable.
+
+2026-10-25: Page Break Preview keeps its resize cursor on outer and internal boundaries, while hovering or dragging in either sheet direction; cancelling returns ordinary cells to the cell cursor.
+
+Integrate draggable page boundaries and resize-cursor priority with main f6b0cec6.
