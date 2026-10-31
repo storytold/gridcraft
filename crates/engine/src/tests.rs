@@ -2983,6 +2983,26 @@ fn file_options_reports_settings_and_asks_for_the_options_page() {
     assert_eq!(s.active().unwrap().wb, before, "Options never changes the workbook");
 }
 
+#[test]
+fn enter_direction_sets_where_enter_moves_and_can_turn_the_move_off() {
+    let mut s = Session::new();
+    // Excel's default: Enter moves down. Without params the command only reports.
+    assert_eq!(s.execute("options.enterDirection", json!({})).unwrap(), json!({"move": true, "direction": "down"}));
+    assert_eq!(s.prefs.enter_step(), (1, 0));
+    assert_eq!(s.execute("options.enterDirection", json!({"direction": "left"})).unwrap(), json!({"move": true, "direction": "left"}));
+    assert_eq!(s.prefs.enter_step(), (0, -1));
+    // Off keeps the selection where it is; back on without a direction moves down again.
+    assert_eq!(s.execute("options.enterDirection", json!({"move": false})).unwrap()["move"], false);
+    assert_eq!(s.prefs.enter_step(), (0, 0));
+    assert_eq!(s.execute("options.enterDirection", json!({"move": true})).unwrap(), json!({"move": true, "direction": "down"}));
+    // A bad direction is an error and changes nothing.
+    assert!(s.execute("options.enterDirection", json!({"direction": "sideways"})).is_err());
+    assert_eq!(s.prefs.enter_step(), (1, 0));
+    // A hand-edited prefs.json with an unknown direction still moves down.
+    let odd: crate::Prefs = serde_json::from_str(r#"{"enterDirection": "diagonal"}"#).unwrap();
+    assert_eq!(odd.enter_step(), (1, 0));
+}
+
 /// Ctrl+8 hides and shows the outline symbols; it's undoable and a sheet setting.
 #[test]
 fn show_outline_symbols_toggles() {
