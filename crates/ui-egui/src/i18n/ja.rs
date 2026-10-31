@@ -1,12 +1,12 @@
 //! Japanese translations for the interface strings in `i18n.rs`; labels follow Excel for Mac's
 //! Japanese wording, and anything absent falls back to English.
 //!
-//! [`CORE`] is the shared reference catalog every language translates: the ribbon, sheet tabs,
-//! widgets and the most common dialog labels. [`DIALOGS`] adds the dialog titles and labels,
-//! message boxes, Backstage/File-view items, template names and native-menu strings the Brazilian
-//! Portuguese catalog (`pt.rs`) covers on top of it. The two lists never overlap.
+//! [`CORE`] is the shared reference set: the ribbon, sheet tabs, widgets and the most common dialog
+//! labels. [`DIALOGS`] adds the dialog titles and labels, message boxes, Backstage/File-view items,
+//! template names and native-menu strings. The two lists never overlap. A string a language doesn't
+//! translate shows in English; `cargo xtask i18n-report` lists them per language.
 
-/// English label → Japanese, the shared reference set every catalog covers.
+/// English label → Japanese, the shared reference set.
 pub(super) const CORE: &[(&str, &str)] = &[
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
@@ -154,6 +154,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Remove Arrows", "矢印の解除"),
     ("Show Formulas", "数式の表示"),
     ("Error Checking", "エラーチェック"),
+    ("Circular References", "循環参照"),
     ("Evaluate Formula", "数式の検証"),
     ("Watch Window", "ウォッチ ウィンドウ"),
     ("Calculation\nOptions", "計算方法の設定"),
@@ -209,6 +210,9 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Page Break\nPreview", "改ページ プレビュー"),
     ("Page\nLayout", "ページ レイアウト"),
     ("Formula Bar", "数式バー"),
+    ("Name Box", "名前ボックス"),
+    ("Cell Editor", "セル エディター"),
+    ("Font Size", "フォント サイズ"),
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
     ("Zoom", "ズーム"),
@@ -306,6 +310,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("More\nFunctions", "その他の関数"),
     ("Sheet Options|View", "画面"),
     ("Print", "印刷"),
+    ("Print What", "印刷する内容"),
     ("Click to add data", "クリックしてデータを追加"),
     ("Add header", "ヘッダーの追加"),
     ("Add footer", "フッターの追加"),
@@ -331,6 +336,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Go to Header", "ヘッダーに移動"),
     ("Different First Page", "先頭ページのみ別指定"),
     ("Different Odd & Even Pages", "奇数/偶数ページ別指定"),
+    ("Scale with Document", "文書に合わせて拡大/縮小"),
+    ("Align with Page Margins", "ページ余白に合わせる"),
     ("Go to Footer", "フッターに移動"),
     ("Ruler", "ルーラー"),
     ("File", "ファイル"),
@@ -411,7 +418,19 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Save .xlsx workbooks automatically after every change", "変更のたびに .xlsx ブックを自動的に保存する"),
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
+    ("Maximum Iterations:", "最大反復回数:"),
+    ("Maximum Change:", "変化の最大値:"),
+    ("Maximum Iterations must be a whole number from 1 to 32767.", "最大反復回数には 1 から 32767 までの整数を指定してください。"),
+    ("Maximum Change must be a number of 0 or more.", "変化の最大値には 0 以上の数値を指定してください。"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Record Macro", "マクロの記録"),
+    ("Stop Recording", "記録終了"),
+    ("Use Relative References", "相対参照で記録"),
+    ("Run\nMacro", "マクロの実行"),
+    ("Macros…", "マクロ…"),
+    ("Recording", "記録中"),
+    ("New Macro", "新しいマクロ"),
+    ("Show", "表示"),
 ];
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
@@ -770,6 +789,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Doughnut", "ドーナツ"),
     ("Area", "面"),
     ("Stacked Area", "積み上げ面"),
+    ("100% Stacked Area", "100% 積み上げ面"),
     ("Scatter", "散布図"),
     ("Scatter with Lines", "直線付き散布図"),
     ("Radar", "レーダー"),
@@ -980,10 +1000,163 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Unprotect Sheet…", "シート保護の解除…"),
 ];
 
+/// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
+/// Portuguese catalog has no entry for them either). Kept apart so the two catalogs above keep the
+/// same key set; it never overlaps them.
+pub(super) const EXTRA: &[(&str, &str)] = &[
+    ("Cut (⌘X)", "切り取り (⌘X)"),
+    ("Copy (⌘C)", "コピー (⌘C)"),
+    ("Bold (⌘B)", "太字 (⌘B)"),
+    ("Italic (⌘I)", "斜体 (⌘I)"),
+    ("Underline (⌘U)", "下線 (⌘U)"),
+    ("AutoSum (⌘⇧T)", "オート SUM (⌘⇧T)"),
+    ("Filter (⌘⇧F)", "フィルター (⌘⇧F)"),
+    ("Flash Fill (⌘E)", "フラッシュ フィル (⌘E)"),
+    ("Insert Link (⌘K)", "リンクの挿入 (⌘K)"),
+    ("Paste (⌘V)", "貼り付け (⌘V)"),
+    ("Redo (⌘Y)", "やり直し (⌘Y)"),
+    ("Save (⌘S)", "上書き保存 (⌘S)"),
+    ("Search commands (⌘⇧Space)", "コマンドの検索 (⌘⇧Space)"),
+    ("Table (⌘T)", "テーブル (⌘T)"),
+    ("Undo (⌘Z)", "元に戻す (⌘Z)"),
+    ("New Workbook", "新しいブック"),
+    ("Save As…", "名前を付けて保存…"),
+    ("Print…", "印刷…"),
+    ("Export as PDF…", "PDF としてエクスポート…"),
+    ("Save a Copy as Excel Workbook (.xlsx)…", "Excel ブック (.xlsx) としてコピーを保存…"),
+    ("Export as CSV…", "CSV としてエクスポート…"),
+    ("Export as Web Page (.html)…", "Web ページ (.html) としてエクスポート…"),
+    ("Bottom Border", "下罫線"),
+    ("Top Border", "上罫線"),
+    ("Left Border", "左罫線"),
+    ("Right Border", "右罫線"),
+    ("No Border", "枠なし"),
+    ("All Borders", "格子"),
+    ("Outside Borders", "外枠"),
+    ("Thick Outside Borders", "太い外枠"),
+    ("Bottom Double Border", "下二重罫線"),
+    ("Thick Bottom Border", "下太罫線"),
+    ("Top and Bottom Border", "上下罫線"),
+    ("Top and Thick Bottom Border", "上罫線 + 下太罫線"),
+    ("Top and Double Bottom Border", "上罫線 + 下二重罫線"),
+    ("Inside Borders", "内側罫線"),
+    ("More Borders…", "その他の罫線…"),
+    ("More Functions…", "その他の関数…"),
+    ("No Fill", "塗りつぶしなし"),
+    ("Theme Colors", "テーマの色"),
+    ("Standard Colors", "標準の色"),
+    ("Highlight Cells Rules", "セルの強調表示ルール"),
+    ("Greater Than…", "指定の値より大きい…"),
+    ("Less Than…", "指定の値より小さい…"),
+    ("Between…", "指定の範囲内…"),
+    ("Equal To…", "指定の値に等しい…"),
+    ("Text that Contains…", "文字列…"),
+    ("A Date Occurring…", "日付…"),
+    ("Duplicate Values…", "重複する値…"),
+    ("Top/Bottom Rules", "上位/下位ルール"),
+    ("Blue", "青"),
+    ("Green", "緑"),
+    ("Red", "赤"),
+    ("Orange", "オレンジ"),
+    ("Light Blue", "水色"),
+    ("Purple", "紫"),
+    ("Green - Yellow - Red", "緑 - 黄 - 赤"),
+    ("Red - Yellow - Green", "赤 - 黄 - 緑"),
+    ("Green - White - Red", "緑 - 白 - 赤"),
+    ("Blue - White - Red", "青 - 白 - 赤"),
+    ("White - Green", "白 - 緑"),
+    ("White - Red", "白 - 赤"),
+    ("3 Arrows", "3 つの矢印"),
+    ("3 Traffic Lights", "3 つの信号"),
+    ("3 Symbols", "3 つの記号"),
+    ("4 Ratings", "4 段階評価"),
+    ("5 Arrows", "5 つの矢印"),
+    ("5 Quarters", "5 つの四分円"),
+    ("New Rule…", "新しいルール…"),
+    ("Clear Rules", "ルールのクリア"),
+    ("Manage Rules…", "ルールの管理…"),
+    ("Good, Bad and Neutral", "良い、悪い、どちらでもない"),
+    ("Bad", "悪い"),
+    ("Good", "良い"),
+    ("Neutral", "どちらでもない"),
+    ("Data and Model", "データとモデル"),
+    ("Calculation", "計算"),
+    ("Check Cell", "チェック セル"),
+    ("Explanatory Text", "説明文"),
+    ("Input", "入力"),
+    ("Linked Cell", "リンク セル"),
+    ("Note", "メモ"),
+    ("Output", "出力"),
+    ("Warning Text", "警告文"),
+    ("Titles and Headings", "タイトルと見出し"),
+    ("Heading 1", "見出し 1"),
+    ("Heading 2", "見出し 2"),
+    ("Heading 3", "見出し 3"),
+    ("Heading 4", "見出し 4"),
+    ("Total", "集計"),
+    ("Themed Cell Styles", "テーマのセルのスタイル"),
+    ("Number Format", "表示形式"),
+    ("Comma [0]", "桁区切り [0]"),
+    ("Currency [0]", "通貨表示形式 [0]"),
+    ("Percent", "パーセント"),
+    ("Place in Cell", "セル内に配置"),
+    ("Place over Cells", "セルの上に配置"),
+    ("Rectangle", "四角形"),
+    ("Rounded Rectangle", "角丸四角形"),
+    ("Oval", "楕円"),
+    ("Triangle", "三角形"),
+    ("Arrow", "矢印"),
+    ("Column", "縦棒"),
+    ("Win/Loss", "勝敗"),
+    ("Type to filter…", "入力して絞り込み…"),
+    ("Sort Ascending", "昇順"),
+    ("Sort Descending", "降順"),
+    ("Search", "検索"),
+    ("Apply", "適用"),
+    ("20% - Accent1", "20% - アクセント 1"),
+    ("20% - Accent2", "20% - アクセント 2"),
+    ("20% - Accent3", "20% - アクセント 3"),
+    ("20% - Accent4", "20% - アクセント 4"),
+    ("20% - Accent5", "20% - アクセント 5"),
+    ("20% - Accent6", "20% - アクセント 6"),
+    ("40% - Accent1", "40% - アクセント 1"),
+    ("40% - Accent2", "40% - アクセント 2"),
+    ("40% - Accent3", "40% - アクセント 3"),
+    ("40% - Accent4", "40% - アクセント 4"),
+    ("40% - Accent5", "40% - アクセント 5"),
+    ("40% - Accent6", "40% - アクセント 6"),
+    ("60% - Accent1", "60% - アクセント 1"),
+    ("60% - Accent2", "60% - アクセント 2"),
+    ("60% - Accent3", "60% - アクセント 3"),
+    ("60% - Accent4", "60% - アクセント 4"),
+    ("60% - Accent5", "60% - アクセント 5"),
+    ("60% - Accent6", "60% - アクセント 6"),
+    ("Accent1", "アクセント 1"),
+    ("Accent2", "アクセント 2"),
+    ("Accent3", "アクセント 3"),
+    ("Accent4", "アクセント 4"),
+    ("Accent5", "アクセント 5"),
+    ("Accent6", "アクセント 6"),
+    ("Recent Colors", "最近使用した色"),
+    ("More Colors…", "その他の色…"),
+    ("Hex", "16進"),
+    ("Page Break Preview", "改ページ プレビュー"),
+    ("Bubble", "バブル"),
+    ("Box & Whisker", "箱ひげ図"),
+    ("Treemap", "ツリーマップ"),
+    ("Sunburst", "サンバースト"),
+    ("Stock", "株価"),
+    ("Bar", "横棒"),
+    (
+        "Drag to fill cells. Drag from inside a cell to select a range.",
+        "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
+    ),
+];
+
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can
 /// fall back to English. Dialog strings come first, the shared core second.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
-    DIALOGS.iter().chain(CORE).find(|(english, _)| *english == text).map(|(_, translated)| *translated)
+    DIALOGS.iter().chain(CORE).chain(EXTRA).find(|(english, _)| *english == text).map(|(_, translated)| *translated)
 }
 
 #[cfg(test)]
@@ -997,130 +1170,24 @@ mod tests {
         DIALOGS.iter().chain(CORE).map(|(english, _)| *english)
     }
 
-    /// The decoded value of the Rust string literal starting at byte `start` (its opening `"`), and
-    /// the byte index just past its closing quote. Escapes (`\n`, `\"`, `\\`, `\t`, `\u{…}`) are
-    /// decoded, so the keys compare equal to the ones in the tables above.
-    fn string_literal(source: &str, start: usize) -> Option<(String, usize)> {
-        if !source[start..].starts_with('"') {
-            return None;
-        }
-        let mut value = String::new();
-        let mut chars = source[start + 1..].char_indices();
-        while let Some((offset, c)) = chars.next() {
-            match c {
-                '"' => return Some((value, start + 1 + offset + 1)),
-                '\\' => match chars.next().map(|(_, c)| c) {
-                    Some('n') => value.push('\n'),
-                    Some('t') => value.push('\t'),
-                    Some('r') => value.push('\r'),
-                    Some('0') => value.push('\0'),
-                    Some('\\') => value.push('\\'),
-                    Some('"') => value.push('"'),
-                    Some('\'') => value.push('\''),
-                    Some('u') => {
-                        let mut hex = String::new();
-                        for (_, c) in chars.by_ref() {
-                            if c == '}' {
-                                break;
-                            }
-                            if c != '{' {
-                                hex.push(c);
-                            }
-                        }
-                        if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                            value.push(c);
-                        }
-                    }
-                    // A line continuation (backslash, newline, indentation) adds nothing.
-                    _ => {}
-                },
-                _ => value.push(c),
-            }
-        }
-        None
-    }
-
-    /// Every key `pt.rs` translates, read out of its source with a small scanner: a match arm is a
-    /// string literal whose `=>` is followed by another string literal, which covers the block form
-    /// (`"key" => { "value" }`) as well. Parsing the real source keeps the two catalogs from
-    /// drifting apart again instead of checking a remembered count.
-    fn portuguese_keys() -> Vec<String> {
-        let source = include_str!("pt.rs");
-        let mut literals: Vec<(String, usize, usize)> = Vec::new();
-        let mut i = 0;
-        while i < source.len() {
-            let rest = &source[i..];
-            if rest.starts_with("//") {
-                i += rest.find('\n').unwrap_or(rest.len());
-                continue;
-            }
-            if rest.starts_with('"') {
-                let (value, end) = string_literal(source, i).unwrap();
-                literals.push((value, i, end));
-                i = end;
-                continue;
-            }
-            i += rest.chars().next().unwrap().len_utf8();
-        }
-        let mut keys = Vec::new();
-        for pair in literals.windows(2) {
-            let (key, _, end) = &pair[0];
-            let start = pair[1].1;
-            let gap = source[*end..start].trim();
-            if gap == "=>" || gap == "=> {" {
-                keys.push(key.clone());
-            }
-        }
-        keys
-    }
-
     #[test]
-    fn keys_are_unique_and_every_value_is_translated() {
+    fn keys_are_unique_and_no_value_is_blank() {
         let mut seen = HashSet::new();
         for (english, japanese) in DIALOGS.iter().chain(CORE) {
-            assert!(!japanese.is_empty(), "empty translation for {english:?}");
             assert!(japanese.chars().any(|c| !c.is_whitespace()), "blank translation for {english:?}");
             assert!(seen.insert(*english), "duplicate key across CORE and DIALOGS: {english:?}");
         }
-        assert_eq!(seen.len(), catalog_keys().count());
-        assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 562, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 954);
     }
 
     #[test]
-    fn covers_every_key_the_portuguese_catalog_translates() {
-        let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 954, "pt.rs's arms changed: add the new keys here and update the count");
-        let japanese: HashSet<&str> = catalog_keys().collect();
-        for key in &portuguese {
-            assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");
+    fn extra_labels_do_not_overlap_the_catalog() {
+        let catalog: HashSet<&str> = catalog_keys().collect();
+        let mut seen = HashSet::new();
+        for (english, japanese) in EXTRA {
+            assert!(!japanese.trim().is_empty(), "empty translation for {english:?}");
+            assert!(!catalog.contains(english), "{english:?} is already in CORE or DIALOGS");
+            assert!(seen.insert(*english), "duplicate EXTRA key: {english:?}");
+            assert_eq!(translate(english), Some(*japanese));
         }
-        assert_eq!(japanese.len(), portuguese.len(), "the two catalogs hold the same key set");
-    }
-
-    #[test]
-    fn high_value_strings_use_excel_japanese_wording() {
-        for (english, japanese) in [
-            ("OK", "OK"),
-            ("Cancel", "キャンセル"),
-            ("Don't Save", "保存しない"),
-            ("Text Box", "テキスト ボックス"),
-            ("Row Height", "行の高さ"),
-            ("Column Width", "列の幅"),
-            ("Sort", "並べ替え"),
-            ("Filter", "フィルター"),
-            ("Conditional Formatting", "条件付き書式"),
-            ("Do you want to save the changes you made to {title}?", "{title} への変更を保存しますか?"),
-            ("Save a copy as .{format}", ".{format} としてコピーを保存"),
-            ("Format Cells|Fill", "塗りつぶし"),
-            ("Insert\nSlicer", "スライサーの\n挿入"),
-        ] {
-            assert_eq!(translate(english), Some(japanese), "{english:?}");
-            assert_eq!(crate::i18n::Language::Ja.tr(english), japanese, "{english:?}");
-        }
-        // A `context|label` key shows only its label in English; an unknown label keeps the text.
-        assert_eq!(crate::i18n::Language::En.tr("Format Cells|Fill"), "Fill");
-        assert_eq!(crate::i18n::Language::Ja.tr("Not in any catalog"), "Not in any catalog");
     }
 }

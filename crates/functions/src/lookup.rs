@@ -23,6 +23,19 @@ fn needle(args: &[Arg], i: usize) -> R<Value> {
     }
 }
 
+/// Order of two values for the approximate and binary searches: [`compare`], except that numbers
+/// compare exactly. Excel's `=` treats numbers equal to 15 significant digits as equal, but its
+/// lookups don't. Observed in Excel 365 with A1 holding
+/// `=0.1+0.2` (0.30000000000000004): `A1=0.3` is TRUE, yet `MATCH(0.3,A1,1)` is #N/A because
+/// A1 is larger, and in {0.1;0.2;0.3;A1;0.4} `MATCH(0.3,…,1)` is 3 and `MATCH(A1,…,1)` is 4.
+/// The same holds for `=100+1E-14` against 100, and in every XLOOKUP / XMATCH mode.
+fn lookup_order(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or_else(|| compare(a, b)),
+        _ => compare(a, b),
+    }
+}
+
 fn same_type(a: &Value, b: &Value) -> bool {
     matches!((a, b), (Value::Number(_), Value::Number(_)) | (Value::Text(_), Value::Text(_)) | (Value::Bool(_), Value::Bool(_)))
 }
@@ -59,10 +72,10 @@ fn bsearch_last(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
             continue;
         };
         let v = hay.get(j)?;
-        let o = compare(v, x);
+        let o = lookup_order(v, x);
         if o == Ordering::Equal {
             let mut k = j;
-            while hay.get(k + 1).is_some_and(|w| same_type(x, w) && compare(w, x) == Ordering::Equal) {
+            while hay.get(k + 1).is_some_and(|w| same_type(x, w) && lookup_order(w, x) == Ordering::Equal) {
                 k += 1;
             }
             return Some(k);
@@ -88,8 +101,8 @@ fn bsearch_last(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
 fn binary_order(v: &Value, x: &Value, desc: bool) -> Ordering {
     match v {
         Value::Empty => Ordering::Greater,
-        _ if desc => compare(v, x).reverse(),
-        _ => compare(v, x),
+        _ if desc => lookup_order(v, x).reverse(),
+        _ => lookup_order(v, x),
     }
 }
 
@@ -134,10 +147,11 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
         return Err(*e);
     }
     let idx = num(args, 2)?;
-    if idx < 1.0 {
+    // NaN too: it would pass `idx < 1.0` and become index 0 (#2163).
+    if idx.is_nan() || idx < 1.0 {
         return Err(CellError::Value);
     }
-    let idx = idx.trunc() as usize - 1;
+    let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
     let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
     if idx >= len {
@@ -261,7 +275,7 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
         if !same_type(x, v) {
             continue;
         }
-        let o = compare(v, x);
+        let o = lookup_order(v, x);
         let candidate = if match_mode == -1 { o == Ordering::Less } else { o == Ordering::Greater };
         if !candidate {
             continue;
@@ -269,7 +283,7 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
         let better = match best.and_then(|b| hay.get(b)) {
             None => true,
             Some(bv) => {
-                let c = compare(v, bv);
+                let c = lookup_order(v, bv);
                 if match_mode == -1 { c == Ordering::Greater } else { c == Ordering::Less }
             }
         };
@@ -745,6 +759,44 @@ mod tests {
         close(ev("XMATCH", vec![t("a?c"), av(arr(vec![vec![tv("xyz"), tv("abc")]])), n(2.0)]), 2.0);
         let r = ev("XMATCH", vec![av(row(&[30.0, 10.0])), rf(v)]);
         assert_eq!(rows_of(&r), vec![vec![nv(3.0), nv(1.0)]]);
+    }
+
+    /// Lookups compare numbers exactly, unlike `=` (15 significant digits). Observed in Excel 365.
+    #[test]
+    fn lookups_compare_numbers_exactly() {
+        let e = 0.1 + 0.2;
+        let one = || rf(col(&[e]));
+        // Exact modes miss a key one bit away.
+        is_err(ev("MATCH", vec![n(0.3), one(), n(0.0)]), CellError::NA);
+        is_err(ev("VLOOKUP", vec![n(0.3), one(), n(1.0), b(false)]), CellError::NA);
+        is_err(ev("XMATCH", vec![n(0.3), one()]), CellError::NA);
+        close(ev("MATCH", vec![n(0.3), rf(col(&[e, 0.3])), n(0.0)]), 2.0);
+        close(ev("MATCH", vec![n(e), rf(col(&[e, 0.3])), n(0.0)]), 1.0);
+        is_err(ev("MATCH", vec![n(100.0), rf(col(&[100.0 + 1e-14])), n(0.0)]), CellError::NA);
+        // 0 and -0 are still the same key.
+        close(ev("MATCH", vec![n(-0.0), rf(col(&[0.0])), n(0.0)]), 1.0);
+        // Approximate modes: 0.3 sorts below 0.30000000000000004.
+        is_err(ev("MATCH", vec![n(0.3), one(), n(1.0)]), CellError::NA);
+        close(ev("MATCH", vec![n(0.3), one(), n(-1.0)]), 1.0);
+        is_err(ev("LOOKUP", vec![n(0.3), one()]), CellError::NA);
+        is_err(ev("XMATCH", vec![n(0.3), one(), n(-1.0)]), CellError::NA);
+        close(ev("XMATCH", vec![n(0.3), one(), n(1.0)]), 1.0);
+        // The bisection stops on 0.3 and doesn't run on into the next entry.
+        let list = || rf(col(&[0.1, 0.2, 0.3, e, 0.4]));
+        close(ev("MATCH", vec![n(0.3), list(), n(1.0)]), 3.0);
+        close(ev("MATCH", vec![n(e), list(), n(1.0)]), 4.0);
+        close(ev("XMATCH", vec![n(0.3), list(), n(0.0), n(2.0)]), 3.0);
+        close(ev("XMATCH", vec![n(e), list(), n(0.0), n(2.0)]), 4.0);
+        let asc = || rf(col(&[0.1, e, 0.5]));
+        let desc = || rf(col(&[0.5, e, 0.1]));
+        close(ev("MATCH", vec![n(0.3), asc(), n(1.0)]), 1.0);
+        close(ev("MATCH", vec![n(0.3), desc(), n(-1.0)]), 2.0);
+        is_err(ev("XMATCH", vec![n(0.3), asc(), n(0.0), n(2.0)]), CellError::NA);
+        close(ev("XMATCH", vec![n(0.3), asc(), n(-1.0), n(2.0)]), 1.0);
+        close(ev("XMATCH", vec![n(0.3), asc(), n(1.0), n(2.0)]), 2.0);
+        close(ev("XMATCH", vec![n(0.3), desc(), n(-1.0), n(-2.0)]), 3.0);
+        close(ev("XMATCH", vec![n(0.3), asc(), n(-1.0)]), 1.0);
+        close(ev("XMATCH", vec![n(0.3), asc(), n(1.0)]), 2.0);
     }
 
     #[test]

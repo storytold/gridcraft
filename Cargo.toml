@@ -4,10 +4,10 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.14.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.90"
+rust-version = "1.95"
 repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]
@@ -24,12 +24,19 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+# Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
+# the app) comes from one storytold/craft-libs revision.
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", version = "=0.1.0", features = ["egui"] }
 
 # foundation
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 quick-xml = "0.41"
@@ -41,10 +48,10 @@ sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # ui
-egui = "0.36"
-egui_extras = { version = "0.36", default-features = false }
-eframe = { version = "0.36", default-features = false }
-egui_kittest = "0.36"
+egui = "0.37"
+egui_extras = { version = "0.37", default-features = false }
+eframe = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
 # The desktop's preferred language, for the first-run interface language (native only).
@@ -53,25 +60,49 @@ sys-locale = "0.3"
 # to egui, which panics on a file it can't parse. Same version as epaint's, so no second copy.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
-epaint_default_fonts = "0.36"
+epaint_default_fonts = "0.37"
+# One native window per workbook: the window list, Window menu titles and the immediate-viewport
+# driver. Same craft-libs revision as craft-update above.
+craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", default-features = false, features = ["egui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
-type_complexity = "allow"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 16
 debug = 0
+
+# Keep the complete egui family and native event bridge on reviewed fork commits.
+[patch.crates-io]
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

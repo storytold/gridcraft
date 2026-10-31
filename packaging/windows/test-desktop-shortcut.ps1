@@ -16,7 +16,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUN
 }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'gridcraft-shortcut-smoke' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$InstallDir = Join-Path $env:ProgramFiles 'GridCraft'
+$InstallDir = Join-Path $env:ProgramFiles 'ArtCraft\GridCraft'
 $DesktopLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GridCraft.lnk'
 $StartLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GridCraft.lnk'
 $ChoiceKey = 'HKLM:\Software\GridCraft\Installer'
@@ -65,17 +65,18 @@ function Get-ProductCode([string] $Msi) {
 function Invoke-Msi([string] $Name, [string[]] $Arguments) {
   $log = Join-Path $WorkDir "$Name.log"
   # /norestart is unconditional. Each operation and the workflow have time limits.
-  $process = Start-Process msiexec.exe -ArgumentList ($Arguments + @('/qn', '/norestart', '/l*v', "`"$log`"")) -PassThru
+  # Keep this existing regression on the explicit all-users route, including cross-account removal.
+  $process = Start-Process msiexec.exe -ArgumentList ($Arguments + @('ALLUSERS=1', '/qn', '/norestart', '/l*v', "`"$log`"")) -PassThru
   try {
     if (-not $process.WaitForExit(120000)) {
       $process.Kill()
       throw "$Name exceeded two minutes; see $log"
     }
     if ($process.ExitCode -ne 0) {
-      if (Test-Path $log) { Get-Content $log -Tail 60 | Write-Host }
+      if (Test-Path $log) { Get-Content $log -Tail 60 }
       throw "$Name exited $($process.ExitCode); see $log"
     }
-    Write-Host "ok $Name"
+    Write-Output "ok $Name"
   } finally {
     $process.Dispose()
   }
@@ -146,7 +147,7 @@ function Uninstall-AsSystem($Package) {
       $info = Get-ScheduledTaskInfo -TaskName $taskName
       if ($info.LastRunTime -ge $started.AddSeconds(-1) -and $task.State -ne 'Running' -and $info.LastTaskResult -ne 267009) {
         Assert-That ($info.LastTaskResult -eq 0) "Cross-account uninstall failed with $($info.LastTaskResult); see $log"
-        Write-Host 'ok uninstall-as-system'
+        Write-Output 'ok uninstall-as-system'
         return
       }
     } while ((Get-Date) -lt $deadline)
