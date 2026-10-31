@@ -119,6 +119,8 @@ fn no_block_several_blocks_or_unlabeled_data_keep_the_error() {
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["Ann", null]]})).unwrap();
     assert!(source_from(&mut s, "B2:C3").unwrap_err().contains(ERR));
+    // So is a selection of several areas whose last one is a single blank cell.
+    assert!(source_from(&mut s, "G5:H8,D9").unwrap_err().contains(ERR));
     assert_eq!(source_from(&mut s, "D9").unwrap(), "Sheet1!$A$1:$B$2");
     // One block whose first row leaves a column without a label, or labels it with spaces.
     for label in ["", "  "] {
