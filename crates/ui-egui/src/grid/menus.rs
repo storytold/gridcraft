@@ -336,6 +336,26 @@ pub(super) fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo,
     }
 }
 
+/// The Quick Analysis button beside a selected range of several cells (Excel for Windows shows it
+/// at the bottom-right corner), when nothing else owns the pointer or the keyboard.
+pub(super) fn quick_analysis_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
+    if app.editor.is_some() || app.dialog.is_some() || app.grid.drag != Drag::None || app.grid.fill_tag.is_some() {
+        return;
+    }
+    let Some(range) = app.session.active().and_then(|d| match d.selection.ranges.as_slice() {
+        [r] if r.start != r.end => Some(*r),
+        _ => None,
+    }) else {
+        return;
+    };
+    let corner = geo.range_rect(sh, range).right_bottom();
+    let button = geo.mirror_rect(Rect::from_min_size(corner + vec2(2.0, 2.0), vec2(22.0, 22.0)));
+    if !geo.mirror_rect(geo.cells).contains_rect(button) {
+        return;
+    }
+    crate::quick_analysis::button(app, ui, button.min - vec2(2.0, 2.0));
+}
+
 /// The menu a right-drag of the fill handle opens on release, as in Excel.
 pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((src, target, at)) = app.grid.fill_menu else { return };
