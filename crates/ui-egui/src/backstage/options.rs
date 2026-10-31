@@ -1,10 +1,11 @@
-use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
+use super::{Key, Language, Modifiers, RichText, SheetApp, Tokens, Ui, dim, i18n, json, section, theme, vec2};
 
-/// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
-/// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
-/// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
-/// settings are saved with the workbook.
+/// Excel's File › Options page: General (display theme, interface language, Show formula bar, and
+/// the font, font size and number of sheets of new workbooks), Editing (AutoComplete) and Save (the
+/// autosave checkbox toggling `app.ui.autosave`), plus Formulas (calculation mode and iterative
+/// calculation) when a document is active. Theme, language, formula bar, new-workbook, AutoComplete
+/// and calculation changes run their commands through `run_or_alert`; calculation settings are
+/// saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
@@ -14,6 +15,8 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
+    ui.add_space(14.0);
+    new_workbook_options(app, ui, lang);
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
@@ -73,6 +76,79 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .labelled_by(label.id);
         ui.end_row();
     });
+}
+
+/// The font sizes the Font size list offers, as the Home tab's size list does.
+const FONT_SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
+
+/// The font, font size and number of sheets of new workbooks (`options.newWorkbooks`). The next
+/// new workbook takes a change at once; open workbooks keep their own font.
+fn new_workbook_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(lang.tr("New workbooks")).font(theme::ui_bold(13.0)).color(t.text));
+    ui.add_space(6.0);
+    let font = app.session.prefs.new_workbook_font();
+    let sheets = app.session.prefs.new_workbook_sheets();
+    egui::Grid::new("backstage_options_new_workbooks").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        let label = ui.label(lang.tr("Use this as the default font"));
+        // The Home tab's standard fonts first, then the installed ones, as Format Cells lists them.
+        craft_ui::ComboBox::from_id_salt("backstage_default_font")
+            .width(200.0)
+            .selected_text(font.name.as_str())
+            .show_ui(ui, |ui| {
+                for name in crate::fonts::families() {
+                    if ui.selectable_label(name == font.name, name.as_str()).clicked() && name != font.name {
+                        app.run_or_alert("options.newWorkbooks", json!({"font": name}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(lang.tr("Font size"));
+        craft_ui::ComboBox::from_id_salt("backstage_default_font_size")
+            .width(80.0)
+            .selected_text(size_text(font.size))
+            .show_ui(ui, |ui| {
+                for size in FONT_SIZES {
+                    if ui.selectable_label(size == font.size, size_text(size)).clicked() && size != font.size {
+                        app.run_or_alert("options.newWorkbooks", json!({"fontSize": size}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(lang.tr("Include this many sheets"));
+        let id = ui.make_persistent_id("backstage_new_workbook_sheets");
+        let committed = crate::widgets::committed_text(ui, id, &sheets.to_string(), Some(80.0));
+        if let Some(response) = ui.ctx().read_response(id) {
+            response.labelled_by(label.id);
+        }
+        if let Some(text) = committed {
+            match parse_sheets(&text) {
+                Some(n) if n != sheets => {
+                    app.run_or_alert("options.newWorkbooks", json!({"sheets": n}));
+                }
+                Some(_) => {}
+                None => refuse(app, ui, "The number of sheets must be a whole number from 1 to 255."),
+            }
+        }
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+    dim(ui, lang.tr("These settings apply to workbooks created from now on."));
+}
+
+/// A font size as the size boxes show it: `11`, `10.5`.
+fn size_text(size: f32) -> String {
+    if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") }
+}
+
+/// Include this many sheets as typed: a whole number from 1 to 255, or `None`.
+fn parse_sheets(text: &str) -> Option<usize> {
+    let n = text.trim().parse::<usize>().ok()?;
+    (1..=gridcraft_engine::cmd::file::MAX_NEW_SHEETS).contains(&n).then_some(n)
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.

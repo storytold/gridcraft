@@ -21,9 +21,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, options.newWorkbooks, view.theme, app.language.set)",
             always,
             options
+        ),
+        cmd!(
+            query "options.newWorkbooks",
+            "New Workbook Defaults",
+            [],
+            None,
+            "{font?: name (1–31 characters), fontSize?: 1..409 (points, rounded to half points), sheets?: 1..255} → {font, fontSize, sheets}: the Normal style's font and size, and the number of sheets, of every workbook File › New makes from now on (a preference kept in prefs.json, not in a workbook; open workbooks keep their own font); {} only reports them",
+            always,
+            new_workbooks
         ),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
         cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
@@ -233,6 +242,68 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
         json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
     });
     Ok(json!({"calculation": calculation}))
+}
+
+/// The font sizes, in points, `options.newWorkbooks` takes for new workbooks (as Font Size takes them).
+pub const DEFAULT_FONT_SIZES: std::ops::RangeInclusive<f32> = 1.0..=409.0;
+/// The longest font name, in characters, `options.newWorkbooks` takes: Excel's limit for a font name.
+pub const MAX_FONT_NAME: usize = 31;
+/// The most sheets a new workbook can have.
+pub const MAX_NEW_SHEETS: usize = 255;
+
+/// Whether `name` (trimmed) can be the default font of new workbooks: 1 to [`MAX_FONT_NAME`]
+/// characters, none of them a control character.
+pub fn font_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= MAX_FONT_NAME && !name.chars().any(char::is_control)
+}
+
+/// File › Options › General, for new workbooks: the font and size of the Normal style each
+/// workbook File › New makes, and its number of sheets. They are preferences, so open workbooks
+/// keep their own Normal style; the next new workbook takes a change at once. Every value is
+/// checked before any is kept: a refused call changes nothing.
+fn new_workbooks(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "options.newWorkbooks";
+    let given = |key: &str| p.get(key).filter(|v| !v.is_null());
+    let font = match given("font") {
+        Some(v) => Some(
+            v.as_str()
+                .map(str::trim)
+                .filter(|name| font_name_ok(name))
+                .ok_or_else(|| bad(ID, format!("`font` must be a font name of 1 to {MAX_FONT_NAME} characters")))?
+                .to_string(),
+        ),
+        None => None,
+    };
+    let size = match given("fontSize") {
+        // Whole and half points, as Font Size keeps them.
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|n| DEFAULT_FONT_SIZES.contains(&(*n as f32)))
+                .map(|n| ((n * 2.0).round() / 2.0) as f32)
+                .ok_or_else(|| bad(ID, "`fontSize` must be a number from 1 to 409"))?,
+        ),
+        None => None,
+    };
+    let sheets = match given("sheets") {
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|n| n.fract() == 0.0 && (1.0..=MAX_NEW_SHEETS as f64).contains(n))
+                .map(|n| n as usize)
+                .ok_or_else(|| bad(ID, format!("`sheets` must be a whole number from 1 to {MAX_NEW_SHEETS}")))?,
+        ),
+        None => None,
+    };
+    if let Some(font) = font {
+        s.prefs.default_font = font;
+    }
+    if let Some(size) = size {
+        s.prefs.default_font_size = size;
+    }
+    if let Some(sheets) = sheets {
+        s.prefs.sheets_in_new_workbook = sheets;
+    }
+    let font = s.prefs.new_workbook_font();
+    Ok(json!({"font": font.name, "fontSize": font.size, "sheets": s.prefs.new_workbook_sheets()}))
 }
 
 fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {

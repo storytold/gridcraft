@@ -380,8 +380,11 @@ pub struct Prefs {
     pub enter_direction: String,
     pub autocomplete: bool,
     pub user_name: String,
+    /// The Normal style's font of a new workbook (File › Options › General, `options.newWorkbooks`).
     pub default_font: String,
+    /// The Normal style's font size of a new workbook, in points.
     pub default_font_size: f32,
+    /// How many sheets a new workbook has.
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
@@ -408,6 +411,23 @@ pub struct StatusBarStats {
 impl Default for StatusBarStats {
     fn default() -> Self {
         StatusBarStats { average: true, count: true, numerical_count: false, minimum: false, maximum: false, sum: true }
+    }
+}
+
+impl Prefs {
+    /// The Normal font of a new workbook: `default_font` at `default_font_size`. A name or size
+    /// `options.newWorkbooks` would refuse (a prefs.json edited by hand) gives Calibri or 11 instead.
+    pub fn new_workbook_font(&self) -> gridcraft_model::Font {
+        let name = self.default_font.trim();
+        let name = if cmd::file::font_name_ok(name) { name } else { gridcraft_model::DEFAULT_FONT };
+        let size = self.default_font_size;
+        let size = if cmd::file::DEFAULT_FONT_SIZES.contains(&size) { size } else { gridcraft_model::DEFAULT_FONT_SIZE };
+        gridcraft_model::Font { name: name.into(), size, ..gridcraft_model::Font::default() }
+    }
+
+    /// How many sheets a new workbook has: `sheets_in_new_workbook`, kept to 1–255.
+    pub fn new_workbook_sheets(&self) -> usize {
+        self.sheets_in_new_workbook.clamp(1, cmd::file::MAX_NEW_SHEETS)
     }
 }
 
@@ -583,12 +603,15 @@ impl Session {
             }
         }
     }
-    /// A new blank workbook titled `BookN`.
+    /// A new blank workbook titled `BookN`, made as the preferences say: its author, the font and
+    /// size of its Normal style (font 0 in the saved file) and its number of sheets.
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
         wb.props.author = self.prefs.user_name.clone();
-        for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
+        let normal = gridcraft_model::Style { font: self.prefs.new_workbook_font(), ..gridcraft_model::Style::default() };
+        wb.styles = gridcraft_model::StyleTable::with_default(normal);
+        for _ in 1..self.prefs.new_workbook_sheets() {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }

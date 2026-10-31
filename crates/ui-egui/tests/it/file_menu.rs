@@ -543,6 +543,78 @@ fn options_sets_maximum_iterations_and_change_only_while_iteration_is_on() {
     assert!(h.state().message.is_none());
 }
 
+/// Options › General: the font, font size and number of sheets of new workbooks (#3017). The next
+/// File › New takes them at once; the open workbook keeps its font.
+#[test]
+fn options_sets_the_font_size_and_sheets_of_new_workbooks() {
+    use egui::accesskit::Role;
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1400.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        crate::common::prepare(SheetApp::new(session, Services::default())),
+    );
+    h.run_steps(4);
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let normal = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        let f = &h.state().session.active().unwrap().wb.styles.get(gridcraft_engine::model::StyleId::DEFAULT).font;
+        (f.name.clone(), f.size)
+    };
+    let sheets = |h: &egui_kittest::Harness<'static, SheetApp>| h.get_by_role_and_label(Role::TextInput, "Include this many sheets").rect();
+    let retype = |h: &mut egui_kittest::Harness<'static, SheetApp>, text: &str| {
+        let rect = sheets(h);
+        h.input_mut().events.push(egui::Event::PointerMoved(rect.center()));
+        h.run_steps(1);
+        h.get_by_role_and_label(Role::TextInput, "Include this many sheets").click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        for c in text.chars() {
+            h.input_mut().events.push(egui::Event::Text(c.to_string()));
+            h.run_steps(2);
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+    };
+    let pick = |h: &mut egui_kittest::Harness<'static, SheetApp>, combo: &str, item: &str| {
+        h.get_by_role_and_label(Role::ComboBox, combo).click();
+        h.run_steps(3);
+        h.get_by_label(item).click();
+        h.run_steps(3);
+    };
+
+    // Nothing set: Calibri 11 and one sheet.
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Include this many sheets").value().as_deref(), Some("1"));
+    pick(&mut h, "Use this as the default font", "Arial");
+    pick(&mut h, "Font size", "10");
+    retype(&mut h, "3");
+    let prefs = &h.state().session.prefs;
+    assert_eq!((prefs.default_font.as_str(), prefs.default_font_size, prefs.sheets_in_new_workbook), ("Arial", 10.0, 3));
+    assert!(h.state().message.is_none());
+    assert_eq!(normal(&h), ("Calibri".to_string(), 11.0), "the open workbook keeps its font");
+
+    // Out-of-range counts are refused with a message and change nothing.
+    for bad in ["0", "256", "2.5", "many"] {
+        retype(&mut h, bad);
+        assert_eq!(h.state().session.prefs.sheets_in_new_workbook, 3, "{bad}");
+        assert!(h.state_mut().message.take().is_some(), "{bad} is reported");
+        h.run_steps(2);
+    }
+
+    // File › New takes the settings at once, without a restart.
+    h.state_mut().run_or_alert("file.new", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(normal(&h), ("Arial".to_string(), 10.0));
+    assert_eq!(h.state().session.active().unwrap().wb.sheets.len(), 3);
+    let first = &h.state().session.documents()[0].wb;
+    assert_eq!(first.styles.get(gridcraft_engine::model::StyleId::DEFAULT).font.name, "Calibri");
+}
+
 /// Share › Export as Web Page (and the native File menu's Save as Web Page) asks for a name in its
 /// own dialog. A bare name has no folder: written as typed it lands in the process's working
 /// directory, where nobody looks for it (#1212). The save picker chooses the folder instead.

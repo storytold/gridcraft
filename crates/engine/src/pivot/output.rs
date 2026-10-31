@@ -399,8 +399,10 @@ pub(super) fn look(style: &str) -> Look {
     }
 }
 
-pub(super) fn cell_style(lk: &Look, rk: RowKind, cell: &OutCell, last_header: bool) -> Style {
-    let mut s = Style::default();
+/// A report cell's style: the workbook's Normal style (its font and size) with what the PivotTable style
+/// and the cell's kind add.
+pub(super) fn cell_style(normal: &Style, lk: &Look, rk: RowKind, cell: &OutCell, last_header: bool) -> Style {
+    let mut s = normal.clone();
     match rk {
         RowKind::Header => {
             s.font.bold = true;
