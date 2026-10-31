@@ -180,6 +180,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
@@ -272,6 +273,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
 | 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
