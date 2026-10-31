@@ -15,10 +15,12 @@ fn default_source(s: &Session) -> Result<String> {
         return Ok(t.name.clone());
     }
     let sel = d.selection.current();
+    // The fallbacks below are for one selected cell; several areas keep their earlier source.
+    let one_cell = d.selection.is_single_cell();
     let r = if sel.is_single() {
-        // A blank active cell next to the data adds its own empty row or column to the region.
         let region = current_region(sh, d.selection.active);
-        trim_empty_edges(sh, region).unwrap_or(region)
+        // A blank active cell next to the data adds its own empty row or column to the region.
+        if one_cell { trim_empty_edges(sh, region).unwrap_or(region) } else { region }
     } else {
         let used = sh.used_range().unwrap_or(sel);
         sel.intersection(&used).unwrap_or(sel)
@@ -26,12 +28,12 @@ fn default_source(s: &Session) -> Result<String> {
     if r.is_single() && sh.value(r.start).is_empty() {
         // Away from the data, the sheet's only block of labeled columns is the source (#2764).
         // A selected block stays the user's choice, even where it holds no data.
-        return match only_data_block(&d.wb, sh).filter(|_| d.selection.is_single_cell()) {
+        return match only_data_block(&d.wb, sh).filter(|_| one_cell) {
             Some(block) => Ok(source_text(sh, block)),
             None => Err(other("The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`.")),
         };
     }
-    Ok(if sel.is_single() { source_text(sh, r) } else { pv::range_text(&sh.name, r) })
+    Ok(if one_cell { source_text(sh, r) } else { pv::range_text(&sh.name, r) })
 }
 
 /// The table holding `r`, by name, so the source leaves out its totals row and grows with it;

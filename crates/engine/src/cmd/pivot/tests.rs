@@ -100,6 +100,8 @@ fn blank_active_cell_next_to_the_data_leaves_its_empty_line_out() {
     }
     // Inside the data nothing changes.
     assert_eq!(source_from(&mut s, "C5").unwrap(), "Sheet1!$A$1:$E$13");
+    // Several areas keep the untrimmed region, whose empty column has no field name.
+    assert!(source_from(&mut s, "G20:H25,F1").unwrap_err().contains("field name is not valid"));
 }
 
 #[test]
