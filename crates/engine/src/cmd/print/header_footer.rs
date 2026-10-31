@@ -1,5 +1,5 @@
 use super::layout::SheetLayout;
-use super::{Font, Page, Value, Workbook};
+use super::{Font, Page, Rect, Value, Workbook};
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
 pub(super) const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
@@ -151,6 +151,8 @@ pub struct HfSection {
     pub bold: bool,
     pub italic: bool,
     pub size: Option<f32>,
+    /// Where `&G` puts the section's picture: a char index into `text` (the first `&G` only).
+    pub picture: Option<usize>,
 }
 
 /// Expands a header/footer string into its left, centre and right sections.
@@ -217,7 +219,12 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
                     sec.size = Some(v.clamp(1.0, 409.0));
                 }
             }
-            // Underline, strike, super/subscript, colour, picture: not rendered.
+            'G' | 'g' => {
+                if sec.picture.is_none() {
+                    sec.picture = Some(sec.text.chars().count());
+                }
+            }
+            // Underline, strike, super/subscript, colour: not rendered.
             'K' | 'k' => {
                 i = (i + 6).min(chars.len());
             }
@@ -227,7 +234,68 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
     out
 }
 
-pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
+/// A header or footer picture ready to print: where it goes, its printed size in points (before
+/// Scale with Document) and its decoded RGBA pixels.
+pub(super) struct HfImage {
+    pub page: gridcraft_model::HfPage,
+    pub footer: bool,
+    pub section: usize,
+    pub width: f32,
+    pub height: f32,
+    pub rgba: Vec<u8>,
+    pub pixels: [u32; 2],
+}
+
+/// Largest header/footer picture decoded, in bytes of the encoded file and in pixels.
+const HF_MAX_BYTES: usize = 16 * 1024 * 1024;
+const HF_MAX_SIDE_PX: u32 = 8192;
+
+/// Decodes the header and footer pictures a sheet keeps (#1257), once per print. Pictures that
+/// can't be decoded within the limits are left out, as if their `&G` weren't there.
+pub(super) fn hf_images(sh: &gridcraft_model::Sheet, scale: f32) -> Vec<HfImage> {
+    let Some(kept) = sh.preserved.as_deref() else { return vec![] };
+    gridcraft_xlsx::header_footer_pictures(kept)
+        .into_iter()
+        .filter_map(|p| {
+            // About 150 dpi at the printed size is plenty.
+            let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
+            let (rgba, w, h) = decode_limited(&p.data, px(p.width), px(p.height))?;
+            Some(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, rgba, pixels: [w, h] })
+        })
+        .collect()
+}
+
+/// Decodes an encoded picture to RGBA within fixed limits, downscaled to at most `max_w`×`max_h`.
+fn decode_limited(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+    if data.len() > HF_MAX_BYTES {
+        return None;
+    }
+    let (iw, ih) = crate::io::image_size(data)?;
+    if iw == 0 || ih == 0 || iw > HF_MAX_SIDE_PX || ih > HF_MAX_SIDE_PX || u64::from(iw) * u64::from(ih) > 16_000_000 {
+        return None;
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(HF_MAX_SIDE_PX);
+    limits.max_image_height = Some(HF_MAX_SIDE_PX);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
+    let img = if img.width() > max_w.max(1) || img.height() > max_h.max(1) { img.thumbnail(max_w.max(1), max_h.max(1)) } else { img };
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    Some((rgba.into_raw(), w, h))
+}
+
+/// One line of a section: its text around the picture (all of it in `before` when the line has
+/// none) and the picture's printed size.
+struct HfLine<'a> {
+    before: String,
+    after: String,
+    picture: Option<(&'a HfImage, f32, f32)>,
+}
+
+pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext, images: &[HfImage]) {
     let [_, _, _, _, hm, fm] = lay.margins;
     let (l, r) = lay.hf_sides();
     let text_scale = lay.hf_text_scale();
@@ -239,23 +307,60 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
         }
         let secs = expand_header_footer(spec, cx);
         for (i, sec) in secs.iter().enumerate() {
-            if sec.text.trim().is_empty() {
+            let image = sec.picture.and_then(|_| images.iter().find(|im| im.page == which && im.footer == !header && im.section == i));
+            if sec.text.trim().is_empty() && image.is_none() {
                 continue;
             }
             let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
-            let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
-            let n = lines.len() as f32;
-            for (j, line) in lines.iter().enumerate() {
-                let lw = gridcraft_pdf::text_width(font, size, line);
+            let lines = section_lines(sec, image, text_scale);
+            // Text sits this far above the bottom of its line (as it always has).
+            let descent = if header { 0.4 } else { 0.22 } * size;
+            let line_h = |ln: &HfLine<'_>| ln.picture.map_or(size * 1.2, |(_, _, h)| h.max(size * 1.2));
+            let total: f32 = lines.iter().map(line_h).sum();
+            // Headers grow down from the header margin, footers up from the footer margin.
+            let mut top = if header { hm } else { ph - fm - total };
+            for ln in &lines {
+                let lh = line_h(ln);
+                let bw = gridcraft_pdf::text_width(font, size, &ln.before);
+                let pic_w = ln.picture.map_or(0.0, |(_, w, _)| w);
+                let lw = bw + pic_w + if ln.after.is_empty() { 0.0 } else { gridcraft_pdf::text_width(font, size, &ln.after) };
                 let x = match i {
                     0 => l,
                     1 => (pw - lw) / 2.0,
                     _ => pw - r - lw,
                 };
-                let y = if header { hm + size * 0.8 + j as f32 * size * 1.2 } else { ph - fm - size * 0.22 - (n - 1.0 - j as f32) * size * 1.2 };
-                pg.text(x, y, size, font, [0, 0, 0], line);
+                let base = top + lh - descent;
+                if !ln.before.is_empty() {
+                    pg.text(x, base, size, font, [0, 0, 0], &ln.before);
+                }
+                if let Some((im, w, h)) = ln.picture {
+                    pg.image_rgba(Rect::new(x + bw, top + lh - h, w, h), &im.rgba, im.pixels);
+                }
+                if !ln.after.is_empty() {
+                    pg.text(x + bw + pic_w, base, size, font, [0, 0, 0], &ln.after);
+                }
+                top += lh;
             }
         }
     }
+}
+
+/// A section's lines (at most 20), with the picture on the line where its `&G` was.
+fn section_lines<'a>(sec: &HfSection, image: Option<&'a HfImage>, scale: f32) -> Vec<HfLine<'a>> {
+    let mut start = 0usize;
+    let mut out = vec![];
+    for line in sec.text.split('\n').take(20) {
+        let n = line.chars().count();
+        let at = sec.picture.filter(|p| *p >= start && *p <= start + n).map(|p| p - start);
+        match (at, image) {
+            (Some(k), Some(im)) => {
+                let (b, a) = line.split_at(line.char_indices().nth(k).map_or(line.len(), |(j, _)| j));
+                out.push(HfLine { before: b.to_string(), after: a.to_string(), picture: Some((im, im.width * scale, im.height * scale)) });
+            }
+            _ => out.push(HfLine { before: line.to_string(), after: String::new(), picture: None }),
+        }
+        start += n + 1;
+    }
+    out
 }
