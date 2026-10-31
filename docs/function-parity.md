@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-27 · **Change:** minor (ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals, and the other IM* differences from Excel are listed; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -98,6 +98,12 @@ This improves series preparation; it does not change the model-fitting or season
 
 ## Depth (estimated)
 
+| Function | Excel parity note |
+|---|---|
+| BINOM.DIST / BINOM.DIST.RANGE | Trial count is truncated, then must be at most 2,147,483,646; larger trials return `#NUM!`. |
+| BETA.DIST | Density mode returns `#NUM!` at the lower or upper interval endpoint when the corresponding shape parameter is less than or equal to 1; cumulative endpoint results remain 0 and 1. |
+| HARMEAN | Returns `#N/A` when arrays and references contain no numeric observations; zero and negative numeric observations still return `#NUM!`. |
+
 **~82% ready.** The library is broad and has 96 test functions in `crates/functions` with many
 assertions each, but there is no conformance suite against Excel-computed results, and user
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
@@ -124,6 +130,23 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
+| 2026-10-31 | minor | DEC2BIN, DEC2HEX and DEC2OCT validate `places` before returning negative two's-complement output, and Boolean places return `#VALUE!`, matching Excel |
+| 2026-10-31 | minor | BITLSHIFT and BITRSHIFT return `0` for zero operands shifted beyond 53 bits in either direction; nonzero operands retain the `#NUM!` limit, matching Excel |
+| 2026-10-31 | minor | UNICHAR returns `#N/A` for U+FDD0–U+FDEF and U+FFFE/U+FFFF on every plane; adjacent valid characters and existing invalid-range/surrogate errors remain unchanged, matching Excel |
+| 2026-10-31 | minor | UPPER, LOWER and PROPER use single-character casing: `UPPER("Straße")` keeps ß, `LOWER("İ")` returns i, and `PROPER("İSTANBUL")` returns Istanbul, matching Windows Excel 16.0 build 20527 in LCID 1033 |
+| 2026-10-31 | minor | FIXED and DOLLAR format the rounded number's shortest decimal representation before padding requested fractional zeroes, so 1.1 at 16 places and 1.005 at 20 places do not expose binary noise; measured in Windows Excel 16.0 build 20527, LCID 1033 |
+| 2026-10-31 | minor | FIXED accepts output through 255 characters; DOLLAR accepts output through 254. Windows Excel 16.0 build 20527 (LCID 1033) confirmed the distinct cutoffs with grouped and ungrouped values, signs, currency layout and decimal places |
+| 2026-10-31 | minor | DOLLAR uses the input sign for negative amounts that round to zero at nonnegative decimal places (`DOLLAR(-0.0001,0)` is `($0)`); when negative decimal places round to zero, Excel returns `$0`. Exact zero and negative zero stay unsigned; FIXED still returns `0` for `FIXED(-0.0001,0)` |
+| 2026-10-31 | minor | F.DIST, F.DIST.RT, F.INV and F.INV.RT accept degrees of freedom at the 10-billion boundary; F.INV uses the complementary tail, with a gamma-tail limit when numerator degrees dominate, to preserve inverse accuracy; values above the limit remain invalid |
+| 2026-10-31 | minor | T.DIST returns `#DIV/0!` in density mode and `#NUM!` in cumulative mode when degrees truncate to zero; negative integer degrees remain `#NUM!` |
+| 2026-10-31 | minor | Student-t density uses an asymptotic log-gamma ratio for large degrees of freedom, avoiding cancellation while preserving bounded work; checked against Excel at 100 million and 10 billion degrees |
+| 2026-10-31 | minor | T.INV probability zero returns `#DIV/0!`, while other out-of-range probabilities and invalid degrees remain `#NUM!`; T.INV.2T keeps its separate boundary behavior |
+| 2026-10-31 | minor | GAMMA.DIST density at x=0 and shape 1 returns `#NUM!` for all positive scales; the cumulative branch and other shape boundaries are unchanged |
+| 2026-10-31 | minor | WEIBULL.DIST returns zero at x=0 in both density and cumulative modes, including shape below one; negative x remains `#NUM!` |
+| 2026-10-31 | minor | BINOM.DIST and BINOM.DIST.RANGE reject trial counts above 2,147,483,646 after truncation |
+| 2026-10-31 | minor | BETA.DIST density returns `#NUM!` at the lower endpoint with alpha less than or equal to 1 and upper endpoint with beta less than or equal to 1; cumulative behavior is unchanged |
+| 2026-10-31 | minor | HARMEAN returns `#N/A` when array or reference inputs contain no numbers; nonpositive numeric observations remain `#NUM!` |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
