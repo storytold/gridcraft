@@ -21,12 +21,12 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text), with
-    // any letter after `+`/`-`: localized names may start with one such as `Ü` (`+ÜBERSETZEN(…)`).
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text). German
+    // names may start with a non-ASCII letter after the sign (`+ÜBERSETZEN(…)`); other languages
+    // keep ASCII letters, so Spanish `-Árbol` stays text.
+    let letter = |c: char| if locale == FormulaLocale::De { c.is_alphabetic() } else { c.is_ascii_alphabetic() };
     let body = text;
-    if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
-    {
+    if body.starts_with('=') || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| letter(c) || c == '(')) {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));

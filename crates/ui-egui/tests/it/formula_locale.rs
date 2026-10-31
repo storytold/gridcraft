@@ -262,3 +262,11 @@ fn german_entry_display_and_xlsx_roundtrip() {
     assert!(enter(&mut app, "1,5"));
     assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(1.5));
 }
+
+#[test]
+fn only_german_takes_a_non_ascii_letter_after_a_sign_as_a_formula() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    assert!(enter(&mut app, "-Árbol"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("-Árbol"));
+}
