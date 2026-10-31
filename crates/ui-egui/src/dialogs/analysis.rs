@@ -480,15 +480,20 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         ui.label(egui::RichText::new(note).small());
     }
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let t = crate::theme::Tokens::get(ui.ctx());
-        let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
-        if solve.clicked() && !text(d, "objective").trim().is_empty() {
-            *confirm = true;
-        }
-        if ui.button(" Close ").clicked() {
-            *open = false;
-        }
+    // A row as tall as the buttons (see `ok_cancel`): the Load/Save area and the notes can make
+    // the form shorter, and a right-to-left layout straight in the window would fill what is
+    // left.
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let t = crate::theme::Tokens::get(ui.ctx());
+            let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
+            if solve.clicked() && !text(d, "objective").trim().is_empty() {
+                *confirm = true;
+            }
+            if ui.button(" Close ").clicked() {
+                *open = false;
+            }
+        });
     });
 }
 

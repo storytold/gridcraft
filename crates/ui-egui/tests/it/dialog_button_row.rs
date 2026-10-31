@@ -50,8 +50,13 @@ fn solver_options_buttons_sit_under_the_last_option() {
     // The Solver Parameters' Solve button sits under its last row too.
     h.state_mut().open_dialog("solver", json!({}));
     h.run_steps(4);
-    let last = h.get_by_label("Load/Save").rect();
-    let solve = h.get_by_label("  Solve  ").rect();
-    let gap = solve.top() - last.bottom();
-    assert!((0.0..40.0).contains(&gap), "Solve is {gap} points under the last row");
+    let gap = |h: &egui_kittest::Harness<'_, SheetApp>| h.get_by_label("  Solve  ").rect().top() - h.get_by_label("Load/Save").rect().bottom();
+    let fresh = gap(&h);
+    assert!((0.0..40.0).contains(&fresh), "Solve is {fresh} points under the last row");
+    // It stays there when the form gets shorter again: Load/Save shown, then hidden.
+    for _ in 0..2 {
+        h.get_by_label("Load/Save").click();
+        h.run_steps(4);
+    }
+    assert!((gap(&h) - fresh).abs() < 1.0, "Solve is {} points under the last row, not {fresh}", gap(&h));
 }
