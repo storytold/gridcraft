@@ -99,6 +99,8 @@ impl SheetApp {
         if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
+            } else {
+                self.tab_run = None;
             }
             return true;
         }
@@ -155,6 +157,8 @@ impl SheetApp {
             Ok(_) => {
                 if dr != 0 || dc != 0 {
                     self.move_after_enter(dr, dc);
+                } else {
+                    self.tab_run = None;
                 }
                 self.after_engine();
                 true

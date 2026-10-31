@@ -1226,3 +1226,24 @@ fn sideways_enter_does_not_start_a_tab_run() {
     assert_eq!(value(&h, "D3"), Value::Number(2.0));
     assert_eq!(active(&h), "D4", "the same while typing");
 }
+
+#[test]
+/// Entering a cell with the move off is not a Tab either: a later Enter down must not return to the Tab run's column.
+fn stay_put_enter_ends_a_tab_run() {
+    let mut h = harness(blank());
+    let active = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().selection.active.a1();
+    h.state_mut().session.run("selection.set", json!({"cell": "B2"})).unwrap();
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(active(&h), "D2");
+    h.state_mut().session.run("options.enterDirection", json!({"move": false})).unwrap();
+    h.run_steps(2);
+    text(&mut h, "1");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "D2");
+    h.state_mut().session.run("options.enterDirection", json!({"direction": "down"})).unwrap();
+    h.run_steps(2);
+    text(&mut h, "2");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "D3", "not back to B, where the Tabs started");
+}
