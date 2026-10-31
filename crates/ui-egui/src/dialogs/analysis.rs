@@ -200,13 +200,17 @@ fn solver_options(ui: &mut egui::Ui, d: &mut Dialog, edit: impl Fn(&mut egui::Ui
         d.values.insert("requireBounds".into(), json!(bounds));
     }
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(" Cancel ").clicked() {
-            cancel_solver_options(d);
-        }
-        if ui.button("  OK  ").clicked() {
-            done = true;
-        }
+    // A row as tall as the buttons (see `ok_cancel`): a right-to-left layout straight in the
+    // window takes all the height it is offered.
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Cancel ").clicked() {
+                cancel_solver_options(d);
+            }
+            if ui.button("  OK  ").clicked() {
+                done = true;
+            }
+        });
     });
     if done {
         close_solver_options(d);

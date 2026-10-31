@@ -954,8 +954,10 @@ fn solver_options_go_with_the_solve() {
     let mut h = harness(s);
     h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
     h.run_steps(2);
+    // Switching between the parameters and the options changes the window's height, and it
+    // re-centres over the next frames, so each switch is followed by a few frames.
     h.get_by_label("Options").click();
-    h.run_steps(2);
+    h.run_steps(4);
     assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
     // Cancel keeps the options as they were; OK keeps the edits.
     let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
@@ -963,15 +965,15 @@ fn solver_options_go_with_the_solve() {
     };
     put(&mut h, "maxEvaluations", json!("7"));
     h.get_by_label(" Cancel ").click();
-    h.run_steps(2);
+    h.run_steps(4);
     let d = h.state().dialog.as_ref().unwrap();
     assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
     h.get_by_label("Options").click();
-    h.run_steps(2);
+    h.run_steps(4);
     put(&mut h, "requireBounds", json!(false));
     put(&mut h, "randomSeed", json!("11"));
     h.get_by_label("  OK  ").click();
-    h.run_steps(2);
+    h.run_steps(4);
     h.get_by_label("  Solve  ").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
