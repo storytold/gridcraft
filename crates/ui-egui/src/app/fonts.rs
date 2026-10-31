@@ -78,7 +78,7 @@ impl SheetApp {
             return;
         }
         if self.prepared_fonts {
-            ctx.set_fonts(theme::pinned_font_definitions());
+            theme::install_fonts(ctx, theme::pinned_font_definitions());
             theme::apply(ctx, self.ui.dark);
         } else {
             SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
@@ -104,7 +104,7 @@ impl SheetApp {
         if used == self.fonts_bound {
             return;
         }
-        ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
+        theme::install_fonts(ctx, theme::font_definitions_with(self.ui.language, &used));
         self.fonts_bound = used;
         self.fonts_rebind = true;
         ctx.request_repaint();

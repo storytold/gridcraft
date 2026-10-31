@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (revision-history table placement) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -80,6 +80,7 @@ drawing its own:
   scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
   the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
   `formula_bar::BarLayout` records where its parts went each frame, for tests.
+- **Thai cell line wrapping** (`thai_layout.rs`): ICU4X LSTM `LineSegmenter` supplies break opportunities for committed worksheet cells with Wrap Text enabled. The renderer measures candidate substrings with egui's active font, clips oversized first segments, preserves exact UTF-8 byte ranges without changing workbook text, and falls back when cell or frame work budgets are exhausted. Its global plan LRU is capped at 1,024 entries and an 8 MiB estimate of retained allocations, including HashMap table capacity, keys/strings and shared line slices; this estimate is not process RSS. Keys include Context identity, font family/size/generation, width, zoom, alignment and pixels-per-point. Installing fonts invalidates only that Context's plans, and final galleys reuse egui's per-Context layout cache. Cache hits use borrowed keys and share line plans. After bounded no-progress retries, an unchanged workload uses cached plans or legacy fallback without remeasuring misses; a changed complete pass workload restarts evaluation on the following pass. T1 row heights are explicit, so Thai AutoFit and in-cell editor wrapping remain separate work.
 
 
 ## Engine building blocks for multi-command actions
@@ -155,10 +156,20 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 - XLSX reader builds the whole workbook in memory; no streaming (#175).
 - Unmodelled XLSX parts are not carried through a save.
 
+Workbook saves exclusively create a unique sibling temporary file before writing and replacing
+the destination. Stale temporary files and pre-existing symlinks remain untouched and cannot block
+later saves. Automatic cleanup applies only to the temporary file this save owns; native regular-file
+and Unix symlink collision regressions cover that ownership boundary. Filesystem tests use isolated
+temporary directories with automatic cleanup on both success and assertion failure.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Stabilize Thai cache overflow across external repaints, borrow hit keys and share line plans; isolate snapshot diagnostics |
+| 2026-10-30 | minor | Unique save temporary files, preserved stale paths and isolated portable filesystem regressions |
+| 2026-10-30 | minor | Preserve Thai eligibility, geometry and shared pass budgets in upstream extracted cell/pane functions; describe retained table allocation accounting |
+| 2026-10-26 | minor | Thai cell wrapping: font-generation and DPI cache identity, bounded payload accounting, and explicit T1 scope (AutoFit/editor remain separate) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |

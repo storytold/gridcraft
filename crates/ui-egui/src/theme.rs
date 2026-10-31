@@ -32,6 +32,14 @@ pub use font_setup::{
     chinese_font_loaded, craft_font_scripts, craft_fonts_cover, craft_fonts_loaded, craft_fonts_required, font_definitions,
     font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
+
+/// Installs the active font set and invalidates text layouts measured against the previous set.
+pub fn install_fonts(ctx: &egui::Context, fonts: FontDefinitions) {
+    crate::thai_layout::install_frame_budget_finalizer(ctx);
+    ctx.set_fonts(fonts);
+    crate::thai_layout::bump_font_generation(ctx);
+}
+
 #[cfg(test)]
 use font_setup::{candidates, craft_font_faces, try_load};
 #[cfg(test)]
