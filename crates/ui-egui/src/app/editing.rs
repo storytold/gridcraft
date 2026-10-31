@@ -125,6 +125,14 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
+        let cmd = if fill_selection { "range.fill" } else { "cell.set" };
+        let target = if fill_selection { None } else { Some(gridcraft_engine::core::RangeRef::cell(ed.cell)) };
+        if let Some(why) = crate::ask_agent::held_for(self, cmd, target) {
+            self.toast = Some((why, now_ms()));
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
         // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
         if self.session.active().is_some_and(|d| d.wb.active_sheet() != ed.sheet)
             && let Err(e) = self.session.run("sheet.activate", json!({"sheet": ed.sheet}))

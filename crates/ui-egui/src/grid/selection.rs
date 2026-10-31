@@ -92,6 +92,12 @@ pub(crate) struct SelectionPaintInput<'a> {
 
 pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
+    // Ask Agent: cells an agent is working on, outlined in its colour.
+    for (sheet, range, [r, g, b]) in crate::ask_agent::held_ranges(app) {
+        if sheet == sh.name && range_in_pane(range, rows, cols) {
+            p.rect_stroke(geo.range_rect(sh, range), 0.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(r, g, b)), egui::StrokeKind::Inside);
+        }
+    }
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
         p.rect_filled(rect, 0.0, t.sel_fill);

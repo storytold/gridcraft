@@ -70,6 +70,8 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `agent.listen` | `{timeoutMs?, agent?}` | Wait for an Ask Agent request (`{id, instruction, selection, ...}`) |
+| `agent.reply` | `{id, text, done?, error?}` | Progress note or final answer for an Ask Agent request |
 
 ### Screenshot budgets
 
@@ -141,3 +143,11 @@ rejected without changing earlier settings. `ui.printSubmit` explicitly submits 
 print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
 and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
 GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+
+## Ask Agent
+
+Desktop Ask Agent hands selected cells and an instruction to an external agent over authenticated control.
+- `agent.listen {timeoutMs?, agent?}` claims the oldest waiting request or returns `{"none": true}`.
+- `agent.reply {id, text, done?, error?}` sends progress notes (`done: false`) or a final answer (`done: true`).
+- The agent edits with standard commands tagged with `request`. All edits form ONE undo group in the app.
+- Only the connection that claimed the request may edit while it is open (`NOT_OWNER`).

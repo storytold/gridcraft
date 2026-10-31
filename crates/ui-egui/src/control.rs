@@ -15,6 +15,9 @@
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//!
+//! Ask Agent's `agent.listen` / `agent.reply` are answered by the host's transport from
+//! [`crate::ask_agent::AgentHub`], never here on the UI thread.
 
 use std::sync::mpsc::Sender;
 
@@ -97,8 +100,13 @@ fn wrap(r: Result<Json, String>) -> Outcome {
 
 /// Runs a command for an agent. Commands that move the selection scroll the active cell into
 /// view, as the Go To dialog, the Name Box and the arrow keys do.
-fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
-    let r = app.run(id, params);
+fn run(app: &mut SheetApp, id: &str, params: Json, context: &Json) -> Result<Json, String> {
+    let r = if let Some(request) = context.get("request").and_then(Json::as_u64) {
+        let conn = context.get("_agentConnection").and_then(Json::as_u64).ok_or("Ask Agent commands need an authenticated connection")?;
+        crate::ask_agent::run_for(app, conn, request, id, params)
+    } else {
+        app.run(id, params)
+    };
     if r.is_ok() && matches!(id, "edit.goTo" | "edit.goToSpecial" | "selection.set" | "selection.move") {
         app.grid.ensure_visible = true;
     }
@@ -107,9 +115,9 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
 
 /// [`run`] in another window (`window` or `doc` from the request), bringing back the active
 /// window afterwards unless the command itself switched windows.
-fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
+fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json, context: &Json) -> Result<Json, String> {
     let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
-    let r = run(app, id, params);
+    let r = run(app, id, params, context);
     app.session.leave_target(guard);
     r
 }
@@ -129,10 +137,14 @@ fn direct(app: &mut SheetApp, id: &str, p: &Json, via_app: bool) -> Result<Json,
         t
     };
     if via_app {
-        return run_in(app, target, id, params);
+        return run_in(app, target, id, params, p);
     }
     let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
-    let r = app.session.run(id, params);
+    let r = if let (Some(request), Some(conn)) = (p.get("request").and_then(Json::as_u64), p.get("_agentConnection").and_then(Json::as_u64)) {
+        crate::ask_agent::read_for(app, conn, request, id, params)
+    } else {
+        app.session.run(id, params)
+    };
     app.session.leave_target(guard);
     r
 }
@@ -156,6 +168,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "windows": app.session.window_list(),
         "activeWindow": app.session.active_window(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
+        "askAgent": app.ask_agent.inspect(),
     })
 }
 
@@ -175,6 +188,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let out = match method {
+        "ui.askAgent" => wrap(crate::ask_agent::command(app, p)),
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
@@ -182,7 +196,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 Ok(t) => t,
                 Err(e) => return err(e),
             };
-            wrap(run_in(app, target, id, if params.is_null() { json!({}) } else { params }))
+            wrap(run_in(app, target, id, if params.is_null() { json!({}) } else { params }, p))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -212,6 +226,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                ("ui.askAgent", "Ask Agent", "{} opens bubble; {instruction: text} queues request; {close: true}"),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }

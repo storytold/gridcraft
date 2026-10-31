@@ -1004,6 +1004,22 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
 /// Portuguese catalog has no entry for them either). Kept apart so the two catalogs above keep the
 /// same key set; it never overlaps them.
 pub(super) const EXTRA: &[(&str, &str)] = &[
+    ("Ask Agent", "エージェントに依頼"),
+    ("Ask Agent…", "エージェントに依頼…"),
+    ("Ask\nAgent", "エージェント\nに依頼"),
+    ("Waiting for an agent…", "エージェントを待っています…"),
+    ("Working on it…", "作業中…"),
+    ("Reply to refine…", "返信して調整…"),
+    ("What should the agent do?", "エージェントに何をしてもらいますか?"),
+    ("Send", "送信"),
+    ("Any", "指定なし"),
+    ("Conversation", "会話"),
+    ("You", "あなた"),
+    ("Agent", "エージェント"),
+    ("Current instruction", "現在の指示"),
+    ("Undo all of the agent's edits", "エージェントの編集をすべて元に戻す"),
+    ("Actions", "アクション"),
+    ("Choose a starting instruction, then edit and send", "最初の指示を選択し、編集して送信"),
     ("Cut (⌘X)", "切り取り (⌘X)"),
     ("Copy (⌘C)", "コピー (⌘C)"),
     ("Bold (⌘B)", "太字 (⌘B)"),

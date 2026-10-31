@@ -160,6 +160,9 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 items.insert(i + 1, ("-", ""));
                 items.insert(i + 2, ("Show Details", "pivot.showDetails"));
             }
+            if app.ask_agent.hub.is_some() {
+                items.extend([("-", ""), ("Ask Agent…", "ui:askAgent")]);
+            }
             let lang = crate::i18n::current(ui.ctx());
             for (label, id) in items {
                 if label == "-" {
@@ -178,6 +181,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                        "ui:askAgent" => crate::ask_agent::open_from_ui(app),
                         "ui:pickList" => app.open_dialog("pickList", json!({})),
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
