@@ -4092,6 +4092,66 @@ fn sort_and_remove_duplicates_move_the_rows_notes_and_links() {
     assert!(notes.iter().all(Option::is_none), "a note on a removed row goes with it: {notes:?}");
 }
 
+/// Excel sorts merged cells only when identical merged blocks tile the whole range (observed in
+/// Excel: a mix of merged and unmerged cells, merges of different sizes, or a merge sticking out
+/// of the range all give "To do this, all the merged cells need to be the same size."). The
+/// blocks move as units, with their notes and hyperlinks, and the merges stay where they are.
+#[test]
+fn sort_moves_identical_merged_blocks_and_refuses_anything_else() {
+    let merges = |s: &Session| {
+        let mut m: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+        m.sort();
+        m
+    };
+    // Every row merged A:B, sorted on A: whole rows of blocks move, merges are unchanged.
+    let mut s = s();
+    for (i, t) in ["d", "b", "c", "a"].iter().enumerate() {
+        s.execute("cell.set", json!({"cell": format!("A{}", i + 1), "input": t})).unwrap();
+        s.execute("home.mergeCells", json!({"range": format!("A{0}:B{0}", i + 1)})).unwrap();
+    }
+    s.execute("review.newNote", json!({"cell": "A1", "text": "nd", "author": "Example"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A2", "target": "https://example.com/b"})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:B4", "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(["A1", "A2", "A3", "A4"].map(|c| v(&s, c)), ["a", "b", "c", "d"].map(Value::text));
+    assert_eq!(merges(&s), ["A1:B1", "A2:B2", "A3:B3", "A4:B4"]);
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.comments.get(&CellRef::parse("A4").unwrap()).map(|m| m.text.as_str()), Some("nd"));
+    assert!(sh.hyperlinks.contains_key(&CellRef::parse("A2").unwrap()));
+    assert!(!sh.hyperlinks.contains_key(&CellRef::parse("A1").unwrap()));
+
+    // Two-row merges sort as blocks of two rows.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "d"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "b"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A3:A4"})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("b"));
+    assert_eq!(v(&s, "A3"), Value::text("d"));
+    assert_eq!(merges(&s), ["A1:A2", "A3:A4"]);
+
+    // Same-size merges that do not cover the whole range (column C is unmerged), one merged row
+    // among unmerged ones, and a merge covering only part of the range are all refused, unchanged.
+    for (range, merge, key) in [("A1:C4", "A1:B1", "C"), ("A1:A4", "A1:B1", "A"), ("A1:A4", "A2:A3", "A")] {
+        let mut s = self::s();
+        for (i, t) in ["d", "b", "c", "a"].iter().enumerate() {
+            s.execute("cell.set", json!({"cell": format!("A{}", i + 1), "input": t})).unwrap();
+        }
+        s.execute("home.mergeCells", json!({"range": merge})).unwrap();
+        let err = s.execute("data.sort", json!({"range": range, "keys": [{"column": key}]})).unwrap_err();
+        assert!(err.to_string().contains("merged cells need to be the same size"), "{range}/{merge}: {err}");
+        assert_eq!(v(&s, "A1"), Value::text("d"));
+    }
+
+    // Merges outside the range don't matter.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "b"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "a"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "E1:F2"})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A2", "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("a"));
+}
+
 /// Insert › Link sorts a target as Excel's dialog does: a sheet reference, a defined name or `#…` is
 /// a place in this document, anything else an existing file or web page. A file saved as a
 /// `location` opens nothing in Excel (#800).

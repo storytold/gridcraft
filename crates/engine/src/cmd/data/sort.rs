@@ -92,9 +92,27 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
     }
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(Json::Null) };
-        if sh.merges.iter().any(|m| m.intersects(&body) && !m.is_single()) {
-            return Err(EngineError::Other("To do this, all the merged cells need to be the same size.".into()));
-        }
+        // Excel sorts merged cells only when identical merged blocks tile the whole range; the
+        // blocks then move as units, and since they are all alike the merges themselves stay put.
+        let merged: Vec<&RangeRef> = sh.merges.iter().filter(|m| m.intersects(&body) && !m.is_single()).collect();
+        let unit = match merged.first() {
+            None => 1,
+            Some(first) => {
+                let (mh, mw) = (first.height(), first.width());
+                let tiles = merged.iter().all(|m| {
+                    body.contains_range(m)
+                        && m.height() == mh
+                        && m.width() == mw
+                        && (m.start.row - body.start.row) % mh.max(1) == 0
+                        && (m.start.col - body.start.col) % mw.max(1) == 0
+                });
+                let area: u64 = merged.iter().map(|m| m.count()).sum();
+                if !tiles || area != body.count() {
+                    return Err(EngineError::Other("To do this, all the merged cells need to be the same size.".into()));
+                }
+                (if by_cols { mw } else { mh }).max(1)
+            }
+        };
         let n = if by_cols { body.width() } else { body.height() };
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
@@ -113,8 +131,8 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             };
             (v, color)
         };
-        let mut order: Vec<u32> = (0..n).collect();
-        let keyed: Vec<Vec<(Value, u32)>> = (0..n).map(|i| keys.iter().map(|k| key_val(i, k)).collect()).collect();
+        let mut order: Vec<u32> = (0..n / unit).collect();
+        let keyed: Vec<Vec<(Value, u32)>> = (0..n / unit).map(|i| keys.iter().map(|k| key_val(i * unit, k)).collect()).collect();
         order.sort_by(|&a, &b| {
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
@@ -137,6 +155,8 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             }
             Ordering::Equal
         });
+        // Back from blocks to lines.
+        let order: Vec<u32> = order.iter().flat_map(|&b| (0..unit).map(move |j| b * unit + j)).collect();
         if order.iter().enumerate().all(|(i, &o)| i as u32 == o) {
             return Ok(Json::Null);
         }
