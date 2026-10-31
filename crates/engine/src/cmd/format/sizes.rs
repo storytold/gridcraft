@@ -91,12 +91,30 @@ pub(super) fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, lines) = line_targets(s, p, false)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
-        for (a, b) in lines {
+        for &(a, b) in &lines {
             for c in a..=b {
                 let e = sh.cols.entry(c).or_default();
                 e.size = Some(w as f32);
                 e.hidden = w == 0.0;
             }
+        }
+        // Rows with wrapped text in these columns fit the new width, as in Excel (rows given a
+        // height by hand keep it: `auto_row_height` skips them). A width of 0 hides the columns,
+        // which leaves row heights as they are.
+        if w > 0.0
+            && let Some(sh) = cx.wb.sheet(si)
+            && let Some(u) = sh.used_range()
+        {
+            let mut rows = Vec::new();
+            for &(a, b) in &lines {
+                let (a, b) = (a.max(u.start.col), b.min(u.end.col));
+                if a > b {
+                    continue;
+                }
+                let range = RangeRef::new(CellRef::new(u.start.row, a), CellRef::new(u.end.row, b));
+                rows.extend(sh.cells.iter_range(range).filter(|&(c, _)| cx.wb.styles.get(sh.style_id(c)).align.wrap).map(|(c, _)| (si, c.row)));
+            }
+            cx.fit_rows.extend(rows);
         }
         Ok(Json::Null)
     })
