@@ -43,7 +43,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
-- **Missing:** axis scaling, label options, error bars, per-point formatting.
+- **Missing:** axis scaling, label options, error bars, per-point gradient/pattern fills and effects (solid point fills, lines, markers, explosion, Invert if Negative and vary colors landed).
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
   (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn and written back.
   (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
@@ -188,6 +188,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
+| 2026-10-15 | minor | §4: solid per-point formats, Invert if Negative and vary colors landed |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |

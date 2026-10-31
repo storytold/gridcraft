@@ -85,6 +85,9 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             });
         }
     } else {
@@ -101,6 +104,9 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             });
         }
     }
@@ -267,6 +273,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
+        vary_colors: None,
     };
     Ok((sheet, chart))
 }

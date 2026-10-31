@@ -1,11 +1,12 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
-use super::lines::{decimate, draw_markers, draw_runs};
+use super::lines::{decimate, draw_point_markers, draw_point_segments, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
     VAlign, WHITE, clean, fixed_scale, nice_scale,
 };
+use crate::points;
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -179,6 +180,7 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+#[allow(clippy::cognitive_complexity)] // Keep the shared cartesian-series draw order in one place.
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -282,12 +284,13 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
+                        let (fill, stroke) = points::fill(data, s, j, s.values.get(j).copied().flatten());
                         if horizontal {
                             let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
+                            ctx.rect(lo, y, len, bw, fill, stroke);
                         } else {
                             let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
+                            ctx.rect(x, lo, bw, len, fill, stroke);
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
@@ -296,7 +299,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             if horizontal {
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    ctx.text(mid, y, &t, LABEL_SIZE, on(fill), (HAlign::Center, VAlign::Middle));
                                 } else if v >= 0.0 {
                                     ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
                                 } else {
@@ -305,7 +308,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             } else {
                                 let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    ctx.text(x, mid, &t, LABEL_SIZE, on(fill), (HAlign::Center, VAlign::Middle));
                                 } else if v >= 0.0 {
                                     ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                                 } else {
@@ -318,9 +321,29 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
+                    // Point colours are drawn on straight segments only (a smoothed line keeps
+                    // the series colour).
+                    if !s.smooth {
+                        draw_point_segments(ctx, data, s, &pts, 2.25);
+                    }
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
-                        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+                        draw_point_markers(ctx, data, s, &pts, 3.5);
+                    } else if cw >= 3.0
+                        && s.points
+                            .iter()
+                            .any(|p| p.marker_symbol != gridcraft_model::MarkerSymbol::Auto && p.marker_symbol != gridcraft_model::MarkerSymbol::None)
+                    {
+                        // A line without markers still shows a point that sets a marker shape.
+                        for p in s
+                            .points
+                            .iter()
+                            .filter(|p| !matches!(p.marker_symbol, gridcraft_model::MarkerSymbol::Auto | gridcraft_model::MarkerSymbol::None))
+                        {
+                            if let (Some(Some(at)), Some(m)) = (pts.get(p.index), points::mark(data, s, p.index, 3.5)) {
+                                points::draw_mark(&mut ctx.out, *at, &m);
+                            }
+                        }
                     }
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
@@ -402,32 +425,36 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if bubble {
             let sizes = s.sizes.as_deref().unwrap_or(&[]);
             let smax = sizes.iter().flatten().fold(0.0f64, |a, b| a.max(*b));
-            let mut bubbles: Vec<([f32; 2], f64)> = px
+            let mut bubbles: Vec<(usize, [f32; 2], f64)> = px
                 .iter()
                 .enumerate()
                 .filter_map(|(j, p)| {
                     let sz = if sizes.is_empty() { Some(1.0) } else { sizes.get(j).copied().flatten() };
                     match (p, sz) {
-                        (Some(p), Some(sz)) if sz > 0.0 => Some((*p, sz)),
+                        (Some(p), Some(sz)) if sz > 0.0 => Some((j, *p, sz)),
                         _ => None,
                     }
                 })
                 .take(MAX_MARKERS)
                 .collect();
-            bubbles.sort_by(|a, b| b.1.total_cmp(&a.1));
+            bubbles.sort_by(|a, b| b.2.total_cmp(&a.2));
             let smax = if sizes.is_empty() { 1.0 } else { smax };
-            let fill = [s.color[0], s.color[1], s.color[2], 0xC0];
-            for (p, sz) in bubbles {
+            for (j, p, sz) in bubbles {
                 let r = ((sz / smax).sqrt() as f32 * rmax).max(1.0);
-                ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some((WHITE, 0.75)) });
+                let (c, stroke) = points::fill(data, s, j, None);
+                let fill = [c[0], c[1], c[2], 0xC0];
+                ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some(stroke.unwrap_or((WHITE, 0.75))) });
             }
         } else {
             let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
             if lines {
                 draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
+                if !s.smooth {
+                    draw_point_segments(ctx, data, s, &px, 2.0);
+                }
             }
             if !lines || px.len() <= 500 {
-                draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
+                draw_point_markers(ctx, data, s, &px, 3.5);
             }
         }
         if chart.data_labels && pts.len() <= MAX_LABELS {

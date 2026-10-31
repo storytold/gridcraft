@@ -2,6 +2,7 @@ use super::{
     CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
     f64_param, json, split_sheet, str_param, u32_param,
 };
+use gridcraft_model::{DataPoint, MarkerFormat, MarkerSymbol};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
@@ -250,13 +251,122 @@ pub(super) fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Highest point index Format Data Point accepts (a worksheet's row count).
+const MAX_POINT_INDEX: u64 = 1_048_575;
+
+fn marker_symbol(name: &str) -> Option<MarkerSymbol> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "auto" | "automatic" => MarkerSymbol::Auto,
+        "none" => MarkerSymbol::None,
+        "circle" => MarkerSymbol::Circle,
+        "square" => MarkerSymbol::Square,
+        "diamond" => MarkerSymbol::Diamond,
+        "triangle" => MarkerSymbol::Triangle,
+        "x" => MarkerSymbol::X,
+        "star" => MarkerSymbol::Star,
+        "dot" => MarkerSymbol::Dot,
+        "dash" => MarkerSymbol::Dash,
+        "plus" => MarkerSymbol::Plus,
+        _ => return None,
+    })
+}
+
+/// Format Selection on a series (`series`) or one of its points (`point`, Format Data Point).
 pub(super) fn format_series(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "chart.formatSelection";
     let idx = u32_param(p, "series").unwrap_or(0) as usize;
-    let color = str_param(p, "color").and_then(Color::from_hex);
+    let hex = |k: &str| -> Option<Option<Color>> { p.get(k).map(|v| v.as_str().and_then(Color::from_hex)) };
+    let color = hex("color");
+    let vary = bool_param(p, "varyColors");
+    let invert = bool_param(p, "invertIfNegative");
+    let invert_color = hex("invertColor");
+    let point = match p.get("point") {
+        None | Some(Json::Null) => None,
+        Some(v) => match v.as_u64() {
+            Some(i) if i <= MAX_POINT_INDEX => Some(i as u32),
+            _ => return Err(bad(CMD, "`point` must be a point index (0-based)")),
+        },
+    };
+    let marker = match str_param(p, "marker") {
+        None => None,
+        Some(m) => Some(marker_symbol(m).ok_or_else(|| bad(CMD, "unknown `marker` symbol"))?),
+    };
+    let marker_size = u32_param(p, "markerSize").map(|v| v.clamp(2, 72) as u8);
+    let marker_color = hex("markerColor");
+    let marker_line = hex("markerLine");
+    let line = hex("line");
+    let explosion = u32_param(p, "explosion").map(|v| v.min(400));
+    let reset = bool_param(p, "reset").unwrap_or(false);
     with_chart(s, p, |c| {
-        if let Some(se) = c.series.get_mut(idx) {
-            se.color = color;
+        if let Some(v) = vary {
+            c.vary_colors = Some(v);
         }
+        let Some(se) = c.series.get_mut(idx) else { return Ok(()) };
+        let Some(pi) = point else {
+            // Format Data Series. With nothing else set, the call sets (or resets) the fill.
+            if color.is_some() || (vary.is_none() && invert.is_none() && invert_color.is_none()) {
+                se.color = color.flatten();
+            }
+            if let Some(v) = invert {
+                se.invert_if_negative = v;
+            }
+            if let Some(v) = invert_color {
+                se.invert_color = v;
+            }
+            return Ok(());
+        };
+        let any = color.is_some()
+            || line.is_some()
+            || marker.is_some()
+            || marker_size.is_some()
+            || marker_color.is_some()
+            || marker_line.is_some()
+            || explosion.is_some()
+            || invert.is_some();
+        // `invertColor` is a series setting, so it applies even when a point is named.
+        if let Some(v) = invert_color {
+            se.invert_color = v;
+        }
+        let series_level = vary.is_some() || invert_color.is_some();
+        if reset || (!any && !series_level) {
+            // Reset to Match Style.
+            se.points.retain(|x| x.index != pi);
+            return Ok(());
+        }
+        if !any {
+            // Only chart-wide or series-level settings were given: leave the point as it is.
+            return Ok(());
+        }
+        let Some(dp) = se.point_mut(pi) else { return Ok(()) };
+        if let Some(v) = color {
+            dp.fill = v;
+        }
+        if let Some(v) = line {
+            dp.line = v;
+        }
+        if let Some(v) = explosion {
+            dp.explosion = (v > 0).then_some(v);
+        }
+        if let Some(v) = invert {
+            dp.invert_if_negative = Some(v);
+        }
+        if marker.is_some() || marker_size.is_some() || marker_color.is_some() || marker_line.is_some() {
+            let m = dp.marker.get_or_insert_with(MarkerFormat::default);
+            if let Some(v) = marker {
+                m.symbol = v;
+            }
+            if let Some(v) = marker_size {
+                m.size = Some(v);
+            }
+            if let Some(v) = marker_color {
+                m.fill = v;
+            }
+            if let Some(v) = marker_line {
+                m.line = v;
+            }
+        }
+        let empty = DataPoint { index: pi, ..Default::default() };
+        se.points.retain(|x| *x != empty);
         Ok(())
     })
 }

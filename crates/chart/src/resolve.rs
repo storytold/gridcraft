@@ -2,10 +2,10 @@
 
 use gridcraft_calc::evaluate;
 use gridcraft_core::{CellRef, RangeRef, Value, category_levels, number_to_text};
-use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
+use gridcraft_model::{Chart, ChartKind, Color, Series, Theme, Workbook, style::apply_tint};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
-use crate::{ChartData, Rgba, SeriesData, TrendlineData};
+use crate::{ChartData, PointStyle, Rgba, SeriesData, TrendlineData};
 
 /// Cap on points per series (keeps whole-column references from exploding).
 pub(crate) const MAX_POINTS: usize = 100_000;
@@ -13,6 +13,8 @@ pub(crate) const MAX_POINTS: usize = 100_000;
 pub(crate) const MAX_SERIES: usize = 255;
 /// Cap on trendlines drawn per series.
 pub(crate) const MAX_TRENDLINES: usize = 16;
+/// Cap on point overrides drawn per series.
+pub(crate) const MAX_POINT_STYLES: usize = 4096;
 
 /// Tints used for series beyond the six theme accents: lighter, darker, lighter still…
 const CYCLE_TINTS: [f64; 6] = [0.0, 0.4, -0.25, 0.6, -0.5, 0.2];
@@ -231,8 +233,8 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let color =
-            s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
+        let explicit = rgba(s.color.as_ref(), &wb.theme);
+        let color = explicit.unwrap_or_else(|| series_color(&wb.theme, i));
         let kind = effective_kind(chart.kind, s.kind, i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
@@ -269,10 +271,77 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             smooth: s.smooth,
             trendlines,
             number_format: ref_format(wb, sheet, &s.values),
+            points: point_styles(s, &wb.theme),
+            invert_if_negative: s.invert_if_negative,
+            // Excel reads the inverted colour only when the series has a fill of its own.
+            invert_color: explicit.map(|_| rgba(s.invert_color.as_ref(), &wb.theme).unwrap_or([0xFF, 0xFF, 0xFF, 0xFF])),
+            explicit_color: explicit.is_some(),
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    // Excel varies colours by point for pie-like charts, and for a chart whose only series is
+    // a bar, line, scatter or bubble series; it ignores the setting with several series and
+    // for areas. The legend of such a single series lists its points, as it also does when
+    // the points have formats of their own.
+    let single = series.len() == 1 && varies_by_point(chart.kind);
+    let vary_colors = match chart.kind {
+        ChartKind::Pie | ChartKind::Doughnut => chart.vary_colors_on(),
+        ChartKind::Treemap | ChartKind::Sunburst => true,
+        _ => single && chart.vary_colors_on(),
+    };
+    let legend_by_point = single && (chart.vary_colors_on() || series.first().is_some_and(|s| !s.points.is_empty()));
+    ChartData { categories, category_levels, series, palette, vary_colors, legend_by_point }
+}
+
+/// Kinds whose single series Excel colours point by point when vary colors is on.
+fn varies_by_point(k: ChartKind) -> bool {
+    use ChartKind::*;
+    matches!(
+        k,
+        ColumnClustered
+            | ColumnStacked
+            | ColumnStacked100
+            | BarClustered
+            | BarStacked
+            | BarStacked100
+            | Line
+            | LineMarkers
+            | LineStacked
+            | Scatter
+            | ScatterLines
+            | Bubble
+    )
+}
+
+fn rgba(c: Option<&Color>, theme: &Theme) -> Option<Rgba> {
+    c.and_then(|c| c.resolve(theme)).map(|[r, g, b]| [r, g, b, 0xFF])
+}
+
+/// A series' point overrides resolved against the theme, sorted by index, capped.
+fn point_styles(s: &Series, theme: &Theme) -> Vec<PointStyle> {
+    let mut out: Vec<PointStyle> = s
+        .points
+        .iter()
+        .filter(|p| (p.index as usize) < MAX_POINTS)
+        .take(MAX_POINT_STYLES)
+        .map(|p| {
+            let m = p.marker.as_ref();
+            PointStyle {
+                index: p.index as usize,
+                fill: rgba(p.fill.as_ref(), theme),
+                line: rgba(p.line.as_ref(), theme),
+                marker_symbol: m.map(|m| m.symbol).unwrap_or_default(),
+                marker_size: m.and_then(|m| m.size).map(|v| f32::from(v.clamp(2, 72))),
+                marker_fill: rgba(m.and_then(|m| m.fill.as_ref()), theme),
+                marker_line: rgba(m.and_then(|m| m.line.as_ref()), theme),
+                explosion: p.explosion.map(|e| e.min(400) as f32 / 100.0).unwrap_or(0.0),
+                invert_if_negative: p.invert_if_negative,
+            }
+        })
+        .collect();
+    out.sort_by_key(|p| p.index);
+    out.dedup_by_key(|p| p.index);
+    out
 }

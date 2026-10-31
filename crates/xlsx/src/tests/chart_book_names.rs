@@ -47,6 +47,7 @@ fn series(name: &str, values: &str) -> Series {
         smooth: false,
         trendlines: Vec::new(),
         quartiles: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -77,6 +78,7 @@ fn chart_names_are_written_qualified() {
         data_labels: false,
         gridlines: true,
         style: 2,
+        vary_colors: None,
         x_title: None,
         y_title: None,
         source: None,

@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod axis;
+mod points;
 mod raster;
 mod render;
 mod resolve;
@@ -20,7 +21,7 @@ mod trend;
 #[cfg(test)]
 mod tests;
 
-pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline, TrendlineKind};
+pub use gridcraft_model::{Chart, ChartKind, LegendPos, MarkerSymbol, SparklineKind, Trendline, TrendlineKind};
 use serde::{Deserialize, Serialize};
 
 pub use axis::{Scale, format_number, nice_scale};
@@ -132,6 +133,14 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// Points take the palette colours one by one (vary colors by point, as Excel draws it:
+    /// pie-like charts, or the only series of a bar, line, scatter or bubble chart).
+    #[serde(default)]
+    pub vary_colors: bool,
+    /// The legend lists the points of the only series instead of the series (vary colors by
+    /// point, or points with their own format).
+    #[serde(default)]
+    pub legend_by_point: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -153,6 +162,36 @@ pub struct SeriesData {
     pub trendlines: Vec<TrendlineData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
+    /// Format Data Point overrides, sorted by index.
+    #[serde(default)]
+    pub points: Vec<PointStyle>,
+    /// Negative bars are drawn in `invert_color` (white when `None`).
+    #[serde(default)]
+    pub invert_if_negative: bool,
+    /// Fill of inverted negative bars; only set when the series has a fill of its own.
+    #[serde(default)]
+    pub invert_color: Option<Rgba>,
+    /// `color` was set on the series (not taken from the palette): it wins over vary colors.
+    #[serde(default)]
+    pub explicit_color: bool,
+}
+
+/// One point's own look (Format Data Point), resolved against the theme. `None` follows the
+/// series.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PointStyle {
+    pub index: usize,
+    pub fill: Option<Rgba>,
+    /// Bar or slice border; the segment ending at this point on a line.
+    pub line: Option<Rgba>,
+    pub marker_symbol: MarkerSymbol,
+    /// Marker size in points.
+    pub marker_size: Option<f32>,
+    pub marker_fill: Option<Rgba>,
+    pub marker_line: Option<Rgba>,
+    /// Pie slices: how far the slice is pulled out, as a fraction of the radius.
+    pub explosion: f32,
+    pub invert_if_negative: Option<bool>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -175,6 +214,10 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            points: vec![],
+            invert_if_negative: false,
+            invert_color: None,
+            explicit_color: false,
         }
     }
 }
