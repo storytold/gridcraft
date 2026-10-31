@@ -333,11 +333,22 @@ fn implicit_intersection_metadata_respects_function_argument_context() {
             ("SUM(A1:A3)", false),
             ("SUMPRODUCT(A1:A3*B1:B3)", false),
             ("SUMPRODUCT(SQRT(A1:A3))", false),
-            // An explicit `@` is written as `_xlfn.SINGLE`, a dynamic-array formula. Dropping it
-            // instead would need the reader to put it back on legacy formulas.
-            ("SQRT(@A1:A3)", true),
-            ("@A1:A3*2", true),
+            // An `@` that legacy Excel implies is dropped (the reader puts it back), and so is one
+            // of a range an edit made one cell (`SQRT(@A1:A1)` after deleting rows under
+            // `SQRT(@A1:A3)`). An `@` of one value stays as `_xlfn.SINGLE` in a legacy formula, as
+            // Excel writes it; any other `@` makes the formula a dynamic-array one.
+            ("SQRT(@A1:A3)", false),
+            ("@A1:A3*2", false),
             ("@(A1:A3*2)", true),
+            ("SQRT(@A1)", false),
+            ("SQRT(@A1:A1)", false),
+            ("@SUM(A1:A3)", false),
+            ("SUMPRODUCT(@ROW(A1:A3))", true),
+            ("SUMPRODUCT(@SQRT(A1:A3))", true),
+            // Legacy Excel intersects IFERROR's and IFNA's arguments inside SUMPRODUCT; dynamic-array
+            // Excel evaluates them as arrays.
+            ("SUMPRODUCT(IFERROR(VALUE(A1:A3),0))", true),
+            ("SUMPRODUCT(IFNA(A1:A3,0))", true),
             ("SQRT(INDIRECT(\"A1\"))", false),
             ("SUM(INDIRECT(\"A1:A3\"))", false),
             ("SQRT(INDIRECT(\"A1:A3\"))", true),
