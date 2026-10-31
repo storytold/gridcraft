@@ -2293,3 +2293,13 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn concat_operator_cuts_at_the_cell_limit() {
+    // Excel: LEN(REPT("x",20000)&REPT("x",20000)) is 32767, and REPT("x",32767)&"y" is 32767.
+    let mut t = T::new();
+    t.set("A1", "=LEN(REPT(\"x\",20000)&REPT(\"x\",20000))");
+    t.set("A2", "=LEN(REPT(\"x\",32767)&\"y\")");
+    t.set("A3", "=LEN(\"é\"&REPT(\"é\",32767))");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (32767.0, 32767.0, 32767.0));
+}

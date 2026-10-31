@@ -160,13 +160,7 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
             }
         }),
         BinOp::Concat => match (a.to_text(), b.to_text()) {
-            (Ok(x), Ok(y)) => {
-                if x.len() + y.len() > 32767 * 4 {
-                    Value::Error(CellError::Value)
-                } else {
-                    Value::text(x + &y)
-                }
-            }
+            (Ok(x), Ok(y)) => Value::text(gridcraft_core::cap_text(x + &y)),
             (Err(e), _) | (_, Err(e)) => Value::Error(e),
         },
         BinOp::Eq => Value::Bool(compare(a, b) == Equal),

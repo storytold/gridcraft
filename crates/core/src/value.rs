@@ -389,6 +389,27 @@ pub fn sci_text(n: f64, sig: usize) -> String {
     format!("{}E{}{:02}", mant, if e < 0 { '-' } else { '+' }, e.abs())
 }
 
+/// Longest text a cell can hold, in characters.
+pub const MAX_TEXT_CHARS: usize = 32_767;
+
+/// `s` cut to [`MAX_TEXT_CHARS`] characters, as Excel cuts typed text and `&` results.
+pub fn cap_text(mut s: String) -> String {
+    if s.len() > MAX_TEXT_CHARS
+        && let Some((i, _)) = s.char_indices().nth(MAX_TEXT_CHARS)
+    {
+        s.truncate(i);
+    }
+    s
+}
+
+/// `v` with text cut to [`MAX_TEXT_CHARS`] characters; other values pass through.
+pub fn cap_value(v: Value) -> Value {
+    match v {
+        Value::Text(t) if t.len() > MAX_TEXT_CHARS => Value::text(cap_text(t.to_string())),
+        v => v,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
