@@ -48,6 +48,8 @@ fn literal_category_with_separators_survives_save() {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     });
     wb.sheets = vec![Arc::new(s)];
     let bytes = write_xlsx(&wb).unwrap();
