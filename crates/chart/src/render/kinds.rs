@@ -2,7 +2,7 @@ use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, point_color};
 use super::{
     AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, QuartileMethod, STOCK, SeriesData,
-    TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
+    TAU, TEXT, UP, VAlign, WHITE, axis_fmt, clean, label_fmt, nice_scale,
 };
 
 // ---------------------------------------------------------------- histogram
@@ -91,7 +91,8 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     }
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
-    let f = Fmt::new(&s.number_format);
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
+    let fl = label_fmt(s);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -113,7 +114,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
-            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &fl.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -139,7 +140,7 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let slot = plot.h / n as f32;
     let bh = slot * 0.85;
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     let show = slot >= LABEL_SIZE * 0.9;
     for (j, v) in vals.iter().enumerate() {
         let bw = (*v / max) as f32 * plot.w;
@@ -176,7 +177,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         return;
     }
     let ri = r * inner;
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     let mut a = 0.0f32;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {
@@ -278,7 +279,7 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let mut items: Vec<(usize, f64)> =
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     for (j, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
@@ -310,7 +311,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (cx, cy) = (area.cx(), area.cy());
     let (lo, hi) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())).unwrap_or((0.0, 0.0));
     let sc = nice_scale(lo, hi, true);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let ang = |j: usize| j as f32 / ncat as f32 * TAU;
     let pt = |a: f32, rr: f32| [cx + rr * a.sin(), cy - rr * a.cos()];
     let ticks = sc.ticks();
@@ -386,7 +387,7 @@ pub(super) fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: 
     let labels: Vec<String> = data.series.iter().map(|s| s.name.clone()).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -435,7 +436,7 @@ pub(super) fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let labels: Vec<String> = (0..ncat).map(|j| cat_label(data, j)).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;

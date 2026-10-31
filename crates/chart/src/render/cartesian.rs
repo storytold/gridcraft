@@ -4,7 +4,7 @@ use super::lines::{decimate, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, fixed_scale, nice_scale,
+    VAlign, WHITE, axis_fmt, clean, fixed_scale, label_fmt, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -126,7 +126,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     spans
 }
 
-fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option<(f64, f64)>>]) -> Vec<(Scale, Fmt)> {
+fn axis_scales(chart: &Chart, data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option<(f64, f64)>>]) -> Vec<(Scale, Fmt)> {
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
@@ -141,10 +141,11 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
+        let typed = if axis { chart.axis_number_formats.y2.as_deref() } else { chart.axis_number_formats.y.as_deref() };
         let (scale, fmt) = if all100 {
-            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
+            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new(typed.unwrap_or("0%")))
         } else {
-            let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
+            let code = typed.or_else(|| members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str())).unwrap_or("General");
             (nice_scale(lo, hi, force_zero), Fmt::new(code))
         };
         axes.push((scale, fmt));
@@ -191,7 +192,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     let spans = series_spans(data, &fams, &sec, ncat);
 
-    let axes = axis_scales(data, &fams, &sec, &spans);
+    let axes = axis_scales(chart, data, &fams, &sec, &spans);
     let Some((s1, f1)) = axes.first() else { return };
     let y1 = ValAxis { scale: *s1, fmt: f1 };
     let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
@@ -237,7 +238,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 continue;
             }
             let sc = scale_of(i);
-            let fmt = Fmt::new(&s.number_format);
+            let fmt = label_fmt(s);
             let row = match spans.get(i) {
                 Some(r) => r,
                 None => continue,
@@ -388,8 +389,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
     let xs = nice_scale(xlo, xhi, false);
     let ys = nice_scale(ylo, yhi, false);
-    let fx = Fmt::new("General");
-    let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let fx = Fmt::new(chart.axis_number_formats.x.as_deref().unwrap_or("General"));
+    let fy = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -431,9 +432,10 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
             }
         }
         if chart.data_labels && pts.len() <= MAX_LABELS {
+            let fl = label_fmt(s);
             for (p, raw) in px.iter().zip(pts) {
                 if let (Some(p), Some((_, y))) = (p, raw) {
-                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                    ctx.text(p[0], p[1] - 6.0, &fl.format(*y, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                 }
             }
         }
