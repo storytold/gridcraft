@@ -7,7 +7,10 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
-use crate::features::*;
+use crate::features::{
+    AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, PivotTable, PrintSettings, Shape, SheetProtection, Slicer, Sparkline, Table,
+    Validation,
+};
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
 
@@ -52,6 +55,10 @@ impl SheetViewMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// The `sheetId` the file gave the sheet, written back on save so that what refers to the
+    /// sheet by its id keeps finding it; 0 for a sheet the file did not have. Not in JSON.
+    #[serde(skip)]
+    pub file_id: u32,
     pub cells: CellStore,
     /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
@@ -80,6 +87,13 @@ pub struct Sheet {
     /// outline itself stays.
     #[serde(default = "yes")]
     pub show_outline_symbols: bool,
+    /// Outline summary rows sit below their detail, and summary columns right of it (Data ▸
+    /// Outline ▸ Settings; off puts them above / left). Saved as `outlinePr summaryBelow` and
+    /// `summaryRight`.
+    #[serde(default = "yes")]
+    pub summary_below: bool,
+    #[serde(default = "yes")]
+    pub summary_right: bool,
     pub right_to_left: bool,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
@@ -135,6 +149,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
             spill: BTreeMap::new(),
@@ -149,6 +164,8 @@ impl Sheet {
             visibility: Visibility::Visible,
             show_gridlines: true,
             show_outline_symbols: true,
+            summary_below: true,
+            summary_right: true,
             show_headings: true,
             show_formulas: false,
             show_zeros: true,
@@ -613,8 +630,11 @@ mod tests {
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
 mod picture_map {
-    use super::*;
-    use serde::{Deserializer, Serializer};
+    use crate::cell::CellPicture;
+    use gridcraft_core::CellRef;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
     pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }

@@ -13,12 +13,12 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     session.new_workbook();
     session.run("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
     session.run("selection.set", json!({"range": "A1:B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(6);
     h

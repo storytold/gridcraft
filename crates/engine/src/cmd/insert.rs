@@ -3,11 +3,18 @@
 
 use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
+    Formula, Hyperlink, Image, LegendPos, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table, TableColumn, TotalsFn, Underline,
+    Workbook,
+};
 use serde_json::{Value as Json, json};
 
 use super::sheet::{rewrite, shift_cell_features};
-use super::*;
+use super::{
+    CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, cell_param_on, cmd, edit,
+    f64_param, has_doc, locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 use crate::selection::current_region;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -92,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -294,7 +301,7 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)) };
             shift_cell_features(sh, &e);
             let name = sh.name.clone();
-            rewrite(&mut cx.wb, &name, &e);
+            rewrite(cx, &name, &e);
             let sh = cx.sheet_mut(sheet)?;
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
                 sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("Column{}", i + 1)));
@@ -371,7 +378,7 @@ fn find_table(s: &Session, p: &Json) -> Result<(usize, usize)> {
     if let Some(n) = str_param(p, "table") {
         return d.wb.table(n).ok_or_else(|| bad("table", format!("no table named `{n}`")));
     }
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let ti = sh
         .tables
@@ -582,6 +589,7 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
         ("area", "stacked") => ChartKind::AreaStacked,
+        ("area", "stacked100") => ChartKind::AreaStacked100,
         ("area", _) => ChartKind::Area,
         ("scatter", "lines") => ChartKind::ScatterLines,
         ("scatter", _) => ChartKind::Scatter,
@@ -834,7 +842,7 @@ fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let idx = match u32_param(p, "chart") {
         Some(id) => sh.charts.iter().position(|c| c.id == id),
@@ -983,7 +991,7 @@ fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
         _ => SparklineKind::Line,
     };
     let markers = bool_param(p, "markers").unwrap_or(false);
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         sh.sparklines.retain(|x| x.cell != loc);
@@ -1008,7 +1016,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
     if placement == "cell" {
         let mime = validate_cell_picture(&data)?;
         let d = s.doc()?;
-        let sheet = d.wb.active_sheet;
+        let sheet = d.wb.active_sheet();
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         let at = match str_param(p, "at") {
             Some(a) => CellRef::parse(a).ok_or_else(|| bad("insert.picture", "invalid cell address"))?,
@@ -1052,7 +1060,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         mime,
         alt: str_param(p, "alt").unwrap_or("").into(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.images.push(img);
         Ok(json!({"image": id}))
@@ -1122,7 +1130,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.shapes.push(shape);
         Ok(json!({"shape": id}))
@@ -1140,7 +1148,7 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("shape.setText", "`text` is longer than 32,767 characters"));
     }
     let d = s.doc()?;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.active().ok_or_else(|| bad("shape.setText", "no such text box"))?;
     let shape = sh.shapes.iter().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
     if shape.kind != ShapeKind::TextBox {
@@ -1163,7 +1171,7 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
 fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("object.delete", "missing `id`"))?;
     let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         match kind.as_str() {
@@ -1179,7 +1187,7 @@ fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
 fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("object.move", "missing `id`"))?;
     let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
@@ -1220,7 +1228,7 @@ fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("object.setAnchorMode", "kind must be chart, image or shape"));
     }
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let anchor = match kind.as_str() {
@@ -1316,9 +1324,20 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let text = str_param(p, "text").unwrap_or("").to_string();
-    let author = str_param(p, "author").map(str::to_string).unwrap_or_else(|| s.prefs.user_name.clone());
+    let named = str_param(p, "author").map(str::to_string);
+    let author = named.clone().unwrap_or_else(|| s.prefs.user_name.clone());
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.comments.insert(
+        let comments = &mut cx.sheet_mut(sheet)?.comments;
+        // Writing a note on a cell that has one edits it, as Excel's Edit Note does: the box, the
+        // replies, the dates and who wrote it stay. A note replaces a comment and vice versa.
+        if let Some(c) = comments.get_mut(&at).filter(|c| c.threaded == threaded) {
+            c.text = text.clone();
+            if let Some(author) = named.clone() {
+                c.author = author;
+            }
+            return Ok(json!({"cell": at.a1()}));
+        }
+        comments.insert(
             at,
             Comment {
                 author: author.clone(),
@@ -1718,7 +1737,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
         text: name,
         format: Default::default(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.shapes.push(shape);
         Ok(json!({"shape": id}))

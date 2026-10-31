@@ -11,12 +11,12 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("selection.set", json!({"cell": "C3"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(6);
     h
@@ -51,13 +51,15 @@ fn row_height_opens_with_the_height_ready_to_type() {
     let mut h = harness();
     h.state_mut().open_dialog("rowHeight", json!({}));
     h.run_steps(6);
-    type_and_enter(&mut h, "40");
+    let shown = h.state().dialog.as_ref().and_then(|d| d.values.get("points")).and_then(|v| v.as_f64());
+    assert!(shown.is_some_and(|v| (v - 15.0).abs() < 0.01), "a default row opens at 15 points, got {shown:?}");
+    type_and_enter(&mut h, "30");
     assert!(h.state().dialog.is_none(), "Enter confirmed the dialog");
     let height = {
         let d = h.state().session.active().unwrap();
         d.wb.active().unwrap().row_height(CellRef::parse("C3").unwrap().row)
     };
-    assert!((height as f64 - 40.0).abs() < 0.6, "row 3 is 40 high, got {height}");
+    assert!((height as f64 - 40.0).abs() < 0.6, "row 3 is 30 points (40 pixels) high, got {height}");
 }
 
 #[test]

@@ -56,6 +56,8 @@ pub struct PreservedSheet {
     pub rel_id: String,
     /// How many worksheets come before it: its position among the model's sheets.
     pub before: usize,
+    /// Its `sheetId` in the source file.
+    pub sheet_id: u32,
 }
 
 /// Unmodelled content kept for one owner (the workbook, which also holds package-root content,

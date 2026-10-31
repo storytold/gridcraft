@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -49,6 +49,39 @@ including tests, 2026-10-10.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
+## UI building blocks
+
+The panels in `crates/ui-egui` share a few pieces, so a new feature reuses them instead of
+drawing its own:
+
+- **Colours**: `theme::Tokens`, each with a light and a dark value. The sheet stays white in both
+  themes, so colours drawn on it (`sheet_ref_colors`, `sheet_control_*`, icons through
+  `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
+  foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
+  token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
+  colours (`theme::Cat`) from the tokens.
+- **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
+  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
+  `i18n` in one place. Split buttons return the main and arrow responses separately, with
+  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
+  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  and a test keeps every tab within the card's three rows.
+- **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
+  edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
+  including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
+  comments). Tab indents (every selected line, Shift+Tab dedents), Enter keeps the line's
+  indentation (one level more after a Python colon), both applied in input order with the typing
+  around them: a pass can carry several events, and the editor's keys that follow an event the
+  text field acts on (select all, an arrow) wait for the editor's next pass, which puts them
+  ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
+  scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
+  hostile input.
+- **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
+  scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
+  the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
+  `formula_bar::BarLayout` records where its parts went each frame, for tests.
+
+
 ## Engine building blocks for multi-command actions
 
 Actions made of many commands (macros, a debugger that runs one step per call) use these parts of
@@ -65,12 +98,15 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   every group it opened, as `group_rollback` does. `Session::abort_groups(doc)`, and the command
   `automate.stopAction` on the active workbook, roll back the groups left open on a document (a
   debugger the person abandons, a caller that dropped its token), so Undo works there again. The
+  command runs on its own: a step of a script or macro may not stop the action it is part of, and
+  a recording leaves it out, so playing the recording back never stops the run. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
-  dialog (the dialog's confirming call is the step), and the buffer is independent of the journal
+  dialog (the dialog's confirming call is the step; a run that changed the workbook before a step
+  of it opened a dialog is recorded), and the buffer is independent of the journal
   (Automate › Record Actions still records through the journal).
 - **Document trust.** `DocState::trust` is `Local` for workbooks made in the session and
   `FromFile` for workbooks opened from a file. `Trust` has no default: `DocState::new` takes it,
@@ -87,10 +123,16 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   other than tab, line feed and carriage return, U+FFFE, U+FFFF) are stored as the noncharacter
   U+FDD0 and four hex digits, as is U+FDD0 itself, and read back as they were. `stash::items`
   and `stash::keys` list the items under a key prefix in one pass over the names, at most
-  10,000 of them (`stash::MAX_ITEMS`). The older single-name `_sc_<key>` items are read as well.
+  10,000 of them (`stash::MAX_ITEMS`) with a count of the rest, so a caller can say what it did
+  not list. The older single-name `_sc_<key>` items are read as well.
   `formulas.defineName` and `formulas.deleteName` refuse a name the workbook holds such an item
   under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
   `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
+
+The macro engine (`engine/src/macros/`, commands in `cmd/macros.rs`, described in
+[`macros.md`](macros.md)) is built on these: a run is an undo group, the recorder reads the
+recording buffer, the policy asks before a macro in a `FromFile` workbook runs, and xlsx keeps
+macros as chunked hidden names (`_gc_macro_<n>_<k>`: macro `n`, chunk `k`).
 
 ## Agent control
 
@@ -117,6 +159,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
+| 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

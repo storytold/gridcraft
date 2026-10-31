@@ -17,6 +17,7 @@ gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+web-time = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }

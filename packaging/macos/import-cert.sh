@@ -26,7 +26,9 @@ KEYCHAIN="$WORK/gridcraft-signing.keychain-db"
 CERT="$WORK/gridcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -rf "$WORK"' EXIT
+# Remove only the decoded certificate: the keychain lives in the same directory and codesign
+# needs it until the workflow's "Remove temporary keychain" step deletes it.
+trap 'rm -f "${CERT:-}"' EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
