@@ -14,6 +14,7 @@ name = "gridcraft-cli"
 path = "src/main.rs"
 
 [dependencies]
+gridcraft-dax = { workspace = true }
 gridcraft-engine = { workspace = true }
 gridcraft-mcp = { workspace = true }
 serde_json = { workspace = true }
