@@ -2293,3 +2293,198 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn clearing_a_cell_unblocks_the_arrays_above_and_left_of_it() {
+    let mut t = T::new();
+    for r in 1..=50 {
+        t.set(&format!("D{r}"), &format!("={r}*2"));
+    }
+    t.set("B2", "7");
+    t.set("B1", "=SEQUENCE(3)");
+    t.set("C1", "=SEQUENCE(1,3)");
+    t.set("A20", "=B1+1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("A20"), Value::Error(CellError::Spill));
+    // Emptied: the array above it spills.
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("B2"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B2"))]);
+    assert_eq!(t.num("B3"), 3.0);
+    assert_eq!(t.num("A20"), 2.0);
+    // Typing over the area blocks it again; far from it, nothing is disturbed.
+    t.set("B3", "9");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    t.set("D50", "1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("D49"), 98.0);
+    // Clearing it again frees the array.
+    t.set("B3", "");
+    assert_eq!(t.num("B3"), 3.0);
+}
+
+/// A sheet with `#SPILL!` cells in rows 0..64, columns 100..16384 (as blocked arrays leave), none
+/// near column A.
+fn spill_error_field() -> T {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for r in 0..64 {
+        for col in 100..16_384 {
+            sh.cells.set(CellRef::new(r, col), Cell::value(Value::Error(CellError::Spill)));
+        }
+    }
+    t.calc.recalc_all(&mut t.wb);
+    t
+}
+
+#[test]
+fn an_edit_far_left_of_many_spill_errors_does_not_disturb_them() {
+    let mut t = spill_error_field();
+    t.set("A65", "5");
+    assert_eq!(t.num("A65"), 5.0);
+    assert_eq!(t.get("CW1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("XFD64"), Value::Error(CellError::Spill));
+    // A blocked formula inside the window is still found when a cell to its right is cleared.
+    t.set("DA66", "7");
+    t.set("CZ66", "=SEQUENCE(1,3)");
+    assert_eq!(t.get("CZ66"), Value::Error(CellError::Spill));
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("DA66"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("DA66"))]);
+    assert_eq!(t.num("DA66"), 2.0);
+}
+
+/// Probe: single-cell edits in column A below a block of `#SPILL!` cells to its right.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture spill_error_field_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn spill_error_field_probe() {
+    let mut t = spill_error_field();
+    let mut best = std::time::Duration::MAX;
+    for i in 0..9 {
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            t.set("A65", &format!("{i}"));
+        }
+        best = best.min(start.elapsed());
+    }
+    eprintln!("100 edits of A65 beside 1,040,000 spill errors: best of 9 = {best:?}");
+}
+
+/// A full-height column spill (inside the 10,000,000-cell cap) and a paste of 17 cells elsewhere:
+/// the paste must not register the spill's 65,536 blocks, and a paste over the spill must still
+/// block it.
+fn tall_spill_book() -> T {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(1048576)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    t
+}
+
+fn paste_into(t: &mut T, cells: &[(u32, u32)]) {
+    let changed: Vec<(usize, CellRef)> = cells.iter().map(|&(r, c)| (0, CellRef::new(r, c))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+}
+
+#[test]
+fn a_paste_beside_a_tall_spill_leaves_it_alone_and_one_over_it_blocks_it() {
+    let mut t = tall_spill_book();
+    let beside: Vec<(u32, u32)> = (0..17).map(|i| (i, 5)).collect();
+    paste_into(&mut t, &beside);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    let over: Vec<(u32, u32)> = (0..17).map(|i| (500_000 + i, if i == 9 { 0 } else { 5 })).collect();
+    paste_into(&mut t, &over);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+}
+
+/// Probe: `cells_changed` for a 17-cell paste in column F beside the tall spill.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture tall_spill_paste_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn tall_spill_paste_probe() {
+    let mut t = tall_spill_book();
+    let mut best = std::time::Duration::MAX;
+    for round in 0..9u32 {
+        let beside: Vec<(u32, u32)> = (0..17).map(|i| (round * 20 + i, 5)).collect();
+        let start = std::time::Instant::now();
+        paste_into(&mut t, &beside);
+        best = best.min(start.elapsed());
+    }
+    eprintln!("tall spill, 17-cell paste beside it: best of 9 = {best:?}");
+}
+
+#[test]
+fn many_spills_are_read_and_blocked_by_a_paste() {
+    let mut t = T::new();
+    // 40 arrays of 3 rows side by side in rows 1-3, and a reader of a range over two of them.
+    for i in 0..40u32 {
+        let anchor = CellRef::new(0, 2 * i);
+        t.wb.sheet_mut(0).unwrap().cells.set(anchor, Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.set("A10", "=SUM(C1:F3)");
+    t.set("A12", "=COUNT(C1:F3)");
+    t.set("A11", "=C2*1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A10"), (10 + 11 + 12 + 20 + 21 + 22) as f64);
+    assert_eq!(t.num("A11"), 11.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // Pasting 20 cells (more than one spill's width worth, so the changed set is indexed) over
+    // the second row of every other array blocks those arrays; the rest are unchanged.
+    let changed: Vec<(usize, CellRef)> = (0..20u32).map(|i| (0, CellRef::new(1, 4 * i))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C1"), Value::Number(10.0));
+    assert_eq!(t.get("G2"), Value::Number(31.0));
+    assert_eq!(t.get("A10"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("A12"), 4.0);
+}
+
+#[test]
+fn a_paste_over_small_and_tall_spills_blocks_those_it_touches() {
+    let mut t = T::new();
+    for i in 0..40u32 {
+        t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 2 * i), Cell::formula(Formula::new("=SEQUENCE(3)")));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 200), Cell::formula(Formula::new("=SEQUENCE(1048576)")));
+    t.calc.recalc_all(&mut t.wb);
+    // 20 cells: the middle row of the small arrays in columns 0, 8, 16 ... 72 (columns 80 and up hit
+    // nothing), and one deep inside the tall one.
+    let mut cells: Vec<(u32, u32)> = (0..19u32).map(|i| (1, 8 * i)).collect();
+    cells.push((700_000, 200));
+    paste_into(&mut t, &cells);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("GS1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C1"), 1.0);
+    assert_eq!(t.num("C3"), 3.0);
+    assert_eq!(t.get("I1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E3"), 3.0);
+}
+
+#[test]
+fn a_big_paste_on_one_sheet_and_one_cell_over_many_spills_on_another() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for i in 0..1_500u32 {
+        t.wb.sheet_mut(1).unwrap().cells.set(CellRef::new(4 * i, 0), Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.wb.sheet(1).unwrap().value(CellRef::new(4 * 700 + 2, 0)), Value::Number(7002.0));
+    // 5000 cells pasted on the first sheet, one over the middle of the 701st array on the second.
+    let mut changed: Vec<(usize, CellRef)> = (0..5_000u32).map(|i| (0, CellRef::new(i / 50, i % 50))).collect();
+    changed.push((1, CellRef::new(4 * 700 + 1, 0)));
+    for k in &changed {
+        t.wb.sheet_mut(k.0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    let data = t.wb.sheet(1).unwrap();
+    assert_eq!(data.value(CellRef::new(4 * 700, 0)), Value::Error(CellError::Spill));
+    assert_eq!(data.value(CellRef::new(4 * 699 + 2, 0)), Value::Number(6992.0));
+    assert_eq!(data.value(CellRef::new(4 * 701 + 2, 0)), Value::Number(7012.0));
+}
