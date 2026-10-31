@@ -198,6 +198,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` |
 
 - **Contributor and agent rules** (clean-room, asset policy, never-crash, quality gates): [`AGENTS.md`](AGENTS.md)
+- **Contributing:** reporting issues and preparing a PR: [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Bundled assets:** each one is listed with its licence in [`ATTRIBUTION.md`](ATTRIBUTION.md)
 - **Releases:** signed macOS, Windows, Linux, BSD and web builds; see [`docs/releasing.md`](docs/releasing.md)
 

@@ -1,0 +1,65 @@
+name: Excel parity gap
+description: Describe a behavior difference between GridCraft and Microsoft Excel.
+title: "Parity: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues and PRs first. Describe behavior using public documentation or observation with synthetic data.
+        Do not attach real customer files, personal or confidential data, or Office code, templates, icons, fonts or other vendor assets.
+        Keep screenshots of Microsoft software out of the repository; prefer public documentation and text descriptions of observations.
+  - type: input
+    id: version
+    attributes:
+      label: GridCraft version
+      description: Release version or source commit SHA.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and platform
+      description: Include the OS version; for the web build, also include browser and version.
+    validations:
+      required: true
+  - type: input
+    id: excel-feature
+    attributes:
+      label: Excel feature
+      description: Function, command or workflow whose behavior differs.
+    validations:
+      required: true
+  - type: textarea
+    id: gridcraft-behavior
+    attributes:
+      label: Current GridCraft behavior
+    validations:
+      required: true
+  - type: textarea
+    id: excel-behavior
+    attributes:
+      label: Expected Excel behavior
+      description: Describe the expected result and the Excel version used for comparison, if known.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the cell values, formulas and actions needed to compare the behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Optional public documentation, specification links, observations or screenshots you can share publicly. Do not copy vendor help text or assets.
+    validations:
+      required: false
+  - type: textarea
+    id: synthetic-workbook
+    attributes:
+      label: Minimal synthetic workbook
+      description: Describe a minimal workbook with invented data, or attach one created in GridCraft. Cell values and formulas in text are welcome.
+    validations:
+      required: false
