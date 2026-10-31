@@ -17,14 +17,28 @@
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// `println!` that ends the program quietly when stdout is closed (`gridcraft-cli commands |
-/// head`) instead of panicking on a broken pipe.
+static STDOUT_CLOSED: AtomicBool = AtomicBool::new(false);
+
+/// `println!` that suppresses further output when a reader closes stdout, while allowing work to finish.
 macro_rules! outln {
     ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        if let Err(e) = writeln!(std::io::stdout(), $($arg)*) {
+        if !$crate::STDOUT_CLOSED.load(std::sync::atomic::Ordering::Relaxed)
+            && let Err(e) = $crate::write_stdout(format_args!("{}\n", format_args!($($arg)*)))
+        {
             $crate::stdout_failed(e);
+        }
+    }};
+}
+
+macro_rules! errln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        if let Err(e) = writeln!(std::io::stderr().lock(), $($arg)*)
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            std::process::exit(1);
         }
     }};
 }
@@ -45,20 +59,43 @@ const USAGE: &str = "usage:
                      [--out FILE] [--print RANGE] [--quiet]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
+                     closing stdout does not cancel work; cancel the process to stop it
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
-/// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
-/// other write error is reported.
-fn stdout_failed(e: std::io::Error) -> ! {
-    if e.kind() == std::io::ErrorKind::BrokenPipe {
-        std::process::exit(0);
+fn write_stdout(args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+    use std::io::Write as _;
+    #[cfg(unix)]
+    {
+        // Stdout suppresses EBADF, so write through a duplicate to report invalid destinations.
+        use std::os::fd::AsFd as _;
+        use std::sync::{Mutex, OnceLock};
+        static STDOUT: OnceLock<std::io::Result<Mutex<std::fs::File>>> = OnceLock::new();
+        let out = STDOUT.get_or_init(|| std::io::stdout().as_fd().try_clone_to_owned().map(|fd| Mutex::new(std::fs::File::from(fd))));
+        match out {
+            Ok(out) => out.lock().unwrap_or_else(std::sync::PoisonError::into_inner).write_all(args.to_string().as_bytes()),
+            Err(error) => Err(std::io::Error::new(error.kind(), error.to_string())),
+        }
     }
-    eprintln!("gridcraft-cli: can't write to stdout: {e}");
-    std::process::exit(1);
+    #[cfg(not(unix))]
+    {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        out.write_fmt(args).and_then(|()| out.flush())
+    }
+}
+
+/// Stop writing after a reader closes the pipe; report any other write error.
+fn stdout_failed(e: std::io::Error) {
+    if e.kind() == std::io::ErrorKind::BrokenPipe {
+        STDOUT_CLOSED.store(true, Ordering::Relaxed);
+    } else {
+        errln!("gridcraft-cli: can't write to stdout: {e}");
+        std::process::exit(1);
+    }
 }
 
 fn main() -> ExitCode {
@@ -89,7 +126,7 @@ fn main() -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("gridcraft-cli: {e}");
+            errln!("gridcraft-cli: {e}");
             ExitCode::FAILURE
         }
     }
@@ -159,7 +196,7 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
         && let Some(warnings) = value.get("warnings").and_then(Value::as_array)
     {
         for warning in warnings.iter().filter_map(Value::as_str) {
-            eprintln!("Warning: {warning}");
+            errln!("Warning: {warning}");
         }
     }
     r
@@ -292,13 +329,13 @@ fn convert(args: &[String]) -> Result<(), String> {
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
-        eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
+        errln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
         return Ok(());
     }
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;
     gridcraft_engine::io::write_file(out, &bytes).map_err(|e| e.to_string())?;
-    eprintln!("wrote {out} ({} bytes)", bytes.len());
+    errln!("wrote {out} ({} bytes)", bytes.len());
     Ok(())
 }
 
@@ -451,7 +488,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     if let Some(out) = a.opt("out") {
         let r = exec(&mut s, "file.save", json!({"path": out}))?;
-        eprintln!("wrote {out} ({} bytes)", r["bytes"]);
+        errln!("wrote {out} ({} bytes)", r["bytes"]);
     }
     for (name, range) in &a.opts {
         if name == "print" {
@@ -491,7 +528,7 @@ fn commands(args: &[String]) -> Result<(), String> {
         outln!("{:<w$}  {}{menu}{sc}", c.id, c.label.trim_end_matches('…'));
         outln!("{:<w$}    {}", "", c.params);
     }
-    eprintln!("{} commands", list.len());
+    errln!("{} commands", list.len());
     Ok(())
 }
 
@@ -518,7 +555,7 @@ fn functions(args: &[String]) -> Result<(), String> {
         let desc = f["description"].as_str().unwrap_or("");
         outln!("    {cat}: {desc}");
     }
-    eprintln!("{} functions", list.len());
+    errln!("{} functions", list.len());
     Ok(())
 }
 
@@ -549,7 +586,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             Box::new(Headless::with_session(session))
         }
     };
-    eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());
+    errln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     Server::new(backend).serve(stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
