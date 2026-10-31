@@ -28,9 +28,11 @@ mod objects;
 mod text;
 
 use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
+pub use gridcraft_xlsx::HfPicture;
 use header_footer::draw_header_footer;
 pub use header_footer::{
-    HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
+    HF_FIELDS, HfContext, HfLine, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, hf_pictures, join_header_footer,
+    section_lines, split_header_footer,
 };
 /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
 type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;

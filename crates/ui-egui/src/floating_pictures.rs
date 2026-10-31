@@ -23,13 +23,24 @@ const MIN_TEXTURE_SIDE: u32 = 64;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHE_ITEMS: usize = 4096;
 
-/// A picture: its workbook, its object id there, and its size in bytes (object ids are per
-/// workbook, so two open workbooks can both have a picture 1).
+/// A picture: its workbook, its id there, and its size in bytes (object ids are per workbook, so
+/// two open workbooks can both have a picture 1). Header and footer pictures have no object id:
+/// theirs is the address of their bytes, which their sheet holds as long as it keeps them.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
-    id: u32,
+    kind: Kind,
+    id: u64,
     len: usize,
+}
+
+/// What a cached picture is.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum Kind {
+    /// A floating picture (Insert › Pictures).
+    Floating,
+    /// A header or footer picture (`&G`).
+    HeaderFooter,
 }
 
 #[derive(Default)]
@@ -157,10 +168,21 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 /// The texture of picture `image` of workbook `doc`, drawn in `rect` (points); `None` when it
 /// can't be decoded or is too large to be.
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
+    let key = Key { doc, kind: Kind::Floating, id: u64::from(image.id), len: image.data.len() };
+    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want_side(ctx, rect))
+}
+
+/// The texture of a header or footer picture of workbook `doc` (its encoded bytes, as the sheet
+/// keeps them), drawn in `rect` (points), from the same bounded cache as floating pictures.
+pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<[u8]>, rect: egui::Rect) -> Option<TextureHandle> {
+    let key = Key { doc, kind: Kind::HeaderFooter, id: data.as_ptr() as usize as u64, len: data.len() };
+    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, data, want_side(ctx, rect))
+}
+
+/// The longer side of `rect` in physical pixels.
+fn want_side(ctx: &egui::Context, rect: egui::Rect) -> u32 {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
-    let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
-    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
+    if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 }
 }
 
 #[cfg(test)]
@@ -175,7 +197,7 @@ mod tests {
     }
 
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, kind: Kind::Floating, id: u64::from(id), len: data.len() }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
