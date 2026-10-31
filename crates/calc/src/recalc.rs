@@ -113,11 +113,32 @@ fn components(edges: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>) {
 /// the same formula as in an incremental recalculation.
 #[derive(Default)]
 struct Prior {
-    /// Formulas that spilled (their area, from the last calculation or the file's `ref`).
-    spilled: HashSet<Key>,
+    /// Formulas that spilled, with the area they filled (from the last calculation or the file's
+    /// `ref`).
+    spilled: HashMap<Key, RangeRef>,
     /// Formulas that showed #SPILL!. A cell's value moves with it on a structural edit, its spill
     /// area doesn't.
     blocked: HashSet<Key>,
+}
+
+impl Prior {
+    /// Formulas whose new array reaches past their own former area into another formula's: they
+    /// are laid out after it, as in an incremental recalculation, where that area is still filled.
+    fn grown_into_another(&self, dirty: &[Key], spills: &HashMap<Key, std::sync::Arc<Array>>) -> HashSet<Key> {
+        let mut out = HashSet::default();
+        for k in dirty {
+            let (Some(old), Some(array)) = (self.spilled.get(k), spills.get(k)) else { continue };
+            let end = CellRef::new(
+                k.1.row.saturating_add((array.rows as u32).saturating_sub(1)),
+                k.1.col.saturating_add((array.cols as u32).saturating_sub(1)),
+            );
+            let area = RangeRef::new(k.1, end);
+            if !old.contains_range(&area) && self.spilled.iter().any(|(o, r)| o != k && o.0 == k.0 && r.intersects(&area)) {
+                out.insert(*k);
+            }
+        }
+        out
+    }
 }
 
 impl Calc {
@@ -205,7 +226,7 @@ impl Calc {
             if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
                 && let Some(sh) = wb.sheet_mut(i)
             {
-                prior.spilled.extend(sh.spill_ranges.iter().filter(|(_, r)| !r.is_single()).map(|(c, _)| (i, *c)));
+                prior.spilled.extend(sh.spill_ranges.iter().filter(|(_, r)| !r.is_single()).map(|(c, r)| ((i, *c), *r)));
                 sh.spill.clear();
                 sh.spill_ranges.clear();
             }
@@ -391,11 +412,13 @@ impl Calc {
             self.circular.extend(cycles);
             // When two arrays want the same cells, the one already spilling there keeps them and
             // the newcomer is #SPILL! (as when it is entered), and one that was #SPILL! stays so:
-            // arrays are laid out in that order, then in reading order. Without this, a full
+            // arrays are laid out in that order, then in reading order. Of two that both spilled,
+            // one that grew into the other's former area comes second. Without this, a full
             // recalculation or reopening the file handed the area to whichever came first.
+            let grown = if prior.spilled.is_empty() { HashSet::default() } else { prior.grown_into_another(&dirty, &spills) };
             dirty.sort_by_key(|k| {
-                let owns = prior.spilled.contains(k) || wb.sheet(k.0).is_some_and(|s| s.spill_ranges.contains_key(&k.1));
-                (prior.blocked.contains(k), !owns)
+                let owns = prior.spilled.contains_key(k) || wb.sheet(k.0).is_some_and(|s| s.spill_ranges.contains_key(&k.1));
+                (prior.blocked.contains(k), !owns, grown.contains(k))
             });
             let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read

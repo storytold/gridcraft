@@ -721,6 +721,23 @@ fn a_full_recalc_keeps_a_spill_with_the_formula_already_spilling_there() {
 }
 
 #[test]
+fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
+    // Both arrays spill; in manual calculation F13 then grows over F14:G14, which C14's array
+    // fills. A full recalculation gives what an automatic one would: C14 keeps its cells and F13
+    // is #SPILL!, although F13 comes first in reading order.
+    let mut t = T::new();
+    t.set("J1", "1");
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(J1,2)");
+    assert_eq!([t.num("F13"), t.num("G13")], [1.0, 2.0]);
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("J1", "5");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("F14"), t.num("G14"), t.num("I14")], [1.0, 4.0, 5.0, 7.0]);
+}
+
+#[test]
 fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     // Two arrays of one recalculation want the same empty cell: the one laid out second is
     // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
