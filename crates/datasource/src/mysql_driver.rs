@@ -74,24 +74,39 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     if let Some(p) = &req.password {
         b = b.pass(Some(p.as_str()));
     }
-    let mut conn = match Conn::new(b.clone().ssl_opts(tls)) {
+    let (mut conn, opts) = match Conn::new(b.clone().ssl_opts(tls.clone())) {
+        Ok(c) => (c, b.ssl_opts(tls)),
         // PREFERRED falls back to an unencrypted session only when the server has no TLS at all.
-        Err(mysql::Error::DriverError(DriverError::TlsNotSupported)) if fallback => Conn::new(b.ssl_opts(None::<SslOpts>)),
-        r => r,
-    }
-    .map_err(|e| format!("Could not connect to MySQL: {e}"))?;
+        Err(mysql::Error::DriverError(DriverError::TlsNotSupported)) if fallback => {
+            let b = b.ssl_opts(None::<SslOpts>);
+            (Conn::new(b.clone()).map_err(|e| format!("Could not connect to MySQL: {e}"))?, b)
+        }
+        Err(e) => return Err(format!("Could not connect to MySQL: {e}")),
+    };
+    // Past `max_rows` the rest of the result is not wanted, but the client reads it to the end
+    // when the result is dropped: stop the query on the server instead, from a second session.
+    let id = conn.connection_id();
+    let stop = move || {
+        if let Ok(mut c) = Conn::new(opts) {
+            let _ = c.query_drop(format!("KILL QUERY {id}"));
+        }
+    };
     // The binary protocol returns typed values; statements it can't prepare (SHOW, some CALLs)
     // fall back to the text protocol.
     match conn.exec_iter(req.query.as_str(), ()) {
-        Ok(result) => return collect(result, req.max_rows),
+        Ok(result) => return collect(result, req.max_rows, stop),
         Err(mysql::Error::MySqlError(e)) if e.code == 1295 => {}
         Err(e) => return Err(format!("MySQL: {e}")),
     }
     let result = conn.query_iter(req.query.as_str()).map_err(|e| format!("MySQL: {e}"))?;
-    collect(result, req.max_rows)
+    collect(result, req.max_rows, stop)
 }
 
-fn collect<P: mysql::prelude::Protocol>(mut result: mysql::QueryResult<'_, '_, '_, P>, max_rows: usize) -> Result<DbTable, String> {
+fn collect<P: mysql::prelude::Protocol>(
+    mut result: mysql::QueryResult<'_, '_, '_, P>,
+    max_rows: usize,
+    stop: impl FnOnce(),
+) -> Result<DbTable, String> {
     let Some(set) = result.iter() else { return Ok(DbTable::default()) };
     let cols = set.columns();
     let types: Vec<ColumnType> = cols.as_ref().iter().map(|c| c.column_type()).collect();
@@ -99,6 +114,7 @@ fn collect<P: mysql::prelude::Protocol>(mut result: mysql::QueryResult<'_, '_, '
     for row in set {
         if table.rows.len() >= max_rows {
             table.truncated = true;
+            stop();
             break;
         }
         let row = row.map_err(|e| format!("MySQL: {e}"))?;
@@ -147,6 +163,11 @@ fn value(v: Value, ty: Option<ColumnType>) -> DbValue {
 /// Text-protocol values and binary-protocol strings/decimals arrive as bytes.
 fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
     use ColumnType::*;
+    // BIT(1..64) arrives as its bits, big-endian, not as text.
+    if ty == Some(MYSQL_TYPE_BIT) && b.len() <= 8 {
+        let n = b.iter().fold(0u64, |n, byte| (n << 8) | u64::from(*byte));
+        return i64::try_from(n).map_or_else(|_| DbValue::Text(n.to_string()), DbValue::Int);
+    }
     let Ok(s) = String::from_utf8(b) else { return DbValue::Text("(binary)".into()) };
     let num = || s.parse::<f64>().ok().filter(|f| f.is_finite());
     match ty {
@@ -155,7 +176,6 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
         }
         Some(MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL | MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE) => num().map_or(DbValue::Text(s), DbValue::Float),
         Some(MYSQL_TYPE_DATE | MYSQL_TYPE_DATETIME | MYSQL_TYPE_TIMESTAMP | MYSQL_TYPE_TIME) => crate::parse_temporal(&s).unwrap_or(DbValue::Text(s)),
-        Some(MYSQL_TYPE_BIT) => DbValue::Text(s),
         _ => DbValue::Text(s),
     }
 }
@@ -163,6 +183,14 @@ fn bytes(b: Vec<u8>, ty: Option<ColumnType>) -> DbValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bit_values_are_numbers() {
+        assert_eq!(bytes(vec![0b1000_0000], Some(ColumnType::MYSQL_TYPE_BIT)), DbValue::Int(128));
+        assert_eq!(bytes(vec![1, 0], Some(ColumnType::MYSQL_TYPE_BIT)), DbValue::Int(256));
+        assert_eq!(bytes(vec![0xFF; 8], Some(ColumnType::MYSQL_TYPE_BIT)), DbValue::Text(u64::MAX.to_string()));
+        assert_eq!(bytes(b"abc".to_vec(), Some(ColumnType::MYSQL_TYPE_VAR_STRING)), DbValue::Text("abc".into()));
+    }
 
     #[test]
     fn url_tls_options_keep_their_certificate_checks() {
