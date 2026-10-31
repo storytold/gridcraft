@@ -176,3 +176,27 @@ fn a_file_with_too_many_equations_lays_out_a_bounded_amount() {
     t.execute("equation.edit", json!({"id": id, "latex": source})).unwrap();
     assert!(matches!(equation(&t, id).math.get(&source), Some(Ok(_))), "editing lays it out");
 }
+
+#[test]
+fn ids_stay_unique_when_a_file_used_the_largest_id() {
+    // A workbook (from a JSON file, say) whose shape has id u32::MAX: new equations and the
+    // objects of a copied sheet still get ids no other object has.
+    let mut s = s();
+    let first = insert(&mut s, json!({"latex": "x", "cell": "A1"}));
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.shapes.iter_mut().filter(|x| x.id == first).for_each(|x| x.id = u32::MAX);
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let a = insert(&mut t, json!({"latex": "y", "cell": "C1"}));
+    let b = insert(&mut t, json!({"latex": "z", "cell": "E1"}));
+    t.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &t.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| sh.shapes.iter().map(|x| x.id)).collect();
+    assert_eq!(ids.len(), 6, "three equations on each sheet");
+    assert!(a != u32::MAX && b != u32::MAX && a != b, "{a} {b}");
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "every id is distinct: {ids:?}");
+}

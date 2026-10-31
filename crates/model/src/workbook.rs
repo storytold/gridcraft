@@ -445,26 +445,54 @@ impl Workbook {
         }
     }
 
+    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
-        let mut m = 0;
-        for s in &self.sheets {
-            for c in &s.charts {
-                m = m.max(c.id);
-            }
-            for c in &s.images {
-                m = m.max(c.id);
-            }
-            for c in &s.shapes {
-                m = m.max(c.id);
-            }
-            for c in &s.tables {
-                m = m.max(c.id);
-            }
-            for c in &s.slicers {
-                m = m.max(c.id);
-            }
+        self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
+    }
+
+    /// `count` distinct ids no object in the workbook uses, sorted: the ones above the largest id
+    /// in use while they last, then the lowest free ones. Fewer come back only when the id space
+    /// is exhausted.
+    pub fn free_object_ids(&self, count: usize) -> Vec<u32> {
+        let mut used: Vec<u32> = self
+            .sheets
+            .iter()
+            .flat_map(|s| {
+                s.charts
+                    .iter()
+                    .map(|o| o.id)
+                    .chain(s.images.iter().map(|o| o.id))
+                    .chain(s.shapes.iter().map(|o| o.id))
+                    .chain(s.tables.iter().map(|o| o.id))
+                    .chain(s.slicers.iter().map(|o| o.id))
+            })
+            .collect();
+        used.sort_unstable();
+        used.dedup();
+        let max = used.last().copied().unwrap_or(0);
+        let mut out = Vec::with_capacity(count.min(1 << 16));
+        let mut next = max.checked_add(1);
+        while out.len() < count
+            && let Some(id) = next
+        {
+            out.push(id);
+            next = id.checked_add(1);
         }
-        m.saturating_add(1)
+        // Past the top: the gaps below the largest id, from 1 (0 is never an object's id).
+        let mut taken = used.iter().copied().peekable();
+        let mut id = 1u32;
+        while out.len() < count && id < max {
+            while taken.next_if(|&t| t < id).is_some() {}
+            if taken.peek() == Some(&id) {
+                taken.next();
+            } else {
+                out.push(id);
+            }
+            id += 1;
+        }
+        out.sort_unstable();
+        out
     }
 }
 
@@ -516,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn object_ids_saturate_instead_of_overflowing() {
+    fn object_ids_never_overflow_or_repeat() {
         let mut wb = Workbook::new();
         let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
         assert_eq!(wb.next_object_id(), 1);
@@ -527,6 +555,18 @@ mod tests {
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
-        assert_eq!(wb.next_object_id(), u32::MAX, "an id read from a file at the maximum saturates");
+        // An id read from a file at the maximum: the lowest free id, not the maximum again.
+        assert_eq!(wb.next_object_id(), 1);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(1));
+            sh.images.push(image(3));
+        }
+        assert_eq!(wb.next_object_id(), 2);
+        assert_eq!(wb.free_object_ids(4), vec![2, 4, 5, 6], "the gaps, skipping 1, 3 and 7");
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX - 1));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
     }
 }
