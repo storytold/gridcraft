@@ -25,9 +25,11 @@ impl Scale {
         (0..=n)
             .map(|i| {
                 let v = self.min + i as f64 * self.step;
-                // Snap away accumulated float error.
+                // Snap away accumulated float error, but only onto a multiple of the step that is
+                // really that close: a `min` off the step grid must keep its own ticks.
                 let snapped = (v / self.step).round() * self.step;
-                if snapped.abs() < self.step * 1e-9 { 0.0 } else { snapped }
+                let v = if (snapped - v).abs() < self.step * 1e-9 { snapped } else { v };
+                if v.abs() < self.step * 1e-9 { 0.0 } else { v }
             })
             .collect()
     }
@@ -104,11 +106,6 @@ pub fn nice_scale(lo: f64, hi: f64, force_zero: bool) -> Scale {
     if !(min.is_finite() && max.is_finite()) || max <= min {
         return Scale { min: lo, max: hi, step: range };
     }
-    Scale { min, max, step }
-}
-
-/// Exact fixed scale (100% stacked axes).
-pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
     Scale { min, max, step }
 }
 
