@@ -53,6 +53,9 @@ pub(super) struct Links {
     pub names: Vec<String>,
     /// Per defined name: whether the import skips it (its formula can't be decoded).
     pub skipped: Vec<bool>,
+    /// Per defined name: whether it names a macro or a user-defined function (Lbl `fFunc` or
+    /// `fProc`, [MS-XLS] 2.4.150). Never imported: the workbook's VBA project isn't read.
+    pub macros: Vec<bool>,
     pub books: Vec<SupBook>,
     pub xti: Vec<Xti>,
 }
@@ -334,6 +337,12 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], base: CellRef, mode: Mode, links:
             0x23 => {
                 let i = usize::try_from(t.u32()?).ok().and_then(|i| i.checked_sub(1));
                 let name = i.and_then(|i| links.names.get(i)).filter(|n| !n.is_empty()).ok_or(Unsupported("reference to a missing defined name"))?;
+                // A call to a VBA function (`=DIAGONALWERT(I11)`: PtgName to a macro name, then
+                // PtgFuncVar 255) can't run here and would calculate to #NAME?: the cell keeps its
+                // saved result, and a defined name that calls one is skipped like the others.
+                if i.and_then(|i| links.macros.get(i)) == Some(&true) {
+                    return Err(Unsupported("user-defined functions (VBA macros)"));
+                }
                 // A cell using a name the import drops would calculate to #NAME?: keep its
                 // saved result instead, as for references to other workbooks.
                 if mode != Mode::Name && i.and_then(|i| links.skipped.get(i)) == Some(&true) {
@@ -480,8 +489,9 @@ mod tests {
     fn links() -> Links {
         Links {
             sheets: vec!["Sheet1".into(), "My Data".into()],
-            names: vec!["Rate".into()],
-            skipped: vec![false],
+            names: vec!["Rate".into(), "MyUdf".into()],
+            skipped: vec![false, false],
+            macros: vec![false, true],
             books: vec![
                 SupBook { internal: true, addin: false, names: vec![] },
                 SupBook { internal: false, addin: true, names: vec!["_xlfn.IFERROR".into()] },
@@ -514,6 +524,9 @@ mod tests {
         let namex = [&[0x39u8][..], &1u16.to_le_bytes(), &1u32.to_le_bytes()].concat();
         let call = [namex.as_slice(), &[0x1E, 5, 0, 0x16, 0x22, 3, 0xFF, 0]].concat();
         assert_eq!(text(&call, &[]).unwrap(), "IFERROR(5,)");
+        // A VBA function called by name (PtgName to a macro name) is refused: it can't run here.
+        let udf = [&[0x23u8][..], &2u32.to_le_bytes(), &[0x1E, 1, 0, 0x22, 2, 0xFF, 0]].concat();
+        assert_eq!(text(&udf, &[]), Err(Unsupported("user-defined functions (VBA macros)")));
         // A deleted sheet becomes #REF!; the CHOOSE jump table is skipped.
         let ref_deleted = [&[0x3Au8][..], &3u16.to_le_bytes(), &[0, 0, 0, 0]].concat();
         let choose = [&[0x1Eu8, 1, 0][..], &[0x19, 0x04, 1, 0, 0, 0, 0, 0], ref_deleted.as_slice(), &[0x1E, 2, 0, 0x22, 3, 100, 0]].concat();
