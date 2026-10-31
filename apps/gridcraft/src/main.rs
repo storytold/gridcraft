@@ -27,6 +27,19 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
+#[cfg(target_os = "windows")]
+fn prepare_help_stdout() {
+    use win32console::console::{HandleType, WinConsole};
+
+    let has_stdout = WinConsole::get_std_handle(HandleType::Output).is_ok_and(|handle| handle.is_valid() && !handle.get_raw().is_null());
+    if !has_stdout {
+        let _ = WinConsole::attach_console(u32::MAX);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn prepare_help_stdout() {}
+
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
@@ -234,6 +247,13 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        prepare_help_stdout();
+        let help = "usage: gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [files…]\n\nOptions:\n  --control <port>       Start the localhost JSON-lines control server\n  --control-token <token>  Authenticate control connections\n  --sample <name>        Open a sample workbook (sales, grades, budget)\n  -h, --help             Print this help and exit\n  -V, --version          Print version and exit\n";
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), help.as_bytes());
+        return Ok(());
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -254,7 +274,6 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
     if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         if let Err(e) = done {

@@ -24,7 +24,7 @@ use gridcraft_engine::formula::{Expr, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::{Args, USAGE, number_text, pretty};
+use super::{Args, USAGE, number_text, pretty, print_usage};
 
 mod calc;
 mod fidelity;
@@ -198,6 +198,10 @@ pub fn main(args: &[String]) -> ExitCode {
         Ok(a) => a,
         Err(e) => return usage(e),
     };
+    if a.help {
+        print_usage();
+        return ExitCode::SUCCESS;
+    }
     if a.positional.is_empty() {
         return usage("missing <file-or-dir>".into());
     }
