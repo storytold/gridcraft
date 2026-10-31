@@ -22,7 +22,9 @@ pub(super) fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<S
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
             }
-            if let Some(fd) = try_load(&[(path.as_str(), *index)]) {
+            if let Some(mut fd) = try_load(&[(path.as_str(), *index)]) {
+                // CJK text shares the Latin baseline; symbols and emoji keep box centering.
+                fd.tweak.set_baseline_fallback(key.starts_with("sys-cjk-"));
                 fonts.font_data.insert(key.to_string(), Arc::new(fd));
                 keys.push(key.to_string());
                 loaded.push(path.clone());

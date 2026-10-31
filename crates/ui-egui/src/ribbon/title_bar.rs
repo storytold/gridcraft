@@ -244,7 +244,7 @@ mod title_bar_tests {
 
     #[test]
     fn long_title_is_truncated_with_an_ellipsis() {
-        let long = format!("upload-{}-cleaned (1).xlsx", "3FMyNTYg2gDaANiAAACq20AAAAQMBqug".repeat(4));
+        let long = format!("资产清单2026第4季度-{}-中文 (1).xlsx", "3FMyNTYg2gDaANiAAACq20AAAAQMBqug".repeat(4));
         let (text, w, _) = layout_title(&long, false, 300.0);
         assert!(text.ends_with('…'), "truncated title ends with an ellipsis: {text:?}");
         assert!(text.chars().count() < long.chars().count());
