@@ -11,7 +11,7 @@ use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
-use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
+use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, save_changes_focused, vec2};
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
@@ -113,6 +113,15 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
+    let covered = app.macros.question.is_some() || app.message.is_some();
+    #[cfg(not(target_arch = "wasm32"))]
+    let covered = covered || crate::updates_ui::prompt_shown(app);
+    if d.name == "saveChanges" && covered {
+        d.save_changes_armed = None;
+        d.save_changes_pending = None;
+        app.dialog = Some(d);
+        return;
+    }
     let home = app.ui_window();
     // The macro step editor is a large resizable window of its own.
     if d.name == "macroEditor" {
@@ -317,15 +326,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
+                    let (focused, held) = ui.input(|i| (
+                        save_changes_focused(i),
+                        i.key_down(Key::Y) || i.key_down(Key::N),
+                    ));
+                    let mut answer = save_changes_shortcut(&mut d, ui.ctx(), focused);
                     ui.horizontal(|ui| {
-                        for (label, answer) in
+                        for (label, choice) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
-                                open = false;
+                            if ui.button(label).clicked() && answer != Some(crate::SaveAnswer::Cancel) {
+                                answer = Some(choice);
                             }
                         }
                     });
+                    if focused && let Some(answer) = answer {
+                        d.save_changes_pending = Some(answer);
+                        d.save_changes_armed = None;
+                    }
+                    // A mouse click or another answer key must not move a still-held gesture
+                    // into the next native window. Cancel never advances and stays immediate.
+                    if focused
+                        && (!held || d.save_changes_pending == Some(crate::SaveAnswer::Cancel))
+                        && let Some(answer) = d.save_changes_pending.take()
+                        && app.answer_save_changes(answer, quitting, ui.ctx())
+                    {
+                        open = false;
+                    }
                 }
                 "start" => {
                     ui.heading("Start a new workbook");
@@ -598,4 +625,38 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.end_row();
         }
     });
+}
+
+fn save_changes_shortcut(d: &mut Dialog, ctx: &egui::Context, focused: bool) -> Option<crate::SaveAnswer> {
+    let mut answer = None;
+    ctx.input_mut(|i| {
+        if !focused {
+            d.save_changes_armed = None;
+            d.save_changes_pending = None;
+        }
+        i.events.retain(|event| {
+            match event {
+                egui::Event::Key { key, pressed, repeat, modifiers, .. } => {
+                    if matches!(key, Key::Y | Key::N) {
+                        if *pressed {
+                            if !repeat {
+                                d.save_changes_armed = (focused && modifiers.is_none()).then_some(*key);
+                            }
+                        } else if d.save_changes_armed.take() == Some(*key) && focused && modifiers.is_none() {
+                            answer.get_or_insert(if *key == Key::Y { crate::SaveAnswer::Save } else { crate::SaveAnswer::DontSave });
+                        }
+                    } else if *key == Key::Escape && *pressed && !repeat && focused && modifiers.is_none() {
+                        answer = Some(crate::SaveAnswer::Cancel);
+                    }
+                    // Consume the whole answer gesture, including repeats, before another
+                    // workbook's question can be drawn in this frame.
+                    return !modifiers.is_none() || !matches!(key, Key::Y | Key::N | Key::Escape);
+                }
+                egui::Event::Text(text) if matches!(text.as_str(), "y" | "Y" | "n" | "N") => return false,
+                _ => {}
+            }
+            true
+        });
+    });
+    answer
 }

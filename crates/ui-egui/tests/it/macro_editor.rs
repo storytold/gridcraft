@@ -469,6 +469,36 @@ fn quitting_with_the_editor_open_still_asks_about_unsaved_workbooks() {
 }
 
 #[test]
+fn save_changes_keys_do_not_answer_the_macro_editors_close_question() {
+    let mut h = harness();
+    three(&mut h);
+    h.state_mut().macros.editor.as_mut().unwrap().dirty = true;
+    h.state_mut().run("cell.set", json!({"cell": "Z9", "input": "unsaved"})).unwrap();
+    let doc = h.state().session.doc().unwrap().uid;
+    request_window_close(&mut h);
+    assert!(h.state().macros.editor.as_ref().unwrap().ask_close);
+    for key in [Key::N, Key::Y] {
+        h.key_press(key);
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
+        assert!(h.state().macros.editor.as_ref().unwrap().dirty);
+        assert_eq!(h.state().session.doc().unwrap().uid, doc);
+    }
+    h.get_by_label("Don't Save").click();
+    let sent = step_commands(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close));
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(h.state().session.doc().unwrap().uid, doc);
+    h.key_press(Key::N);
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "a fresh N answers the workbook's own question");
+    assert!(h.state().session.documents().iter().all(|d| d.uid != doc));
+}
+
+#[test]
 fn a_dialog_asked_for_over_the_editor_says_why_it_did_not_open() {
     let mut h = harness();
     three(&mut h);
