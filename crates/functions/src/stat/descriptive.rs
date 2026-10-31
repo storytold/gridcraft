@@ -420,7 +420,10 @@ pub(super) fn geomean(v: &[f64]) -> R<f64> {
 }
 
 pub(super) fn harmean(v: &[f64]) -> R<f64> {
-    if v.is_empty() || v.iter().any(|&x| x <= 0.0) {
+    if v.is_empty() {
+        return Err(CellError::NA);
+    }
+    if v.iter().any(|&x| x <= 0.0) {
         return Err(CellError::Num);
     }
     Ok(v.len() as f64 / v.iter().map(|x| 1.0 / x).sum::<f64>())
