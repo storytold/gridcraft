@@ -7,6 +7,7 @@ use gridcraft_engine::model::{Sheet, Visibility};
 use serde_json::json;
 
 use crate::SheetApp;
+use crate::i18n::Language;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -452,25 +453,26 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
     let mut parts = Vec::new();
+    let lang = app.ui.language;
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(format!("{}: {}", lang.tr("Average"), fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(format!("{}: {}", lang.tr(if lang == Language::Tr { "Status|Count" } else { "Count" }), st.count));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(format!("{}: {}", lang.tr("Numerical Count"), st.numeric));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(format!("{}: {}", lang.tr("Minimum"), fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(format!("{}: {}", lang.tr("Maximum"), fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(format!("{}: {}", lang.tr(if lang == Language::Tr { "Status|Sum" } else { "Sum" }), fmt(st.sum)));
     }
     parts
 }
@@ -481,12 +483,21 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
     let st = app.session.prefs.status_bar;
     for (key, label, mut on) in [
         ("average", "Average", st.average),
-        ("count", "Count", st.count),
+        ("count", "Status|Count", st.count),
         ("numericalCount", "Numerical Count", st.numerical_count),
         ("minimum", "Minimum", st.minimum),
         ("maximum", "Maximum", st.maximum),
-        ("sum", "Sum", st.sum),
+        ("sum", "Status|Sum", st.sum),
     ] {
+        let label = if app.ui.language == Language::Tr {
+            label
+        } else {
+            match label {
+                "Status|Count" => "Count",
+                "Status|Sum" => "Sum",
+                _ => label,
+            }
+        };
         if ui.checkbox(&mut on, app.ui.language.tr(label)).changed() {
             app.run_or_alert("view.statusBar", json!({ key: on }));
         }
