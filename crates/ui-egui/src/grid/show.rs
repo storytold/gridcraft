@@ -205,7 +205,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if geo.paper.is_some() {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
-    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    show_grid_interactions(app, ui, &resp, &geo, sh, &wb, &mut cf);
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
@@ -322,7 +322,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
     }
 }
 
-fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut CfCache) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -338,6 +338,11 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         interact(app, ui, resp, geo, sh, wb);
     }
     update_cursor(app, ui, resp, geo, sh);
+    if let Some(active) = app.session.active()
+        && let Some(active_sheet) = active.wb.active()
+    {
+        expose_active_cell(app, ui, resp.id, resp.rect, (&active.wb, active_sheet, sh, cf));
+    }
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
@@ -818,6 +823,75 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         );
     }
     p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
+}
+
+/// The grid is painted, so a screen reader sees one blank node. Give it the active cell: address as
+/// the label, shown text as the value, and the formula (when it isn't hidden) as the description.
+fn expose_active_cell(app: &SheetApp, ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, paint: (&Workbook, &Sheet, &Sheet, &mut CfCache)) {
+    let (wb, sh, painted_sheet, painted_cf) = paint;
+    let si = wb.active_sheet();
+    let at = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+    let at = sh.merge_at(at).map(|m| m.start).unwrap_or(at);
+    let input = crate::formula_bar::active_input(app);
+    let picture = sh.cell_pictures.contains_key(&at);
+    // A picture cell's text value is its error fallback; the picture's alt text is what it shows.
+    let address = at.to_string();
+    let mut text_child = String::new();
+    ui.ctx().accesskit_node_builder(id, |node| {
+        let (shown, hidden) = if picture {
+            (input.clone(), false)
+        } else {
+            let (look, conditional) = if std::ptr::eq(sh, painted_sheet) {
+                super::cell_paint::look(wb, si, sh, at, painted_cf)
+            } else {
+                super::cell_paint::look(wb, si, sh, at, &mut CfCache::new())
+            };
+            let value = sh.value(at);
+            let hidden =
+                conditional.as_ref().is_some_and(|format| format.hide_value) || (!sh.show_formulas && !sh.show_zeros && value.as_f64() == Some(0.0));
+            let shown = if hidden {
+                String::new()
+            } else if sh.show_formulas
+                && !gridcraft_engine::display::formula_hidden(wb, sh, at)
+                && let Some(formula) = sh.cell(at).and_then(|cell| cell.formula.as_ref())
+            {
+                format!("={}", formula.text)
+            } else {
+                gridcraft_engine::display::value_text_as(wb, &value, look.style.num_fmt.as_str())
+            };
+            (shown, hidden)
+        };
+        let formula_cell = !picture
+            && !hidden
+            && !input.is_empty()
+            && !gridcraft_engine::display::formula_hidden(wb, sh, at)
+            && sh.cell(sh.spill_anchor(at).unwrap_or(at)).is_some_and(|cell| cell.formula.is_some());
+        let description = if formula_cell {
+            let formula = sh.cell(sh.spill_anchor(at).unwrap_or(at)).and_then(|cell| cell.formula.as_ref());
+            let text = formula.map(|formula| format!("={}", formula.text)).unwrap_or_else(|| input.clone());
+            if formula.is_some_and(|formula| formula.array.is_some()) { format!("{{{text}}}") } else { text }
+        } else {
+            String::new()
+        };
+        text_child = shown.clone();
+        node.set_role(egui::accesskit::Role::Cell);
+        node.set_label(address);
+        node.set_value(shown.clone());
+        if !description.is_empty() {
+            node.set_description(description);
+        }
+    });
+    if !text_child.is_empty() {
+        // AT-SPI doesn't expose a string value for table cells; a child label gives it text.
+        ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("active-cell-value", id))
+                .max_rect(rect)
+                .accessibility_parent(id)
+                .accessibility_role(egui::accesskit::Role::Label)
+                .accessibility_label(text_child),
+        );
+    }
 }
 
 #[cfg(test)]
