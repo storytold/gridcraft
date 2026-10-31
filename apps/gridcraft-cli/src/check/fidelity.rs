@@ -102,6 +102,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
     let mut cond_formats = Diffs::new("condFormats", m);
     let mut validations = Diffs::new("validations", m);
     let mut charts = Diffs::new("charts", m);
+    let mut pictures = Diffs::new("pictures", m);
     let mut comments = Diffs::new("comments", m);
     let mut hyperlinks = Diffs::new("hyperlinks", m);
     let mut pivots = Diffs::new("pivots", m);
@@ -152,6 +153,31 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         if ca != cb {
             charts.push(|| format!("{name}: {ca:?} → {cb:?}"));
         }
+        // Compare picture occurrences in order, not IDs or media part names: the writer
+        // renumbers those. Payload and alternative text are preserved without normalization.
+        for i in 0..sa.images.len().max(sb.images.len()) {
+            match (sa.images.get(i), sb.images.get(i)) {
+                (Some(before), Some(after)) => {
+                    let media_changed = before.data != after.data;
+                    let alt_changed = before.alt != after.alt;
+                    if media_changed || alt_changed {
+                        pictures.push(|| {
+                            let mut fields = Vec::new();
+                            if media_changed {
+                                fields.push(format!("media bytes ({} → {} bytes)", before.data.len(), after.data.len()));
+                            }
+                            if alt_changed {
+                                fields.push("alternative text".to_string());
+                            }
+                            format!("{name}: picture {} changed: {}", i + 1, fields.join(", "))
+                        });
+                    }
+                }
+                (Some(_), None) => pictures.push(|| format!("{name}: picture {} removed", i + 1)),
+                (None, Some(_)) => pictures.push(|| format!("{name}: picture {} added", i + 1)),
+                (None, None) => {}
+            }
+        }
         diff_count(&mut comments, &name, sa.comments.len(), sb.comments.len());
         diff_count(&mut hyperlinks, &name, sa.hyperlinks.len(), sb.hyperlinks.len());
         diff_count(&mut pivots, &name, sa.pivots.len(), sb.pivots.len());
@@ -178,6 +204,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         cond_formats.done(),
         validations.done(),
         charts.done(),
+        pictures.done(),
         comments.done(),
         hyperlinks.done(),
         pivots.done(),

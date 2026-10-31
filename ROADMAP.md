@@ -171,6 +171,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |
 | 2026-10-14 | Recalculation: when two arrays of one recalculation want the same empty cells, the formulas that read the one laid out second (at its anchor or over the cells it would have spilled into) read `#SPILL!` and empty cells instead of its values |
 | 2026-10-14 | Border keytips: each Alt, H, B letter applies the preset Excel's Borders menu gives it (H,B,O bottom, H,B,B bottom double, H,B,N no border, H,B,A all borders and the rest); they all drew a bottom border before. H,B,M opens Format Cells on the Border tab |
+| 2026-10-13 | CLI XLSX fidelity checks detect changed picture media and alternative text, preserving occurrence order and multiplicity |
 | 2026-10-13 | Formula-entry Command/Ctrl-click inserts another reference with the locale's argument separator; Shift-click extends from a stable, sheet-aware anchor. Pointer tests cover repeated clicks, reversed ranges, ordinary replacement, typed separators, Spanish syntax, sheet switches and keyboard continuation. Readiness estimates unchanged. |
 | 2026-10-13 | `formulas.evaluate` (`gridcraft-cli eval`, MCP `evaluate_formula`) refuses what entering the formula in a cell refuses, with the reason (`=SUM(1;2)`: "expected `,` or `)`"), instead of `#NAME?` for any formula that doesn't parse |
 | 2026-10-13 | Colour menus: Fill Color, Font Color and the Format Cells pickers end with Recent Colors (the last ten custom colours) and More Colors… (hue/saturation area, RGB, hex box, preview, OK/Cancel) (#928) |
@@ -267,6 +268,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | minor | XLSX dynamic-array `cm` metadata kept on save; progress log row |
 | 2026-10-14 | minor | Progress log: spill anchor reading its old spill area |
 | 2026-10-14 | minor | Progress log: formulas reading an array that loses a spill conflict |
+| 2026-10-13 | minor | Picture media and alternative-text comparisons in the CLI fidelity checker |
 | 2026-10-13 | trivial | Progress log: More Colors… and Recent Colors in the colour menus (#928) |
 | 2026-10-13 | minor | Multi-level category axes (read, drawn, written); progress log row |
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |

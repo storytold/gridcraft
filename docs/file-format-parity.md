@@ -14,6 +14,15 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+## Picture fidelity checks
+
+`gridcraft-cli check` reports a `pictures` category for exact media bytes and alternative text,
+comparing ordered picture occurrences per sheet. It detects same-size media replacement as well
+as missing pictures, without comparing regenerated object IDs or media-part filenames. Controls
+cover duplicate media, two XLSX saves, escaped alternative text and report caps. This checks
+post-import model fidelity, not anchor geometry, image decoding, initial-import loss or external
+Excel acceptance. Source-package object inventory and drawing identity remain separate concerns.
+
 ## Workbook formats
 
 XLSX column declarations are limited to 1,000,000 expanded column assignments per worksheet,
@@ -136,6 +145,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |
 | 2026-10-14 | minor | PDF export writes clickable annotations for safe cell URLs and destinations on printed pages; CLI `convert` accepts `.pdf` output (#954) |
+| 2026-10-13 | minor | Picture media and alternative-text comparisons in the CLI fidelity checker |
 | 2026-10-13 | trivial | XLSX export keeps a picture shared by several sheets as one media part (#985) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
