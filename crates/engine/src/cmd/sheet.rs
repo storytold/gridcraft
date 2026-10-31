@@ -298,7 +298,7 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
         if last >= at && last as u64 + count as u64 >= limit as u64 {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     Ok(())
@@ -521,7 +521,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
         if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     let right = shift == "right";

@@ -1636,6 +1636,8 @@ Macro",
     // From PR #721 (hasan-sdaif): two plain labels, wording kept as submitted.
     ("Delete columns", "حذف أعمدة"),
     ("Insert columns", "إدراج أعمدة"),
+    // From main (statistics copy on click)
+    ("Click to copy", "انقر للنسخ"),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.

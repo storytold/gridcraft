@@ -270,8 +270,16 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
     let label = tr(ui, label);
     let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
     let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
-    let main = Rect::from_min_size(rect.min, vec2(24.0 + tw, rect.height()));
-    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    // Mirrored, the arrow is at the left and the icon and label at the right.
+    let rtl = crate::rtl::on(ui.ctx());
+    let (main, arrow) = if rtl {
+        let split = rect.right() - (24.0 + tw);
+        (Rect::from_min_max(pos2(split, rect.top()), rect.max), Rect::from_min_max(rect.min, pos2(split, rect.bottom())))
+    } else {
+        let main = Rect::from_min_size(rect.min, vec2(24.0 + tw, rect.height()));
+        (main, Rect::from_min_max(pos2(main.right(), rect.top()), rect.max))
+    };
+    let divider_x = if rtl { main.left() } else { main.right() };
     let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
     let a = ui.interact(arrow, ui.scope_id().with((tip, "arrow")), Sense::click());
     let name = label.replace('\n', " ");
@@ -285,10 +293,10 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
                 ui.painter().rect_filled(r, 4.0, t.pressed);
             }
         }
-        ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+        ui.painter().line_segment([pos2(divider_x, rect.top() + 3.0), pos2(divider_x, rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
-    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, main, 12.0), rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    ui.painter().text(pos2(crate::rtl::lead_x(rtl, main, 24.0), rect.center().y), crate::rtl::lead_center(rtl), label, font, t.text);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
     let tip = tip_text(ui, tip);
     (m.on_hover_text(tip.clone()), a.on_hover_text(tip))
