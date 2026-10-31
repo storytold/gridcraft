@@ -106,7 +106,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         && app.session.active().is_some_and(|d| d.uid == ed.doc)
     {
         let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
-        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
+        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text, ed.locale) {
             if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) {
                 continue;
             }

@@ -298,7 +298,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let EditorKeyOutcome { action, arrow, cancel } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
-    let refs = formula_refs(&ed.text);
+    let refs = formula_refs(&ed.text, ed.locale);
     let t = Tokens::get(ui.ctx());
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
     let cell_text_color = if on_sheet { t.cell_text } else { t.text };
@@ -605,7 +605,7 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
     let caret_b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
-    for (a, b, ..) in formula_refs(&ed.text) {
+    for (a, b, ..) in formula_refs(&ed.text, ed.locale) {
         if a <= caret_b && caret_b <= b {
             let Some(r) = ed.text.get(a..b) else { return };
             let cycled: String = r

@@ -272,11 +272,12 @@ impl EditState {
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
-/// same colour), for colouring the editor and outlining ranges on the grid.
-pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+/// same colour), for colouring the editor and outlining ranges on the grid. `locale` is the edit
+/// syntax, so `=A1+#WERT!` in German still finds A1.
+pub fn formula_refs(text: &str, locale: gridcraft_engine::formula::FormulaLocale) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
     let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
     let offset = text.len() - body.len();
-    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
+    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize_locale(body, locale) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     let mut i = 0;
@@ -459,11 +460,20 @@ mod tests {
 
     #[test]
     fn ref_spans() {
-        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
+        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4", Default::default());
         assert_eq!(r.len(), 4);
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
         assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn ref_spans_follow_the_edit_syntax() {
+        use gridcraft_engine::formula::FormulaLocale;
+        // A German error value does not hide the references around it.
+        let r = formula_refs("=A1+#WERT!+SUMME(B2:C3;1,5)", FormulaLocale::De);
+        assert_eq!(r.iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["A1", "B2:C3"]);
+        assert!(formula_refs("=A1+#WERT!", FormulaLocale::En).is_empty());
     }
 
     #[test]
@@ -478,7 +488,7 @@ mod tests {
 
     #[test]
     fn whole_row_and_column_ref_spans() {
-        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)", Default::default());
         assert_eq!(refs.len(), 4);
         assert_eq!(refs[0].2.a1(), "C:C");
         assert_eq!(refs[1].2.a1(), "4:6");
@@ -493,7 +503,7 @@ mod tests {
         edit.insert_ref("C:C");
         edit.append_ref("E:E");
         assert_eq!(edit.text, "=SUM(C:C,E:E");
-        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(formula_refs(&edit.text, edit.locale).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
         assert_eq!(edit.point, Some((9, 12)));
         assert!(edit.can_point());
     }
