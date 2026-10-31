@@ -227,6 +227,8 @@ pub struct GridState {
     /// of it offers Show Details, and running it says why.
     pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
+    /// Quick Analysis button and popup (Ctrl+Q).
+    pub quick_analysis: crate::quick_analysis::State,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
     /// Header or footer being edited in place (Page Layout view).
