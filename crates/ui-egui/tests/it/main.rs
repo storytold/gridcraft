@@ -35,6 +35,8 @@ mod fill_handle_right_drag;
 mod fill_options_button;
 mod filter_list_scroll;
 mod filter_menu_enter;
+mod filter_only_value;
+mod filter_value_counts;
 mod find_dialog_focus;
 mod floating_pictures;
 mod font_box_filter;
