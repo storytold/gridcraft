@@ -232,10 +232,18 @@ fn with(p: &Json, key: &str, v: Json) -> Json {
     Json::Object(m)
 }
 
+/// The rows of `sheet` a filter hides: formatting leaves them as they are.
+fn filtered_rows(s: &Session, sheet: usize) -> Result<std::collections::BTreeSet<u32>> {
+    Ok(s.doc()?.wb.sheet(sheet).map(|sh| sh.filtered_rows()).unwrap_or_default())
+}
+
 /// Applies `f` to the style of every targeted cell (whole rows/columns set the line format too).
+/// Rows hidden by a filter keep their format, as in Excel: formatting a filtered range changes
+/// only its visible cells. Rows hidden by hand are formatted.
 pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    let filtered = filtered_rows(s, sheet)?;
     let guarded = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.is_some());
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
@@ -254,31 +262,119 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
             };
         }
         let mut cache: std::collections::HashMap<StyleId, StyleId> = std::collections::HashMap::new();
+        // Cells a whole-column format stores beyond the selection's existing ones, over the
+        // whole command.
+        let mut budget: usize = 4_000_000;
+        let mut spend = |n: usize| match budget.checked_sub(n) {
+            Some(left) => {
+                budget = left;
+                Ok(())
+            }
+            None => Err(bad("format", "selection too large to format cell by cell")),
+        };
         for r in &ranges {
             let full_rows = r.is_full_rows();
             let full_cols = r.is_full_cols();
+            let filtered_in_range: Vec<u32> = filtered.range(r.start.row..=r.end.row).copied().collect();
             if full_rows || full_cols {
+                let row_lines = full_rows && !full_cols;
+                // Column formats before this edit: filtered rows keep showing them.
+                let old_cols: std::collections::BTreeMap<u32, StyleId> =
+                    cx.wb.sheet(sheet).map(|sh| sh.cols.iter().filter_map(|(c, i)| i.style.map(|st| (*c, st))).collect()).unwrap_or_default();
                 // Line formats.
-                let lines: Vec<u32> = if full_rows && !full_cols { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };
-                for line in lines {
+                let lines: Vec<u32> = if row_lines {
+                    (r.start.row..=r.end.row).filter(|row| !filtered.contains(row)).collect()
+                } else {
+                    (r.start.col..=r.end.col).collect()
+                };
+                for &line in &lines {
                     let cur = {
                         let sh = cx.wb.sheet(sheet);
-                        let info = if full_rows && !full_cols { sh.and_then(|s| s.rows.get(&line)) } else { sh.and_then(|s| s.cols.get(&line)) };
+                        let info = if row_lines { sh.and_then(|s| s.rows.get(&line)) } else { sh.and_then(|s| s.cols.get(&line)) };
                         info.and_then(|i| i.style).unwrap_or_default()
                     };
                     let new = *cache.entry(cur).or_insert_with(|| cx.wb.styles.derive(cur, &f));
                     guard_flags!(cur, new);
                     let sh = cx.sheet_mut(sheet)?;
-                    let map = if full_rows && !full_cols { &mut sh.rows } else { &mut sh.cols };
+                    let map = if row_lines { &mut sh.rows } else { &mut sh.cols };
                     map.entry(line).or_default().style = Some(new);
                 }
                 // Existing cells in those lines.
-                let cells: Vec<(CellRef, StyleId)> =
-                    cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(*r).map(|(c, x)| (c, x.style)).collect()).unwrap_or_default();
+                let cells: Vec<(CellRef, StyleId)> = cx
+                    .wb
+                    .sheet(sheet)
+                    .map(|sh| sh.cells.iter_range(*r).filter(|(c, _)| !filtered.contains(&c.row)).map(|(c, x)| (c, x.style)).collect())
+                    .unwrap_or_default();
                 for (c, st) in &cells {
                     let new = *cache.entry(*st).or_insert_with(|| cx.wb.styles.derive(*st, &f));
                     guard_flags!(*st, new);
                     cx.sheet_mut(sheet)?.set_style(*c, new);
+                }
+                if !row_lines {
+                    // A row format outranks a column format: the visible rows that have one take
+                    // the change on it (every column is selected) or on cells of their own.
+                    let styled_rows: Vec<(u32, StyleId)> = cx
+                        .wb
+                        .sheet(sheet)
+                        .map(|sh| {
+                            sh.rows
+                                .range(r.start.row..=r.end.row)
+                                .filter(|(row, _)| !filtered.contains(row))
+                                .filter_map(|(row, i)| i.style.map(|st| (*row, st)))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for (row, st) in styled_rows {
+                        let new = *cache.entry(st).or_insert_with(|| cx.wb.styles.derive(st, &f));
+                        guard_flags!(st, new);
+                        if full_rows {
+                            cx.sheet_mut(sheet)?.rows.entry(row).or_default().style = Some(new);
+                            continue;
+                        }
+                        spend(lines.len())?;
+                        cx.fit_rows.push((sheet, row));
+                        for &col in &lines {
+                            let c = CellRef::new(row, col);
+                            if cx.wb.sheet(sheet).is_some_and(|sh| sh.cells.get(c).is_none()) {
+                                cx.sheet_mut(sheet)?.set_style(c, new);
+                            }
+                        }
+                    }
+                    // A filtered row that went by the column formats keeps showing the old ones,
+                    // on cells of its own in the selected columns, or, when one of those had the
+                    // default (a blank cell can't hold it) or that takes more cells, under a row
+                    // format of the most common old column format, with cells of its own in the
+                    // columns whose format differs. That row format stays the default while any
+                    // column went by the default, which no cell could restore under another one.
+                    let old_of = |col: u32| old_cols.get(&col).copied().unwrap_or_default();
+                    let base = if old_cols.len() >= gridcraft_core::MAX_COLS as usize && old_cols.values().all(|st| *st != StyleId::DEFAULT) {
+                        let mut counts: std::collections::HashMap<StyleId, usize> = std::collections::HashMap::new();
+                        for st in old_cols.values() {
+                            *counts.entry(*st).or_default() += 1;
+                        }
+                        counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map_or(StyleId::DEFAULT, |(st, _)| st)
+                    } else {
+                        StyleId::DEFAULT
+                    };
+                    let others: Vec<(u32, StyleId)> = old_cols.iter().filter(|(_, st)| **st != base).map(|(c, st)| (*c, *st)).collect();
+                    let per_col = lines.iter().all(|c| old_of(*c) != StyleId::DEFAULT) && lines.len() <= others.len();
+                    let (row_style, pins) = if per_col { (None, lines.iter().map(|c| (*c, old_of(*c))).collect()) } else { (Some(base), others) };
+                    for &row in &filtered_in_range {
+                        if cx.wb.sheet(sheet).is_some_and(|sh| sh.rows.get(&row).is_some_and(|i| i.style.is_some())) {
+                            continue;
+                        }
+                        spend(pins.len())?;
+                        let sh = cx.sheet_mut(sheet)?;
+                        if let Some(st) = row_style {
+                            sh.rows.entry(row).or_default().style = Some(st);
+                        }
+                        for &(col, st) in &pins {
+                            let c = CellRef::new(row, col);
+                            if sh.cells.get(c).is_none() {
+                                sh.set_style(c, st);
+                            }
+                        }
+                    }
                 }
                 // Formatting touched these cells: re-fit their rows (Excel auto-fits).
                 cx.fit_rows.extend(cells.iter().map(|(c, _)| (sheet, c.row)));
@@ -288,9 +384,9 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
                 return Err(bad("format", "selection too large to format cell by cell"));
             }
             if r.height() <= 100_000 {
-                cx.fit_rows.extend((r.start.row..=r.end.row).map(|row| (sheet, row)));
+                cx.fit_rows.extend((r.start.row..=r.end.row).filter(|row| !filtered.contains(row)).map(|row| (sheet, row)));
             }
-            for c in r.iter() {
+            for c in r.iter().filter(|c| !filtered.contains(&c.row)) {
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
                 let new = *cache.entry(st).or_insert_with(|| cx.wb.styles.derive(st, &f));
                 if new != st {
@@ -411,6 +507,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let base = border_style(str_param(p, "style").unwrap_or("thin"));
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    let filtered = filtered_rows(s, sheet)?;
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
     }
@@ -419,8 +516,12 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
             if r.count() > 2_000_000 {
                 return Err(bad("home.borders", "selection too large"));
             }
-            for c in r.iter() {
-                let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
+            // Rows a filter hides keep their borders, and the outline runs along the first and
+            // last visible rows, so a bottom border shows even when the last row is filtered.
+            let Some(first) = (r.start.row..=r.end.row).find(|row| !filtered.contains(row)) else { continue };
+            let Some(last) = (r.start.row..=r.end.row).rev().find(|row| !filtered.contains(row)) else { continue };
+            for c in r.iter().filter(|c| !filtered.contains(&c.row)) {
+                let (top, bottom, left, right) = (c.row == first, c.row == last, c.col == r.start.col, c.col == r.end.col);
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
                 let line = |style: BorderStyle| BorderLine { style, color };
                 let new = cx.wb.styles.derive(st, |s| {
@@ -510,6 +611,9 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
                             continue;
                         }
                         let Some(neighbor) = c.offset(dr, dc) else { continue };
+                        if filtered.contains(&neighbor.row) {
+                            continue;
+                        }
                         let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(neighbor)).unwrap_or_default();
                         let new = cx.wb.styles.derive(st, |s| {
                             let edge = match (dr, dc) {

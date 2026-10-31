@@ -334,6 +334,10 @@ impl Sheet {
             self.autofilter.as_ref().is_some_and(|af| !af.criteria.is_empty() && row > af.range.start.row && row <= af.range.end.row);
         in_sheet_filter || self.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|r| row >= r.start.row && row <= r.end.row))
     }
+    /// The rows an applied filter hides, in order. See `is_row_filtered`.
+    pub fn filtered_rows(&self) -> std::collections::BTreeSet<u32> {
+        self.rows.keys().copied().filter(|r| self.is_row_filtered(*r)).collect()
+    }
     pub fn is_col_hidden(&self, col: u32) -> bool {
         self.cols.get(&col).is_some_and(|r| r.hidden)
     }
