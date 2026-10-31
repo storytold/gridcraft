@@ -165,11 +165,12 @@ impl EditState {
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        // Unicode upper case: `zä` finds `ZÄHLENWENN`.
-        let u = word.to_uppercase();
+        // Fold as formula names do: `zä` finds `ZÄHLENWENN`, `KGRÖẞ` finds `KGRÖSSTE`.
+        let fold = gridcraft_engine::formula::fold_name;
+        let key = fold(&word);
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
-        if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
+        self.autocomplete = names.iter().filter(|n| fold(n).starts_with(&key)).take(12).cloned().collect();
+        if self.autocomplete.len() == 1 && self.autocomplete.first().is_some_and(|n| fold(n) == key) {
             self.autocomplete.clear();
         }
         self.ac_index = self.ac_index.min(self.autocomplete.len().saturating_sub(1));
@@ -436,7 +437,10 @@ mod tests {
 
     #[test]
     fn autocomplete_takes_names_with_umlauts() {
-        let names: Vec<String> = ["ZÄHLENWENN", "ZÄHLENWENNS", "ZEILE"].iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = ["ZÄHLENWENN", "ZÄHLENWENNS", "ZEILE", "KGRÖSSTE"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=KGRÖẞ".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, ["KGRÖSSTE"]);
         let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=1+zä".into(), true, false);
         e.update_autocomplete(&names);
         assert_eq!(e.autocomplete, ["ZÄHLENWENN", "ZÄHLENWENNS"]);
