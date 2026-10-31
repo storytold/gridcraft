@@ -524,7 +524,7 @@ fn number_literal_too_large_for_f64_is_a_parse_error() {
     for bad in ["1E+400", "-1E+400", "1E+400*A1", "SUM(1E309,1)", "9".repeat(400).as_str()] {
         assert!(parse(bad).is_err(), "{bad} should fail");
     }
-    assert!(parse("1E+308").is_ok());
+    assert!(parse("9.99999999999999E+307").is_ok());
 }
 
 #[test]
@@ -555,6 +555,21 @@ fn reference_shapes_print_unchanged() -> Result<(), Box<dyn std::error::Error>> 
         if let Expr::Ref(r) = &e {
             assert_eq!(printer::reference_a1(r), text);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn number_literals_follow_excel_limits() -> Result<(), Box<dyn std::error::Error>> {
+    for ok in ["9.99999999999999E+307", "1E-307", "0", "0E-400", "0.000"] {
+        assert!(lexer::tokenize(ok).is_ok(), "{ok}");
+    }
+    for bad in ["1E+308", "1.79E+308", "10E+307", "0.1E+309", "1E-310", "5E-310", "9.9E-310", "1E-320", "1E-400"] {
+        assert!(lexer::tokenize(bad).is_err(), "{bad}");
+    }
+    for zero in ["1E-309", "0.01E-307", "100E-311", "1E-308"] {
+        let toks = lexer::tokenize(zero)?;
+        assert!(toks.iter().any(|t| t.tok == lexer::Tok::Number(0.0)), "{zero}");
     }
     Ok(())
 }
