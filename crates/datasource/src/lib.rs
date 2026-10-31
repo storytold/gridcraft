@@ -52,6 +52,8 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
 /// Significant digits a decimal may have to become a number: any decimal of 15 digits comes back
 /// unchanged from an `f64`.
 const EXACT_DIGITS: usize = 15;
+/// Integers beyond this lose digits as numbers; the engine keeps such `DbValue::Int`s as text too.
+const MAX_EXACT_INT: f64 = 9_007_199_254_740_992.0;
 
 /// A DECIMAL or NUMERIC value as a number when an `f64` keeps all its digits, else as its text,
 /// so an import never changes a stored value (`9007199254740993`, `NaN`, `1e-400`, `1e400`).
@@ -63,7 +65,13 @@ pub fn decimal(s: &str) -> DbValue {
     let coefficient = t.split(['e', 'E']).next().unwrap_or("");
     let digits: String = coefficient.chars().filter(char::is_ascii_digit).collect();
     let significant = digits.trim_start_matches('0').trim_end_matches('0');
-    if !f.is_finite() || significant.len() > EXACT_DIGITS || (f == 0.0 && !significant.is_empty()) || (f != 0.0 && f.abs() < f64::MIN_POSITIVE) {
+    let big_integer = f.fract() == 0.0 && f.abs() > MAX_EXACT_INT;
+    if !f.is_finite()
+        || significant.len() > EXACT_DIGITS
+        || big_integer
+        || (f == 0.0 && !significant.is_empty())
+        || (f != 0.0 && f.abs() < f64::MIN_POSITIVE)
+    {
         return text();
     }
     DbValue::Float(f)
@@ -129,7 +137,25 @@ mod tests {
         assert_eq!(decimal("1234567890123456"), DbValue::Text("1234567890123456".into()));
         assert_eq!(decimal("0.000123456789012345"), DbValue::Float(0.000_123_456_789_012_345));
         assert_eq!(decimal("-12.50"), DbValue::Float(-12.5));
-        assert_eq!(decimal("10000000000000000000"), DbValue::Float(1e19));
+        // Integers beyond 2^53, in any form or sign, even ones an f64 would hold exactly.
+        for kept in [
+            "1000000000000010000",
+            "-1000000000000010000",
+            "-9007199254740993",
+            "10000000000000000000",
+            "1000000000000010000.0",
+            "1.00000000000001e18",
+            "-1E19",
+        ] {
+            assert_eq!(decimal(kept), DbValue::Text(kept.into()), "{kept}");
+        }
+        assert_eq!(decimal("9007199254740992"), DbValue::Text("9007199254740992".into()), "16 digits");
+        assert_eq!(decimal("9007199254740000"), DbValue::Float(9_007_199_254_740_000.0));
+        assert_eq!(decimal("-1e15"), DbValue::Float(-1e15));
+        assert_eq!(decimal("1.5e3"), DbValue::Float(1500.0));
+        // Fractional values: as before.
+        assert_eq!(decimal("12345678901234.5"), DbValue::Float(12_345_678_901_234.5));
+        assert_eq!(decimal("-0.000001"), DbValue::Float(-0.000_001));
         assert_eq!(decimal("0.000"), DbValue::Float(0.0));
         for kept in ["1e400", "-1e400", "1e-400", "2e-310", "NaN", "Infinity", "abc"] {
             assert_eq!(decimal(kept), DbValue::Text(kept.into()), "{kept}");
