@@ -74,7 +74,7 @@ pub(super) fn gridline_centre(edge: f32) -> f32 {
 /// that rule, so that the selection's outline can be laid exactly on the gridline.
 /// `tests/it/selection_outline.rs` compares the two as the renderer tessellates them, at several
 /// display scales, so a renderer that changes its rule is noticed.
-fn gridline_span(edge: f32, ppp: f32) -> (f32, f32) {
+pub(super) fn gridline_span(edge: f32, ppp: f32) -> (f32, f32) {
     gridline_pixels(gridline_centre(edge), ppp)
 }
 
@@ -82,7 +82,7 @@ fn gridline_span(edge: f32, ppp: f32) -> (f32, f32) {
 /// `mirror` (right-to-left; [`Geo::mirror_axis`]). The renderer moves the reflected line onto
 /// pixels, so its pixels are found there and reflected back: reflected with everything else, the
 /// span covers them exactly.
-fn gridline_span_mirrored(edge: f32, ppp: f32, mirror: Option<f32>) -> (f32, f32) {
+pub(super) fn gridline_span_mirrored(edge: f32, ppp: f32, mirror: Option<f32>) -> (f32, f32) {
     match mirror {
         Some(axis) => {
             let (first, past) = gridline_pixels(axis - gridline_centre(edge), ppp);

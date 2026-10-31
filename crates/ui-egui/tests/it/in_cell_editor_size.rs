@@ -1,6 +1,6 @@
 //! The in-cell editor covers the edited cell exactly, as in Excel, at every zoom (#1755).
 
-use egui::{Color32, Event, Modifiers, PointerButton, Rect, Shape};
+use egui::{Event, Modifiers, PointerButton, Rect};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
@@ -44,17 +44,10 @@ fn type_text(h: &mut Harness, text: &str) {
     h.run_steps(3);
 }
 
-/// The white editor background painted from the cell's top-left corner.
-fn editor_rect(h: &Harness, cell: Rect) -> Rect {
-    h.output()
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Rect(r) if r.fill == Color32::WHITE && (r.rect.min - cell.min).length() < 0.01 => Some(r.rect),
-            _ => None,
-        })
-        .next_back()
-        .expect("in-cell editor background")
+/// Where the in-cell editor was laid out in the last frame. It is painted as the inside of the
+/// cell's gridlines, with the selection's outline on them, so no one painted rectangle is the editor.
+fn editor_rect(h: &Harness) -> Rect {
+    h.ctx.data(|d| d.get_temp(egui::Id::unique("gridcraft.cell_editor.rect"))).expect("the in-cell editor is laid out")
 }
 
 fn assert_close(a: Rect, b: Rect, what: &str) {
@@ -71,7 +64,7 @@ fn editor_matches_the_cell_at_every_zoom() {
         type_text(&mut h, "abc");
         assert!(h.state().editor.is_some());
         let cell = cell_rect(&h, "B2");
-        assert_close(editor_rect(&h, cell), cell, &format!("zoom {zoom}"));
+        assert_close(editor_rect(&h), cell, &format!("zoom {zoom}"));
     }
 }
 
@@ -81,7 +74,7 @@ fn one_long_line_widens_the_editor_but_keeps_the_row_height() {
     click_cell(&mut h, "B2");
     type_text(&mut h, "a much longer line of text than the cell can hold");
     let cell = cell_rect(&h, "B2");
-    let ed = editor_rect(&h, cell);
+    let ed = editor_rect(&h);
     assert!(ed.width() > cell.width() + 1.0, "long text widens the editor: {ed:?} vs {cell:?}");
     assert!((ed.height() - cell.height()).abs() < 0.01, "one line keeps the row height: {ed:?} vs {cell:?}");
 }
