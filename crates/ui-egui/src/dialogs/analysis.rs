@@ -32,7 +32,7 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
 }
 
 /// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
-fn toolpak_fields(tool: &str) -> Vec<Field> {
+fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
@@ -57,6 +57,17 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
+        // With Labels ticked this tool reads row names from the first column as well as column
+        // names from the first row, so the caption says both.
+        "anovaTwoFactorWithout" => {
+            vec![range(), Check { key: "labels", label: "Labels in first row and first column" }, Text { key: "alpha", label: "Alpha:" }]
+        }
+        "anovaTwoFactorWith" => vec![
+            Note("The input range holds column labels in its first row and sample labels in its first column.".into()),
+            range(),
+            Text { key: "rowsPerSample", label: "Rows per sample:" },
+            Text { key: "alpha", label: "Alpha:" },
+        ],
         "regression" => vec![
             Text { key: "inputY", label: "Input Y Range:" },
             Text { key: "inputX", label: "Input X Range:" },
@@ -70,12 +81,82 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "movingAverage" => {
             vec![range(), labels(), Text { key: "interval", label: "Interval:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
+        "randomNumberGeneration" => {
+            let dist = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform");
+            let mut v = vec![Text { key: "variables", label: "Number of Variables:" }];
+            // A patterned sequence sets its own length, so it has no count to type.
+            if dist != "patterned" {
+                v.push(Text { key: "count", label: "Number of Random Numbers:" });
+            }
+            v.push(Choice {
+                key: "distribution",
+                label: "Distribution:",
+                options: vec![
+                    ("uniform", "Uniform"),
+                    ("normal", "Normal"),
+                    ("bernoulli", "Bernoulli"),
+                    ("binomial", "Binomial"),
+                    ("poisson", "Poisson"),
+                    ("patterned", "Patterned"),
+                    ("discrete", "Discrete"),
+                ],
+            });
+            v.extend(match dist {
+                "normal" => vec![Text { key: "mean", label: "Mean:" }, Text { key: "standardDeviation", label: "Standard deviation:" }],
+                "bernoulli" => vec![Text { key: "p", label: "p Value:" }],
+                "binomial" => vec![Text { key: "p", label: "p Value:" }, Text { key: "trials", label: "Number of trials:" }],
+                "poisson" => vec![Text { key: "lambda", label: "Lambda:" }],
+                "patterned" => vec![
+                    Note("Each number is repeated, then the whole sequence; together they set how many values are written.".into()),
+                    Text { key: "from", label: "From:" },
+                    Text { key: "to", label: "To:" },
+                    Text { key: "step", label: "In steps of:" },
+                    Text { key: "repeatEach", label: "Repeating each number (times):" },
+                    Text { key: "repeatSequence", label: "Repeating each sequence (times):" },
+                ],
+                "discrete" => vec![Text { key: "valueRange", label: "Value and Probability Input Range:" }],
+                _ => vec![Text { key: "from", label: "Between:" }, Text { key: "to", label: "And:" }],
+            });
+            // A patterned sequence draws nothing, so it has no seed.
+            if dist != "patterned" {
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            }
+            v
+        }
+        "sampling" => {
+            let mut v = vec![
+                range(),
+                labels(),
+                Choice { key: "method", label: "Sampling Method:", options: vec![("periodic", "Periodic"), ("random", "Random")] },
+            ];
+            // Periodic sampling takes every period-th value and draws nothing, so only random
+            // sampling has a seed.
+            if values.get("method").and_then(Json::as_str) == Some("random") {
+                v.push(Text { key: "samples", label: "Number of Samples:" });
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            } else {
+                v.push(Text { key: "period", label: "Period:" });
+            }
+            v
+        }
+        "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {
             vec![range(), labels(), Text { key: "damping", label: "Damping factor:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
         "fTest" => {
             let mut v = two();
             v.extend([labels(), Text { key: "alpha", label: "Alpha:" }]);
+            v
+        }
+        "zTest" => {
+            let mut v = two();
+            v.extend([
+                Text { key: "hypothesizedDifference", label: "Hypothesized Mean Difference:" },
+                Text { key: "variance1", label: "Variable 1 Variance (known):" },
+                Text { key: "variance2", label: "Variable 2 Variance (known):" },
+                labels(),
+                Text { key: "alpha", label: "Alpha:" },
+            ]);
             v
         }
         _ => {
@@ -96,14 +177,42 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
+        "rowsPerSample": "", "variance1": "", "variance2": "", "inverse": false,
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
+    // Random Number Generation and Sampling.
+    for (k, x) in [
+        ("variables", "1"),
+        ("count", ""),
+        ("distribution", "uniform"),
+        ("from", "0"),
+        ("to", "1"),
+        ("mean", "0"),
+        ("standardDeviation", "1"),
+        ("p", "0.5"),
+        ("trials", "10"),
+        ("lambda", "1"),
+        ("step", "1"),
+        ("repeatEach", "1"),
+        ("repeatSequence", "1"),
+        ("valueRange", ""),
+        ("seed", ""),
+        ("method", "periodic"),
+        ("period", ""),
+        ("samples", ""),
+    ] {
+        v[k] = json!(x);
+    }
     if tool == "regression" {
         v["confidence"] = json!("95");
         v["inputY"] = json!(sel);
     }
     v.as_object().cloned().unwrap_or_default()
 }
+
+/// Height a ToolPak form needs besides the tool's own options: title bar, output options, OK
+/// and the window's margins.
+const TOOLPAK_CHROME: f32 = 240.0;
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
@@ -149,8 +258,11 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         return;
     };
     d.title = label.to_string();
-    d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    d.fields = toolpak_fields(&tool, &d.values);
+    // The tool's options scroll in a short window (the patterned Random Number Generation form
+    // is taller than 600 points); the output options and OK below always stay in view.
+    let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
+    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(ui, d));
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (§13: Analysis ToolPak has all 19 tools; earlier: PivotTable Enable show details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -117,16 +117,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
-- `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in, including Forecast Start (hindcast, #785). **Estimate:** 15–25 h.
+- Forecast Sheet (`data.forecastSheet`) and the FORECAST.ETS family are in, including Forecast
+  Start (hindcast, #785).
 - Solver (`data.solver`, #327) has Simplex LP with integer/binary branch and bound, a local
   nonlinear method (augmented Lagrangian, not GRG), the Evolutionary method, and Answer and
   Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
   successful solve and its reports share one Undo step (#1050). AllDifferent constraints,
   the Solver Options dialog, the Sensitivity and Population reports and Load/Save Model remain.
-  The Analysis ToolPak
-  (`data.analysisToolPak`) has 13 of 19 tools. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in; the sheet has no Forecast Start (hindcast) option yet. **Estimate:** 12–20 h.
+- The Analysis ToolPak (`data.analysisToolPak`) has all 19 of Excel's tools; their chart output
+  remains. **Estimate:** 12–20 h.
 
 ### 14. Page Layout view and print polish (U, F)
 - Page Layout view landed (#329): paper view with rulers and in-place header/footer editing.
@@ -183,6 +182,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
