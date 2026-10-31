@@ -106,6 +106,11 @@ pub(super) fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(why) = denied_script_step(id, &st["params"]) {
             return Err(bad("automate.runScript", why));
         }
+        // A script step is a command automation asked for: held to --allow-commands like one
+        // sent directly (before any step runs), so a script is never a way around the list.
+        if !id.starts_with("automate.") {
+            crate::automation::check_command(id).map_err(|e| bad("automate.runScript", e.to_string()))?;
+        }
     }
     let _sandbox = crate::io::ScriptSandbox::enter();
     let mut n = 0;
