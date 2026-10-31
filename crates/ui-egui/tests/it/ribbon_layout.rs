@@ -1,21 +1,21 @@
 //! Ribbon layout: the big split button, the scroll arrows of an overflowing tab, and every tab
 //! fitting the card's height.
 
-use egui::{FontDefinitions, FontFamily, vec2};
+use egui::vec2;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
 use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
-use gridcraft_ui_egui::{SheetApp, theme, widgets};
+use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn app_at(width: f32, tab: &str) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     app.ui.ribbon_tab = tab.into();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 700.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(width, 700.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -102,18 +102,10 @@ struct Clicks {
 }
 
 #[test]
+/// The main button clicks once and the arrow twice separately; the tooltip keeps the platform shortcut, and the icon sits above the full-width label.
 fn big_split_button_separates_the_default_action_from_the_menu() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
         |ui, c: &mut Clicks| {
-            if ui.ctx().cumulative_pass_nr() == 0 {
-                // egui's own font stands in for the system UI font; it applies from the next pass.
-                let mut fonts = FontDefinitions::default();
-                let proportional = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-                fonts.families.insert(FontFamily::Name(theme::UI.into()), proportional.clone());
-                fonts.families.insert(FontFamily::Name(theme::CELL.into()), proportional);
-                ui.ctx().set_fonts(fonts);
-                return;
-            }
             let (main, arrow) = widgets::big_split_button(ui, Icon::Sum, "Auto\nSum", "AutoSum");
             c.main += u32::from(main.clicked());
             c.arrow += u32::from(arrow.clicked());
@@ -128,11 +120,13 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
     h.get_by_label("Auto Sum options").click();
     h.run_steps(2);
     assert_eq!((h.state().main, h.state().arrow), (1, 2));
-    // The tooltip carries the shortcut hint, as every ribbon button's does.
+    // The tooltip carries the shortcut hint, as every ribbon button's does. egui 0.37 waits for
+    // the pointer to settle before opening it, so remove the hover delay and let it settle.
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Auto Sum").hover();
-    h.run_steps(3);
-    let hint = if cfg!(target_os = "macos") { "AutoSum (\u{2318}" } else { "AutoSum (Alt+=" };
-    assert!(h.query(egui_kittest::kittest::By::new().label_contains(hint)).is_some(), "tooltip with the shortcut");
+    h.run_steps(6);
+    let shortcut = if cfg!(target_os = "macos") { "AutoSum (\u{2318}\u{21e7}T)" } else { "AutoSum (Alt+=)" };
+    assert!(h.query_by_value(shortcut).is_some(), "tooltip with the shortcut");
     // The icon part sits above the label part, across the full width.
     let main = h.get_by_label("Auto Sum").rect();
     let arrow = h.get_by_label("Auto Sum options").rect();

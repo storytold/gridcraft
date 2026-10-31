@@ -8,18 +8,7 @@ use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{Services, SheetApp};
 
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, services),
-    );
-    h.run_steps(4);
-    h
+    crate::support::services_harness(services, 4)
 }
 
 /// Opens File (the Backstage view) and clicks a navigation entry or page button.
@@ -110,17 +99,21 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
 }
 
 #[test]
+/// Options opens, named Backstage pages are reachable and accessible, an invalid page errors, and both close and Back leave Backstage.
 fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     let mut h = harness(Services::default());
     let r = h.state_mut().run("file.options", serde_json::json!({})).unwrap();
     assert_eq!(r["calculation"]["mode"], "automatic");
     h.run_steps(3);
+    h.check_accessibility();
     assert_eq!(page(&h), Some("options"));
     click(&mut h, "Info");
+    h.check_accessibility();
     assert_eq!(page(&h), Some("info"));
     for id in ["print", "export", "saveAs", "new", "open", "home"] {
         h.state_mut().run("ui.backstage", serde_json::json!({"page": id})).unwrap();
         h.run_steps(2);
+        h.check_accessibility();
         assert_eq!(page(&h), Some(id));
     }
     assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "feedback"})).is_err());
@@ -130,6 +123,7 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     h.state_mut().run("ui.backstage", serde_json::json!({})).unwrap();
     h.run_steps(2);
     click(&mut h, "Back");
+    h.check_accessibility();
     assert!(h.state().backstage.is_none());
 }
 
@@ -285,6 +279,113 @@ fn closing_the_window_can_save_first_and_a_saved_workbook_closes_at_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(h.state().session.active_index(), 0, "the unsaved workbook comes forward");
+    let sent = click_commands(&mut h, "Cancel");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Cancel stops the quit");
+    assert_eq!(h.state().session.documents().len(), 2, "Cancel keeps both workbooks");
+
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "the saved workbook isn't asked about: {sent:?}");
+    assert!(h.state().dialog.is_none());
+}
+
+/// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).
+fn typing_in_book1_then_new(h: &mut egui_kittest::Harness<'static, SheetApp>) -> u64 {
+    h.input_mut().events.push(egui::Event::Text("hello".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+    let book1 = h.state().session.doc().unwrap().uid;
+    h.state_mut().run_or_alert("file.new", serde_json::json!({}));
+    h.run_steps(3);
+    book1
+}
+
+fn a1(h: &egui_kittest::Harness<'static, SheetApp>, doc: usize) -> Value {
+    h.state().session.documents()[doc].wb.active().unwrap().value(CellRef::new(0, 0))
+}
+
+#[test]
+fn new_workbook_keeps_the_typed_cell_in_the_first_and_switch_windows_brings_it_back() {
+    let mut h = harness(Services::default());
+    let book1 = typing_in_book1_then_new(&mut h);
+    assert!(h.state().editor.is_none(), "the draft doesn't follow into Book2");
+    assert_eq!(h.state().session.documents().len(), 2);
+    assert_eq!(h.state().session.active_index(), 1);
+    assert_eq!(a1(&h, 0), Value::text("hello"), "the draft is committed into Book1, as Enter would");
+    assert!(h.state().session.documents()[0].is_dirty(), "so quitting asks about Book1");
+    assert_eq!(a1(&h, 1), Value::Empty);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(a1(&h, 1), Value::Empty, "Enter in Book2 writes nothing left over");
+
+    // The key tip or command search opens the View tab's list; Book1 shows its unsaved bullet.
+    h.state_mut().run_or_alert("view.switchWindows", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().ui.ribbon_tab, "View");
+    h.get_by_label_contains("Book1 •").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc().unwrap().uid, book1);
+    assert_eq!(h.state().session.documents().len(), 2);
+    assert!(h.state().message.is_none());
+}
+
+#[test]
+fn a_draft_its_workbook_refuses_stops_the_switch_and_stays_open() {
+    let mut h = harness(Services::default());
+    let book1 = typing_in_book1_then_new(&mut h);
+    let book2 = h.state().session.doc().unwrap().uid;
+    h.state_mut().session.execute("data.validation", serde_json::json!({"range": "A1", "type": "list", "formula1": "\"Red,Green\""})).unwrap();
+    h.input_mut().events.push(egui::Event::Text("Purple".into()));
+    h.run_steps(2);
+    h.state_mut().run_or_alert("view.switchWindows", serde_json::json!({"doc": book1}));
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc().unwrap().uid, book2, "the switch doesn't happen");
+    assert_eq!(h.state().editor.as_ref().map(|ed| ed.text.as_str()), Some("Purple"), "the draft stays open to fix");
+    assert_eq!(a1(&h, 1), Value::Empty, "Book2 is unchanged");
+    assert!(h.state().message.is_some(), "the refusal is reported");
+
+    // Esc drops the draft; then the switch goes through.
+    h.state_mut().message = None;
+    h.state_mut().cancel_edit();
+    h.state_mut().run_or_alert("view.switchWindows", serde_json::json!({"doc": book1}));
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc().unwrap().uid, book1);
+    assert!(h.state().message.is_none());
+}
+
+#[test]
+fn an_untouched_f2_draft_leaves_the_workbook_clean_on_a_file_command() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-f2-draft-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "=1+2"})).unwrap();
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    let undo = h.state().session.doc().unwrap().undo.len();
+    h.key_press(egui::Key::F2);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.as_ref().map(|ed| ed.text.as_str()), Some("=1+2"));
+    h.state_mut().run_or_alert("file.new", serde_json::json!({}));
+    h.run_steps(2);
+    assert!(h.state().editor.is_none());
+    let book1 = &h.state().session.documents()[0];
+    assert!(!book1.is_dirty(), "nothing was typed, so nothing changed");
+    assert_eq!(book1.undo.len(), undo, "and no undo step was added");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn pdf_picker_harness(dir: &std::path::Path) -> (Arc<Mutex<Vec<String>>>, egui_kittest::Harness<'static, SheetApp>) {
     let asked = Arc::new(Mutex::new(Vec::<String>::new()));
     let (capture, target) = (asked.clone(), dir.to_path_buf());
@@ -338,23 +439,20 @@ fn options_sets_maximum_iterations_and_change_only_while_iteration_is_on() {
     let mut session = Session::new();
     session.new_workbook();
     // Tall enough that the Formulas section is on screen without scrolling.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 1400.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1400.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Services::default()),
+        crate::common::prepare(SheetApp::new(session, Services::default())),
     );
     h.run_steps(4);
     h.state_mut().run("file.options", serde_json::json!({})).unwrap();
     h.run_steps(3);
     let calc = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().wb.calc.clone();
-    // The text field on the same row as `label`.
-    let field = |h: &egui_kittest::Harness<'static, SheetApp>, label: &str| {
-        let l = h.get_by_label(label).rect();
-        h.get_all_by_role(Role::TextInput).map(|n| n.rect()).find(|r| r.left() > l.left() && (r.center().y - l.center().y).abs() < 8.0).unwrap()
-    };
+    // Resolve the field by its accessible name in both the disabled and enabled states.
+    let field = |h: &egui_kittest::Harness<'static, SheetApp>, label: &str| h.get_by_role_and_label(Role::TextInput, label).rect();
     let disabled = |h: &egui_kittest::Harness<'static, SheetApp>, rect: egui::Rect| {
         h.get_all_by_role(Role::TextInput).find(|n| n.rect() == rect).unwrap().accesskit_node().is_disabled()
     };
@@ -486,4 +584,66 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     assert!(h.state().message.is_some(), "a failed write is reported");
     assert_eq!(asked.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn new_window_shows_the_same_workbook_and_a_draft_settles_in_its_own_window() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("selection.set", serde_json::json!({"range": "B2"})).unwrap();
+    let first = h.state().session.active_window().unwrap();
+    h.state_mut().run_or_alert("view.newWindow", serde_json::json!({}));
+    h.run_steps(2);
+    let second = h.state().session.active_window().unwrap();
+    let book = h.state().session.doc().unwrap().uid;
+    assert_ne!(first, second);
+    assert_eq!(h.state().session.documents().len(), 1, "one workbook, two windows");
+    let titles: Vec<String> = h.state().open_windows().iter().map(|w| w.title.clone()).collect();
+    assert_eq!(titles, ["Book1:1", "Book1:2"]);
+
+    // A draft typed in window 2 is entered in window 2's cell before window 1 comes forward.
+    h.state_mut().run("selection.set", serde_json::json!({"range": "D4"})).unwrap();
+    h.input_mut().events.push(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    h.state_mut().run_or_alert("view.switchWindows", serde_json::json!({"window": first}));
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "the draft doesn't follow into window 1");
+    assert_eq!(h.state().session.active_window(), Some(first));
+    let d = h.state().session.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().value(CellRef::parse("D4").unwrap()), Value::text("typed"));
+    assert_eq!(d.selection.active, CellRef::parse("B2").unwrap(), "window 1 keeps its own selection");
+
+    // Quitting asks once about the workbook, whichever window shows it.
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(h.state().session.document_index(book).is_none(), "both windows closed with the workbook");
+}
+
+#[test]
+fn control_requests_route_to_a_window_and_list_windows() {
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    let mut h = harness(Services::default());
+    let first = h.state().session.active_window().unwrap();
+    h.state_mut().run_or_alert("file.new", serde_json::json!({}));
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    let call = |h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, p: serde_json::Value| match handle(h.state_mut(), &ctx, method, &p) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => serde_json::Value::Null,
+    };
+    let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.set", "params": {"cell": "A1", "input": "one"}, "window": first}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a1(&h, 0), Value::text("one"));
+    assert_eq!(a1(&h, 1), Value::Empty);
+    assert_eq!(h.state().session.active_index(), 1, "Book2 stays in front");
+    let r = call(&mut h, "cell.get", serde_json::json!({"cell": "A1", "window": first}));
+    assert!(r["result"].to_string().contains("one"), "{r}");
+
+    let r = call(&mut h, "window.list", serde_json::json!({}));
+    let rows = r["result"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{r}");
+    assert_eq!((rows[0]["window"].as_u64(), rows[0]["title"].as_str(), rows[0]["dirty"].as_bool()), (Some(first), Some("Book1"), Some(true)));
+    assert_eq!(rows[1]["active"].as_bool(), Some(true));
+    let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
+    assert_eq!(r["ok"], false, "{r}");
 }

@@ -8,17 +8,9 @@ use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
+/// Builds the standard interaction harness around the caller's session with four warm-up passes.
 fn harness(session: Session) -> egui_kittest::Harness<'static, SheetApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn blank() -> Session {
@@ -210,12 +202,13 @@ fn space_toggles_the_active_checkbox_without_clicking_the_hovered_cell() {
 }
 
 #[test]
+/// Name Box Enter selects A1; the next grid Enter moves down to A2.
 fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
     // #247: typing A1 in the Name Box and pressing Enter selected A2; the grid replayed the Enter.
     let mut h = harness(blank());
     h.state_mut().session.run("selection.set", json!({"cell": "C5"})).unwrap();
     h.run_steps(2);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("gridcraft.name_box")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("gridcraft.name_box")));
     h.run_steps(2);
     h.input_mut().events.push(Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
     h.input_mut().events.push(Event::Text("A1".into()));
@@ -243,13 +236,16 @@ fn name_box_shows_a_name_defined_on_a_sheet_with_an_apostrophe() {
 }
 
 #[test]
+/// Typing and Enter commit 42 in A1; `=A1*2` and Tab commit 84 in A2 and move to B2, with accessibility checks.
 fn typing_enters_values_and_moves_down() {
     let mut h = harness(blank());
     text(&mut h, "42");
     assert!(h.state().editor.is_some(), "typing starts editing");
+    h.check_accessibility();
     key(&mut h, Key::Enter, Modifiers::NONE);
     assert_eq!(value(&h, "A1"), Value::Number(42.0));
     text(&mut h, "=A1*2");
+    h.check_accessibility();
     key(&mut h, Key::Tab, Modifiers::NONE);
     assert_eq!(value(&h, "A2"), Value::Number(84.0));
     let active = h.state().session.active().map(|d| d.selection.active.a1());
@@ -336,6 +332,43 @@ fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
 }
 
 #[test]
+fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
+    // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
+    // at the whole column of data, as the same keys select it outside an edit.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1:B5", "values": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "D1"})).unwrap();
+    let mut h = harness(s);
+    text(&mut h, "=COUNTIF(");
+    click_cell(&mut h, "A1");
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1"));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND | Modifiers::SHIFT));
+    key(&mut h, Key::ArrowDown, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1:A5"), "Ctrl+Shift+Down extends to the last filled cell");
+    key(&mut h, Key::ArrowRight, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1:B5"), "Ctrl+Shift+Right extends the moving end across the data");
+    key(&mut h, Key::ArrowDown, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A:B"), "past the data, Ctrl+Shift+Down reaches the sheet edge (written as whole columns)");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    key(&mut h, Key::ArrowUp, Modifiers::COMMAND);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B5"), "Ctrl+Up without Shift points at the next filled cell");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B4"), "a plain arrow still moves one cell");
+    // An automation tool (osascript `key code`) presses and releases within one frame, so by the
+    // time the frame runs `i.modifiers` is already empty: the modifiers that count are the ones on
+    // the press event.
+    h.input_mut().events.extend([
+        Event::Key { key: Key::ArrowUp, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND },
+        Event::ModifiersChanged(Modifiers::NONE),
+        Event::Key { key: Key::ArrowUp, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(2);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B1"), "Command released in the same frame as the press still jumps");
+}
+
+#[test]
 fn shortcuts_format_and_extend() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
@@ -412,6 +445,7 @@ fn insert_column_or_bar_menu_inserts_a_hundred_percent_stacked_bar() {
 }
 
 #[test]
+/// Every main ribbon tab and dark mode render with accessibility checks.
 fn renders_every_ribbon_tab_without_panicking() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
@@ -419,12 +453,15 @@ fn renders_every_ribbon_tab_without_panicking() {
     for tab in ["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"] {
         h.state_mut().ui.ribbon_tab = tab.into();
         h.run_steps(2);
+        h.check_accessibility();
     }
     h.state_mut().ui.dark = true;
     h.run_steps(3);
+    h.check_accessibility();
 }
 
 #[test]
+/// Language commands are listed and every available locale renders and persists; CJK locales are omitted when craft fonts are absent.
 fn language_switch_renders_the_ribbon_and_persists() {
     let mut h = harness(blank());
     // English by default whatever the host's locale: only the desktop app reads the system language.
@@ -439,9 +476,17 @@ fn language_switch_renders_the_ribbon_and_persists() {
     for id in ["app.language.set", "app.language.english", "app.language.japanese"] {
         assert!(ids.contains(&id), "engine.commands lists {id}");
     }
-    for language in Language::ALL {
+    // A minimal CI image has egui's bundled faces but no Japanese/Korean/Chinese face. Those
+    // catalogs are exercised when the pinned craft-fonts input is present; skipping them here is
+    // the documented no-font gap, not a missing-glyph or accessibility opt-out.
+    let languages: Vec<Language> = Language::ALL
+        .into_iter()
+        .filter(|l| gridcraft_ui_egui::theme::craft_fonts_loaded() || !matches!(l, Language::Ja | Language::Ko | Language::Zh))
+        .collect();
+    for language in languages {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
-        h.run_steps(2); // every locale renders the ribbon without panicking
+        h.run_steps(2); // every available locale renders the ribbon without panicking
+        h.check_accessibility();
         assert_eq!(h.state().ui.language, language);
         let restored: gridcraft_ui_egui::UiState = serde_json::from_str(&serde_json::to_string(&h.state().ui).unwrap()).unwrap();
         assert_eq!(restored.language, language);
@@ -451,6 +496,7 @@ fn language_switch_renders_the_ribbon_and_persists() {
 }
 
 #[test]
+/// The PivotTable Fields pane and its field menus switch to Spanish.
 fn pivot_fields_pane_follows_the_interface_language() {
     // #858: the PivotTable Fields pane and its field menus stayed in English after switching to Spanish.
     let mut h = harness(blank());
@@ -458,6 +504,7 @@ fn pivot_fields_pane_follows_the_interface_language() {
     h.state_mut().run("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "rows": ["Region"]})).unwrap();
     h.state_mut().run("app.language.set", json!({"language": "es"})).unwrap();
     h.run_steps(4);
+    h.check_accessibility();
     let es = |english| Language::Es.tr(english);
     for english in ["PivotTable Fields", "Rows", "Values", "Refresh", "Calculated Field…"] {
         assert!(h.query_by_label(es(english)).is_some(), "the pane shows `{}`", es(english));
@@ -467,6 +514,7 @@ fn pivot_fields_pane_follows_the_interface_language() {
     }
     h.get_by_label("Region ▾").click();
     h.run_steps(2);
+    h.check_accessibility();
     for english in ["Move to Column Labels", "Group by Years", "Remove Field"] {
         assert!(h.query_by_label(es(english)).is_some(), "the field menu shows `{}`", es(english));
     }
@@ -583,6 +631,7 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
 }
 
 #[test]
+/// Selecting 100% Stacked Area in the All Charts list inserts that chart type.
 fn all_charts_inserts_a_hundred_percent_stacked_area() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
@@ -595,6 +644,7 @@ fn all_charts_inserts_a_hundred_percent_stacked_area() {
     h.input_mut().events.push(Event::PointerMoved(first));
     h.input_mut().events.push(Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
         delta: egui::vec2(0.0, -10.0),
         phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
@@ -649,6 +699,7 @@ fn select_data_dialog_sets_the_category_axis_labels() {
 }
 
 #[test]
+/// Each listed dialog opens, passes accessibility and closes.
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
     for name in [
@@ -665,11 +716,14 @@ fn dialogs_open_and_close() {
         "pivotCalculatedField",
         "about",
         "macros",
+        "recordMacro",
+        "macroEditor",
         "analysisToolPak",
         "solver",
     ] {
         h.state_mut().open_dialog(name, json!({}));
         h.run_steps(2);
+        h.check_accessibility();
         key(&mut h, Key::Escape, Modifiers::NONE);
         h.state_mut().dialog = None;
         h.state_mut().message = None;

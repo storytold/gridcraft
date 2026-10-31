@@ -210,6 +210,9 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Page Break\nPreview", "改ページ プレビュー"),
     ("Page\nLayout", "ページ レイアウト"),
     ("Formula Bar", "数式バー"),
+    ("Name Box", "名前ボックス"),
+    ("Cell Editor", "セル エディター"),
+    ("Font Size", "フォント サイズ"),
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
     ("Zoom", "ズーム"),
@@ -307,6 +310,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("More\nFunctions", "その他の関数"),
     ("Sheet Options|View", "画面"),
     ("Print", "印刷"),
+    ("Print What", "印刷する内容"),
     ("Click to add data", "クリックしてデータを追加"),
     ("Add header", "ヘッダーの追加"),
     ("Add footer", "フッターの追加"),
@@ -419,6 +423,14 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Maximum Iterations must be a whole number from 1 to 32767.", "最大反復回数には 1 から 32767 までの整数を指定してください。"),
     ("Maximum Change must be a number of 0 or more.", "変化の最大値には 0 以上の数値を指定してください。"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Record Macro", "マクロの記録"),
+    ("Stop Recording", "記録終了"),
+    ("Use Relative References", "相対参照で記録"),
+    ("Run\nMacro", "マクロの実行"),
+    ("Macros…", "マクロ…"),
+    ("Recording", "記録中"),
+    ("New Macro", "新しいマクロ"),
+    ("Show", "表示"),
 ];
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].

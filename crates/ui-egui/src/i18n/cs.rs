@@ -1,5 +1,6 @@
 //! Czech translations for the interface strings in i18n.rs.
 
+/// Returns the Czech translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Vložit",
@@ -187,6 +188,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Náhled\nkonců stránek",
         "Page\nLayout" => "Rozložení\nstránky",
         "Formula Bar" => "Řádek vzorců",
+        "Name Box" => "Pole názvu",
+        "Cell Editor" => "Editor buňky",
+        "Font Size" => "Velikost písma",
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
         "Zoom" => "Lupa",
@@ -420,6 +424,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Další\nfunkce",
         "Sheet Options|View" => "Zobrazit",
         "Print" => "Tisknout",
+        "Print What" => "Co tisknout",
 
         // Additional runtime labels and tooltips, grouped by source file.
         // formula_bar.rs (alphabetical keys).
@@ -552,6 +557,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "AutoSave" => "Automatické ukládání",
         "AutoSave: save after every change (workbooks saved to a file)" => "Automatické ukládání: ukládat po každé změně (sešity uložené do souboru)",
         "All sheets" => "Všechny listy",
+        "Record Macro" => "Záznam makra",
+        "Stop Recording" => "Zastavit záznam",
+        "Use Relative References" => "Použít relativní odkazy",
+        "Run\nMacro" => "Spustit makro",
+        "Macros…" => "Makra…",
+        "Recording" => "Záznam",
+        "Stop" => "Zastavit",
+        "New Macro" => "Nové makro",
+        "Show" => "Zobrazit",
         _ => return None,
     })
 }

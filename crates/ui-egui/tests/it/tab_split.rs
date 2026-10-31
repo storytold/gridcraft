@@ -15,18 +15,12 @@ fn harness(width: f32, sheets: usize) -> Harness {
         s.execute("home.insertSheet", json!({"name":format!("Tab{i:02}")})).unwrap();
     }
     s.execute("sheet.activate", json!({"sheet":0})).unwrap();
-    let mut fonts_ready = false;
-    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(width, 120.0)).build_ui_state(
+    let mut h = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(width, 120.0)).build_ui_state(
         move |ui, app: &mut SheetApp| {
-            if !fonts_ready {
-                ui.ctx().set_fonts(gridcraft_ui_egui::theme::font_definitions());
-                fonts_ready = true;
-                return;
-            }
             app.grid.cells_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(ui.max_rect().width(), 80.0)));
             gridcraft_ui_egui::tabs::sheet_tabs(app, ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(20);
     h

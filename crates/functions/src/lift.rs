@@ -58,6 +58,35 @@ fn reject_multi_cell_refs(spec: &FnSpec, args: &[Arg]) -> Option<Vec<Arg>> {
     )
 }
 
+/// Lookups whose every call searches a lookup vector from its start, so a call lifted over `n`
+/// needles does `n` x (vector length) work. Their search arguments don't lift.
+const SCANS: &[&str] = &["VLOOKUP", "HLOOKUP", "LOOKUP", "MATCH", "XLOOKUP", "XMATCH"];
+
+/// Work budget of a lifted [`SCANS`] lookup: needle cells times the length of the longest vector
+/// it searches (the longest dimension of its largest non-lifted array). Each needle re-reads and
+/// scans the vector (about 8 ns per entry), so without a cap a one-cell formula such as
+/// `XMATCH(SEQUENCE(1048576), -SEQUENCE(1048576))` runs for hours and hangs opening the file.
+/// Past the budget the call is `#NUM!`, as MMULT is past 2e9 multiply-adds. 5e8 keeps the worst
+/// case to a few seconds and still admits 5,000 needles over a 100,000-row table.
+const LIFTED_SCAN_BUDGET: usize = 500_000_000;
+
+/// The length of the longest vector a lifted call of `spec` searches per needle: 0 unless `spec`
+/// is one of the [`SCANS`] lookups and a non-lifted argument is an array.
+fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
+    if !SCANS.contains(&spec.name) {
+        return 0;
+    }
+    args.iter()
+        .enumerate()
+        .filter(|(i, _)| !spec.is_scalar_arg(*i))
+        .filter_map(|(_, a)| match &a.value {
+            Value::Array(arr) => Some(arr.rows.max(arr.cols)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     let rejected = if spec.value_args.is_empty() { None } else { reject_multi_cell_refs(spec, args) };
     let args = rejected.as_deref().unwrap_or(args);
@@ -76,7 +105,8 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
     if !any {
         return (spec.imp)(args, ctx);
     }
-    if rows.saturating_mul(cols) > MAX_CELLS {
+    let needles = rows.saturating_mul(cols);
+    if needles > MAX_CELLS || needles.saturating_mul(scan_len(spec, args)) > LIFTED_SCAN_BUDGET {
         return Value::Error(CellError::Num);
     }
     let mut cell_args: Vec<Arg> = args.to_vec();
@@ -147,6 +177,36 @@ mod tests {
             &mut TestCtx::default(),
         );
         is_err(huge, CellError::Num);
+    }
+
+    /// Security: a lifted lookup searches its whole lookup vector once per needle, so needles x
+    /// vector length past `LIFTED_SCAN_BUDGET` is `#NUM!` at once.
+    /// `XMATCH(SEQUENCE(1048576), -SEQUENCE(1048576))` used to run for hours (and hung opening
+    /// the 1.6 KB file holding it).
+    #[test]
+    fn lifted_lookups_stop_past_their_work_budget() {
+        use gridcraft_core::Array;
+        let tall = |n: usize| av(Array::filled(n, 1, nv(-1.0)).into());
+        let wide = |n: usize| av(Array::filled(1, n, nv(-1.0)).into());
+        is_err(ev("XMATCH", vec![tall(1_048_576), tall(1_048_576)]), CellError::Num);
+        // Just past the budget, for every lookup: 501 needles over 1,000,000 entries.
+        assert_eq!(super::LIFTED_SCAN_BUDGET, 500 * 1_000_000);
+        is_err(ev("XMATCH", vec![tall(501), tall(1_000_000)]), CellError::Num);
+        is_err(ev("MATCH", vec![tall(501), tall(1_000_000), n(0.0)]), CellError::Num);
+        is_err(ev("XLOOKUP", vec![tall(501), tall(1_000_000), tall(1_000_000)]), CellError::Num);
+        is_err(ev("VLOOKUP", vec![tall(501), tall(1_000_000), n(1.0), b(false)]), CellError::Num);
+        is_err(ev("HLOOKUP", vec![tall(501), wide(1_000_000), n(1.0), b(false)]), CellError::Num);
+        is_err(ev("LOOKUP", vec![tall(501), tall(1_000_000)]), CellError::Num);
+        // Within the budget lifted lookups work as before.
+        let keys = || av(col(&[10.0, 20.0, 30.0]));
+        let pos = ev("XMATCH", vec![av(col(&[30.0, 10.0, 99.0])), keys()]);
+        assert_eq!(rows_of(&pos), vec![vec![nv(3.0)], vec![nv(1.0)], vec![Value::Error(CellError::NA)]]);
+        let found = ev("XLOOKUP", vec![av(row(&[20.0, 30.0])), keys(), av(col(&[1.0, 2.0, 3.0]))]);
+        assert_eq!(rows_of(&found), vec![vec![nv(2.0), nv(3.0)]]);
+        // Other lifted functions aren't metered: INDEX reads one entry per position.
+        let picks: Vec<f64> = (1..=1000u32).map(f64::from).collect();
+        let out = ev("INDEX", vec![tall(1_048_576), av(col(&picks))]);
+        assert_eq!(rows_of(&out), vec![vec![nv(-1.0)]; 1000]);
     }
 
     #[test]

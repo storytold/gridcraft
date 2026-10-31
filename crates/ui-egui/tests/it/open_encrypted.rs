@@ -9,18 +9,7 @@ use serde_json::json;
 const PW: &str = "synthetic-pw-8842";
 
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, services),
-    );
-    h.run_steps(4);
-    h
+    crate::support::services_harness(services, 4)
 }
 
 /// A workbook with 42 in A1, saved as `.xlsx` and encrypted with `PW`.
