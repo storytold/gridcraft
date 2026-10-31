@@ -36,8 +36,10 @@ too. A worksheet function passed by name (`BYROW(A1:B3;SUMA)`) is spelled like i
 
 A formula language is a data file, `crates/formula/src/input/<language>.rs`: its function names,
 booleans, errors, table specifiers and separators, each word with its source. Adding a language
-means adding that file and one `FormulaLocale` variant; the lexer, parser and printer read every
-language through the same table.
+means adding that file with its `mod` line in `crates/formula/src/input.rs`, a `FormulaLocale`
+variant with its entry in `FormulaLocale::ALL` and its arm in `dialect()`, and the interface
+language's arm in `Language::formula_locale` (`crates/ui-egui/src/i18n.rs`). No parsing code
+changes: the lexer, parser and printer read every language through the same table.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions

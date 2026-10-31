@@ -22,7 +22,8 @@ merged. Those locales retain their existing formula fallback; this change adds o
 
 Each formula language is data (`crates/formula/src/input/<language>.rs`: names, booleans,
 errors, table specifiers, separators) behind one `Dialect` table, so a language is added by a
-data file and one `FormulaLocale` variant, without new parsing code. Every entry carries its
+data file and its registration (`FormulaLocale` variant, `ALL`, `dialect()`, the interface
+language's `formula_locale`), without new parsing code. Every entry carries its
 source; Microsoft's localized pages are machine-translated, so names need two agreeing signals.
 
 ## Preserve array evaluation when exporting formulas (#64)
