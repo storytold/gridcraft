@@ -242,3 +242,55 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn dax_format_parse_and_errors() {
+    assert_eq!(ok(&["dax", "format", "1 + 2 * 3"]).trim(), "1 + 2 * 3");
+    assert_eq!(ok(&["dax", "format", "(1 + 2) * 3"]).trim(), "(1 + 2) * 3");
+    assert_eq!(ok(&["dax", "format", "-2 ^ 2"]).trim(), "-2 ^ 2");
+    assert!(ok(&["dax", "parse", "1 + 2 * 3"]).contains("Binary"));
+
+    assert_eq!(ok(&["dax", "format", "'Sales'[Amount] + 1"]).trim(), "'Sales'[Amount] + 1");
+    assert!(ok(&["dax", "parse", "'It''s'[A]]B]"]).contains("It's"));
+
+    let query = ok(&["dax", "format", "EVALUATE SUM('Sales'[Amount])"]);
+    assert_eq!(query.trim(), "EVALUATE SUM('Sales'[Amount])");
+    assert!(ok(&["dax", "parse", "EVALUATE 1"]).contains("Query"));
+
+    let define = ok(&["dax", "format", "DEFINE MEASURE Sales[M] = 1 VAR X = 2 EVALUATE Sales ORDER BY [M] DESC START AT 0"]);
+    assert_eq!(define.trim(), "DEFINE\n    MEASURE Sales[M] = 1\n    VAR X = 2\nEVALUATE Sales\nORDER BY\n    [M] DESC\nSTART AT 0");
+    assert!(ok(&["dax", "parse", "DEFINE MEASURE Sales[M] = 1 EVALUATE Sales"]).contains("Measure"));
+
+    // `DEFINE` on its own is a valid name expression, so it must not be forced onto the query
+    // parser just because it starts with a query keyword.
+    assert_eq!(ok(&["dax", "format", "DEFINE"]).trim(), "DEFINE");
+    assert!(ok(&["dax", "parse", "DEFINE"]).contains("Name"));
+
+    // A DAX text may open with a `--` line comment; it must reach the parser instead of being
+    // mistaken for a CLI option.
+    assert_eq!(ok(&["dax", "format", "-- note\n1 + 2"]).trim(), "1 + 2");
+    assert!(ok(&["dax", "parse", "-- note\n1 + 2"]).contains("Binary"));
+
+    let o = run(&["dax", "format", "DEFINE MEASURE Sales[M] = 1"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("EVALUATE"));
+
+    let o = run(&["dax", "parse", "1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("expected expression"));
+    let o = run(&["dax", "format", "EVALUATE 1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("end of input"));
+
+    let dir = tmpdir("dax");
+    let file = dir.join("expr.dax");
+    std::fs::write(&file, "1 + 2 * 3").unwrap();
+    assert_eq!(ok(&["dax", "format", "--file", file.to_str().unwrap()]).trim(), "1 + 2 * 3");
+    let _ = std::fs::remove_dir_all(dir);
+
+    let mut child = bin().args(["dax", "format"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"1 + 2 * 3").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "1 + 2 * 3");
+}
