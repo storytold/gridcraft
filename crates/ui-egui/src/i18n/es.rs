@@ -459,6 +459,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Diseño de informe",
         "Compact" => "Compacto",
         "Outline" => "Esquema",
+        "Report Layout|Outline" => "Esquema",
         "Tabular" => "Tabular",
         "Insert Sheet" => "Insertar hoja",
         "Rename" => "Cambiar nombre",
