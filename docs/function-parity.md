@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-27 · **Change:** minor (ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals, and the other IM* differences from Excel are listed; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (discrete distribution counts reject negative fractions before truncation; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -98,6 +98,10 @@ This improves series preparation; it does not change the model-fitting or season
 
 ## Depth (estimated)
 
+| Function | Excel parity note |
+|---|---|
+| BINOM.DIST / BINOM.DIST.RANGE / POISSON.DIST / HYPGEOM.DIST | Negative fractional count arguments return `#NUM!` before truncation; nonnegative fractional counts retain the existing truncation behavior. |
+
 **~82% ready.** The library is broad and has 96 test functions in `crates/functions` with many
 assertions each, but there is no conformance suite against Excel-computed results, and user
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
@@ -124,6 +128,9 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | BINOM.DIST, BINOM.DIST.RANGE, POISSON.DIST and HYPGEOM.DIST reject negative fractional counts before truncation |
+| 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
+| 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
