@@ -10,6 +10,7 @@ use super::{
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
     keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
+pub(crate) use pick::{AfterPick, PendingPick};
 
 mod clipboard;
 mod commands;
@@ -18,6 +19,7 @@ mod files;
 mod fonts;
 mod input;
 mod keys;
+mod pick;
 mod prefs;
 mod print;
 mod quit;
@@ -75,6 +77,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            pending_pick: None,
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),
@@ -127,6 +130,7 @@ impl SheetApp {
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
+        self.poll_pick(ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
