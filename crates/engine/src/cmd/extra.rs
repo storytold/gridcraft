@@ -23,7 +23,7 @@ mod window;
 pub(crate) use cells::is_checkbox_cell;
 use cells::{background, checkbox, draw_border, new_cell_style, recently_used, theme_colors, theme_fonts, toggle_checkbox, use_in_formula};
 use chart::{add_element, change_colors, format_series, move_chart, quick_layout, select_data};
-use data::{from_csv, from_table_range, queries, table_resize};
+use data::{from_table_range, queries, table_resize};
 use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline};
 pub(crate) use scripts::has_scripts;
 use scripts::{all_scripts, delete_script, new_script, record, run_script, stop_action, trust_scripts};
@@ -191,25 +191,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
             .execute("data.removeDuplicates", p.clone())),
-        // Get & Transform
-        cmd!(
-            "data.fromTextCsv",
-            "From Text/CSV",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
-            has_doc,
-            from_csv
-        ),
-        cmd!(
-            "data.getData",
-            "Get Data",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text} (CSV/TSV/JSON array of objects) → new sheet table",
-            has_doc,
-            from_csv
-        ),
+        // Get & Transform (From Text/CSV and Get Data are in `text_import`)
         cmd!(
             "data.fromTableRange",
             "From Table/Range",
