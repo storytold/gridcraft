@@ -344,7 +344,10 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
         "Une o texto de valores e intervalos com um delimitador, opcionalmente ignorando itens vazios.",
     ),
     ("Keeps rows or columns from the start (or end) of an array.", "Mantém linhas ou colunas do início (ou do fim) de uma matriz."),
-    ("Keeps the rows or columns of an array whose include flag is TRUE.", "Mantém as linhas ou colunas de uma matriz cujo argumento incluir é TRUE."),
+    (
+        "Keeps the rows or columns of an array whose include flag is TRUE.",
+        "Mantém as linhas ou colunas de uma matriz cujo valor correspondente no argumento incluir é TRUE.",
+    ),
     ("Largest number (0 when there are none).", "Maior número (0 quando não há nenhum)."),
     ("Largest number in a field of the matching records.", "Maior número em um campo dos registros correspondentes."),
     ("Largest value among cells that meet every condition.", "Maior valor entre as células que atendem a todas as condições."),
