@@ -24,16 +24,14 @@ impl SheetApp {
                 return;
             }
         }
-        if let Some(batch) = self.synthetic.front() {
-            let from = raw.events.len();
-            raw.events.extend(batch.iter().cloned());
+        if let Some(batch) = self.synthetic.front_mut() {
             // Real input was converted per window by `ControlClicks`; a scripted Control-click
-            // gets the same, with its own press state so it never ends a real one.
-            if cfg!(target_os = "macos")
-                && let Some(added) = raw.events.get_mut(from..)
-            {
-                control_click_as_secondary(added, &mut self.control_click);
+            // gets the same, with its own press state so it never ends a real one. In the queued
+            // batch itself: a step offered again keeps its converted buttons.
+            if cfg!(target_os = "macos") {
+                control_click_as_secondary(batch, &mut self.control_click);
             }
+            raw.events.extend(batch.iter().cloned());
             self.synthetic_pending = true;
             self.synthetic_injected_at_pass = Some(ctx.cumulative_pass_nr());
         }
@@ -165,5 +163,31 @@ mod tests {
         assert_eq!(buttons(&main_press.events), [PointerButton::Secondary]);
         assert_eq!(buttons(&other_click.events), [PointerButton::Primary, PointerButton::Primary]);
         assert_eq!(buttons(&main_release.events), [PointerButton::Secondary], "the release ends the main window's Control-press");
+    }
+
+    #[test]
+    fn a_scripted_release_offered_again_stays_secondary() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut app = crate::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.synthetic.push_back(vec![button(PointerButton::Primary, true, Modifiers::CTRL)]);
+        app.synthetic.push_back(vec![button(PointerButton::Primary, false, Modifiers::NONE)]);
+        let mut press = RawInput::default();
+        app.raw_input_hook(&ctx, &mut press);
+        assert_eq!(buttons(&press.events), [PointerButton::Secondary]);
+        // A `ui` pass applies the press step.
+        app.synthetic.pop_front();
+        app.synthetic_pending = false;
+        let mut release = RawInput::default();
+        app.raw_input_hook(&ctx, &mut release);
+        assert_eq!(buttons(&release.events), [PointerButton::Secondary]);
+        // A pass ends without applying it (the font gate), so the hook offers the step again.
+        let mut out = ctx.run_ui(RawInput::default(), |_| {});
+        out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+        let mut again = RawInput::default();
+        app.raw_input_hook(&ctx, &mut again);
+        assert_eq!(buttons(&again.events), [PointerButton::Secondary], "the re-offered release still ends the secondary press");
     }
 }
