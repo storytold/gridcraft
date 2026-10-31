@@ -85,26 +85,148 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
         && (target.start.col == src.start.col || target.end.col == src.end.col)
 }
 
+/// The same axis, direction and write count for a committed fill and its preview.
+struct FillShape {
+    vertical: bool,
+    forward: bool,
+    lane_count: u32,
+    steps: u32,
+}
+
+impl FillShape {
+    fn new(src: RangeRef, target: RangeRef) -> Self {
+        // Direction: down/up if target extends rows, else right/left.
+        let vertical = target.height() != src.height() || target.width() == src.width();
+        let forward = if vertical {
+            target.end.row > src.end.row || target.start.row == src.start.row
+        } else {
+            target.end.col > src.end.col || target.start.col == src.start.col
+        };
+        // Every source lane writes one cell per step past the source: bound that product, not the
+        // source and target separately (whole rows into whole columns was ~17 billion writes).
+        let (lane_count, steps) = if vertical {
+            let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
+            (src.width(), steps)
+        } else {
+            let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
+            (src.height(), steps)
+        };
+        Self { vertical, forward, lane_count, steps }
+    }
+}
+
+/// One source lane and its detected patterns, shared by filling and read-only prediction.
+struct FillLane {
+    source: Vec<(CellRef, Option<Cell>)>,
+    pattern: Pattern,
+    per_cell: Vec<Pattern>,
+}
+
+impl FillLane {
+    fn new(wb: &Workbook, src_cells: Vec<(CellRef, Option<Cell>)>, mode: FillMode) -> Self {
+        let fmt = |c: &(CellRef, Option<Cell>)| wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
+        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
+            let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
+            let dates = match mode {
+                FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, wb.date_system, first_fmt),
+                _ => None,
+            };
+            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &wb.custom_lists, wb.date_system, first_fmt));
+            match (mode, detected) {
+                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
+                (_, p) => p,
+            }
+        } else {
+            Pattern::Copy
+        };
+        // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
+        // own series, one step per repeat of the source.
+        let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
+            src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &wb.custom_lists, wb.date_system, fmt(c))).collect()
+        } else {
+            Vec::new()
+        };
+        Self { source: src_cells, pattern, per_cell }
+    }
+
+    fn cell(&self, sh: &gridcraft_model::Sheet, t: CellRef, k: usize, forward: bool, mode: FillMode) -> (CellRef, Cell) {
+        let step = k as i64 + 1;
+        let idx = k % self.source.len().max(1);
+        let src_i = if forward { idx } else { self.source.len() - 1 - idx };
+        let (sc, scell) = self.source.get(src_i).cloned().unwrap_or((t, None));
+        let mut cell = scell.clone().unwrap_or_default();
+        match mode {
+            FillMode::Formats => {
+                let mut existing = sh.cell(t).cloned().unwrap_or_default();
+                existing.style = cell.style;
+                return (sc, existing);
+            }
+            FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend | FillMode::Dates(_) => {
+                let style = if mode == FillMode::ValuesOnly { sh.cell(t).map(|c| c.style).unwrap_or_default() } else { cell.style };
+                if let Some(f) = &cell.formula {
+                    if let Some(e) = f.expr() {
+                        let shifted = gridcraft_formula::adjust::shift_relative(e, t.row as i64 - sc.row as i64, t.col as i64 - sc.col as i64);
+                        cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                        cell.value = Value::Empty;
+                    }
+                } else if let Some(v) = match self.per_cell.get(src_i) {
+                    Some(p) => p.value(k as i64 / self.source.len() as i64 + 1, forward, 1),
+                    None => self.pattern.value(step, forward, self.source.len()),
+                } {
+                    cell.value = v;
+                }
+                cell.style = style;
+            }
+        }
+        (sc, cell)
+    }
+}
+
+/// Predict one destination cell using the committed fill's patterns and formula adjustment.
+/// No workbook, calculation, revision or history state is changed. Work depends only on one
+/// source lane (at most 4,096 cells), never on the distance dragged or number of target cells.
+/// Oversized sources and ranges beyond the fill command's size limit have no preview.
+pub fn preview_cell(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef, at: CellRef, mode: FillMode) -> Option<Cell> {
+    if src.count() > MAX_FILL_CELLS
+        || target.count() > MAX_FILL_CELLS
+        || !holds_source_in_corner(src, target)
+        || !target.contains(at)
+        || src.contains(at)
+    {
+        return None;
+    }
+    let FillShape { vertical, forward, lane_count, steps } = FillShape::new(src, target);
+    let src_len = if vertical { src.height() } else { src.width() };
+    if src_len > 4096 || u64::from(lane_count) * u64::from(steps) > MAX_FILL_CELLS {
+        return None;
+    }
+    // A diagonal target is filled on the engine's selected axis, in the source's lanes only.
+    let (lane, offset) = if vertical {
+        if at.col < src.start.col || at.col > src.end.col {
+            return None;
+        }
+        (at.col, if forward { at.row.checked_sub(src.end.row)? } else { src.start.row.checked_sub(at.row)? })
+    } else {
+        if at.row < src.start.row || at.row > src.end.row {
+            return None;
+        }
+        (at.row, if forward { at.col.checked_sub(src.end.col)? } else { src.start.col.checked_sub(at.col)? })
+    };
+    let k = offset.checked_sub(1)? as usize;
+    let sh = wb.sheet(sheet)?;
+    let source = (0..src_len)
+        .map(|i| {
+            let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
+            (c, sh.cell(c).cloned())
+        })
+        .collect();
+    Some(FillLane::new(wb, source, mode).cell(sh, at, k, forward, mode).1)
+}
+
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
-    let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
-    // Direction: down/up if target extends rows, else right/left.
-    let vertical = target.height() != src.height() || target.width() == src.width();
-    let forward = if vertical {
-        target.end.row > src.end.row || target.start.row == src.start.row
-    } else {
-        target.end.col > src.end.col || target.start.col == src.start.col
-    };
-    // Every source lane writes one cell per step past the source: bound that product, not the
-    // source and target separately (whole rows into whole columns was ~17 billion writes).
-    let (lane_count, steps) = if vertical {
-        let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
-        (src.width(), steps)
-    } else {
-        let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
-        (src.height(), steps)
-    };
+    let FillShape { vertical, forward, lane_count, steps } = FillShape::new(src, target);
     if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
         return Err(crate::EngineError::Other("The fill is too large.".into()));
     }
@@ -128,57 +250,12 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 if forward { (src.end.col + 1..=target.end.col).collect() } else { (target.start.col..src.start.col).rev().collect() };
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
-        let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
-            let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
-            let dates = match mode {
-                FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, cx.wb.date_system, first_fmt),
-                _ => None,
-            };
-            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &custom, cx.wb.date_system, first_fmt));
-            match (mode, detected) {
-                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
-                (_, p) => p,
-            }
-        } else {
-            Pattern::Copy
-        };
-        // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
-        // own series, one step per repeat of the source.
-        let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
-            src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &custom, cx.wb.date_system, fmt(c))).collect()
-        } else {
-            Vec::new()
-        };
+        let lane = FillLane::new(&cx.wb, src_cells, mode);
         for (k, t) in targets.iter().enumerate() {
-            let step = k as i64 + 1;
-            let idx = k % src_cells.len().max(1);
-            let src_i = if forward { idx } else { src_cells.len() - 1 - idx };
-            let (sc, scell) = src_cells.get(src_i).cloned().unwrap_or((src.start, None));
-            let mut cell = scell.clone().unwrap_or_default();
-            match mode {
-                FillMode::Formats => {
-                    let mut existing = sh.cell(*t).cloned().unwrap_or_default();
-                    existing.style = cell.style;
-                    writes.push((*t, Some(existing)));
-                    continue;
-                }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend | FillMode::Dates(_) => {
-                    let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
-                    if let Some(f) = &cell.formula {
-                        if let Some(e) = f.expr() {
-                            let shifted = gridcraft_formula::adjust::shift_relative(e, t.row as i64 - sc.row as i64, t.col as i64 - sc.col as i64);
-                            cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
-                            cell.value = Value::Empty;
-                        }
-                    } else if let Some(v) = match per_cell.get(src_i) {
-                        Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
-                        None => pattern.value(step, forward, src_cells.len()),
-                    } {
-                        cell.value = v;
-                    }
-                    cell.style = style;
-                }
+            let (sc, cell) = lane.cell(sh, *t, k, forward, mode);
+            if mode == FillMode::Formats {
+                writes.push((*t, Some(cell)));
+                continue;
             }
             if let Some(picture) = sh.cell_pictures.get(&sc) {
                 pictures.push((*t, picture.clone()));

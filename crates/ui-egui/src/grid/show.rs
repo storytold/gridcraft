@@ -1,4 +1,6 @@
 #[cfg(test)]
+use super::Pos2;
+#[cfg(test)]
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
@@ -9,12 +11,10 @@ use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
-    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
-    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    Align2, Arc, CellRef, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp,
+    Stroke, StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
     zoom_glide_step,
 };
-#[cfg(test)]
-use super::{CellRef, Pos2};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -348,8 +348,58 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     context_menu(app, ui);
     fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
     fill_options_tag(app, ui, geo, sh);
+    fill_value_preview(app, ui, geo);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);
+}
+
+/// The current drag endpoint, predicted by the engine without executing an edit.
+fn fill_value_preview(app: &SheetApp, ui: &egui::Ui, geo: &Geo) {
+    let Drag::Fill { target: Some(target), menu: false } = app.grid.drag else { return };
+    let Some(doc) = app.session.active() else { return };
+    let si = doc.wb.active_sheet();
+    let Some(sh) = doc.wb.sheet(si) else { return };
+    let Some(pointer) = ui.ctx().pointer_hover_pos() else { return };
+    let pointer_in_grid = geo.mirror_pos(pointer);
+    let pc = geo.cell_at(
+        sh,
+        pos2(
+            pointer_in_grid.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0),
+            pointer_in_grid.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0),
+        ),
+    );
+    let at = CellRef::new(pc.row.clamp(target.start.row, target.end.row), pc.col.clamp(target.start.col, target.end.col));
+    let mode = if ui.input(|i| i.modifiers.command) { gridcraft_engine::fill::FillMode::Alternate } else { gridcraft_engine::fill::FillMode::Series };
+    let Some(cell) = gridcraft_engine::fill::preview_cell(&doc.wb, si, doc.selection.current(), target, at, mode) else { return };
+    let style = doc.wb.styles.get(cell.style);
+    // Recalculation is deferred until release; show the shifted formula itself.
+    let text = if cell.formula.is_some() {
+        if style.protection.hidden && sh.is_protected() {
+            return;
+        }
+        crate::formula_locale::display(&cell.input_text(), app.ui.language.formula_locale(), &doc.wb, si)
+    } else {
+        gridcraft_engine::display::value_text_as(&doc.wb, &cell.value, style.num_fmt.as_str())
+    };
+    if text.is_empty() {
+        return;
+    }
+    // Keep long cell contents from covering the grid while dragging.
+    let mut chars = text.chars();
+    let mut label: String = chars.by_ref().take(128).collect();
+    if chars.next().is_some() {
+        label.push('…');
+    }
+    egui::Area::new(egui::Id::unique("fill_value_preview"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .fixed_pos(pointer + vec2(14.0, 18.0))
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(240.0);
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.add(egui::Label::new(label).wrap());
+            });
+        });
 }
 
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {

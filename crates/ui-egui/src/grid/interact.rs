@@ -694,6 +694,12 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
         (input.geo, input.sheet, input.workbook, &input.selection, input.position, input.modifiers, input.response);
     let ctx = input.context.clone();
     if resp.drag_stopped() || (!input.any_pointer_down && app.grid.drag != Drag::None && !resp.dragged()) {
+        let cancel_fill = matches!(app.grid.drag, Drag::Fill { .. })
+            && ctx.input_mut(|i| {
+                let escape = i.key_pressed(egui::Key::Escape);
+                i.events.retain(|event| !matches!(event, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+                escape
+            });
         match std::mem::take(&mut app.grid.drag) {
             Drag::Select => {
                 if resp.drag_stopped()
@@ -710,14 +716,14 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Fill { target: Some(t), menu: true } => {
                 if let Some(p) = pos
                     && t != sel.current()
-                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    && !cancel_fill
                 {
                     app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
                 }
             }
             Drag::Fill { target: Some(t), menu: false } => {
                 let src = sel.current();
-                if t != src {
+                if t != src && !cancel_fill {
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
                     let mode = if mods.command { "alternate" } else { "series" };
                     match app.run("edit.autoFill", json!({"source": src.a1(), "target": t.a1(), "mode": mode})) {
