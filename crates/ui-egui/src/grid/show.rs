@@ -57,6 +57,34 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // Shift (horizontal) or Alt (vertical) holds the scroll to one axis: egui turns it from the
+    // modifiers the wheel events carry, and the grid below turns a vertical scroll horizontal
+    // under Shift where egui didn't, so with either modifier held the scroll passes the rail as
+    // it is, and those paths behave as they did.
+    let holds = ui.ctx().options(|o| {
+        let (h, v) = (o.input_options.horizontal_scroll_modifier, o.input_options.vertical_scroll_modifier);
+        move |m: egui::Modifiers| m.matches_any(h) || m.matches_any(v)
+    });
+    // The trackpad ending a gesture, or starting one, in the order they came, since a slow frame
+    // can hold a whole gesture (a start can come in a frame with no movement yet), and a modifier
+    // on one of its events, whatever the unit: egui takes a gesture's modifiers from every wheel
+    // event while it lasts, on every frame, whether or not the grid scrolls from it (the pointer
+    // may be off the grid, or the event may carry no movement). First the pause that ends a
+    // gesture for egui, as egui checks it before the frame's events.
+    ui.input(|i| {
+        app.grid.scroll_rail.expire(i.time);
+        for e in &i.events {
+            if let egui::Event::MouseWheel { source, .. } = e {
+                app.grid.scroll_rail.heard(i.time, *source == egui::MouseWheelSource::Trackpad);
+            }
+            match e {
+                egui::Event::MouseWheel { phase: egui::TouchPhase::Start, modifiers: m, .. } => app.grid.scroll_rail.begin(holds(*m)),
+                egui::Event::MouseWheel { phase: egui::TouchPhase::Move, modifiers: m, .. } if holds(*m) => app.grid.scroll_rail.hold(),
+                egui::Event::MouseWheel { phase: egui::TouchPhase::End | egui::TouchPhase::Cancel, .. } => app.grid.scroll_rail.end(),
+                _ => {}
+            }
+        }
+    });
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -89,7 +117,18 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-            let mut d = scroll_delta;
+            // What the gesture's own events moved this frame (points, as a trackpad reports; a
+            // mouse wheel's lines or pages are not the gesture's). A gesture starting mid-frame (a
+            // slow frame can hold the end of one and the start of the next) counts only the events
+            // after its start.
+            let own = ui.input(|i| {
+                i.events.iter().fold(egui::Vec2::ZERO, |moved, e| match e {
+                    egui::Event::MouseWheel { phase: egui::TouchPhase::Start, .. } => egui::Vec2::ZERO,
+                    egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, .. } => moved + *delta,
+                    _ => moved,
+                })
+            });
+            let mut d = app.grid.scroll_rail.steer(scroll_delta, own);
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {
