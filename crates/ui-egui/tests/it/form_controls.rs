@@ -242,6 +242,29 @@ fn a_button_runs_its_macro_and_cmd_or_right_click_only_selects() {
 }
 
 #[test]
+fn holding_enter_or_space_presses_a_focused_button_once() {
+    let (mut h, ids) = fixture();
+    let r = rect(&h, ids.button);
+    click(&mut h, r.center());
+    assert_eq!(h.state().grid.focused_control, Some(ids.button));
+    for k in [Key::Enter, Key::Space] {
+        let before = undo_len(&h);
+        // A held key: one press, then the system's repeats, then the release.
+        h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for _ in 0..5 {
+            h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(undo_len(&h), before + 1, "{k:?} ran the macro once");
+        assert_eq!(cell(&h, "H1"), Value::text("pressed"));
+        assert_eq!(cell(&h, "A20"), Value::Empty, "{k:?} typed nothing into the cell");
+    }
+}
+
+#[test]
 fn a_button_from_a_file_asks_before_it_runs() {
     use egui_kittest::kittest::Queryable as _;
     let (mut h, ids) = fixture();

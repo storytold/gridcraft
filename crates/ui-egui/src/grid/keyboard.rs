@@ -170,7 +170,9 @@ fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui:
 fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool {
     match ev {
         egui::Event::Text(text) => text == " " && app.grid.focused_control.is_some() && app.selected_object.is_none(),
-        egui::Event::Key { key, pressed: true, modifiers: m, .. } => !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key),
+        egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
+            !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key, *repeat)
+        }
         _ => false,
     }
 }

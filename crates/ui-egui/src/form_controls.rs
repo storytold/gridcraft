@@ -357,8 +357,9 @@ fn step_part(app: &mut SheetApp, c: &FormControl, part: Part) {
 }
 
 /// Keys for the focused control: arrows move by a step, Page Up and Page Down by a page, Home and
-/// End to the ends; Space or Enter presses a button. True when the key was used.
-pub fn key(app: &mut SheetApp, sh: &Sheet, key: egui::Key) -> bool {
+/// End to the ends; Space or Enter presses a button. True when the key was used. `repeat` is a key
+/// held down: it steps a slider or spin button again, but a button runs once per press.
+pub fn key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, repeat: bool) -> bool {
     use egui::Key;
     let Some(c) = app.grid.focused_control.and_then(|id| find(sh, id)).cloned() else { return false };
     if app.selected_object.is_some() {
@@ -370,7 +371,9 @@ pub fn key(app: &mut SheetApp, sh: &Sheet, key: egui::Key) -> bool {
             true
         }
         (ControlKind::Button, Key::Space | Key::Enter) => {
-            app.press_button(c.id);
+            if !repeat {
+                app.press_button(c.id);
+            }
             true
         }
         (ControlKind::Button, _) => false,
