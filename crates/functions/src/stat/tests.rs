@@ -151,6 +151,19 @@ fn spread() {
     let g = [4.0, 5.0, 8.0, 7.0, 11.0, 4.0, 3.0];
     close_tol(ev("GEOMEAN", vec![c(&g)]), 5.476986969, 1e-9);
     close_tol(ev("HARMEAN", vec![c(&g)]), 5.028375962, 1e-9);
+    let text_values = arr(vec![vec![tv("1"), tv("2")]]);
+    let bool_values = arr(vec![vec![Value::Bool(true), Value::Bool(false)]]);
+    let mixed_values = arr(vec![vec![nv(2.0), tv("ignored"), Value::Bool(true)]]);
+    is_err(ev("HARMEAN", vec![av(text_values.clone())]), CellError::NA);
+    is_err(ev("HARMEAN", vec![av(bool_values.clone())]), CellError::NA);
+    is_err(ev("HARMEAN", vec![rf(text_values)]), CellError::NA);
+    is_err(ev("HARMEAN", vec![rf(bool_values)]), CellError::NA);
+    close(ev("HARMEAN", vec![av(mixed_values.clone())]), 2.0);
+    close(ev("HARMEAN", vec![rf(mixed_values)]), 2.0);
+    close(ev("HARMEAN", vec![b(true)]), 1.0);
+    close(ev("HARMEAN", vec![n(2.0), n(4.0)]), 8.0 / 3.0);
+    is_err(ev("HARMEAN", vec![av(arr(vec![vec![nv(0.0)]]))]), CellError::Num);
+    is_err(ev("HARMEAN", vec![av(arr(vec![vec![nv(-1.0)]]))]), CellError::Num);
     is_err(ev("GEOMEAN", vec![c(&[1.0, 0.0])]), CellError::Num);
     close_tol(ev("TRIMMEAN", vec![c(&[4.0, 5.0, 6.0, 7.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0]), n(0.2)]), 3.777777778, 1e-9);
     is_err(ev("TRIMMEAN", vec![c(&[1.0]), n(1.0)]), CellError::Num);
@@ -360,6 +373,7 @@ fn normal() {
 
 #[test]
 fn t_chi_f() {
+    close_tol(ev("T.DIST", vec![n(0.0), n(6e307), b(false)]), 0.3989422804, 1e-10);
     close_tol(ev("T.DIST", vec![n(60.0), n(1.0), b(true)]), 0.99469533, D7);
     close_tol(ev("T.DIST", vec![n(8.0), n(3.0), b(false)]), 0.00073691, 1e-5);
     close_tol(ev("T.DIST.2T", vec![n(1.959999998), n(60.0)]), 0.054644930, D7);
@@ -397,11 +411,54 @@ fn t_chi_f() {
     close_tol(ev("F.DIST.RT", vec![n(15.2069), n(6.0), n(4.0)]), 0.01, 1e-6);
     close_tol(ev("FDIST", vec![n(15.2069), n(6.0), n(4.0)]), 0.01, 1e-6);
     close_tol(ev("F.INV", vec![n(0.01), n(6.0), n(4.0)]), 0.10930991, D7);
+    close_tol(ev("F.INV", vec![n(0.99), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("F.INV.RT", vec![n(0.01), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("FINV", vec![n(0.01), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+}
+
+#[test]
+fn f_distributions_accept_ten_billion_degrees() {
+    close_tol(ev("F.DIST", vec![n(0.0), n(10_000_000_000.0), n(1.0), b(false)]), 0.0, 0.0);
+    close_tol(ev("F.DIST.RT", vec![n(0.0), n(1.0), n(10_000_000_000.0)]), 1.0, 0.0);
+    close_tol(ev("F.DIST", vec![n(0.01), n(1_000_000_000.0), n(1.0), b(true)]), 1.52397e-23, 1e-28);
+    close_tol(ev("F.DIST", vec![n(1.0), n(10_000_000_000.0), n(10_000_000_000.0), b(true)]), 0.5, 0.0);
+    close_tol(ev("F.DIST", vec![n(1_000_000.0), n(10_000_000_000.0), n(1.0), b(true)]), 0.999202115, 1e-8);
+    close_tol(ev("F.INV", vec![n(0.5), n(10_000_000_000.0), n(1.0)]), 2.198110953542527, 2e-6);
+    close_tol(ev("F.DIST.RT", vec![n(0.0), n(9_999_999_999.0), n(1.0)]), 1.0, 0.0);
+    is_err(ev("F.DIST.RT", vec![n(0.0), n(10_000_000_001.0), n(1.0)]), CellError::Num);
+    is_err(ev("F.DIST.RT", vec![n(0.0), n(1.0), n(10_000_000_001.0)]), CellError::Num);
+}
+
+#[test]
+fn t_dist_zero_degrees_error_depends_on_mode() {
+    for df in [0.0, 0.9, -0.1] {
+        is_err(ev("T.DIST", vec![n(0.0), n(df), b(false)]), CellError::Div0);
+        is_err(ev("T.DIST", vec![n(0.0), n(df), b(true)]), CellError::Num);
+    }
+    is_err(ev("T.DIST", vec![n(0.0), n(-1.0), b(false)]), CellError::Num);
+    close_tol(ev("T.DIST", vec![n(0.0), n(1.99), b(false)]), 1.0 / std::f64::consts::PI, 1e-15);
+    close_tol(ev("T.DIST", vec![n(0.0), n(1.0), b(false)]), 1.0 / std::f64::consts::PI, 1e-15);
+}
+
+#[test]
+fn t_density_is_stable_for_large_degrees() {
+    close_tol(ev("T.DIST", vec![n(0.0), n(100_000_000.0), b(false)]), 0.398942279404077, 1e-12);
+    close_tol(ev("T.DIST", vec![n(0.0), n(10_000_000_000.0), b(false)]), 0.3989422803914591, 1e-12);
+    close_tol(ev("T.DIST", vec![n(1.0), n(10_000_000_000_000_000.0), b(false)]), 0.24197072451914337, 1e-12);
+}
+
+#[test]
+fn t_inv_zero_probability_returns_div0() {
+    is_err(ev("T.INV", vec![n(-0.1), n(1.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(0.0), n(1.0)]), CellError::Div0);
+    close_tol(ev("T.INV", vec![n(0.75), n(2.0)]), 0.8164966, D7);
+    is_err(ev("T.INV", vec![n(1.0), n(1.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(1.1), n(1.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(0.0), n(0.0)]), CellError::Num);
+    is_err(ev("T.INV.2T", vec![n(0.0), n(1.0)]), CellError::Num);
 }
 
 #[test]
@@ -427,7 +484,15 @@ fn discrete() {
     close_tol(ev("BINOM.DIST", vec![n(6.0), n(10.0), n(0.5), b(false)]), 0.205078125, 1e-12);
     close_tol(ev("BINOM.DIST", vec![n(6.0), n(10.0), n(0.5), b(true)]), 0.828125, 1e-12);
     close_tol(ev("BINOMDIST", vec![n(6.0), n(10.0), n(0.5), b(false)]), 0.205078125, 1e-12);
+    close(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_646.0), n(0.0), b(false)]), 0.0);
+    close(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_646.9), n(0.0), b(false)]), 0.0);
+    is_err(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_647.0), n(0.0), b(false)]), CellError::Num);
+    is_err(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_647.9), n(0.0), b(false)]), CellError::Num);
     is_err(ev("BINOM.DIST", vec![n(11.0), n(10.0), n(0.5), b(false)]), CellError::Num);
+    close(ev("BINOM.DIST.RANGE", vec![n(2_147_483_646.0), n(0.0), n(1.0)]), 0.0);
+    close(ev("BINOM.DIST.RANGE", vec![n(2_147_483_646.9), n(0.0), n(1.0)]), 0.0);
+    is_err(ev("BINOM.DIST.RANGE", vec![n(2_147_483_647.0), n(0.0), n(1.0)]), CellError::Num);
+    is_err(ev("BINOM.DIST.RANGE", vec![n(2_147_483_647.9), n(0.0), n(1.0)]), CellError::Num);
     close_tol(ev("BINOM.DIST.RANGE", vec![n(60.0), n(0.75), n(48.0)]), 0.083974967, 1e-6);
     close_tol(ev("BINOM.DIST.RANGE", vec![n(60.0), n(0.75), n(45.0), n(50.0)]), 0.523629793, 1e-6);
     close(ev("BINOM.INV", vec![n(6.0), n(0.5), n(0.75)]), 4.0);
@@ -466,6 +531,19 @@ fn continuous() {
     is_err(ev("GAMMA", vec![n(0.0)]), CellError::Num);
     close_tol(ev("BETA.DIST", vec![n(2.0), n(8.0), n(10.0), b(true), n(1.0), n(3.0)]), 0.6854706, D7);
     close_tol(ev("BETA.DIST", vec![n(2.0), n(8.0), n(10.0), b(false), n(1.0), n(3.0)]), 1.4837646, D7);
+    is_err(ev("BETA.DIST", vec![n(0.0), n(1.0), n(1.0), b(false)]), CellError::Num);
+    is_err(ev("BETA.DIST", vec![n(1.0), n(1.0), n(1.0), b(false)]), CellError::Num);
+    is_err(ev("BETA.DIST", vec![n(0.0), n(0.5), n(2.0), b(false)]), CellError::Num);
+    is_err(ev("BETA.DIST", vec![n(1.0), n(2.0), n(0.5), b(false)]), CellError::Num);
+    close(ev("BETA.DIST", vec![n(0.0), n(2.0), n(1.0), b(false)]), 0.0);
+    close(ev("BETA.DIST", vec![n(1.0), n(1.0), n(2.0), b(false)]), 0.0);
+    close(ev("BETA.DIST", vec![n(0.0), n(1.0), n(1.0), b(true)]), 0.0);
+    close(ev("BETA.DIST", vec![n(1.0), n(1.0), n(1.0), b(true)]), 1.0);
+    is_err(ev("BETA.DIST", vec![n(2.0), n(1.0), n(2.0), b(false), n(2.0), n(6.0)]), CellError::Num);
+    is_err(ev("BETA.DIST", vec![n(6.0), n(2.0), n(1.0), b(false), n(2.0), n(6.0)]), CellError::Num);
+    close(ev("BETA.DIST", vec![n(4.0), n(1.0), n(1.0), b(false), n(2.0), n(6.0)]), 0.25);
+    close(ev("BETA.DIST", vec![n(2.0), n(1.0), n(1.0), b(true), n(2.0), n(6.0)]), 0.0);
+    close(ev("BETA.DIST", vec![n(6.0), n(1.0), n(1.0), b(true), n(2.0), n(6.0)]), 1.0);
     close_tol(ev("BETADIST", vec![n(2.0), n(8.0), n(10.0), n(1.0), n(3.0)]), 0.6854706, D7);
     close_tol(ev("BETA.INV", vec![n(0.685470581), n(8.0), n(10.0), n(1.0), n(3.0)]), 2.0, D7);
     close_tol(ev("BETAINV", vec![n(0.685470581), n(8.0), n(10.0), n(1.0), n(3.0)]), 2.0, D7);
@@ -477,6 +555,30 @@ fn continuous() {
     let r = rows_of(&ev("NORM.S.DIST", vec![av(row(&[0.0, 1.0])), b(true)]));
     close(r[0][0].clone(), 0.5);
     close_tol(r[0][1].clone(), 0.841344746, 1e-8);
+}
+
+#[test]
+fn gamma_density_at_zero_shape_one_is_num() {
+    for scale in [0.1, 0.9, 1.0, 1.9, 2.0, 10_000_000_000.0] {
+        is_err(ev("GAMMA.DIST", vec![n(0.0), n(1.0), n(scale), b(false)]), CellError::Num);
+    }
+    is_err(ev("GAMMA.DIST", vec![n(0.0), n(0.5), n(1.0), b(false)]), CellError::Num);
+    close_tol(ev("GAMMA.DIST", vec![n(0.0), n(2.0), n(1.0), b(false)]), 0.0, 0.0);
+    close_tol(ev("GAMMA.DIST", vec![n(0.0), n(1.0), n(2.0), b(true)]), 0.0, 0.0);
+    close_tol(ev("GAMMA.DIST", vec![n(2.0), n(1.0), n(2.0), b(false)]), 0.5 * (-1.0f64).exp(), 1e-15);
+    close_tol(ev("GAMMA.DIST", vec![n(2.0), n(1.0), n(2.0), b(true)]), 1.0 - (-1.0f64).exp(), 1e-15);
+    is_err(ev("GAMMA.DIST", vec![n(-0.1), n(1.0), n(2.0), b(false)]), CellError::Num);
+}
+
+#[test]
+fn weibull_density_at_zero_is_zero() {
+    for shape in [0.5, 1.0, 2.0] {
+        close_tol(ev("WEIBULL.DIST", vec![n(0.0), n(shape), n(1.0), b(false)]), 0.0, 0.0);
+        close_tol(ev("WEIBULL.DIST", vec![n(0.0), n(shape), n(1.0), b(true)]), 0.0, 0.0);
+    }
+    close_tol(ev("WEIBULL.DIST", vec![n(1.0), n(1.0), n(1.0), b(false)]), (-1.0f64).exp(), 1e-15);
+    close_tol(ev("WEIBULL.DIST", vec![n(1.0), n(1.0), n(1.0), b(true)]), 1.0 - (-1.0f64).exp(), 1e-15);
+    is_err(ev("WEIBULL.DIST", vec![n(-0.1), n(1.0), n(1.0), b(false)]), CellError::Num);
 }
 
 #[test]

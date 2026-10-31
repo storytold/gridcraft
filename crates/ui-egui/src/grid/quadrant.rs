@@ -5,8 +5,8 @@ use super::cell_paint::{
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
 use super::{
-    CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, Value,
-    Workbook, pos2, theme, vec2,
+    CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, VAlign,
+    Value, Workbook, pos2, theme, vec2,
 };
 
 /// Mirror what the grid painted into `layer` (the shape indices in `range`) for a right-to-left
@@ -68,6 +68,30 @@ fn mirror_shape(shape: &mut egui::Shape, axis: f32) {
     }
 }
 
+/// Restrict top-aligned wrapped text to complete lines inside the cell.
+///
+/// Preserve the cell and viewport clip when every line fits. Otherwise,
+/// exclude overflowing lines while retaining the visible fitting lines.
+fn wrapped_text_clip(p: &Painter, rect: Rect, galley: &egui::Galley, y: f32, valign: VAlign) -> Rect {
+    let mut clip = rect.intersect(p.clip_rect());
+    if valign != VAlign::Top {
+        return clip;
+    }
+
+    let Some(last_row) = galley.rows.last() else {
+        return clip;
+    };
+
+    if y + last_row.rect().bottom() <= rect.bottom() + 0.01 {
+        return clip;
+    }
+
+    let last_full_bottom = galley.rows.iter().map(|row| y + row.rect().bottom()).rfind(|bottom| *bottom <= rect.bottom() + 0.01);
+
+    clip.max.y = last_full_bottom.map(|bottom| clip.bottom().min(bottom)).unwrap_or(clip.top()).max(clip.top());
+
+    clip
+}
 pub(crate) struct QuadrantPaint<'a> {
     pub(crate) painter: &'a Painter,
     pub(crate) geo: &'a Geo,
@@ -80,6 +104,11 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) tokens: &'a Tokens,
 }
 
+/// Paint a worksheet quadrant, including backgrounds, borders, and text.
+///
+/// For top-aligned wrapped text, painting is limited to complete lines
+/// fitting within the cell height while respecting viewport clipping.
+/// Other vertical alignment modes retain their existing behavior.
 pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     let (r0, r1) = quadrant.rows;
     let (c0, c1) = quadrant.cols;
@@ -288,6 +317,10 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
 
+/// Paint one worksheet cell using its computed appearance and visible geometry.
+///
+/// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
+/// and clipping, while preserving cell decoration and merged-cell constraints.
 fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
@@ -363,7 +396,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             _ => text_left + pad + indent,
         };
         let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
-        p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
+        let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
+        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.

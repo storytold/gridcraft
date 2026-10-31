@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as CSV",
             ["File", "Export"],
             None,
-            "{path, sheet?, delimiter?: \",\" | \";\" (default: the delimiter the file was opened with, else \",\"), decimal?: \".\" | \",\" (decimal comma and period-grouped numbers), bom?: bool (UTF-8 byte order mark, which Excel needs to read accents)}",
+            "{path, sheet?, delimiter?: \",\" | \";\" (default: the delimiter the file was opened with, else \",\"), decimal?: \".\" | \",\" (decimal comma and period-grouped numbers), bom?: bool (UTF-8 byte order mark, which Excel needs to read accents), values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE), with the separator the file was opened with and without `delimiter`, `decimal` or `bom`",
             has_doc,
             |s, p| export(s, p, "csv")
         ),
@@ -231,9 +231,17 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
     let style = if ext == "csv" { csv_style(p, &wb, "file.exportCsv")? } else { None };
-    let bytes = match style {
-        Some(style) => crate::io::csv_bytes(&wb, style)?,
-        None => crate::io::save_bytes(&wb, &target)?,
+    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        // Raw values are for scripts, which read them as written: the display options don't apply.
+        if style.is_some() {
+            return Err(bad("file.exportCsv", "`values` writes raw values; `delimiter`, `decimal` and `bom` style the displayed export"));
+        }
+        crate::io::csv_values_bytes(&wb)?
+    } else {
+        match style {
+            Some(style) => crate::io::csv_bytes(&wb, style)?,
+            None => crate::io::save_bytes(&wb, &target)?,
+        }
     };
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
