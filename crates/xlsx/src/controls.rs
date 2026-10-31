@@ -397,10 +397,11 @@ fn number_of(shape: &El) -> Option<u64> {
 
 /// Reads a sheet's buttons, scroll bars and spin buttons: each `<control>` with its properties
 /// part, else its VML shape, and VML shapes the sheet doesn't list (files that only have VML).
+/// The shapes come from the VML drawing with relationship id `vml_rid` (`<legacyDrawing r:id>`).
 /// Returns the shape numbers of the controls it read, so pass-through keeps only the others.
-pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut Sheet) -> HashSet<u64> {
+pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels: &[Rel], sheet: &mut Sheet) -> HashSet<u64> {
     let mut read = HashSet::new();
-    let vml = match rels.iter().find(|r| r.kind == "vmlDrawing") {
+    let vml = match vml_rid.and_then(|id| rels.iter().find(|r| r.id == id && r.kind == "vmlDrawing")) {
         Some(r) => cx.pkg.read_xml(&r.target).ok().flatten(),
         None => None,
     };

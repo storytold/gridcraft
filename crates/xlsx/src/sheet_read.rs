@@ -141,7 +141,6 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, Ha
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
-    let mut controls: Option<&El> = None;
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -263,12 +262,11 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, Ha
                 }
             }
             "extLst" => read_ext(cx, e, &mut sheet),
-            "controls" | "AlternateContent" => controls = crate::controls::controls_of(e).or(controls),
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
     }
-    let read_controls = read_form_controls(cx, controls, &rels, &mut sheet);
+    let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {
         if let Some(x) = cx.optional_xml(&rel.target)? {
@@ -293,10 +291,14 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, Ha
     Ok((sheet, read_controls))
 }
 
-/// Buttons, scroll bars and spin buttons: the `<controls>` list with its properties parts, else
-/// the VML shapes. Returns the VML shape numbers read, so pass-through keeps only the others.
-fn read_form_controls(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut Sheet) -> HashSet<u64> {
-    if controls.is_some() || rels.iter().any(|r| r.kind == "vmlDrawing") { crate::controls::read(cx, controls, rels, sheet) } else { HashSet::new() }
+/// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside
+/// `mc:AlternateContent`) with its properties parts, else the shapes of the VML drawing that
+/// `<legacyDrawing r:id>` names (not the header and footer drawing of `<legacyDrawingHF>`).
+/// Returns the VML shape numbers read, so pass-through keeps only the others.
+fn read_form_controls(cx: &mut Ctx<'_>, root: &El, rels: &[Rel], sheet: &mut Sheet) -> HashSet<u64> {
+    let controls = root.children.iter().filter_map(crate::controls::controls_of).next_back();
+    let vml = root.child("legacyDrawing").and_then(|e| e.attr("id"));
+    if controls.is_some() || vml.is_some() { crate::controls::read(cx, controls, vml, rels, sheet) } else { HashSet::new() }
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

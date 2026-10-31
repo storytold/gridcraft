@@ -315,3 +315,21 @@ fn the_properties_parts_use_the_ctrl_prop_relationship_type() {
     assert_eq!(types.len(), 4, "{rels}");
     assert!(types.iter().all(|t| *t == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp"), "{types:?}");
 }
+
+/// A sheet with a header and footer drawing and a drawing for its controls: the controls come
+/// from the drawing `<legacyDrawing r:id>` names, whichever relationship is listed first.
+#[test]
+fn controls_come_from_the_legacy_drawing_not_the_header_and_footer_drawing() {
+    let hf = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shape id="LH" o:spid="_x0000_s2049" type="#_x0000_t75"><v:imagedata o:title="logo"/></v:shape></xml>"##;
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawingHF1.vml"/><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><legacyDrawing r:id="rId9"/><legacyDrawingHF r:id="rId1"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/vmlDrawingHF1.vml", hf), ("xl/drawings/vmlDrawing1.vml", VML_ONLY)],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let c = &wb.sheet(0).unwrap().controls;
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert_eq!(c[2].text, "Go");
+}
