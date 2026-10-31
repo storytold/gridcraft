@@ -277,8 +277,78 @@ pub fn save_file_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
 }
 
 /// The folder of the file at `path`, which relative paths to linked workbooks are relative to.
+///
+/// A symlink is followed, since that is where Save writes (see [`write_file`]): links are
+/// rebased against the folder the bytes actually land in.
 pub fn source_dir(path: &str) -> Option<std::path::PathBuf> {
-    std::path::absolute(path).ok()?.parent().map(std::path::Path::to_path_buf)
+    resolve_destination(path)?.parent().map(std::path::Path::to_path_buf)
+}
+
+/// The file `path` really names once symlinks are followed: where a save through it lands.
+/// `None` when it doesn't exist (yet) or there is no file system. On Windows the path comes back
+/// in the form the user knows (`C:\dir\book.xlsx`), not the `\\?\` form `canonicalize` returns,
+/// which would end up in the folder links are rebased against and in messages.
+pub fn resolve_path(path: impl AsRef<std::path::Path>) -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::canonicalize(path.as_ref()).ok().map(simplified)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// `path` without Windows' `\\?\` prefix when the plain form names the same file: a drive path
+/// (`\\?\C:\x` is `C:\x`) or a share (`\\?\UNC\server\share\x` is `\\server\share\x`). Paths of
+/// [`MAX_PLAIN_PATH`] characters or more keep the prefix, since the plain form may not open.
+/// Anything else is returned as it is, on every platform.
+#[cfg(not(target_arch = "wasm32"))]
+fn simplified(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.to_str().and_then(strip_verbatim) {
+        Some(plain) => std::path::PathBuf::from(plain),
+        None => path,
+    }
+}
+
+/// Windows' default limit on a path without the `\\?\` prefix.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PLAIN_PATH: usize = 260;
+
+/// The plain form of a verbatim Windows path (see [`simplified`]), or `None` when it is not
+/// one or has no plain form.
+#[cfg(not(target_arch = "wasm32"))]
+fn strip_verbatim(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let plain = match rest.strip_prefix("UNC\\") {
+        Some(share) => format!(r"\\{share}"),
+        None => {
+            let b = rest.as_bytes();
+            let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\';
+            if !drive {
+                return None;
+            }
+            rest.to_string()
+        }
+    };
+    // `.` and `..` components and `/` are taken literally after the prefix, so keep it for them.
+    let literal = plain.contains('/') || plain.split('\\').any(|part| part == "." || part == "..");
+    (plain.len() < MAX_PLAIN_PATH && !literal).then_some(plain)
+}
+
+/// Where a save to `path` lands: the file itself with symlinks followed, or, for a file that
+/// doesn't exist yet, its folder with symlinks followed and the name added. Falls back to the
+/// absolute path when nothing resolves.
+pub fn resolve_destination(path: &str) -> Option<std::path::PathBuf> {
+    if let Some(file) = resolve_path(path) {
+        return Some(file);
+    }
+    let absolute = std::path::absolute(path).ok()?;
+    match (absolute.parent().and_then(resolve_path), absolute.file_name()) {
+        (Some(dir), Some(name)) => Some(dir.join(name)),
+        _ => Some(absolute),
+    }
 }
 
 /// The file at `path` as `CELL("filename")` reports it: absolute, so the folder is the one the
@@ -681,6 +751,23 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    write_file_expecting(path, bytes, None).map(|_| ())
+}
+
+/// [`write_file`] for a document's own file: `expected` is what `path` resolved to when the
+/// document was opened or last saved. If a symlink in `path` has been retargeted (or left
+/// dangling) since, the save fails instead of overwriting a file the user never opened (Save
+/// As picks a new place). Returns the file that was written, which is what the next save
+/// should expect: resolving `path` again could already name something else.
+///
+/// A save through a symlink writes to the file at the end of the link, however long the chain of
+/// links and whether their targets are relative or absolute (the system resolves them, as
+/// [`resolve_path`] does), and the link stays. The temporary file is created beside that file, so
+/// saving needs write permission in its folder, not only in the link's. A link that is dangling
+/// or loops resolves to nothing: with `expected` the save is refused; without it (Save As onto
+/// such a path) the file is written at the link's own place, replacing the link.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_file_expecting(path: &str, bytes: &[u8], expected: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
     use std::io::Write;
     script_sandbox_check(path)?;
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
@@ -688,8 +775,24 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // path (planted by another local user) makes the save fail instead of truncating the
     // link's target; and it inherits the destination's access restrictions, so saving a
     // private workbook doesn't widen who can read it.
-    let tmp = format!("{path}.sctmp");
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    //
+    // A symlink is followed first: renaming over the link itself would replace it with a
+    // regular file and leave the real workbook untouched, so the temporary file is created
+    // beside the link's target and the rename lands on it. A new file is written in its
+    // folder with symlinks followed.
+    let destination = resolve_destination(path).ok_or_else(|| EngineError::Other(format!("{path}: not a valid path")))?;
+    if let Some(then) = expected {
+        let dangling = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) && resolve_path(path).is_none();
+        if dangling || destination != then {
+            return Err(EngineError::Other(format!("{path}: it no longer points to {}; use Save As to choose where to write", then.display())));
+        }
+    }
+    // Paths stay `PathBuf`s from here: a link may point at a file whose name isn't UTF-8.
+    let target = destination.as_path();
+    let mut tmp_name = target.as_os_str().to_owned();
+    tmp_name.push(".sctmp");
+    let tmp = std::path::PathBuf::from(tmp_name);
+    let prior = std::fs::metadata(target).ok().map(|m| m.permissions());
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -709,16 +812,22 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
+    std::fs::rename(&tmp, target).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
-    })
+    })?;
+    Ok(destination)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
+pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    write_file_expecting(path, bytes, None).map(|_| ())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn write_file_expecting(path: &str, _bytes: &[u8], _expected: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
     script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
