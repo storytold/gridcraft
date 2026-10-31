@@ -28,6 +28,19 @@ use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
+/// Per-window raw input on macOS: eframe runs it for every viewport, the extra workbook windows
+/// included, before `App::raw_input_hook`.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MacInput(gridcraft_ui_egui::ControlClicks);
+
+#[cfg(target_os = "macos")]
+impl eframe::ViewportHooks for MacInput {
+    fn raw_input(&self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.0.convert(raw_input);
+    }
+}
+
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
@@ -341,6 +354,9 @@ fn main() -> eframe::Result<()> {
     }
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // macOS: a Control-click is a right-click (#2563), in every workbook window.
+    #[cfg(target_os = "macos")]
+    let options = eframe::NativeOptions { viewport_hooks: Some(std::sync::Arc::new(MacInput::default())), ..options };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut options = options;
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file

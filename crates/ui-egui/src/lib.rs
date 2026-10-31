@@ -63,6 +63,7 @@ use gridcraft_engine::{Session, UiRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+pub use app::ControlClicks;
 pub use control::{ControlRequest, ControlResponse};
 
 mod app;
@@ -228,6 +229,8 @@ pub struct SheetApp {
     /// did not apply it (the font gate's early return) consumed the events with `begin_pass`
     /// without reaching input handling, so the hook must offer the same step again.
     pub(crate) synthetic_injected_at_pass: Option<u64>,
+    /// macOS: the primary press under way was a Control-click, so its release is a secondary one too.
+    pub(crate) control_click: bool,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub grid: grid::GridState,
     pub perf: Perf,
