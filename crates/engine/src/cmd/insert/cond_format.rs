@@ -244,6 +244,7 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             thresholds: vec![],
             reverse: rule.get("reverse").and_then(Json::as_bool).unwrap_or(false),
             show_value: true,
+            greater: vec![],
         },
         other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
     };
