@@ -149,6 +149,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
+| 2026-10-31 | sheet.read sees what a viewer of the sheet sees: hidden rows, columns and sheets are read only with `includeHidden`, and the response's `visibility` field says when it doesn't; `cell.get` reports `hiddenRow`/`hiddenCol` flags. Save-as-CSV still writes hidden rows, as Excel does |
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
 | 2026-10-26 | PDF preserves Context/LTR/RTL reading direction through wrapping and drawing; RTL sheet cells, borders, headings, objects and sparklines mirror consistently |
 | 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
@@ -289,6 +290,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
+| 2026-10-31 | minor | Progress log: sheet.read reads hidden rows, columns and sheets only with `includeHidden`; `cell.get` reports hidden flags. Scores and milestones unchanged |
 | 2026-10-26 | minor | Progress log: PDF reading direction and RTL sheets |
 | 2026-10-26 | minor | Progress log: Arabic PDF text |
 | 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
