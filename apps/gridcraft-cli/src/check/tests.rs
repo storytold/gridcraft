@@ -281,7 +281,7 @@ fn with_rels(bytes: &[u8], rels: &[(&str, &str)], parts: &[(&str, &str)]) -> Vec
     let mut pending: Vec<(&str, &str)> = rels.to_vec();
     for i in 0..src.len() {
         let mut f = src.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut body = String::new();
         f.read_to_string(&mut body).unwrap();
         if let Some(at) = pending.iter().position(|(r, _)| *r == name) {

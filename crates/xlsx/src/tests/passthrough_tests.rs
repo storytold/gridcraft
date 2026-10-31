@@ -129,7 +129,7 @@ impl Unpacked {
             let mut f = z.by_index(i).unwrap();
             let mut v = vec![];
             f.read_to_end(&mut v).unwrap();
-            parts.insert(f.name().to_string(), v);
+            parts.insert(f.name().unwrap().to_string(), v);
         }
         Unpacked { parts }
     }

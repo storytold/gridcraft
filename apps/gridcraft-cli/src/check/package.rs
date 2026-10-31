@@ -107,7 +107,15 @@ fn resolve_target(source_dir: &str, target: &str) -> String {
 type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 
 fn zip_names(zip: &mut Zip<'_>) -> Vec<String> {
-    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string())).collect()
+    // zip 9: a name that doesn't decode is still listed (lossily), so the check can report it.
+    (0..zip.len().min(MAX_ENTRIES))
+        .filter_map(|i| {
+            zip.by_index_raw(i)
+                .ok()
+                .filter(|f| !f.is_dir())
+                .map(|f| f.name().map_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned(), |n| n.into_owned()))
+        })
+        .collect()
 }
 
 fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
