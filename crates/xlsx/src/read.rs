@@ -15,6 +15,9 @@ pub struct Ctx<'a> {
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
+    /// The shared strings longer than Excel allows in a cell, by index: a sheet counts each cell
+    /// using one, since only those are saved.
+    pub long_strings: std::collections::HashSet<usize>,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
     /// Cell format index → model style.
@@ -96,6 +99,14 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
+/// What one shared string (`si`) may hold: one `phoneticPr`, and its text without a count, as plain
+/// text `t`, rich-text runs `r` and phonetic runs `rPh`. The schema allows one `t`, but a second one
+/// is text the reader has always kept (joined to the first, as in an inline string), and dropping
+/// text would lose the user's data at the next save, so a string past Excel's length is kept whole
+/// and warned about instead (its size stays bounded by the element cap). The parser drops anything
+/// else before the string is handed over.
+const STRING_CHILDREN: &[(&str, usize)] = &[("t", usize::MAX), ("phoneticPr", 1), ("r", usize::MAX), ("rPh", usize::MAX)];
+
 fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError> {
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
     // they annotate, so an open + save does not delete them.
@@ -105,8 +116,20 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                 let mut sst = Vec::new();
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
-                let res = xml::parse_streaming(&b, &["si"], &mut |si| {
+                let mut long_strings = std::collections::HashSet::new();
+                let mut ignored = 0usize;
+                let mut cut = 0usize;
+                let res = xml::parse_streaming(&b, xml::Streaming { split: &["si"], children: STRING_CHILDREN }, &mut |si| {
                     let text = xml::rich_text(&si);
+                    ignored += si.children.iter().filter(|k| !STRING_CHILDREN.iter().any(|(n, _)| *n == k.name)).count();
+                    if si.cut {
+                        cut += 1;
+                    }
+                    // Cut or not, text longer than Excel allows is saved as it is by every cell
+                    // using it, which each sheet counts.
+                    if xml::exceeds_cell_text(&text) {
+                        long_strings.insert(sst.len());
+                    }
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
                     dropped += raw.saturating_sub(runs.len());
@@ -116,13 +139,33 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                     sst.push(Arc::from(text));
                     Ok(())
                 });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
+                let dropped_elements = match res {
+                    Ok(s) => s.dropped,
+                    Err(f) => {
+                        cx.warn(format!("shared strings are damaged ({}); kept {} strings", f.error, sst.len()));
+                        f.dropped
+                    }
+                };
+                if dropped_elements > 0 {
+                    cx.warn(format!(
+                        "shared strings: dropped {dropped_elements} element(s), counting what they held, that a string may not hold (a second phoneticPr, unknown elements, or more elements than a part may hold)"
+                    ));
                 }
                 if dropped > 0 {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
                 }
+                if ignored > 0 {
+                    cx.warn(format!(
+                        "shared strings: {ignored} element(s) GridCraft does not read (unknown elements) were left out and will not be saved"
+                    ));
+                }
+                if cut > 0 {
+                    cx.warn(format!(
+                        "shared strings: {cut} string(s) held more elements than a part may hold and were cut there; the rest of each was dropped"
+                    ));
+                }
                 cx.sst = sst;
+                cx.long_strings = long_strings;
                 cx.keep_phonetics(phonetics);
             }
             None => cx.warn(format!("missing part {}", r.target)),
@@ -227,6 +270,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         pkg,
         report: ReadReport::default(),
         sst: vec![],
+        long_strings: Default::default(),
         phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
