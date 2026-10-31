@@ -71,6 +71,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            recent_commands: HashMap::new(),
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),

@@ -88,13 +88,19 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        self.run_or_alert_ok(id, params);
+    }
+
+    /// [`Self::run_or_alert`], telling whether the command ran: `false` when it failed (the error
+    /// is alerted) or was cancelled before it started.
+    pub(super) fn run_or_alert_ok(&mut self, id: &str, params: Json) -> bool {
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
                 self.open_backstage(backstage::Page::Print);
-                return;
+                return true;
             }
-            return self.print_now(params);
+            return self.print_now_ok(params);
         }
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
@@ -104,7 +110,8 @@ impl SheetApp {
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
-            return self.open_dialog("recommendedCharts", json!({}));
+            self.open_dialog("recommendedCharts", json!({}));
+            return true;
         }
         // Switch Windows with no window named (key tip, command search) opens the View tab's
         // list to choose from; programmatic callers of `run` get the list back.
@@ -112,14 +119,88 @@ impl SheetApp {
             self.ui.ribbon_tab = "View".into();
             self.ui.ribbon_collapsed = false;
             self.open_switch_windows = true;
-            return;
+            return true;
         }
         match self.run(id, params) {
+            Ok(_) => true,
             // A refused cell draft already shows its own message (with the rule's title).
-            Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
-            Err(e) => self.alert(e),
-            Ok(_) => {}
+            Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => false,
+            Err(e) => {
+                self.alert(e);
+                false
+            }
         }
+    }
+
+    /// Runs `id` as the search box (Alt+Q) chose it, the way the ribbon would: Copy and Cut publish
+    /// to the system clipboard and Paste reads it. The command is remembered as recently used in
+    /// the workbook that was active when it was chosen, and only if it ran.
+    pub(crate) fn run_searched_command(&mut self, ctx: &egui::Context, id: &str) {
+        // Commands that need a dialog to get their parameters. Run with empty params they would
+        // apply defaults (Series, Paste Special) or fail, so the search box opens the dialog the
+        // ribbon opens. Excluded: file.open (a file picker, not a password), comments (depend on
+        // threaded state), chart.set (needs a selected chart), and workbook protection (the
+        // dialog does not swap to Unprotect like protectSheet does).
+        const SEARCH_DIALOGS: &[(&str, &str)] = &[
+            ("home.insertCells", "insertCells"),
+            ("home.insertCopiedCells", "insertPaste"),
+            ("home.deleteCells", "deleteCells"),
+            ("home.rowHeight", "rowHeight"),
+            ("home.columnWidth", "columnWidth"),
+            ("home.defaultWidth", "defaultWidth"),
+            ("home.conditionalFormat", "cfQuick"),
+            ("sheet.rename", "renameSheet"),
+            ("sheet.move", "moveSheet"),
+            ("sheet.unhide", "unhideSheet"),
+            ("review.protectSheet", "protectSheet"),
+            ("review.unprotectSheet", "unprotectSheet"),
+            ("review.allowEditRanges", "allowEditRanges"),
+            ("edit.pasteSpecial", "pasteSpecial"),
+            ("edit.fillSeries", "series"),
+            ("edit.goToSpecial", "goToSpecial"),
+            ("link.open", "openLink"),
+            ("insert.link", "insertLink"),
+            ("insert.sparkline", "sparkline"),
+            ("insert.picture", "insertPicture"),
+            ("pageLayout.headerFooter", "headerFooter"),
+            ("pageLayout.margins", "pageSetup"),
+            ("data.textToColumns", "textToColumns"),
+            ("data.removeDuplicates", "removeDuplicates"),
+            ("data.advancedFilter", "advancedFilter"),
+            ("data.forecastSheet", "forecastSheet"),
+            ("data.subtotal", "subtotal"),
+            ("data.validation", "dataValidation"),
+            ("view.zoom", "zoom"),
+            ("formulas.defineName", "defineName"),
+            ("table.resize", "tableResize"),
+            ("pivot.calculatedField", "pivotCalculatedField"),
+        ];
+        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+        let ran = match id {
+            "edit.copy" | "edit.cut" => self.copy_to_clipboard_ok(ctx, id),
+            "edit.paste" => self.paste_from_clipboard_ok(),
+            _ => match SEARCH_DIALOGS.iter().find(|(c, _)| *c == id) {
+                Some((_, dialog)) => {
+                    self.open_dialog(dialog, json!({}));
+                    self.dialog.is_some()
+                }
+                None => self.run_or_alert_ok(id, json!({})),
+            },
+        };
+        if ran {
+            self.remember_command_in(uid, id);
+        }
+    }
+
+    /// The commands run from the search box in the active workbook, most recent first.
+    pub fn recent_commands(&self) -> &[String] {
+        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+        self.recent_commands.get(&uid).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Notes `id` as just run from the search box in the workbook `uid`.
+    fn remember_command_in(&mut self, uid: u64, id: &str) {
+        crate::command_search::remember(self.recent_commands.entry(uid).or_default(), id);
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
@@ -136,6 +217,17 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            // The search box's list without opening it: `{query}` gives the commands it shows
+            // for that text, best first; no query gives the recently used commands.
+            "ui.search" => {
+                let query = p.get("query").and_then(Json::as_str).unwrap_or("");
+                let hits = if query.trim().is_empty() {
+                    crate::command_search::recent(&self.session, self.recent_commands())
+                } else {
+                    crate::command_search::search(&self.session, query)
+                };
+                Ok(Json::Array(hits.iter().map(crate::command_search::to_json).collect()))
+            }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)

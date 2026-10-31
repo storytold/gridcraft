@@ -69,6 +69,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Drawn at least once. The click that opened a dialog ends in its first frame, so a click
+    /// outside only closes a dialog (the search box) from its second frame on.
+    shown: bool,
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -184,6 +187,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
@@ -207,6 +211,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
             original_link_text: None,

@@ -81,3 +81,16 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
 }
+
+#[test]
+fn command_search_opens_the_dialog_a_command_needs_instead_of_running_it() {
+    let mut h = harness();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    h.input_mut().events.push(Event::Text("fill series".into()));
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("series"), "Fill Series opens its Series dialog");
+    assert!(h.state().session.active().unwrap().undo.is_empty(), "nothing was filled with defaults");
+}

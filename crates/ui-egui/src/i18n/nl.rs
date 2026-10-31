@@ -492,6 +492,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Punten of bellen",
         "Search and run any command" => "Een opdracht zoeken en uitvoeren",
         "Search commands" => "Opdrachten zoeken",
+        "Search commands (Alt+Q)" => "Opdrachten zoeken (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Zoek een opdracht, bijv. vastzetten, grafiek, vet…",
         "Select Data" => "Gegevens selecteren",
         "Select and move ink and shapes" => "Inkt en vormen selecteren en verplaatsen",
         "Series…" => "Reeks…",

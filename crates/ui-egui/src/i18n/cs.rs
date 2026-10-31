@@ -509,6 +509,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Rename Sheet" => "Přejmenovat list",
         "Scatter or Bubble" => "Bodový nebo bublinový graf",
         "Search and run any command" => "Vyhledat a spustit libovolný příkaz",
+        "Search commands (Alt+Q)" => "Vyhledat příkazy (Alt+Q)",
         "Search commands" => "Vyhledat příkazy",
         "Select Data" => "Vybrat data",
         "Select and move ink and shapes" => "Vybrat a přesunout rukopis a obrazce",
@@ -547,6 +548,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Search for a command, e.g. freeze, chart, bold…" => "Vyhledejte příkaz, např. ukotvit, graf, tučné…",
         "Rename" => "Přejmenovat",
         "Move or Copy…" => "Přesunout nebo kopírovat…",
         "Duplicate" => "Duplikovat",

@@ -16,14 +16,14 @@ impl SheetApp {
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
     /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    pub(super) fn export_pdf_with_picker(&mut self, mut params: Json) {
+    pub(super) fn export_pdf_with_picker(&mut self, mut params: Json) -> bool {
         if !self.commit_edit(0, 0, false, false) {
-            return;
+            return false;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
         let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
+        let Some(pick) = &self.services.pick_save else { return false };
+        let Some(path) = pick(&format!("{stem}.pdf")) else { return false };
         // The picker may suggest a workbook extension; the export writes a PDF.
         let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
         match &mut params {
@@ -32,8 +32,12 @@ impl SheetApp {
             }
             other => *other = json!({"path": path}),
         }
-        if let Err(e) = self.run("file.exportPdf", params) {
-            self.alert(e);
+        match self.run("file.exportPdf", params) {
+            Ok(_) => true,
+            Err(e) => {
+                self.alert(e);
+                false
+            }
         }
     }
 
@@ -41,8 +45,17 @@ impl SheetApp {
     /// browser. Rendering errors use the usual alert; asynchronous spooler errors stay visible
     /// on the Print page. The engine command still returns PDF bytes without submitting.
     pub fn print_now(&mut self, params: Json) {
-        if let Err(error) = self.submit_print(params) {
-            self.alert(error);
+        self.print_now_ok(params);
+    }
+
+    /// [`Self::print_now`], telling whether the job was handed off.
+    pub(super) fn print_now_ok(&mut self, params: Json) -> bool {
+        match self.submit_print(params) {
+            Ok(_) => true,
+            Err(error) => {
+                self.alert(error);
+                false
+            }
         }
     }
 

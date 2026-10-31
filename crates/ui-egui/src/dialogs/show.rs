@@ -161,7 +161,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let shown = window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -357,6 +357,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+    // The search box closes on a click outside it, as Excel's does.
+    if d.name == "commandSearch" && d.shown && shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    d.shown = true;
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {

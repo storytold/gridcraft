@@ -20,6 +20,7 @@ mod border_preview;
 mod cell_pictures;
 pub mod chartview;
 pub mod code_editor;
+pub mod command_search;
 pub mod control;
 mod craft_fonts_policy;
 pub mod credits;
@@ -275,6 +276,9 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// Commands run from the search box, most recent first, per workbook (doc uid). In memory
+    /// only: the search lists them while its input is empty.
+    recent_commands: HashMap<u64, Vec<String>>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,

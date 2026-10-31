@@ -511,6 +511,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Διασπορά ή φυσαλίδες",
         "Search and run any command" => "Αναζήτηση και εκτέλεση οποιασδήποτε εντολής",
         "Search commands" => "Αναζήτηση εντολών",
+        "Search commands (Alt+Q)" => "Αναζήτηση εντολών (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Αναζητήστε εντολή, π.χ. πάγωμα, γράφημα, έντονα…",
         "Select Data" => "Επιλογή δεδομένων",
         "Select and move ink and shapes" => "Επιλογή και μετακίνηση μελανιού και σχημάτων",
         "Series…" => "Σειρά…",

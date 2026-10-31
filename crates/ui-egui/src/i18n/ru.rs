@@ -430,6 +430,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "Предельное число итераций должно быть целым числом от 1 до 32767.",
         "Maximum Change must be a number of 0 or more." => "Максимальное изменение должно быть числом не меньше 0.",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Search commands (Alt+Q)" => "Поиск команд (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Найдите команду, например: закрепить, диаграмма, полужирный…",
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
         "Move or Copy…" => "Переместить или скопировать…",

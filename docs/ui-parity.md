@@ -21,6 +21,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
+| Search box (Alt+Q, "Tell Me") | yes | yes (#772, 10-14): Alt+Q, the Alt then Q key tip and the title bar's search icon open it with the input focused; substring and fuzzy match over ribbon command names, ribbon paths, ids and shortcuts; first match highlighted, Up/Down move, Enter or a click runs it; empty input lists the commands recently run from it in this workbook; Esc or a click outside closes it. `ui.search {query}` returns the same list without opening it | no help articles, cell content or suggested actions; recents last for the session only; Alt+Q needs the grid focused and is Windows/Linux only (Excel for Mac has none) |
 | Formula bar with Name Box, expand, function hints | yes | yes; grows with its content from one to five lines (Alt+Enter, wrapped text, or viewing a multi-line cell), then scrolls with the caret in view, the Name Box and buttons staying on the first line; the chevron pins it at five; the in-cell editor shows every line | done; no drag-to-resize handle |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | Ctrl-drag (Cmd or Option on macOS) drops a copy (#971); active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Formula bar with Name Box, expand, function hints | yes | yes | done; dynamic-array spill children show the source formula muted and read-only, using current spill ownership |
@@ -129,6 +130,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Alt+V | Cmd+Control+V, Cmd+Option+V | Paste Special | **added** |
 | Ctrl+Alt+= / Ctrl+Alt+- | — | zoom in / out (10% steps) | **added** |
 | Alt+=, Alt+Down, Alt+Page Down / Up | Option+Down, Option+Page Down / Up | AutoSum, drop-down list, one screen right / left | **added** |
+| Alt+Q (chord, or Alt then Q) | — | search box | **added** (#772) |
 | Alt+Down on a filter header | Option+Down | Open the existing AutoFilter popup; validation dropdowns keep priority | **added** (AutoFilter portion of #441; Ribbon dropdowns and column value picker are separate work) |
 | Alt+F1, Alt+Shift+F1, Shift+F11 | Shift+F11 | embedded chart, new sheet | **added** |
 | Shift+F2, Ctrl+Shift+F2 | Shift+F2, Cmd+Shift+F2 | note, threaded comment | **added** |
@@ -247,6 +249,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-13 | minor | Grid drags keep their own cursor over selection borders, fill handles and outside the grid; hover resumes on release (#936) |
 | 2026-10-13 | minor | AutoFill month patterns retain the workbook's date system, preventing shifted dates in 1904 workbooks when filling forward or backward |
 | 2026-10-13 | minor | Sheet tab bar: the tab strip shrinks to its tabs, up to 60% of the bar, so New sheet (+) sits right after the last tab and the horizontal scrollbar takes the rest (part of #943) |
+| 2026-10-14 | minor | Search box (#772): Alt+Q and the Alt, Q key tip open the command search with the input focused; ranked substring/fuzzy matching on ribbon commands, recently used commands per workbook on empty input, click outside closes; it never lists itself; `ui.search` queries it without UI |
+| 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-13 | minor | Formula-entry Command/Ctrl-click adds arguments and Shift-click extends references; ordinary replacement and dragging retain their behavior. Readiness estimates unchanged. |
 | 2026-10-12 | minor | Next/previous sheet navigation no longer activates hidden worksheets at either workbook boundary; command tests cover Hidden, VeryHidden and selection retention |

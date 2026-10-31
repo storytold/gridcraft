@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab; accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; Alt+Q search box opens the dialog a command needs, #772; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -180,6 +180,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-14 | Search box (Alt+Q): Alt+Q or the Alt, Q key tip opens command search with the input focused; ranked substring/fuzzy matches over ribbon commands, recently used commands on empty input, Esc or a click outside closes; `ui.search` queries it without UI (#772) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
@@ -272,6 +273,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-14 | minor | Progress log: Alt+Q search box (#772) |
 | 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
