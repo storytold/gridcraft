@@ -81,3 +81,33 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
 }
+
+#[test]
+fn command_search_finds_a_command_by_its_label_in_the_ui_language() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "pl"})).unwrap();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    // The Polish hint suggests "pogrubienie": it finds Bold, as "bold" does in English.
+    type_and_enter(&mut h, "pogrubienie");
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter ran the command");
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("C3").unwrap())).font.bold, "C3 is bold");
+}
+
+#[test]
+fn command_search_finds_a_turkish_label_typed_without_the_capital_dot() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "tr"})).unwrap();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    // Italic is "İtalik" in Turkish: "italik" finds it.
+    type_and_enter(&mut h, "italik");
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter ran the command");
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("C3").unwrap())).font.italic, "C3 is italic");
+}
