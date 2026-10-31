@@ -26,9 +26,10 @@ fn reads_skip_hidden_rows_cols_unless_included() {
     let all = s.execute("sheet.read", json!({"range": "A1:C3", "includeHidden": true})).unwrap();
     assert_eq!(all["values"], json!([["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]), "{}", all);
 
-    // A row that is visible but inside a hidden column stays out unless included.
+    // Rows 1 and 3 stay visible; the only column in the range is hidden, so each
+    // visible row reads as an empty row.
     let col = s.execute("sheet.read", json!({"range": "B1:B3"})).unwrap();
-    assert_eq!(col["values"], json!([[]]), "{}", col);
+    assert_eq!(col["values"], json!([[], []]), "{}", col);
     let col = s.execute("sheet.read", json!({"range": "B1:B3", "includeHidden": true})).unwrap();
     assert_eq!(col["values"], json!([["b"], ["e"], ["h"]]), "{}", col);
 }
@@ -43,6 +44,17 @@ fn a_hidden_sheet_is_read_only_with_includehidden() {
     let r = s.execute("sheet.read", json!({"sheet": "Vault", "range": "A1"})).unwrap();
     assert_eq!(r["visibility"], "Hidden");
     assert_eq!(r["values"], json!([["secret"]]), "{}", r);
+}
+
+#[test]
+fn an_empty_sheet_reports_its_visibility() {
+    let mut s = session();
+    s.execute("home.insertSheet", json!({"name": "Blank"})).unwrap();
+    s.execute("sheet.hide", json!({"sheet": "Blank"})).unwrap();
+
+    let r = s.execute("sheet.read", json!({"sheet": "Blank"})).unwrap();
+    assert_eq!(r["visibility"], "Hidden", "{}", r);
+    assert_eq!(r["values"], json!([]), "{}", r);
 }
 
 #[test]
