@@ -3,10 +3,18 @@ name = "gridcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GridCraft's tiny self-contained PDF 1.7 writer (standard 14 fonts, vector drawing, RGBA images)"
+description = "GridCraft PDF 1.7 writer with shaped Unicode TrueType text, standard fonts, vector drawing and RGBA images"
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
+fontdb = "0.23"
+harfrust = "0.12"
+subsetter = { version = "0.2.6", default-features = false }
+ttf-parser = "0.25"
+unicode-segmentation = "1.13"
+
+[build-dependencies]
+ttf-parser = "0.25"

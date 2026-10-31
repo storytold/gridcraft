@@ -1,5 +1,6 @@
 use super::draw::{Block, Look, rgb_of};
-use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use super::text_unicode::{draw_shaped_text, shaped_extents, shaped_width, wrap_shaped};
+use super::{CellRef, Color, Font, FontCatalog, HAlign, MAX_COLS, Page, RangeRef, Sheet, StyleTable, Underline, VAlign, Value};
 
 const PAD_PX: f32 = 2.0;
 
@@ -45,10 +46,6 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
         out.push(line);
     }
     out
-}
-
-fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
 fn text_align(align: HAlign, value: &Value) -> HAlign {
@@ -124,21 +121,20 @@ pub(super) struct TextPlacement<'a> {
     pub limits: (f32, f32),
 }
 
-pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placement: TextPlacement<'_>) -> Result<(), String> {
     let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
     let v = sh.value(c);
     if v.is_empty() || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
-        return;
+        return Ok(());
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
-        return;
+        return Ok(());
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
-    let font = font_for(st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
     let avail = (w - 2.0 * pad - indent).max(0.0);
@@ -155,7 +151,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     } else if code == "General"
         && let Value::Number(n) = v
     {
-        let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
+        let digit = shaped_width(catalog, &st.font.name, st.font.bold, st.font.italic, "0", size)?.max(0.1);
         let max_chars = (avail / digit).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
@@ -166,34 +162,36 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         text = text.replace(['\n', '\r'], " ");
     }
     if text.is_empty() {
-        return;
+        return Ok(());
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    let measure = |text: &str, size: f32| shaped_width(catalog, &st.font.name, st.font.bold, st.font.italic, text, size);
+    let mut tw = measure(&text, size)?;
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = measure(&text, size)?;
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
-        let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
+        let hash = measure("#", size)?.max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = measure(&text, size)?;
     }
     let h_align = text_align(st.align.h, &v);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
+        (true, false) => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, avail.max(size))?,
+        (true, true) if rot.abs() == 90 => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, (h - 2.0 * pad).max(size))?,
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
-    let line_h = size * 1.2;
+    let (line_above, line_below) = shaped_extents(catalog, &st.font.name, st.font.bold, st.font.italic, &lines.concat(), size)?;
+    let line_h = (size * 1.2).max(line_above + line_below);
     let n = lines.len().max(1) as f32;
     let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        VAlign::Top => y + pad + line_above,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_above,
+        VAlign::Bottom => y + h - pad - line_below - (n - 1.0) * line_h,
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -222,29 +220,29 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
+            draw_shaped_text(pg, catalog, ox, oy, size, &st.font.name, st.font.bold, st.font.italic, color, t, angle)?;
         }
         pg.restore();
-        return;
+        return Ok(());
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
+        let vertical_text = lines.concat();
+        let chars: Vec<&str> = gridcraft_pdf::text_clusters(&vertical_text).take(500).map(|(_, cluster)| cluster).collect();
         let mut yy = y + pad + size * 0.8;
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = measure(ch, size)?;
+            draw_shaped_text(pg, catalog, x + (w - cw) / 2.0, yy, size, &st.font.name, st.font.bold, st.font.italic, color, ch, 0.0)?;
             yy += line_h;
             if yy > y + h + line_h {
                 break;
             }
         }
         pg.restore();
-        return;
+        return Ok(());
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = measure(line, size)?;
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -254,7 +252,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         if ly - size > y + h || ly < y - line_h {
             continue;
         }
-        pg.text(lx, ly, size, font, color, line);
+        draw_shaped_text(pg, catalog, lx, ly, size, &st.font.name, st.font.bold, st.font.italic, color, line, 0.0)?;
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
@@ -267,4 +265,5 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         }
     }
     pg.restore();
+    Ok(())
 }

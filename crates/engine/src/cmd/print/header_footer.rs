@@ -1,4 +1,6 @@
+use super::FontCatalog;
 use super::layout::SheetLayout;
+use super::text_unicode::{draw_shaped_text, needs_unicode_text, shaped_width};
 use super::{Font, Page, Value, Workbook};
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
@@ -227,7 +229,13 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
     out
 }
 
-pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
+pub(super) fn draw_header_footer(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    lay: &SheetLayout,
+    which: gridcraft_model::HfPage,
+    cx: &HfContext,
+) -> std::result::Result<(), String> {
     let [_, _, _, _, hm, fm] = lay.margins;
     let (l, r) = lay.hf_sides();
     let text_scale = lay.hf_text_scale();
@@ -244,18 +252,28 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
             }
             let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
+            let unicode = needs_unicode_text(&sec.text);
             let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
             let n = lines.len() as f32;
             for (j, line) in lines.iter().enumerate() {
-                let lw = gridcraft_pdf::text_width(font, size, line);
+                let lw = if unicode {
+                    shaped_width(catalog, "Arial", sec.bold, sec.italic, line, size)?
+                } else {
+                    gridcraft_pdf::text_width(font, size, line)
+                };
                 let x = match i {
                     0 => l,
                     1 => (pw - lw) / 2.0,
                     _ => pw - r - lw,
                 };
                 let y = if header { hm + size * 0.8 + j as f32 * size * 1.2 } else { ph - fm - size * 0.22 - (n - 1.0 - j as f32) * size * 1.2 };
-                pg.text(x, y, size, font, [0, 0, 0], line);
+                if unicode {
+                    draw_shaped_text(pg, catalog, x, y, size, "Arial", sec.bold, sec.italic, [0, 0, 0], line, 0.0)?;
+                } else {
+                    pg.text(x, y, size, font, [0, 0, 0], line);
+                }
             }
         }
     }
+    Ok(())
 }
