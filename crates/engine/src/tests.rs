@@ -2205,6 +2205,35 @@ fn merging_over_a_spill_blocks_it_and_unmerging_unblocks_it() {
 }
 
 #[test]
+fn inserting_a_link_without_text_preserves_a_spill_child() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    s.execute("insert.link", json!({"cell": "A2", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    let d = s.doc().unwrap();
+    let at = CellRef::parse("A2").unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_spill_child() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C3", "values": [["a", "x", 1], ["b", "x", 2], ["a", "y", 3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": "=PIVOTBY(A1:A3,B1:B3,C1:C3,LAMBDA(x,SUM(x)))"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    let at = CellRef::parse("M3").unwrap();
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().spill_anchor(at), Some(CellRef::parse("K1").unwrap()));
+    s.execute("insert.link", json!({"cell": "M3", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
+
+#[test]
 fn multi_cell_array_formulas_and_tables_dont_overlap() {
     // Found by the command-sequence fuzzer: an array over a table header lost its value to the
     // header name written as text, then showed #SPILL! (and reloaded from XLSX differently).
