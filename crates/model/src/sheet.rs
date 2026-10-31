@@ -11,6 +11,7 @@ use crate::features::{
     AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, PivotTable, PrintSettings, Shape, SheetProtection, Slicer, Sparkline, Table,
     Validation,
 };
+use crate::shared::Shared;
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
 
@@ -65,12 +66,12 @@ pub struct Sheet {
     pub cell_pictures: BTreeMap<CellRef, Arc<CellPicture>>,
     /// Values spilled by dynamic-array formulas (maintained by calc), keyed by cell.
     #[serde(skip)]
-    pub spill: BTreeMap<CellRef, Value>,
+    pub spill: Shared<BTreeMap<CellRef, Value>>,
     /// Anchor → spill range.
     #[serde(skip)]
-    pub spill_ranges: BTreeMap<CellRef, RangeRef>,
-    pub cols: BTreeMap<u32, LineInfo>,
-    pub rows: BTreeMap<u32, LineInfo>,
+    pub spill_ranges: Shared<BTreeMap<CellRef, RangeRef>>,
+    pub cols: Shared<BTreeMap<u32, LineInfo>>,
+    pub rows: Shared<BTreeMap<u32, LineInfo>>,
     /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
     pub default_col_width: f32,
     pub default_row_height: f32,
@@ -96,14 +97,14 @@ pub struct Sheet {
     pub summary_right: bool,
     pub right_to_left: bool,
     pub zoom: u16,
-    pub cond_formats: Vec<CondFormat>,
-    pub validations: Vec<Validation>,
+    pub cond_formats: Shared<Vec<CondFormat>>,
+    pub validations: Shared<Vec<Validation>>,
     pub tables: Vec<Table>,
     pub autofilter: Option<AutoFilter>,
-    #[serde(with = "crate::cellmap")]
-    pub comments: BTreeMap<CellRef, Comment>,
-    #[serde(with = "crate::cellmap")]
-    pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
+    #[serde(with = "crate::cellmap::shared")]
+    pub comments: Shared<BTreeMap<CellRef, Comment>>,
+    #[serde(with = "crate::cellmap::shared")]
+    pub hyperlinks: Shared<BTreeMap<CellRef, Hyperlink>>,
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
@@ -152,10 +153,10 @@ impl Sheet {
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
-            spill: BTreeMap::new(),
-            spill_ranges: BTreeMap::new(),
-            cols: BTreeMap::new(),
-            rows: BTreeMap::new(),
+            spill: Shared::default(),
+            spill_ranges: Shared::default(),
+            cols: Shared::default(),
+            rows: Shared::default(),
             default_col_width: DEFAULT_COL_WIDTH,
             default_row_height: DEFAULT_ROW_HEIGHT,
             merges: vec![],
@@ -171,12 +172,12 @@ impl Sheet {
             show_zeros: true,
             right_to_left: false,
             zoom: 100,
-            cond_formats: vec![],
-            validations: vec![],
+            cond_formats: Shared::default(),
+            validations: Shared::default(),
             tables: vec![],
             autofilter: None,
-            comments: BTreeMap::new(),
-            hyperlinks: BTreeMap::new(),
+            comments: Shared::default(),
+            hyperlinks: Shared::default(),
             charts: vec![],
             images: vec![],
             shapes: vec![],

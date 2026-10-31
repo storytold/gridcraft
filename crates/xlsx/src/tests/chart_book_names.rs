@@ -90,7 +90,8 @@ fn chart_names_are_written_qualified() {
         name("Title", None, "Data!$B$1"),
         name("Local", Some(0), "Data!$C$2:$C$4"),
         name("Other", Some(1), "'My Data'!$A$1:$A$3"),
-    ];
+    ]
+    .into();
     let bytes = write_xlsx(&wb).unwrap();
     let mut xml = String::new();
     zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut xml).unwrap();

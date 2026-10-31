@@ -273,13 +273,13 @@ pub fn load(wb: &mut Workbook) -> Vec<String> {
             Some((_, None)) => kept.push(n),
         }
     }
-    wb.names = kept;
+    wb.names = kept.into();
     // Past the macro limit, the rest are counted without being read.
     bad = bad.saturating_add(stored.len().saturating_sub(gridcraft_model::MAX_MACROS));
     let mut found = Vec::new();
     let mut item = Workbook::new();
     for ((_, key), names) in stored.into_iter().take(gridcraft_model::MAX_MACROS) {
-        item.names = names;
+        item.names = names.into();
         let v = stash::get_json(&item, &key);
         if let Some(v) = v.as_ref().filter(|v| is_newer(v)) {
             keep_unread(&mut unread, v.clone(), &mut bad);
