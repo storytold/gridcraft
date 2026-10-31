@@ -22,19 +22,11 @@ fn fixture() -> (Harness, u32) {
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
     let id = session.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": ORIGINAL})).unwrap()["shape"].as_u64().unwrap()
         as u32;
-    let mut h = egui_kittest::Harness::builder()
-        .with_size(vec2(1200.0, 800.0))
-        .with_step_dt(1.0 / 60.0)
-        .with_os(egui::os::OperatingSystem::Mac)
-        .build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            SheetApp::new(session, Default::default()),
-        );
-    h.run_steps(4);
+    let h = crate::common::harness_with(
+        crate::common::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).with_os(egui::os::OperatingSystem::Mac),
+        crate::common::app(session),
+        4,
+    );
     (h, id)
 }
 
@@ -105,9 +97,11 @@ fn assert_cell_unchanged(h: &Harness) {
 }
 
 #[test]
+/// Dragging inside the editor selects text and does not move the box; copy/cut/paste and Enter work, and an outside click commits the multiline text.
 fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     let (mut h, id) = fixture();
     edit_box(&mut h, id);
+    h.check_accessibility();
     assert_eq!(h.state().selected_chart, Some(id));
     let anchor = shape(&h, id).anchor;
     let start = shape_rect(&h, id).min + vec2(5.0, 10.0);
@@ -129,6 +123,7 @@ fn double_click_edits_multiline_text_and_commits_on_outside_click() {
 
     let outside = cell_center(&h, "J15");
     click(&mut h, outside);
+    h.check_accessibility();
     assert_eq!(shape(&h, id).text, "New first line\nNew second line");
     assert_cell_unchanged(&h);
 }

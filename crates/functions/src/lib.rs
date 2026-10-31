@@ -201,7 +201,7 @@ impl FnSpec {
 pub(crate) const VAR: usize = usize::MAX;
 
 fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
-    static REG: OnceLock<(Vec<FnSpec>, HashMap<&'static str, usize>)> = OnceLock::new();
+    static REG: OnceLock<(Vec<FnSpec>, HashMap<&str, usize>)> = OnceLock::new();
     REG.get_or_init(|| {
         let mut v: Vec<FnSpec> = Vec::new();
         for list in [

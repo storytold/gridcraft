@@ -124,8 +124,9 @@ fn mime_for(name: &str) -> &'static str {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
-    for a in &x.children {
+    for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
+        let n = n + 1;
         // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
         // fallback.
         let objs: Vec<&El> = a
@@ -162,7 +163,10 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
                     let uri = gd.attr("uri").unwrap_or("");
                     if let Some(rid) = gd.child("chart").and_then(|c| c.attr("id")) {
-                        let Some(rel) = rels.iter().find(|r| r.id == rid) else { continue };
+                        let Some(rel) = rels.iter().find(|r| r.id == rid) else {
+                            cx.warn(format!("a chart without its chart part was skipped ({part}, object {n})"));
+                            continue;
+                        };
                         let target = rel.target.clone();
                         if let Some(cx_xml) = cx.optional_xml(&target)? {
                             let chartex = uri.contains("chartex");
@@ -174,11 +178,13 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                 }
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
                             }
+                        } else {
+                            cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
                         }
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
-                        cx.warn("a histogram, waterfall, treemap… chart without its chart part was skipped");
+                        cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
                     } else {
-                        cx.warn("an embedded object (SmartArt, OLE…) was skipped");
+                        cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
                     }
                 }
                 "sp" | "cxnSp" => {
@@ -187,7 +193,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         sheet.shapes.push(Shape { id, ..s });
                     }
                 }
-                "grpSp" => cx.warn("grouped shapes are not supported and were skipped"),
+                "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
                 _ => {}
             }
         }

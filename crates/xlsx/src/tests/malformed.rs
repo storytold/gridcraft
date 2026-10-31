@@ -47,6 +47,20 @@ fn missing_parts() {
 }
 
 #[test]
+fn workbook_part_selection_and_validation() {
+    let root_rels = super::ROOT_RELS.replace("xl/workbook.xml", "xl/missing.xml");
+    let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#;
+    let fallback = make_zip(&[("_rels/.rels", root_rels.as_bytes()), ("xl/workbook.xml", workbook.as_bytes())]);
+    assert!(read_xlsx(&fallback).is_ok());
+
+    let wrong_root = make_zip(&[("xl/workbook.xml", b"<worksheet/>")]);
+    assert!(matches!(read_xlsx(&wrong_root), Err(IoError::Format(message)) if message.contains("unexpected root element <worksheet>")));
+
+    let ods = make_zip(&[("content.xml", b"<document/>")]);
+    assert!(matches!(read_xlsx(&ods), Err(IoError::Format(message)) if message.contains("OpenDocument")));
+}
+
+#[test]
 fn huge_coordinates_and_dimensions() {
     let body = r#"<dimension ref="A1:XFD1048576"/><cols><col min="1" max="4000000000" width="1e308"/><col min="0" max="0"/></cols>
       <sheetData><row r="4294967295"><c r="A1"><v>1</v></c></row><row r="2000000"><c r="A2000000"><v>1</v></c></row>
@@ -342,4 +356,32 @@ fn outline_symbols_flag_round_trips() {
     // Absent means shown.
     let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
     assert!(wb.sheet(0).unwrap().show_outline_symbols);
+}
+
+/// Outline Settings (`outlinePr summaryBelow="0" summaryRight="0"`) are read and written back,
+/// between the tab color and the page setup properties.
+#[test]
+fn outline_summary_directions_round_trip() {
+    let body = r#"<sheetPr><tabColor rgb="FF00B050"/><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr><sheetData/><pageSetup fitToWidth="1" fitToHeight="1"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert!(!sh.summary_below && sh.summary_right);
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    let (tab, pr, fit) = (xml.find("<tabColor"), xml.find("<outlinePr summaryBelow=\"0\"/>"), xml.find("<pageSetUpPr"));
+    assert!(tab < pr && pr < fit && tab.is_some(), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert!(!back.sheet(0).unwrap().summary_below && back.sheet(0).unwrap().summary_right);
+    let body = r#"<sheetPr><outlinePr summaryRight="0"/></sheetPr><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert!(sh.summary_below && !sh.summary_right);
+    // Absent means below and right, and the defaults write no `outlinePr`.
+    let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert!(sh.summary_below && sh.summary_right);
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    assert!(!xml.contains("outlinePr"), "{xml}");
 }

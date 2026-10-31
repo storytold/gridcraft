@@ -1,24 +1,12 @@
 //! `ui.dialog.confirm` runs a dialog's command with the parameters its OK button sends (#1459).
 
-use egui::vec2;
-use gridcraft_engine::Session;
 use gridcraft_engine::model::CfRule;
 use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::control::{Outcome, handle};
 use serde_json::{Value as Json, json};
 
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(6);
-    h
+    crate::support::blank_harness(6)
 }
 
 fn control(h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, params: Json) -> Json {
