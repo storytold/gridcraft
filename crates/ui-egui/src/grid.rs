@@ -25,6 +25,7 @@ type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<
 mod cell_paint;
 mod cursor;
 mod editor;
+mod fill_preview;
 mod geo;
 mod interact;
 mod keyboard;
