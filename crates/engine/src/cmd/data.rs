@@ -23,9 +23,13 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
+#[cfg(test)]
+use filter::DateSet;
+pub use filter::{DateNode, FilterList, cell_date, checked_date_items, filter_list};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
+#[cfg(test)]
+use gridcraft_model::{DateGroupItem, DateGrouping};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 use sort::{quick_sort, sort};
 #[cfg(test)]
@@ -64,7 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter Column",
             [],
             None,
-            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool, clear?: bool}",
+            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, dates?: [{year, month?, day?, hour?, minute?, second?}], custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool, clear?: bool}",
             has_doc,
             filter_by
         ),

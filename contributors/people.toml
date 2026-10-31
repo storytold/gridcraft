@@ -97,6 +97,11 @@ real_name = "Tyrel Haveman"
 [people.helenkwok]
 real_name = "Helen Kwok"
 
+[people.carminezac]
+real_name = "Carmine Zacchia"
+display_name = "Carmine Zacchia"
+sync_github_name = false
+
 [people.dotCooCoo]
 real_name = "Robert Lee"
 sync_github_name = true
