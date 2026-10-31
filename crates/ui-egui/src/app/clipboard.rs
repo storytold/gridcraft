@@ -57,6 +57,36 @@ impl SheetApp {
         }
     }
 
+    /// Paste Special from a menu, the ribbon or its dialog: the text on the system clipboard (and
+    /// its HTML flavour) goes along, so cells copied in another app or window can be pasted as
+    /// values, transposed and so on. Not when GridCraft's own copy is newer, chosen as Paste does.
+    pub(crate) fn with_clipboard_text(&mut self, mut params: Json) -> Json {
+        if params.get("text").is_some() {
+            return params;
+        }
+        let Some(text) = self.system_clipboard_text() else { return params };
+        if self.session.clipboard.is_some() && self.clipboard_text_at_copy.as_ref() == Some(&text) {
+            return params;
+        }
+        // A cut pastes once, as with Paste: its text left on the system clipboard isn't pasted
+        // again over the moved block.
+        if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
+            if self.session.clipboard.is_none() {
+                return params;
+            }
+        } else {
+            self.cut_text = None;
+        }
+        let html = self.services.paste_html.as_mut().and_then(|read| read());
+        if let Some(p) = params.as_object_mut() {
+            p.insert("text".into(), Json::String(text));
+            if let Some(html) = html {
+                p.insert("html".into(), Json::String(html));
+            }
+        }
+        params
+    }
+
     /// The system clipboard's plain text, with the line endings of egui's `Event::Paste` text.
     /// `None` when it holds no text or the host can't read it.
     pub(super) fn system_clipboard_text(&mut self) -> Option<String> {
