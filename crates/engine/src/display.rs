@@ -69,8 +69,12 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     }
     let Value::Number(n) = &cell.value else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
-    if cell.formula.is_some() || !parsed(code).is_date() {
+    if cell.formula.is_some() {
         return raw;
+    }
+    if !parsed(code).is_date() {
+        let same = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system), gridcraft_core::parse::Parsed { value: Value::Number(m), format: None } if m == *n);
+        return long_number_digits(*n).filter(|d| same(d)).unwrap_or(raw);
     }
     let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
@@ -88,6 +92,27 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
         format!("{date} {time}")
     };
     if reads_back(&iso) { iso } else { raw }
+}
+
+/// A number from 1E+15 up to (not including) 1E+20 written out as plain digits: the shortest
+/// digits that read back as the same `f64`, padded with zeros (`12345678901234567890` →
+/// `12345678901234567000`), with a decimal point for a fraction below 2^53. Its stored text is in E notation, which would read back as a
+/// Scientific entry and, cut to 15 digits, as a different number. `None` outside that range.
+fn long_number_digits(n: f64) -> Option<String> {
+    if !(1e15..1e20).contains(&n.abs()) {
+        return None;
+    }
+    let s = format!("{:e}", n.abs());
+    let (mant, exp) = s.split_once('e')?;
+    let exp: usize = exp.parse().ok()?;
+    let mut digits: String = mant.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() > exp + 1 {
+        digits.insert(exp + 1, '.');
+    }
+    while digits.len() < exp + 1 {
+        digits.push('0');
+    }
+    Some(if n < 0.0 { format!("-{digits}") } else { digits })
 }
 
 /// Whether `c` has a formula that must not be shown: its cell is formatted Hidden on a

@@ -4469,6 +4469,43 @@ fn editing_a_date_cell_shows_a_date_not_the_serial() {
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at), "42");
 }
 
+#[test]
+fn editing_a_long_number_shows_digits_and_keeps_general() {
+    let at = CellRef::parse("B1").unwrap();
+    let edit = |s: &Session| {
+        let d = s.doc().unwrap();
+        crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at)
+    };
+    let cell = |s: &Session| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let c = sh.cell(at).unwrap();
+        (c.value.clone(), d.wb.styles.get(c.style).num_fmt.as_str().to_string())
+    };
+    for (input, shown) in [
+        ("12345678901234567890", "12345678901234567000"),
+        ("-12345678901234567890", "-12345678901234567000"),
+        ("1234567890123456", "1234567890123456"),
+        ("1000000000000000.5", "1000000000000000.5"),
+        ("123456789012345", "123456789012345"),
+    ] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B1", "input": input})).unwrap();
+        let before = cell(&s);
+        assert_eq!(edit(&s), shown, "{input}");
+        // F2 then Enter without a change keeps the number and its General format.
+        let text = edit(&s);
+        s.execute("cell.set", json!({"cell": "B1", "input": text})).unwrap();
+        assert_eq!(cell(&s), before, "{input}");
+        assert_eq!(before.1, "General", "{input}");
+        assert_eq!(edit(&s), shown, "{input}");
+    }
+    // A number typed in scientific form still gets the Scientific format.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "1e20"})).unwrap();
+    assert_eq!(cell(&s).1, "0.00E+00");
+}
+
 /// A workbook with 42 in A1, saved as `.xlsx` and encrypted with `password`.
 fn encrypted_book(password: &str) -> Vec<u8> {
     let mut src = s();
