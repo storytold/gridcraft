@@ -53,6 +53,7 @@ mod header_column_drag;
 mod host_chrome;
 mod hyperlink_ctrl_click;
 mod hyperlink_dialog;
+mod ime_punctuation;
 mod in_cell_editor_size;
 mod in_cell_editor_wrap;
 mod insert_copied_cells;
