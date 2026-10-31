@@ -31,7 +31,7 @@ const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Table", "⌘T", "Ctrl+T"),
     ("Insert Link", "⌘K", "Ctrl+K"),
     ("Filter", "⌘⇧F", "Ctrl+Shift+L"),
-    ("Flash Fill", "⌘E", "Ctrl+E"),
+    ("Flash Fill", "Control+E", "Ctrl+E"),
     // The Control key, written the way each platform names it. macOS's ⌃ is supplied by its
     // system fonts; elsewhere the Windows spelling avoids a glyph no bundled face has.
     ("Show Formulas", "⌃`", "Ctrl+`"),
@@ -47,7 +47,7 @@ pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
 fn tip_text(ui: &Ui, tip: &str) -> String {
     // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
     let name = tr(ui, tip).replace('\n', " ");
-    let text = match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+    let text = match tooltip_shortcut(tip, ui.ctx().os() == egui::os::OperatingSystem::Mac) {
         Some(keys) => format!("{name} ({keys})"),
         None => name,
     };
@@ -745,7 +745,26 @@ mod tooltip_shortcut_tests {
         assert_eq!(tooltip_shortcut("Search commands", false), None);
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
             assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
-            assert!(mac.starts_with('⌘') || mac.starts_with('⌃'), "{name}: {mac}");
+            assert!(mac.starts_with('⌘') || mac.starts_with('⌃') || (*name == "Flash Fill" && *mac == "Control+E"), "{name}: {mac}");
+        }
+    }
+
+    #[test]
+    fn ribbon_tip_text_obeys_runtime_os() {
+        use egui::os::OperatingSystem;
+
+        for (os, expected) in [(OperatingSystem::Windows, "Flash Fill (Ctrl+E)"), (OperatingSystem::Mac, "Flash Fill (Control+E)")] {
+            let ctx = egui::Context::default();
+            ctx.set_os(os);
+
+            let mut actual = String::new();
+
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                actual = super::tip_text(ui, "Flash Fill");
+            });
+            output.textures_delta.clear();
+
+            assert_eq!(actual, expected, "{os:?}");
         }
     }
 }

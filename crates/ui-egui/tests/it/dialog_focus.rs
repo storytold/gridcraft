@@ -2,6 +2,7 @@
 //! column width without clicking into the field first.
 
 use egui::{Event, Key, vec2};
+use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::SheetApp;
@@ -80,4 +81,104 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     let after_page = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
+}
+
+/// The palette displays the engine metadata unchanged on either runtime OS.
+#[test]
+fn command_search_shows_engine_shortcuts() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        for (query, expected) in [
+            ("home.bold", if os == OperatingSystem::Mac { "Bold  (Cmd+B)" } else { "Bold  (Ctrl+B)" }),
+            ("data.filter", "Filter  (Ctrl+Shift+L)"),
+            ("edit.flashFill", "Flash Fill  (Ctrl+E)"),
+            ("home.alignLeft", if os == OperatingSystem::Mac { "Align Left  (Cmd+L)" } else { "Align Left    Home" }),
+            ("home.alignCenter", if os == OperatingSystem::Mac { "Center  (Cmd+E)" } else { "Center    Home" }),
+            ("selection.row", "Select Entire Row  (Shift+Space)"),
+            ("selection.column", "Select Entire Column  (Ctrl+Space)"),
+            ("data.group", if os == OperatingSystem::Mac { "Group  (Cmd+Shift+K)" } else { "Group  (Alt+Shift+Right)" }),
+            ("data.ungroup", if os == OperatingSystem::Mac { "Ungroup  (Cmd+Shift+J)" } else { "Ungroup  (Alt+Shift+Left)" }),
+        ] {
+            h.state_mut().dialog.as_mut().unwrap().search = query.into();
+            h.run_steps(3);
+            h.get_by_label_contains(expected);
+        }
+    }
+}
+
+/// Paste Special uses the engine's shortcut metadata when enabled.
+#[test]
+fn command_search_shows_paste_special_metadata() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().session.execute("cell.set", json!({"cell": "C3", "input": "copied"})).unwrap();
+
+        h.state_mut().session.execute("edit.copy", json!({"range": "C3"})).unwrap();
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "edit.pasteSpecial".into();
+        h.run_steps(3);
+
+        h.get_by_label_contains(if os == OperatingSystem::Mac { "Paste Special…  (Ctrl+Cmd+V)" } else { "Paste Special…  (Ctrl+Alt+V)" });
+    }
+}
+
+/// The engine registry is the authoritative shortcut source.
+#[test]
+fn command_palette_shortcuts_come_from_engine_metadata() {
+    let session = gridcraft_engine::Session::new();
+    let commands = session.commands();
+
+    for (id, expected) in [
+        ("home.bold", "Cmd+B"),
+        ("data.filter", "Ctrl+Shift+L"),
+        ("edit.flashFill", "Ctrl+E"),
+        ("edit.pasteSpecial", "Ctrl+Cmd+V"),
+        ("selection.row", "Shift+Space"),
+        ("selection.column", "Ctrl+Space"),
+        ("selection.currentRegion", "Ctrl+Shift+8"),
+        ("home.alignLeft", "Cmd+L"),
+        ("home.alignCenter", "Cmd+E"),
+        ("data.group", "Alt+Shift+Right"),
+        ("data.ungroup", "Alt+Shift+Left"),
+    ] {
+        let command = commands.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(command.shortcut, Some(expected), "{id}");
+    }
+}
+/// Current Region displays the shortcut declared in engine metadata.
+#[test]
+fn command_search_shows_current_region_shortcut() {
+    use egui::os::OperatingSystem;
+
+    for (os, expected) in
+        [(OperatingSystem::Windows, "Select Current Region  (Ctrl+Shift+8)"), (OperatingSystem::Mac, "Select Current Region  (Ctrl+Shift+8)")]
+    {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "selection.currentRegion".into();
+
+        h.run_steps(3);
+        h.get_by_label_contains(expected);
+    }
 }
