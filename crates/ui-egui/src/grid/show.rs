@@ -1,21 +1,23 @@
 #[cfg(test)]
+use super::Pos2;
+#[cfg(test)]
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
 use super::interact::{interact, paint_freeze_handles};
+use super::keyboard::keyboard;
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
 use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
-    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
-    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    Align2, Arc, CellRef, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp,
+    Stroke, StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
     zoom_glide_step,
 };
-#[cfg(test)]
-use super::{CellRef, Pos2};
 
+/// Paints the active sheet and routes gestures to overlays before ordinary cell selection.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -328,16 +330,22 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
     }
+    let mut page_break_cursor = false;
     if app.grid.touch_pan {
         // Skip the frames of a touch pan, its release included.
         if !resp.dragged() {
             app.grid.touch_pan = false;
         }
+    } else if crate::page_breaks::interact(app, ui, resp, geo, sh) {
+        page_break_cursor = true;
+        if app.grid.page_break_drag.is_none() {
+            keyboard(app, ui.ctx(), resp, geo, sh);
+        }
     } else {
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }
-    update_cursor(app, ui, resp, geo, sh);
+    update_cursor(app, ui, resp, geo, sh, page_break_cursor);
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
@@ -756,10 +764,11 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     let _ = (wb, si);
 }
 
+/// Paints cached page ranges, page labels and the print-area frame in the active sheet view.
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet());
-    if app.grid.pages.as_ref().is_none_or(|(k, _)| *k != key) {
+    if app.grid.pages.as_ref().is_none_or(|cache| cache.key != key) {
         let pages: Vec<(RangeRef, u32)> = app
             .session
             .run("file.printPreview", json!({}))
@@ -773,17 +782,16 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
                 })
             })
             .unwrap_or_default();
-        app.grid.pages = Some((key, pages));
+        let area = gridcraft_engine::cmd::print::print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0)));
+        app.grid.pages = Some(crate::page_breaks::PageCache { key, pages, area });
     }
-    let Some((_, pages)) = &app.grid.pages else { return };
+    let Some(cache) = &app.grid.pages else { return };
+    let pages = &cache.pages;
     if pages.is_empty() {
         return;
     }
     // Grey everything, then clear the printed pages.
-    let mut printed = pages[0].0;
-    for (r, _) in pages {
-        printed = printed.union(r);
-    }
+    let printed = cache.area;
     let pr = geo.range_rect(sh, printed);
     let grey = Color32::from_black_alpha(70);
     let c = p.clip_rect();
@@ -797,7 +805,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
             p.rect_filled(r, 0.0, grey);
         }
     }
-    let blue = Color32::from_rgb(0x2E, 0x6F, 0xD8);
+    let blue = Tokens::get(p.ctx()).print_area;
     for (r, n) in pages {
         let rr = geo.range_rect(sh, *r);
         if !rr.intersects(c) {

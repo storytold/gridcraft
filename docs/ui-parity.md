@@ -1,5 +1,6 @@
 # UI parity
 
+> **PR update:** 2026-10-31 · Integrate draggable print-area borders and page breaks with main 981fad14; retain boundary snapping, cancellation, cursor priority and theme regressions. Readiness estimates unchanged.
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
@@ -9,6 +10,8 @@ separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
 (`plan/excel/observed-ui.md`, local only) and user issues.
+
+Page Break Preview: drag the blue outer frame to resize the print area, or drag an internal line to move a manual or automatic break. Changes snap to cells and undo in one step; Escape cancels. A stationary click, including a held or same-frame click at low zoom, leaves the print settings and undo history unchanged. Frames and the drag preview share the active light/dark theme colour. An outward break move reduces print scale when needed (minimum 10%). The gesture supports zoom, scrolling and right-to-left sheets. The command is `pageLayout.movePageBreak`; cell contents are preserved. Moving a fitted break switches to a fixed scale and discards inactive stored breaks on both axes, so hidden breaks do not become active.
 
 ## Window and chrome
 
@@ -194,10 +197,17 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | trivial | Integrate draggable Page Break Preview boundaries with main 981fad14, preserving current grid interactions and all prior boundary regressions. |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
+| 2026-10-29 | trivial | Integrate draggable print-area borders and page breaks with main 2ff75179; retain the updated grid reference flow, boundary cache, cursor priority and drag-threshold regressions. |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
 | 2026-10-27 | minor | Ctrl with the numpad's + inserts rows, columns or cells as Ctrl+Shift+= does, as in Excel; it did nothing because the numpad key arrives without Shift |
+| 2026-10-26 | trivial | A stationary boundary click never snaps narrow cells, including held and same-frame clicks; frame and drag preview use the active theme palette. |
+| 2026-10-26 | trivial | Integrate draggable page boundaries and resize-cursor priority with main f6b0cec6. |
+| 2026-10-25 | trivial | Page Break Preview keeps the resize cursor over outer/internal boundaries and during dragging in LTR/RTL; cell cursor resumes after cancellation. |
+| 2026-10-25 | trivial | Integrate Page Break Preview boundary dragging with current main, preserving newer behavior and progress history. |
+| 2026-10-21 | minor | Page Break Preview: draggable print-area frame and internal page breaks, cell snapping, cancellation and one-step undo; outward moves fit the preceding band by reducing print scale |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
@@ -272,3 +282,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | major | Sequential Alt keytips: full-tab table (364 sequences), badges on every control, dropdowns open for typing/arrow editing, colour-palette arrows, real-Excel corrections (issues #33, #49) |
 | 2026-10-10 | minor | Chart resize bug (#190) |
 | 2026-10-10 | major | Created: chrome, grid, keyboard, dialogs, accessibility; key tips, Page Layout view and accessibility tree flagged |
+
+Page Break Preview boundary dragging is integrated with current main, retaining PivotTable field and Show Details caches.
+
+Page-break gestures retain their resize cursor without disabling cell-hover bookkeeping.
+
+Integrate draggable page boundaries and resize-cursor priority with main f6b0cec6.
+
+Pointer jitter within egui's configured click-distance threshold leaves print settings unchanged; snapping and edge scrolling begin only after a deliberate drag, including at low zoom and in RTL sheets.

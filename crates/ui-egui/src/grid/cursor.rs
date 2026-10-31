@@ -3,7 +3,8 @@ use super::interact::{OBJECT_RESIZE_RADIUS, col_edge, freeze_handles, hidden_col
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
-pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+/// Hover bookkeeping remains active while a page boundary owns the cursor.
+pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, page_break_cursor: bool) {
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
         return;
     }
@@ -20,6 +21,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         && !matches!(app.grid.drag, Drag::Freeze { .. })
     {
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
+    }
+    if page_break_cursor {
+        return;
     }
     // Draw tools own the cursor over cells, including while recording a stroke.
     if !app.session.draw_tool.is_empty() && in_cells {
