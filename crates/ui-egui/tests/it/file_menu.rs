@@ -205,6 +205,55 @@ fn save_as_offers_pdf_and_leaves_the_workbook_file_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Save As › CSV through the picker: the picker is offered a .csv name, and the CSV becomes the
+/// workbook's file (its title), so closing asks about it rather than the file it came from.
+#[test]
+fn save_as_csv_makes_the_csv_the_workbooks_file() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-as-csv-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (capture, target) = (asked.clone(), dir.clone());
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |suggested| {
+            capture.lock().unwrap().push(suggested.to_string());
+            Some(target.join(suggested).to_string_lossy().into_owned())
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    choose(&mut h, "Save As");
+    h.state_mut().backstage.as_mut().unwrap().save_format = "csv";
+    h.run_steps(2);
+    click(&mut h, "Browse…");
+    let suggested = asked.lock().unwrap().first().cloned().unwrap_or_default();
+    assert!(suggested.ends_with(".csv"), "the picker is offered a .csv name: {suggested:?}");
+    assert!(std::fs::read_to_string(dir.join(&suggested)).unwrap().starts_with("42"));
+    let d = h.state().session.active().unwrap();
+    assert_eq!(d.display_title(), suggested, "the CSV is the workbook's file now");
+    assert!(h.state().backstage.is_none(), "the Backstage closes once it's saved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save As › CSV where the picker answers a name without an extension: it is saved as the CSV
+/// asked for, never as an .xlsx (which could be the workbook's own file).
+#[test]
+fn save_as_csv_without_an_extension_saves_a_csv() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-as-csv-bare-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.clone();
+    let mut h =
+        harness(Services { pick_save: Some(Box::new(move |_| Some(target.join("Report").to_string_lossy().into_owned()))), ..Default::default() });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    choose(&mut h, "Save As");
+    h.state_mut().backstage.as_mut().unwrap().save_format = "csv";
+    h.run_steps(2);
+    click(&mut h, "Browse…");
+    assert!(std::fs::read_to_string(dir.join("Report.csv")).unwrap().starts_with("42"));
+    assert!(!dir.join("Report.xlsx").exists(), "no workbook is written for a CSV Save As");
+    assert_eq!(h.state().session.active().unwrap().display_title(), "Report.csv");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The window's close button (or Alt+F4, or the OS quitting the app): steps until the request
 /// has been handled and returns the viewport commands the app answered with.
 fn request_window_close(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {

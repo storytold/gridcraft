@@ -2484,6 +2484,48 @@ fn ods_import_never_reuses_source_as_save_target() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Save As a CSV makes it the window's file, as in Excel: the title names it, Save writes it
+/// again, and the workbook it came from is left alone. The workbook still reads as edited (the
+/// CSV holds only the active sheet's values, #2607), and the user is told once what it keeps.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn save_as_a_csv_makes_it_the_windows_file() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-as-csv-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let (book, csv) = (dir.join("Budget.xlsx"), dir.join("Budget.csv"));
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("file.save", json!({"path": book})).unwrap();
+    let saved = std::fs::read(&book).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.take_ui_requests();
+
+    s.execute("file.saveAs", json!({"path": csv})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.path.as_deref(), Some(csv.to_str().unwrap()), "the CSV is the window's file now");
+    assert_eq!(d.display_title(), "Budget.csv");
+    assert!(d.is_dirty(), "a CSV doesn't hold the whole workbook, so it still reads as edited");
+    assert_eq!(std::fs::read(&book).unwrap(), saved, "the workbook it came from is left alone");
+    let told = s.take_ui_requests();
+    assert!(told.iter().any(|r| matches!(r, crate::UiRequest::Message(m) if m.starts_with("Budget.csv keeps only the active sheet"))), "{told:?}");
+
+    // Save writes the CSV again, and doesn't repeat the warning.
+    s.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert!(std::fs::read_to_string(&csv).unwrap().starts_with('3'));
+    assert_eq!(std::fs::read(&book).unwrap(), saved);
+    assert!(!s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
+
+    // A clean workbook saved as a CSV has nothing unsaved.
+    s.execute("file.saveAs", json!({"path": book})).unwrap();
+    assert!(!s.doc().unwrap().is_dirty());
+    s.execute("file.saveAs", json!({"path": dir.join("Clean.tsv")})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.path.as_deref().is_some_and(|p| p.ends_with("Clean.tsv")) && !d.is_dirty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Open a `;` CSV by path (a double-click), edit, Save: the file keeps its `;` separator.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]

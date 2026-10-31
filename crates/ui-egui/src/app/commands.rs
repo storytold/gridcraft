@@ -319,9 +319,17 @@ impl SheetApp {
             }
             "saveAs" => {
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                // The Backstage's Save as type (`format`) names the type the picker suggests, and
+                // the type a name typed without an extension is saved as.
+                let ext = params.get("format").and_then(Json::as_str).unwrap_or("xlsx").to_string();
+                let suggested = if params.get("format").is_some() {
+                    std::path::Path::new(&suggested).with_extension(&ext).to_string_lossy().into_owned()
+                } else {
+                    suggested
+                };
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
+                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.{ext}") } else { path };
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
                 } else if self.services.download.is_some()
