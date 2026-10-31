@@ -4,9 +4,12 @@
 //! - `gridcraft:ready` (to the parent): `{ version }`, the app is listening; send a file now.
 //! - `gridcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array`. It opens like a workbook picked with File › Open or dropped on the window.
-//! - `gridcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
+//! - `gridcraft:save` (to the parent): `{ name, bytes, export }` (bytes a transferred `ArrayBuffer`) for every
 //!   file GridCraft would otherwise download: Save and Save As (an .xlsx workbook) and Export
-//!   as PDF. The parent stores it and reports failures itself.
+//!   as PDF. `export: false` is a normal workbook save; `export: true` is a file export, such as
+//!   PDF. The parent should update the workbook only for saves and store exports as separate
+//!   files, reporting failures itself. Older hosts can ignore the additive boolean field;
+//!   `type`, `name` and `bytes` keep their meanings. This does not distinguish Save from Save As.
 //! - `gridcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 //!
@@ -21,9 +24,7 @@ use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 
-/// Saving one of these hands the whole workbook to the parent, which stores it: the workbook
-/// counts as saved under that name, as it would after Save on the desktop.
-const WORKBOOK_EXTS: &[&str] = &["xlsx"];
+use crate::host_save::{SaveMessage, sync_saved};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
@@ -83,14 +84,7 @@ impl Bridge {
     /// name it was saved as, and the parent hears when unsaved changes appear or go away.
     pub fn sync(&self, app: &mut SheetApp) {
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
-        if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
-            && let Some(doc) = app.session.active_mut()
-        {
-            doc.saved = doc.wb.clone();
-            if doc.path.is_none() {
-                doc.title = name.clone();
-            }
-        }
+        sync_saved(&saved, app);
         let dirty = app.session.documents().iter().any(|d| d.is_dirty());
         if self.reported.get() != Some(dirty) && self.send(&[("type", "gridcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));
@@ -99,9 +93,15 @@ impl Bridge {
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-        let buffer = js_sys::Uint8Array::from(bytes).buffer();
-        let message = message(&[("type", "gridcraft:save".into()), ("name", name.as_str().into()), ("bytes", buffer.clone().into())])
-            .ok_or_else(|| "couldn't build the message".to_string())?;
+        let save = SaveMessage::new(&name, bytes);
+        let buffer = js_sys::Uint8Array::from(save.bytes).buffer();
+        let message = message(&[
+            ("type", "gridcraft:save".into()),
+            ("name", save.name.into()),
+            ("bytes", buffer.clone().into()),
+            ("export", JsValue::from_bool(save.export)),
+        ])
+        .ok_or_else(|| "couldn't build the message".to_string())?;
         self.parent
             .post_message_with_transfer(&message, &self.origin, &js_sys::Array::of1(&buffer))
             .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))?;
@@ -135,10 +135,6 @@ impl Bridge {
     fn send(&self, fields: &[(&str, JsValue)]) -> bool {
         message(fields).is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok())
     }
-}
-
-fn is_workbook(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| WORKBOOK_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
