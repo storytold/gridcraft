@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (constant-range text criteria indexes; automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -207,11 +207,28 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
+| Full recalc, synthetic #2751 profile (2,860 × 61 data, 165,880 criteria formulas) | 287.02 s → 0.492 s (0.483 s with an unrelated array) | not timed | measured, Windows x64 release build; `cargo test --release -p gridcraft-calc criteria_profile_recalc_finishes -- --ignored --nocapture` |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
 independent chains (native only; WASM stays single-threaded), whole-column reference
 clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measured.
+
+Literal text equality in COUNTIF/SUMIF/AVERAGEIF and single-pair COUNTIFS/SUMIFS/AVERAGEIFS/
+MINIFS/MAXIFS uses a pass-local index over constant reference ranges. It retains row-major
+summation and the criteria matcher's one-character Unicode folding. Formula-containing ranges,
+overlapping spills, iterative calculation, numeric/wildcard/comparison criteria, multiple criteria pairs and
+computed criteria retain the ordinary evaluator. Cache allowances (one million range cells,
+8 MB of folded keys, 100,000 groups to bound per-group/map overhead, 1,024 entries per pass)
+fall back without changing results; the cell allowance includes eligibility inspections.
+Ranges are admitted on their second request using at most 1,024 recently seen range pairs,
+so one-off running counts do not spend the build allowance. A larger interleaved working set
+can still miss this optional cache and use the ordinary scan.
+The timing above is Windows x64 release, not CPU-pinned, with other builds active during
+portions of the baseline run. The synthetic
+profile reproduces a criteria recalculation stall; the private XLS workbook and its sampled
+`lookup_equal` path have not been verified with this change. File opening still recalculates
+synchronously; this does not implement background opening or change the lookup functions.
 
 ## Platforms
 
@@ -334,6 +351,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Index repeated literal text criteria over constant ranges per recalc pass; synthetic #2751 profile 287.02 s → 0.492 s, with unchanged results, unrelated-spill support and conservative fallbacks |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |

@@ -1,7 +1,9 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
+use crate::eval::Area;
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
+use std::collections::VecDeque;
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -12,6 +14,22 @@ const MAX_NESTED: usize = 64;
 /// Formula evaluations iterative calculation may spend on one recalculation (passes × formulas
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
+
+/// Criteria ranges remembered as asked for once in a pass; an index is built only on a second
+/// request, and the oldest is forgotten past this.
+const MAX_CRITERIA_RECENT: usize = 1_024;
+
+/// Text criteria indexes (including ranges found ineligible) kept in one pass.
+const MAX_CRITERIA_INDEXES: usize = 1_024;
+
+/// Cells one pass may inspect to build text criteria indexes.
+const MAX_CRITERIA_CELLS: u64 = 1_000_000;
+
+/// Folded text bytes all of a pass's text criteria indexes may retain.
+const MAX_CRITERIA_BYTES: usize = 8_000_000;
+
+/// Distinct groups all of a pass's text criteria indexes may retain.
+const MAX_CRITERIA_GROUPS: usize = 100_000;
 
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
@@ -24,6 +42,15 @@ pub(super) struct PassHost<'a> {
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
+    /// Optional constant-range indexes live only for this pass. None remembers an ineligible
+    /// range too, so thousands of calls do not repeatedly check the same formula cells.
+    text_criteria: HashMap<(Area, Area), Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>>>,
+    /// First requests do not build indexes: running COUNTIF ranges are often used only once.
+    criteria_seen: HashSet<(Area, Area)>,
+    criteria_recent: VecDeque<(Area, Area)>,
+    criteria_cells: u64,
+    criteria_bytes: usize,
+    criteria_groups: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -76,6 +103,12 @@ impl<'a> PassHost<'a> {
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             used: HashMap::default(),
+            text_criteria: HashMap::default(),
+            criteria_seen: HashSet::default(),
+            criteria_recent: VecDeque::new(),
+            criteria_cells: 0,
+            criteria_bytes: 0,
+            criteria_groups: 0,
             rng,
             now,
             cycle: false,
@@ -301,6 +334,12 @@ impl PassHost<'_> {
             }
             _ => v,
         };
+        if let Some(a) = self.spills.get(&k) {
+            let area = spill_area(k, a);
+            // A spill can fill cells that were empty when an index was built. Drop only
+            // intersecting indexes, so unrelated arrays do not disable criteria acceleration.
+            self.text_criteria.retain(|(source, target), _| !overlaps(*source, area) && !overlaps(*target, area));
+        }
         self.results.insert(k, v.clone());
         v
     }
@@ -368,6 +407,16 @@ impl PassHost<'_> {
     }
 }
 
+fn spill_area((sheet, anchor): Key, a: &Array) -> Area {
+    let end =
+        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
+    Area { sheet, range: RangeRef::new(anchor, end) }
+}
+
+fn overlaps(a: Area, b: Area) -> bool {
+    a.sheet == b.sheet && a.range.intersects(&b.range)
+}
+
 /// A legacy (Ctrl+Shift+Enter) array formula's result fitted to the range it was entered in, as
 /// Excel does: a single row or column repeats across the range, a single value fills it, cells
 /// past the result show `#N/A`, and a result larger than the range is cut off.
@@ -393,6 +442,80 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 }
 
 impl Host for PassHost<'_> {
+    fn constant_value(&self, area: Area) -> Option<Value> {
+        let sh = self.wb.sheet(area.sheet)?;
+        if self.iterate || !area.range.is_single() {
+            return None;
+        }
+        // A spill cannot overwrite a nonempty stored constant (spill_blocked). Empty cells
+        // may be covered by a new spill, so decline them without reading/evaluating anything.
+        match sh.cell(area.range.start) {
+            Some(cell) if cell.formula.is_some() || matches!(cell.value, Value::Array(_) | Value::Empty) => None,
+            Some(cell) => Some(cell.value.clone()),
+            None => None,
+        }
+    }
+    fn text_criteria_index(&mut self, range: Area, target: Area) -> Option<std::sync::Arc<gridcraft_functions::TextCriteriaIndex>> {
+        if self.iterate {
+            return None;
+        }
+        let source = self.wb.sheet(range.sheet)?;
+        let dest = self.wb.sheet(target.sheet)?;
+        let key = (range, target);
+        if let Some(index) = self.text_criteria.get(&key) {
+            return index.clone();
+        }
+        if !self.criteria_seen.contains(&key) {
+            if self.criteria_recent.len() >= MAX_CRITERIA_RECENT
+                && let Some(old) = self.criteria_recent.pop_front()
+            {
+                self.criteria_seen.remove(&old);
+            }
+            self.criteria_seen.insert(key);
+            self.criteria_recent.push_back(key);
+            return None;
+        }
+        // Bound the cells inspected for optional builds, including ineligible ranges. Text
+        // and group allowances also bound retained keys and per-group/map overhead. Reaching
+        // any allowance changes no results: the ordinary evaluator remains the fallback.
+        let cells = u64::from(range.range.height()) * u64::from(range.range.width());
+        if self.text_criteria.len() >= MAX_CRITERIA_INDEXES || self.criteria_cells.saturating_add(cells) > MAX_CRITERIA_CELLS {
+            return None;
+        }
+        self.criteria_cells += cells;
+        let constant = |area: Area| {
+            self.wb
+                .sheet(area.sheet)
+                .is_some_and(|sh| sh.cells.iter_range(area.range).all(|(_, cell)| cell.formula.is_none() && !matches!(cell.value, Value::Array(_))))
+        };
+        let spill_overlaps = |area: Area| {
+            self.wb.sheet(area.sheet).is_some_and(|sh| {
+                sh.spill_ranges.values().any(|r| r.intersects(&area.range))
+                    || sh.spill.range(area.range.start..=area.range.end).any(|(c, _)| area.range.contains(*c))
+            }) || self.spills.iter().any(|(k, a)| overlaps(area, spill_area(*k, a)))
+        };
+        let index = if constant(range) && constant(target) && !spill_overlaps(range) && !spill_overlaps(target) {
+            let cells = source.cells.iter_range(range.range).map(|(at, cell)| {
+                let target_cell =
+                    CellRef::new(target.range.start.row + at.row - range.range.start.row, target.range.start.col + at.col - range.range.start.col);
+                (&cell.value, dest.value_ref(target_cell).unwrap_or(&Value::Empty))
+            });
+            gridcraft_functions::TextCriteriaIndex::new(
+                cells,
+                MAX_CRITERIA_BYTES.saturating_sub(self.criteria_bytes),
+                MAX_CRITERIA_GROUPS.saturating_sub(self.criteria_groups),
+            )
+            .map(std::sync::Arc::new)
+        } else {
+            None
+        };
+        if let Some(index) = &index {
+            self.criteria_bytes += index.text_bytes();
+            self.criteria_groups += index.groups();
+        }
+        self.text_criteria.insert(key, index.clone());
+        index
+    }
     fn workbook(&self) -> &Workbook {
         self.wb
     }
@@ -552,5 +675,142 @@ impl Host for PassHost<'_> {
         x ^= x >> 27;
         *self.rng = x;
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+#[cfg(test)]
+mod criteria_tests {
+    use super::*;
+    use crate::Calc;
+    use gridcraft_model::{Cell, Formula};
+
+    #[test]
+    fn one_off_running_counts_do_not_exhaust_the_repeated_range_cache() {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        for r in 0..1_500 {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::new(r, 0), Cell::value(Value::from(format!("key{r}"))));
+            sh.cells.set(CellRef::new(r, 1), Cell::value(Value::Number(1.0)));
+            for (col, text) in [(2, format!("=COUNTIF(A$1:A{0},A{0})", r + 1)), (3, format!("=SUMIF(A$1:A$1500,A{},B$1:B$1500)", r + 1))] {
+                let at = CellRef::new(r, col);
+                let formula = Formula::new(&text);
+                exprs.insert((0, at), formula.expr_arc().unwrap());
+                sh.cells.set(at, Cell::formula(formula));
+            }
+        }
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for col in [2, 3] {
+            for r in 0..1_500 {
+                let key = (0, CellRef::new(r, col));
+                host.calculate(key);
+                assert_eq!(host.results.get(&key), Some(&Value::Number(1.0)));
+            }
+            if col == 2 {
+                assert_eq!(host.criteria_cells, 0, "one-off ranges spent the build allowance");
+            }
+        }
+        assert_eq!(host.criteria_cells, 1_500);
+        assert_eq!(host.text_criteria.len(), 1);
+        assert!(host.criteria_seen.len() <= MAX_CRITERIA_RECENT);
+    }
+
+    #[test]
+    fn saved_spill_values_are_not_indexed_as_empty_stored_cells() {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("={\"header\";\"key\";\"key\"}")));
+        for r in 0..3 {
+            let at = CellRef::new(r, 2);
+            let formula = Formula::new("=COUNTIF(A2:A3,\"key\")");
+            exprs.insert((0, at), formula.expr_arc().unwrap());
+            wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(formula));
+        }
+        Calc::new().recalc_all(&mut wb);
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(2, 0)), Value::from("key"));
+        // Only the criteria formulas are dirty in this pass. Their array precedent is saved.
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for r in 0..3 {
+            let key = (0, CellRef::new(r, 2));
+            host.calculate(key);
+            assert_eq!(host.results.get(&key), Some(&Value::Number(2.0)));
+        }
+        assert!(host.spills.is_empty());
+        assert_eq!(host.criteria_cells, 2);
+        assert!(host.text_criteria.values().all(Option::is_none));
+    }
+
+    #[test]
+    fn text_criteria_formulas_index_their_ranges_once_per_pass() {
+        use crate::eval::Area;
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        for r in 0..500 {
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 0), Cell::value(Value::from(format!("key{r}"))));
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 1), Cell::value(Value::Number(f64::from(r))));
+            for col in 2..5 {
+                let at = CellRef::new(r, col);
+                let formula = Formula::new(&format!("=SUMIF(A$1:A$500,A{},B$1:B$500)", r + 1));
+                exprs.insert((0, at), formula.expr_arc().unwrap());
+                wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(formula));
+            }
+        }
+        let spill_anchor = CellRef::new(0, 25);
+        let formula = Formula::new("=SEQUENCE(2)");
+        exprs.insert((0, spill_anchor), formula.expr_arc().unwrap());
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(spill_anchor, Cell::formula(formula));
+        sh.spill.insert(CellRef::new(1, 25), Value::Number(2.0));
+        sh.spill_ranges.insert(spill_anchor, RangeRef::parse("Z1:Z2").unwrap());
+        let range = Area { sheet: 0, range: RangeRef::parse("A1:A500").unwrap() };
+        let target = Area { sheet: 0, range: RangeRef::parse("B1:B500").unwrap() };
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        host.calculate((0, spill_anchor));
+        for col in 2..5 {
+            for r in 0..500 {
+                let key = (0, CellRef::new(r, col));
+                host.calculate(key);
+                assert_eq!(host.results.get(&key), Some(&Value::Number(f64::from(r))));
+            }
+        }
+        // Exercise the real evaluator, so bypassing the fast path fails this active guard too.
+        assert_eq!(host.criteria_cells, 500);
+        assert_eq!(host.text_criteria.len(), 1);
+        host.iterate = true;
+        assert!(host.text_criteria_index(range, target).is_none());
+    }
+
+    #[test]
+    fn a_new_overlapping_spill_invalidates_a_text_criteria_index() {
+        for source_spills in [false, true] {
+            let mut wb = Workbook::new();
+            let mut exprs = HashMap::default();
+            let (anchor, array) = if source_spills { ("A1", "={\"header\";\"key\";\"key\"}") } else { ("B1", "={0;1;2}") };
+            for (at, text) in
+                [("C1", "=SUMIF(A2:A3,\"key\",B2:B3)"), (anchor, array), ("C2", "=SUMIF(A2:A3,\"key\",B2:B3)"), ("C3", "=SUMIF(A2:A3,\"key\",B2:B3)")]
+            {
+                let cell = CellRef::parse(at).unwrap();
+                let formula = Formula::new(text);
+                exprs.insert((0, cell), formula.expr_arc().unwrap());
+                wb.sheet_mut(0).unwrap().cells.set(cell, Cell::formula(formula));
+            }
+            for r in 1..=2 {
+                let (col, value) = if source_spills { (1, Value::Number(f64::from(r))) } else { (0, Value::from("key")) };
+                wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, col), Cell::value(value));
+            }
+            let mut rng = 1;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+            host.calculate((0, CellRef::new(0, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(0, 2))), Some(&Value::Number(0.0)));
+            host.calculate((0, CellRef::new(1, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(1, 2))), Some(&Value::Number(0.0)));
+            assert_eq!(host.criteria_cells, 2);
+            host.calculate((0, CellRef::parse(anchor).unwrap()));
+            host.calculate((0, CellRef::new(2, 2)));
+            assert_eq!(host.results.get(&(0, CellRef::new(2, 2))), Some(&Value::Number(3.0)));
+        }
     }
 }
