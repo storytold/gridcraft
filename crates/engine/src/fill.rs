@@ -28,6 +28,12 @@ pub enum FillMode {
     /// counted in that unit (one unit when they fall in the same one). A source that isn't dates
     /// extends like a plain drag.
     Dates(DateUnit),
+    /// Linear Trend: the targets continue the least-squares line (y = mx + b) through the source's
+    /// numbers. The source keeps its values.
+    LinearTrend,
+    /// Growth Trend: the targets continue the exponential curve (y = b·m^x) fitted to the source's
+    /// numbers. The source keeps its values.
+    GrowthTrend,
 }
 
 /// The step of a [`FillMode::Dates`] fill.
@@ -45,6 +51,42 @@ impl FillMode {
     fn extends_series(self) -> bool {
         matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly | FillMode::Dates(_))
     }
+}
+
+/// Whether a fill from `src` to `target` runs down or up the sheet rather than across it.
+fn fills_vertically(src: RangeRef, target: RangeRef) -> bool {
+    target.height() != src.height() || target.width() == src.width()
+}
+
+/// The numbers in each lane of `src` that a fill to `target` continues, or `None` when a source
+/// cell is empty or holds text, a logical value, an error or a formula.
+fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> Option<Vec<Vec<f64>>> {
+    let sh = wb.sheet(sheet)?;
+    let vertical = fills_vertically(src, target);
+    let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
+    let len = if vertical { src.height() } else { src.width() };
+    lanes
+        .into_iter()
+        .map(|lane| {
+            (0..len)
+                .map(|i| {
+                    let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
+                    let cell = sh.cell(c)?;
+                    if cell.formula.is_some() || !cell.value.is_number() {
+                        return None;
+                    }
+                    cell.value.as_f64()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether the fill menu offers Linear Trend (`growth` false) or Growth Trend (`growth` true) for a
+/// fill from `src` to `target`: every source cell holds a number, and for Growth Trend the numbers
+/// of each lane are all above zero or all below zero.
+pub fn trend_applies(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef, growth: bool) -> bool {
+    numeric_lanes(wb, sheet, src, target).is_some_and(|lanes| !growth || lanes.iter().all(|nums| Pattern::growth(nums).is_some()))
 }
 
 /// Whether a number format shows a calendar date (`YYYY-MM-DD` and `m/d/yyyy h:mm` do; `0 "days"`
@@ -90,7 +132,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
-    let vertical = target.height() != src.height() || target.width() == src.width();
+    let vertical = fills_vertically(src, target);
     let forward = if vertical {
         target.end.row > src.end.row || target.start.row == src.start.row
     } else {
@@ -108,11 +150,25 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
         return Err(crate::EngineError::Other("The fill is too large.".into()));
     }
+    // Linear Trend and Growth Trend fit each lane's numbers.
+    let trends: Vec<Pattern> = match mode {
+        FillMode::LinearTrend | FillMode::GrowthTrend => {
+            let Some(lanes) = numeric_lanes(&cx.wb, sheet, src, target) else {
+                return Err(crate::EngineError::Other("Linear Trend and Growth Trend need a number in every source cell.".into()));
+            };
+            let fit = |nums: &Vec<f64>| if mode == FillMode::GrowthTrend { Pattern::growth(nums) } else { Some(Pattern::linear(nums)) };
+            let Some(trends) = lanes.iter().map(fit).collect() else {
+                return Err(crate::EngineError::Other("Growth Trend needs numbers that are all above zero or all below zero.".into()));
+            };
+            trends
+        }
+        _ => Vec::new(),
+    };
     let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
     let mut pictures = Vec::new();
-    for lane in lanes {
+    for (lane_i, lane) in lanes.into_iter().enumerate() {
         let src_cells: Vec<(CellRef, Option<Cell>)> = (0..src_len)
             .map(|i| {
                 let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
@@ -129,7 +185,9 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
+        let pattern = if let Some(trend) = trends.get(lane_i) {
+            trend.clone()
+        } else if mode.extends_series() || mode == FillMode::Alternate {
             let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
             let dates = match mode {
                 FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, cx.wb.date_system, first_fmt),
@@ -163,7 +221,14 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     writes.push((*t, Some(existing)));
                     continue;
                 }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend | FillMode::Dates(_) => {
+                FillMode::ValuesOnly
+                | FillMode::Series
+                | FillMode::Alternate
+                | FillMode::Copy
+                | FillMode::Extend
+                | FillMode::Dates(_)
+                | FillMode::LinearTrend
+                | FillMode::GrowthTrend => {
                     let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
@@ -244,9 +309,48 @@ enum Pattern {
         step: i64,
         sys: gridcraft_core::DateSystem,
     },
+    /// Growth Trend, kept as logarithms so that a value the curve reaches is not lost to an
+    /// overflow or underflow on the way: the logarithms of the fitted magnitudes at the source's
+    /// last and first cells, the logarithm of the factor between neighboring cells, and the sign
+    /// of every value (1 or -1).
+    Growth {
+        last: f64,
+        first: f64,
+        step: f64,
+        sign: f64,
+    },
 }
 
 impl Pattern {
+    /// Linear Trend: the least-squares line through `nums`. A lone number is copied unchanged.
+    fn linear(nums: &[f64]) -> Pattern {
+        if nums.len() == 1 {
+            return Pattern::Copy;
+        }
+        let (first, last, step) = least_squares(nums);
+        Pattern::Linear { last, first, step }
+    }
+
+    /// The exponential curve y = b·m^x fitted to `nums` at positions 0, 1, 2… by least squares on
+    /// the logarithms, as the GROWTH function fits positive numbers. Numbers below zero are fitted
+    /// by their magnitudes and keep their sign. `None` when the numbers are not all above zero or
+    /// all below zero. A lone number is copied unchanged.
+    fn growth(nums: &[f64]) -> Option<Pattern> {
+        let sign = if nums.iter().all(|y| *y > 0.0) {
+            1.0
+        } else if nums.iter().all(|y| *y < 0.0) {
+            -1.0
+        } else {
+            return None;
+        };
+        if nums.len() == 1 {
+            return Some(Pattern::Copy);
+        }
+        let logs: Vec<f64> = nums.iter().map(|y| (y * sign).ln()).collect();
+        let (first, last, step) = least_squares(&logs);
+        Some(Pattern::Growth { last, first, step, sign })
+    }
+
     /// The pattern of Fill Days, Fill Weekdays, Fill Months or Fill Years, or `None` when the
     /// source isn't all dates (numbers, not formulas, under a date format in its first cell).
     fn dates(cells: &[(CellRef, Option<Cell>)], unit: DateUnit, sys: gridcraft_core::DateSystem, fmt: &str) -> Option<Pattern> {
@@ -328,19 +432,7 @@ impl Pattern {
                 }
             }
             // Least-squares step for 2+ values (Excel uses a linear trend).
-            let n = nums.len() as f64;
-            let mean_x = (n - 1.0) / 2.0;
-            let mean_y = nums.iter().sum::<f64>() / n;
-            let mut num = 0.0;
-            let mut den = 0.0;
-            for (i, y) in nums.iter().enumerate() {
-                num += (i as f64 - mean_x) * (y - mean_y);
-                den += (i as f64 - mean_x).powi(2);
-            }
-            let step = if den == 0.0 { 0.0 } else { num / den };
-            let fitted_last = mean_y + step * (n - 1.0 - mean_x);
-            let fitted_first = mean_y - step * mean_x;
-            return Pattern::Linear { last: fitted_last, first: fitted_first, step };
+            return Pattern::linear(&nums);
         }
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
@@ -434,8 +526,35 @@ impl Pattern {
                 let base = if forward { *last } else { *first };
                 Some(Value::number(add_weekdays(*sys, base, step.checked_mul(k)?.checked_mul(sign)?)?))
             }
+            Pattern::Growth { last, first, step, sign: growth_sign } => {
+                let base = if forward { *last } else { *first };
+                Some(Value::number(round15(growth_sign * (base + step * (k * sign) as f64).exp())))
+            }
         }
     }
+}
+
+/// 2^600 and 2^-600, both exact.
+const TWO_POW_600: f64 = f64::from_bits((1023 + 600) << 52);
+const TWO_POW_MINUS_600: f64 = f64::from_bits((1023 - 600) << 52);
+
+/// The least-squares line through `nums` at positions 0, 1, 2…: its values at the first and last
+/// positions, and its step. A lone number gives a step of zero. When a number is larger than 2^600,
+/// the fit runs on the numbers multiplied by 2^-600 and its results are multiplied by 2^600, so the
+/// sums stay finite for numbers up to the largest double.
+fn least_squares(nums: &[f64]) -> (f64, f64, f64) {
+    let (down, up) = if nums.iter().any(|y| y.abs() > TWO_POW_600) { (TWO_POW_MINUS_600, TWO_POW_600) } else { (1.0, 1.0) };
+    let n = nums.len() as f64;
+    let mean_x = (n - 1.0) / 2.0;
+    let mean_y = nums.iter().map(|y| y * down).sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (i, y) in nums.iter().enumerate() {
+        num += (i as f64 - mean_x) * (y * down - mean_y);
+        den += (i as f64 - mean_x).powi(2);
+    }
+    let step = if den == 0.0 { 0.0 } else { num / den };
+    ((mean_y - step * mean_x) * up, (mean_y + step * (n - 1.0 - mean_x)) * up, step * up)
 }
 
 /// Whether `serial` falls on Monday to Friday; `None` outside the supported date range.
