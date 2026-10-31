@@ -618,23 +618,39 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     let kk = num(a, 2)?.trunc();
     let nn = num(a, 3)?.trunc();
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
-    if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
+    if k < 0.0 || n < 0.0 || kk < 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
     }
+    let exact_lo = match (integer_count(n), integer_count(nn), integer_count(kk)) {
+        (Some(n), Some(nn), Some(kk)) => Some(n.saturating_sub(nn.saturating_sub(kk))),
+        _ => None,
+    };
+    let lo = exact_lo.map_or_else(|| (n - (nn - kk)).max(0.0), |lo| lo as f64);
+    let below_lo = integer_count(k).zip(exact_lo).map_or(k < lo, |(k, lo)| k < lo);
+    let hi = n.min(kk);
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
-        return num_val(pmf(k));
+        return num_val(if below_lo || k > hi { 0.0 } else { pmf(k) });
+    }
+    if below_lo {
+        return num_val(0.0);
+    }
+    if k >= hi {
+        return num_val(1.0);
     }
     let mut s = 0.0;
-    let mut i = (n - nn + kk).max(0.0);
-    if k - i > 1e6 || i + 1.0 == i {
+    let end = k.min(hi);
+    if end - lo > 1e6 || lo + 1.0 == lo {
         return Err(CellError::Num);
     }
-    while i <= k {
-        s += pmf(i);
-        i += 1.0;
+    for step in 0..=((end - lo) as u64) {
+        s += pmf(lo + step as f64);
     }
     num_val(s.min(1.0))
+}
+
+fn integer_count(value: f64) -> Option<u128> {
+    (value < u128::MAX as f64).then_some(value as u128)
 }
 
 pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
