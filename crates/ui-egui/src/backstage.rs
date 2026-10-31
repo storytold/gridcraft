@@ -118,6 +118,8 @@ pub struct Backstage {
     pub print_all: bool,
     /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
+    /// Export and Save As: fit each sheet of a PDF on one page.
+    pub pdf_fit_to_page: bool,
     /// Print: the previewed page (0-based).
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
@@ -140,6 +142,7 @@ impl Backstage {
             props: Default::default(),
             print_all: false,
             fit_to_page: false,
+            pdf_fit_to_page: false,
             preview_page: 0,
             preview: None,
             save_format: "xlsx",
@@ -222,7 +225,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
+                    Page::Export => export(app, ui, &mut bs, &mut out),
                     Page::Options => options(app, ui),
                     Page::Account => account(app, ui),
                 }
@@ -702,36 +705,57 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;
             }
-        } else if export_as(app, fmt) {
+        } else if export_as(app, fmt, bs.pdf_fit_to_page) {
             out.close = true;
         }
+    }
+    if fmt == "pdf" {
+        ui.add_space(8.0);
+        ui.checkbox(&mut bs.pdf_fit_to_page, lang.tr("Fit Sheet on One Page"));
     }
     ui.add_space(18.0);
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
-fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
     if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked()
-        && export_as(app, "pdf")
+        && export_as(app, "pdf", bs.pdf_fit_to_page)
     {
         out.close = true;
     }
+    ui.add_space(6.0);
+    ui.checkbox(&mut bs.pdf_fit_to_page, lang.tr("Fit Sheet on One Page"));
     ui.add_space(14.0);
     section(ui, lang, "Change File Type");
     for (fmt, icon, title, detail) in [
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
     ] {
-        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
+        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt, false) {
             out.close = true;
         }
     }
 }
 
+/// Fit to one page stops shrinking at 10%, so a very large sheet can still need several pages.
+/// Says so instead of leaving the user to find out when they open the PDF.
+fn warn_if_not_one_page(app: &mut SheetApp, result: &Json, fit_to_page: bool) {
+    let pages = result.get("pages").and_then(Json::as_u64).unwrap_or(0);
+    if fit_to_page && pages > 1 {
+        let text = app
+            .ui
+            .language
+            .tr("This sheet is too large to fit on one page, even at the smallest scale (10%). The PDF has {pages} pages.")
+            .replace("{pages}", &pages.to_string());
+        app.message = Some(("GridCraft".into(), text));
+    }
+}
+
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
-/// as a browser download on the web. Returns whether a file was written or handed over.
-pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
+/// as a browser download on the web. `fit_to_page` fits each sheet of a PDF on one page; the other
+/// formats ignore it. Returns whether a file was written or handed over.
+pub fn export_as(app: &mut SheetApp, fmt: &str, fit_to_page: bool) -> bool {
     if !app.commit_edit(0, 0, false, false) {
         return false;
     }
@@ -747,8 +771,15 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
         let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
-        return match app.run(id, json!({"path": path})) {
-            Ok(_) => true,
+        let mut params = json!({"path": path});
+        if fmt == "pdf" && fit_to_page {
+            params["fitToPage"] = json!(true);
+        }
+        return match app.run(id, params) {
+            Ok(r) => {
+                warn_if_not_one_page(app, &r, fit_to_page);
+                true
+            }
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
                 false
@@ -761,8 +792,12 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
     if fmt == "pdf" {
         // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
-        return match app.run(id, json!({})) {
-            Ok(_) => true,
+        let params = if fit_to_page { json!({"fitToPage": true}) } else { json!({}) };
+        return match app.run(id, params) {
+            Ok(r) => {
+                warn_if_not_one_page(app, &r, fit_to_page);
+                true
+            }
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
                 false
