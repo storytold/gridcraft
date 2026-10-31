@@ -1237,6 +1237,65 @@ fn the_policy_keeps_macros_away_from_files_and_the_app() {
     assert!(s.ui_requests.is_empty());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn check_pdf_font_macro(dir: &std::path::Path, bytes: &[u8], id: &str, named: bool, writes: bool, mode: &str) {
+    let font = dir.join("body.ttf");
+    let mut s = s();
+    set(&mut s, "A1", "A");
+    let d = s.doc().unwrap();
+    let family = d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::new(0, 0))).font.name.to_string();
+    let mut params = if named { json!({"fontFamilies": {(family): {"regular": font}}}) } else { json!({"fonts": {"regular": font}}) };
+    let out = dir.join(format!("{id}-{named}-{writes}-{mode}.pdf"));
+    if writes {
+        params["path"] = json!(out);
+    }
+    let step = json!({"command": id, "params": params});
+    put(&mut s, json!({"name": "Fonts", "steps": [step]}));
+    let start = if mode == "macro.debug" { json!({"name": "Fonts", "action": "start"}) } else { json!({"name": "Fonts"}) };
+    let err = s.execute(mode, start.clone()).unwrap_err().to_string();
+    assert!(err.contains("reads and embeds local font files") && err.contains("permissions"), "{err}");
+    put(&mut s, json!({"name": "Fonts", "steps": [step], "permissions": [id]}));
+    let check = s.execute("macro.check", json!({"name": "Fonts"})).unwrap();
+    let what = if writes { "reads and embeds local font files and writes a file" } else { "reads and embeds local font files" };
+    assert_eq!(check["needsApproval"], json!([format!("runs {id}, which {what}")]));
+    let Err(EngineError::Approve(q)) = s.execute(mode, start.clone()) else { panic!("font access must ask for approval") };
+    assert!(q.contains(what), "{q}");
+    assert!(!out.exists(), "no output before approval");
+    let mut approved = start;
+    approved["approve"] = json!(true);
+    if mode == "macro.debug" {
+        approved["breakpoints"] = json!(["1"]);
+    }
+    s.execute(mode, approved).unwrap();
+    if mode == "macro.debug" {
+        assert!(!out.exists(), "the debugger pauses before the approved file step");
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+    }
+    if writes {
+        let pdf = std::fs::read(&out).unwrap();
+        assert!(pdf.windows(bytes.len()).any(|w| w == bytes), "the approved font was embedded");
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pdf_font_reads_require_disclosed_approval_in_runs_and_debugging() {
+    let dir = std::env::temp_dir().join(format!("gc-macro-pdf-fonts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bytes = gridcraft_pdf::test_support::tiny_ttf(&['A'], 500, 0);
+    std::fs::write(dir.join("body.ttf"), &bytes).unwrap();
+    for id in ["file.exportPdf", "file.print"] {
+        for named in [false, true] {
+            for writes in [false, true] {
+                for mode in ["macro.run", "macro.debug"] {
+                    check_pdf_font_macro(&dir, &bytes, id, named, writes, mode);
+                }
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn macros_from_a_file_ask_before_running() {
     let mut s = s();

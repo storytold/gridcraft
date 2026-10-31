@@ -1,6 +1,6 @@
 //! What a macro step may run. Macros run commands, so this keeps a macro from saving, opening or
 //! closing files, driving the app, running other macros, or reading and writing files without the
-//! person knowing. It goes by command id and the `path` parameter; the runner also runs every
+//! person knowing. It goes by command id, output paths and PDF font selections; the runner also runs every
 //! step except an approved file step inside the scripts' file sandbox, so a command that touches a
 //! file under another parameter can't either.
 
@@ -46,12 +46,20 @@ const ALLOWED: &[&str] = &["file.properties"];
 /// Commands that read a file when given a `path`.
 const READS_FILES: &[&str] = &["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background"];
 
-/// File commands that only produce bytes unless given a `path` (then they write a file).
+/// File commands that produce bytes, optionally writing a `path` or reading explicit PDF fonts.
 const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml", "file.print", "file.printPreview", "file.saveBytes"];
 
 /// Whether command `id` with `params` writes a file (an export or print given a `path`).
 pub fn writes_file(id: &str, params: &Json) -> bool {
     EXPORTS.contains(&id) && params.get("path").is_some_and(|p| !p.is_null())
+}
+
+/// Classify unresolved font tokens conservatively too: selections can contain paths once resolved.
+fn reads_pdf_fonts(id: &str, params: &Json) -> bool {
+    matches!(id, "file.exportPdf" | "file.print")
+        && ["fonts", "fontFamilies"]
+            .iter()
+            .any(|key| params.get(key).is_some_and(|value| !value.is_null() && value.as_object().is_none_or(|faces| !faces.is_empty())))
 }
 
 /// The policy for running command `id` with `params` as a macro step in a document with `trust`.
@@ -62,7 +70,12 @@ pub fn writes_file(id: &str, params: &Json) -> bool {
 pub fn macro_policy(id: &str, params: &Json, trust: Trust) -> Policy {
     let has_path = params.get("path").is_some_and(|p| !p.is_null());
     let base = if EXPORTS.contains(&id) {
-        if has_path { Policy::NeedsPermission("writes a file".into()) } else { Policy::Allow }
+        match (reads_pdf_fonts(id, params), has_path) {
+            (true, true) => Policy::NeedsPermission("reads and embeds local font files and writes a file".into()),
+            (true, false) => Policy::NeedsPermission("reads and embeds local font files".into()),
+            (false, true) => Policy::NeedsPermission("writes a file".into()),
+            (false, false) => Policy::Allow,
+        }
     } else if ALLOWED.contains(&id) {
         Policy::Allow
     } else if let Some((_, why)) = DENIED.iter().find(|(d, _)| *d == id) {
@@ -144,5 +157,32 @@ mod tests {
         for id in ALLOWED.iter().chain(READS_FILES).chain(EXPORTS).chain(DENIED.iter().map(|(id, _)| id)).chain(&["data.solver"]) {
             assert!(crate::find_command(id).is_some(), "{id}");
         }
+    }
+
+    #[test]
+    fn pdf_font_paths_and_unresolved_selections_disclose_reads_separately_from_writes() {
+        for id in ["file.exportPdf", "file.print"] {
+            for selection in [
+                json!({"fonts": {"regular": "/local/body.ttf"}}),
+                json!({"fontFamilies": {"Body": {"regular": "/local/body.ttf", "bold": "/local/bold.ttf"}}}),
+                json!({"fonts": {"regular": {"$ref": "Input"}}}),
+                json!({"fonts": {"$ref": "Input"}}),
+                json!({"fontFamilies": {"$ref": "Input"}}),
+            ] {
+                for trust in [Trust::Local, Trust::FromFile] {
+                    assert_eq!(macro_policy(id, &selection, trust), Policy::NeedsPermission("reads and embeds local font files".into()));
+                    assert!(!writes_file(id, &selection));
+                    let mut written = selection.clone();
+                    written["path"] = json!("/local/out.pdf");
+                    assert_eq!(
+                        macro_policy(id, &written, trust),
+                        Policy::NeedsPermission("reads and embeds local font files and writes a file".into())
+                    );
+                    assert!(writes_file(id, &written));
+                }
+            }
+            assert_eq!(macro_policy(id, &json!({"fontFamilies": {}}), Trust::Local), Policy::Allow);
+        }
+        assert_eq!(macro_policy("file.exportCsv", &json!({"fonts": {"regular": "/local/body.ttf"}}), Trust::Local), Policy::Allow);
     }
 }
