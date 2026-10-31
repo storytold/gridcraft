@@ -1543,7 +1543,7 @@ fn filter_with_a_sheet_prefix_toggles_the_table_at_the_range() {
         wb.sheet(wb.sheet_index("Prices").unwrap()).unwrap().clone()
     };
     assert!(prices(&s).tables[0].filter_button);
-    s.execute("data.filter", json!({"range": "Prices!A2:B3"})).unwrap();
+    s.execute("data.filter", json!({"range": "Prices!A1:B3"})).unwrap();
     assert!(!prices(&s).tables[0].filter_button);
     assert!(prices(&s).autofilter.is_none());
     assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
