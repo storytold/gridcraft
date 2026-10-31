@@ -9,6 +9,8 @@ struct SortKey {
     desc: bool,
     by: String,
     list: Option<Vec<String>>,
+    /// Excel's "Sort anything that looks like a number, as a number" (`xlSortTextAsNumbers`).
+    text_as_numbers: bool,
 }
 
 /// The sheet and range a sort works on: the sheet `sheet` or a `Sheet!` prefix on `range` names,
@@ -34,7 +36,15 @@ pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let header = guess_header(&d.wb, sh, r);
-    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
+    do_sort(
+        s,
+        sheet,
+        r,
+        header,
+        vec![SortKey { col, desc: !asc, by: "values".into(), list: None, text_as_numbers: bool_param(p, "textAsNumbers").unwrap_or(false) }],
+        false,
+        false,
+    )
 }
 
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
@@ -44,6 +54,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
     let by_cols = str_param(p, "orientation") == Some("columns");
     let case = bool_param(p, "matchCase").unwrap_or(false);
+    let text_as_numbers = bool_param(p, "textAsNumbers").unwrap_or(false);
     let mut keys: Vec<SortKey> = Vec::new();
     for k in p.get("keys").and_then(Json::as_array).map(Vec::as_slice).unwrap_or_default() {
         let col = if by_cols {
@@ -64,6 +75,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             col,
             desc: k.get("order").and_then(Json::as_str) == Some("desc"),
             by: k.get("by").and_then(Json::as_str).unwrap_or("values").to_string(),
+            text_as_numbers: k.get("textAsNumbers").and_then(Json::as_bool).unwrap_or(text_as_numbers),
             list: k.get("customList").and_then(Json::as_array).map(|l| l.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
         });
     }
@@ -99,9 +111,19 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
         let styles = &cx.wb.styles;
+        let date_system = cx.wb.date_system;
         let key_val = |i: u32, k: &SortKey| -> (Value, u32) {
             let c = line(i, k.col);
-            let v = sh.value(c);
+            let mut v = sh.value(c);
+            // A custom list matches the cell's text, so those keys keep it.
+            let as_number = if k.text_as_numbers && k.list.is_none() {
+                v.as_text().and_then(|t| gridcraft_core::parse::parse_number_text_in(t, date_system))
+            } else {
+                None
+            };
+            if let Some(n) = as_number {
+                v = Value::number(n);
+            }
             let color = match k.by.as_str() {
                 "cellColor" => {
                     styles.get(sh.style_id(c)).fill.fg.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX)
