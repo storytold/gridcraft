@@ -2293,3 +2293,116 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+/// `SUM`, `COUNT` and `AVERAGE` over blocks of constants share one pass-wide answer per block, and a
+/// running total extends the shorter block's. Every result must equal the left-to-right sum of the
+/// cells, bit for bit, with text, blanks, errors, formulas and a nonzero start in the mix.
+#[test]
+fn aggregates_over_ranges_match_a_plain_fold_bit_for_bit() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, n: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % n
+        }
+    }
+    let nums = [0.1, 0.2, 0.3, 1e16, -1e16, 1.0, 3.7, -0.0, 12345.678, 1e-9, 7.0];
+    let rows = 40u32;
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut wb = Workbook::new();
+    let fresh = |rng: &mut Rng, plain: bool| match rng.next(if plain { 8 } else { 14 }) {
+        0 => Cell::value(Value::text("t")),
+        1 => Cell::default(),
+        2 => Cell::value(Value::Bool(true)),
+        3 if !plain => Cell::value(Value::Error(CellError::NA)),
+        4 if !plain => Cell::formula(Formula::new("=A1*2")),
+        5 if !plain => Cell::formula(Formula::new("=\"x\"&B2")),
+        _ => Cell::value(Value::Number(nums[rng.next(nums.len() as u64) as usize])),
+    };
+    // Columns A:C mostly numbers; E holds a formula column and some errors only in a few rows.
+    for r in 0..rows {
+        for col in 0..3 {
+            let plain = !(r % 13 == 7 && col == 1);
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, col), fresh(&mut rng, plain));
+        }
+    }
+    // Formulas in column H and up: (function, optional leading number, blocks).
+    let mut oracle: Vec<(CellRef, &str, Option<f64>, Vec<(u32, u32, u32, u32)>)> = vec![];
+    let funcs = ["SUM", "COUNT", "AVERAGE"];
+    let mut at = 0;
+    let mut add = |wb: &mut Workbook, f: &'static str, lead: Option<f64>, blocks: Vec<(u32, u32, u32, u32)>| {
+        let args: Vec<String> = blocks
+            .iter()
+            .map(|&(r0, c0, r1, c1)| format!("{}{}:{}{}", (b'A' + c0 as u8) as char, r0 + 1, (b'A' + c1 as u8) as char, r1 + 1))
+            .collect();
+        let lead_s = lead.map(|l| format!("{l:e},")).unwrap_or_default();
+        let cell = CellRef::new(at % rows, 7 + at / rows);
+        wb.sheet_mut(0).unwrap().cells.set(cell, Cell::formula(Formula::new(&format!("={f}({lead_s}{})", args.join(",")))));
+        oracle.push((cell, f, lead, blocks));
+        at += 1;
+    };
+    // Running totals over a clean column and over a column with an error further down.
+    for r in 0..rows {
+        add(&mut wb, "SUM", None, vec![(0, 0, r, 0)]);
+        add(&mut wb, "SUM", None, vec![(0, 1, r, 1)]);
+        add(&mut wb, "COUNT", None, vec![(0, 0, r, 2)]);
+    }
+    for _ in 0..120 {
+        let (r0, r1) = (rng.next(rows as u64) as u32, rng.next(rows as u64) as u32);
+        let (c0, c1) = (rng.next(3) as u32, rng.next(3) as u32);
+        let n = 1 + rng.next(2) as usize;
+        let blocks = (0..n).map(|_| (r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1))).collect();
+        let lead = [None, Some(1e16), Some(0.5), Some(2.0)][rng.next(4) as usize];
+        let f = funcs[rng.next(3) as usize];
+        add(&mut wb, f, lead, blocks);
+    }
+    let check = |wb: &Workbook, when: &str| {
+        let sh = wb.sheet(0).unwrap();
+        for (cell, f, lead, blocks) in &oracle {
+            let (mut sum, mut count, mut error) = (lead.unwrap_or(0.0), u64::from(lead.is_some()), None);
+            for &(r0, c0, r1, c1) in blocks {
+                for r in r0..=r1 {
+                    for col in c0..=c1 {
+                        match sh.value(CellRef::new(r, col)) {
+                            Value::Number(n) => {
+                                sum += n;
+                                count += 1;
+                            }
+                            Value::Error(e) if *f != "COUNT" => error = error.or(Some(e)),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let want = match (error, *f) {
+                (Some(e), _) => Value::Error(e),
+                (_, "SUM") => Value::number(sum),
+                (_, "COUNT") => Value::number(count as f64),
+                (_, _) if count == 0 => Value::Error(CellError::Div0),
+                _ => Value::number(sum / count as f64),
+            };
+            let got = sh.value(*cell);
+            let same = match (&got, &want) {
+                (Value::Number(a), Value::Number(b)) => a.to_bits() == b.to_bits(),
+                (a, b) => a == b,
+            };
+            assert!(same, "{when}: {:?} = {:?}, plain fold {:?}", cell, got, want);
+        }
+    };
+    let mut calc = Calc::new();
+    calc.rebuild(&wb);
+    calc.recalc_all(&mut wb);
+    check(&wb, "full recalc");
+    for round in 0..30 {
+        let mut changed = vec![];
+        for _ in 0..1 + rng.next(4) {
+            let at = CellRef::new(rng.next(rows as u64) as u32, rng.next(3) as u32);
+            wb.sheet_mut(0).unwrap().cells.set(at, fresh(&mut rng, round % 2 == 0));
+            changed.push((0, at));
+        }
+        calc.cells_changed(&mut wb, &changed);
+        check(&wb, &format!("edit round {round}"));
+    }
+}
