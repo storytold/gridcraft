@@ -52,8 +52,14 @@ fn draft_cells(h: &Harness) -> Vec<String> {
         .collect()
 }
 
+/// The editor's control `label`: the lowest on screen, as the title bar's Quick Access Toolbar
+/// has a Save too.
+fn control<'a>(h: &'a Harness, label: &'a str) -> egui_kittest::Node<'a> {
+    h.get_all_by_label(label).max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap()
+}
+
 fn click(h: &mut Harness, label: &str) {
-    h.get_by_label(label).click();
+    control(h, label).click();
     h.run_steps(3);
 }
 
@@ -529,7 +535,7 @@ fn the_editor_fits_a_narrow_window() {
         assert!(screen.contains_rect(window), "the editor at {window:?} is outside the {size:?} window");
         // The editor's own controls (Delete is left out: the ribbon has one too).
         for label in ["Add Step", "Duplicate", "Check", "Run", "Step", "Continue", "Run to Here", "Stop", "Details", "Inputs", "Output", "Save"] {
-            let r = h.get_by_label(label).rect();
+            let r = control(&h, label).rect();
             assert!(screen.contains_rect(r), "{label} at {r:?} is outside the {size:?} window");
         }
     }
