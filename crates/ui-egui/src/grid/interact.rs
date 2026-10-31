@@ -775,7 +775,7 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     let active_sheet = wb.active_sheet();
     let range = if extend {
         ed.point
-            .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
+            .and_then(|point| crate::editor::formula_refs(&ed.text, ed.locale).into_iter().find(|(start, end, ..)| (*start, *end) == point))
             .and_then(|(_, _, previous, previous_sheet, _)| {
                 let previous_sheet = previous_sheet.as_deref().map(|name| wb.sheet_index(name)).unwrap_or(Some(edit_sheet));
                 if previous_sheet != Some(active_sheet) {
