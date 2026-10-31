@@ -27,6 +27,18 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
+/// Routes control-channel synthetic input into the native window it was queued for.
+///
+/// eframe runs [`eframe::App::raw_input_hook`] for the root viewport only; the other native
+/// windows are immediate viewports, whose `RawInput` only these hooks reach.
+struct SyntheticInputHooks(gridcraft_ui_egui::control::SyntheticInput);
+
+impl eframe::ViewportHooks for SyntheticInputHooks {
+    fn raw_input(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.0.raw_input(ctx, raw);
+    }
+}
+
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
@@ -312,6 +324,9 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    // Synthetic control input for a native window outside the root viewport reaches that
+    // window's pass through eframe's per-viewport hooks (see `SyntheticInputHooks`).
+    let synthetic_input = app.synthetic_input();
     app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;
@@ -340,7 +355,8 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options =
+        eframe::NativeOptions { viewport, viewport_hooks: Some(std::sync::Arc::new(SyntheticInputHooks(synthetic_input))), ..Default::default() };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut options = options;
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file

@@ -10,6 +10,20 @@ use gridcraft_engine::core::CellRef;
 
 use crate::{Notice, SheetApp, backstage, dialogs, editor, grid, keytips, text_box};
 
+/// Where synthetic input queued for a window must go (see [`SheetApp::input_route`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputRoute {
+    /// The window in the root viewport (also every window on the web and in tests).
+    Root,
+    /// A native window of its own, drawn as an immediate viewport.
+    Child(egui::ViewportId),
+    /// The window exists but has no native viewport yet (it was opened earlier in this batch):
+    /// keep the input queued for its first frame.
+    Wait,
+    /// The window is gone: drop the input rather than type it into another workbook.
+    Gone,
+}
+
 /// One window's parked interface state (see the module docs).
 #[derive(Default)]
 pub struct WindowUi {
@@ -111,6 +125,41 @@ impl SheetApp {
         self.ui_window = active;
         let session = &self.session;
         self.parked.retain(|w, _| session.window(*w).is_some());
+    }
+
+    /// Records which native viewport shows each engine window (`doc_windows` sets it every
+    /// frame).
+    pub fn set_native_viewports(&mut self, viewports: std::collections::HashMap<u64, egui::ViewportId>) {
+        self.native_viewports = viewports;
+    }
+
+    /// The native viewport showing the active window; `None` on the web, in tests and before the
+    /// first native frame, where the root viewport shows the active window.
+    pub(crate) fn active_viewport(&self) -> Option<egui::ViewportId> {
+        if !self.native_windows {
+            return None;
+        }
+        self.session.active_window().and_then(|w| self.native_viewports.get(&w).copied())
+    }
+
+    /// The synthetic input's eframe viewport hook state (see [`crate::control::SyntheticInput`]).
+    pub fn synthetic_input(&self) -> crate::control::SyntheticInput {
+        self.child_input.clone()
+    }
+
+    /// Where input queued for `window` must go: the root viewport's window, a native window's own
+    /// viewport, or nowhere (waiting for a new window's first frame, or gone).
+    pub(crate) fn input_route(&self, window: Option<u64>) -> InputRoute {
+        if !self.native_windows || self.native_viewports.is_empty() {
+            return InputRoute::Root;
+        }
+        let Some(w) = window else { return InputRoute::Root };
+        match self.native_viewports.get(&w) {
+            Some(vp) if *vp == egui::ViewportId::ROOT => InputRoute::Root,
+            Some(vp) => InputRoute::Child(*vp),
+            None if self.session.window(w).is_some() => InputRoute::Wait,
+            None => InputRoute::Gone,
+        }
     }
 
     /// Activates window `id` (it becomes the most recently active) with its interface state.

@@ -42,6 +42,8 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            child_input: Default::default(),
+            native_viewports: HashMap::new(),
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
@@ -170,7 +172,7 @@ impl SheetApp {
     /// This is a shared eframe web follow-up, not a GridCraft-local workaround, and the control
     /// protocol documents the limitation.
     fn request_hidden_paint(&self, ctx: &egui::Context) {
-        if !(self.shots.needs_hidden_paint() || self.synthetic_pending || !self.synthetic.is_empty()) {
+        if !(self.shots.needs_hidden_paint() || self.synthetic_pending || !self.synthetic.is_empty() || self.child_input.is_pending()) {
             return;
         }
         // The web runner has no `RequestPaintWhileHidden`; sending it there only logs an
@@ -260,12 +262,14 @@ impl SheetApp {
         // same frame must not offer it again (grid sizing calls `ui` more than once per frame);
         // provenance is the injected pass number, so only a pass that missed input handling is
         // re-offered by `raw_input_hook`.
-        // Synthetic input reaches the root viewport only (`raw_input_hook`), so its pass consumes it.
+        // The root's batch is injected by `raw_input_hook`; another window's is injected by the
+        // eframe viewport hook, so only its own viewport's pass consumes it.
         if self.synthetic_pending && ctx.viewport_id() == egui::ViewportId::ROOT {
             self.synthetic.pop_front();
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
         }
+        self.child_input.applied(ctx.viewport_id(), ctx.cumulative_pass_nr());
     }
 
     /// Current selection's top-left cell text as A1 (for the Name Box).
@@ -323,8 +327,8 @@ mod lifecycle_tests {
     fn a_hidden_logic_tick_keeps_one_unapplied_synthetic_step() {
         let ctx = egui::Context::default();
         let mut app = app();
-        app.synthetic.push_back(vec![key_event(true)]);
-        app.synthetic.push_back(vec![key_event(false)]);
+        app.synthetic.push_back(control::SyntheticBatch::new(None, vec![key_event(true)]));
+        app.synthetic.push_back(control::SyntheticBatch::new(None, vec![key_event(false)]));
 
         let mut first = egui::RawInput::default();
         app.raw_input_hook(&ctx, &mut first);
@@ -355,7 +359,7 @@ mod lifecycle_tests {
         app.fonts_set = true;
         // Binds `session.text_width`, as eframe's first frame does.
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
-        app.synthetic.push_back(vec![key_event(true)]);
+        app.synthetic.push_back(control::SyntheticBatch::new(None, vec![key_event(true)]));
 
         // The font gate returns before input handling; `begin_pass` has still consumed the events.
         app.fonts_rebind = true;
@@ -384,7 +388,7 @@ mod lifecycle_tests {
         app.fonts_ready = true;
         app.fonts_han = Some(theme::HanOrder::Chinese);
         app.ui.language = i18n::Language::Ja;
-        app.synthetic.push_back(vec![key_event(true)]);
+        app.synthetic.push_back(control::SyntheticBatch::new(None, vec![key_event(true)]));
         app.synthetic_pending = true;
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         assert!(app.fonts_ready, "the font rebuild waits for the pass that applies the step");
@@ -519,7 +523,7 @@ mod lifecycle_tests {
     fn a_pending_synthetic_step_requests_a_hidden_paint() {
         let ctx = egui::Context::default();
         let mut app = app();
-        app.synthetic.push_back(vec![key_event(true)]);
+        app.synthetic.push_back(control::SyntheticBatch::new(None, vec![key_event(true)]));
         app.synthetic_pending = true;
         let out = ui_pass(&ctx, egui::RawInput::default(), |ui| app.logic(ui.ctx()));
         let painted = out

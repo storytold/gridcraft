@@ -35,18 +35,18 @@ fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {
     let p = egui::pos2(20.0, 20.0);
     let m = egui::Modifiers::NONE;
     let btn = egui::PointerButton::Primary;
-    assert!(push_click(&mut app, p, btn, 2, m).is_ok());
-    assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
-    assert!(push_click(&mut app, p, btn, u32::MAX, m).is_err());
-    assert!(push_drag(&mut app, p, p, usize::MAX, m).is_err());
-    assert!(push_drag(&mut app, p, p, MAX_QUEUED_SYNTHETIC_EVENTS, m).is_err());
+    assert!(push_click(&mut app, None, p, btn, 2, m).is_ok());
+    assert_eq!(app.synthetic.iter().map(|batch| batch.events.len()).sum::<usize>(), 5);
+    assert!(push_click(&mut app, None, p, btn, u32::MAX, m).is_err());
+    assert!(push_drag(&mut app, None, p, p, usize::MAX, m).is_err());
+    assert!(push_drag(&mut app, None, p, p, MAX_QUEUED_SYNTHETIC_EVENTS, m).is_err());
     assert_eq!(app.synthetic.len(), 2);
-    assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
+    assert_eq!(app.synthetic.iter().map(|batch| batch.events.len()).sum::<usize>(), 5);
     // Already queued input counts toward the budget.
-    assert!(push_click(&mut app, p, btn, (MAX_QUEUED_SYNTHETIC_EVENTS / 2) as u32, m).is_err());
+    assert!(push_click(&mut app, None, p, btn, (MAX_QUEUED_SYNTHETIC_EVENTS / 2) as u32, m).is_err());
     assert_eq!(app.synthetic.len(), 2);
     // Normal requests still queue in full.
-    assert!(push_drag(&mut app, p, p + egui::vec2(40.0, 40.0), 3, m).is_ok());
+    assert!(push_drag(&mut app, None, p, p + egui::vec2(40.0, 40.0), 3, m).is_ok());
     assert_eq!(app.synthetic.len(), 8);
 }
 
@@ -966,14 +966,116 @@ fn synthetic_text_key_and_move_producers_honour_the_queue_budget() {
     // Event count: keys and moves use the same overall budget as pointer gestures.
     app.synthetic.clear();
     let pos = egui::pos2(1.0, 1.0);
-    app.synthetic.push_back(vec![egui::Event::PointerMoved(pos); MAX_QUEUED_SYNTHETIC_EVENTS - 1]);
+    app.synthetic.push_back(SyntheticBatch::new(None, vec![egui::Event::PointerMoved(pos); MAX_QUEUED_SYNTHETIC_EVENTS - 1]));
     let Outcome::Done(reply) = handle(&mut app, &ctx, "ui.key", &json!({"key":"enter"})) else { panic!("ui.key returns immediately") };
     assert_eq!(reply["ok"], false, "two key events do not fit in the last slot: {reply}");
-    assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), MAX_QUEUED_SYNTHETIC_EVENTS - 1);
+    assert_eq!(app.synthetic.iter().map(|batch| batch.events.len()).sum::<usize>(), MAX_QUEUED_SYNTHETIC_EVENTS - 1);
 
     app.synthetic.clear();
-    app.synthetic.push_back(vec![egui::Event::PointerMoved(pos); MAX_QUEUED_SYNTHETIC_EVENTS]);
+    app.synthetic.push_back(SyntheticBatch::new(None, vec![egui::Event::PointerMoved(pos); MAX_QUEUED_SYNTHETIC_EVENTS]));
     let Outcome::Done(reply) = handle(&mut app, &ctx, "ui.move", &json!({"x":2.0,"y":2.0})) else { panic!("ui.move returns immediately") };
     assert_eq!(reply["ok"], false, "{reply}");
-    assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), MAX_QUEUED_SYNTHETIC_EVENTS);
+    assert_eq!(app.synthetic.iter().map(|batch| batch.events.len()).sum::<usize>(), MAX_QUEUED_SYNTHETIC_EVENTS);
+}
+
+#[test]
+/// A batch queued for a native window outside the root viewport is injected only into that
+/// window's frame, offered again after a pass that did not apply it, and cleared once applied.
+fn synthetic_input_for_another_window_is_injected_only_into_that_windows_frame() {
+    let ctx = sized_context(egui::vec2(400.0, 300.0));
+    let input = SyntheticInput::default();
+    let child = egui::ViewportId::from_hash_of("gridcraft-test-child-window");
+    assert!(input.hand_off(SyntheticBatch::new(None, vec![egui::Event::Text("x".into())]), child));
+    assert!(input.is_pending());
+    assert_eq!(input.viewport(), Some(child));
+    assert_eq!(input.usage(), (1, std::mem::size_of::<egui::Event>() + 1));
+
+    // A frame for `viewport`, with the entry egui requires for it.
+    let frame = |viewport: egui::ViewportId| {
+        let mut raw = egui::RawInput { viewport_id: viewport, ..Default::default() };
+        raw.viewports.entry(viewport).or_default();
+        raw
+    };
+
+    // The root viewport's frame does not receive it.
+    let mut root = frame(egui::ViewportId::ROOT);
+    input.raw_input(&ctx, &mut root);
+    assert!(root.events.is_empty());
+
+    // The target window's frame gets it exactly once.
+    let mut first = frame(child);
+    input.raw_input(&ctx, &mut first);
+    assert_eq!(first.events.len(), 1);
+    let mut second = frame(child);
+    input.raw_input(&ctx, &mut second);
+    assert!(second.events.is_empty(), "one offer per pass");
+
+    // A completed pass that did not apply the step offers it again for a real pass.
+    let _ = ui_pass(&ctx, frame(child), |_| {});
+    let mut again = frame(child);
+    input.raw_input(&ctx, &mut again);
+    assert_eq!(again.events.len(), 1, "a pass that missed input handling does not lose the step");
+
+    // The window's pass applied it: the batch is gone and the next one may follow.
+    input.applied(child, ctx.cumulative_pass_nr_for(child));
+    assert!(!input.is_pending());
+    assert_eq!(input.usage(), (0, 0));
+}
+
+#[test]
+/// A capture is refused while the active window is not the root viewport's: it must never show
+/// another window, and the error names the root window and how to capture it.
+fn screenshot_refuses_a_window_that_is_not_the_root_window() {
+    let ctx = sized_context(egui::vec2(400.0, 300.0));
+    let mut app = test_app();
+    let w1 = app.session.active_window().unwrap();
+    app.run("file.new", json!({})).unwrap();
+    let w2 = app.session.active_window().unwrap();
+    let child = egui::ViewportId::from_hash_of("gridcraft-test-child-window");
+    app.native_windows = true;
+    app.set_native_viewports([(w1, egui::ViewportId::ROOT), (w2, child)].into_iter().collect());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    admit(&mut app, &ctx, None, tx);
+    let reply = rx.try_recv().expect("the capture is refused at admission");
+    assert_eq!(reply["ok"], false, "{reply}");
+    let message = reply["error"].as_str().unwrap();
+    assert!(message.contains("root window") && message.contains("window.activate"), "the error is actionable: {message}");
+    assert!(message.contains(&format!("window {w1}")), "the error names the root window: {message}");
+    assert!(app.shots.requests.is_empty(), "a refused capture reserves nothing");
+
+    // The root window's capture is admitted, bound to that window.
+    app.enter_window(w1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    admit(&mut app, &ctx, None, tx);
+    assert!(rx.try_recv().is_err(), "the root window's capture is admitted");
+    assert_eq!(app.shots.requests.len(), 1);
+    assert_eq!(app.shots.requests[0].window, Some(w1));
+    app.shots.cancel_all();
+}
+
+#[test]
+/// A queued capture is rejected when the active window changes within one workbook: the pixels
+/// would show a window the request did not name.
+fn a_queued_capture_is_rejected_when_the_active_window_changes() {
+    let ctx = sized_context(egui::vec2(400.0, 300.0));
+    let mut app = test_app();
+    let w1 = app.session.active_window().unwrap();
+    app.run("view.newWindow", json!({})).unwrap();
+    let w2 = app.session.active_window().unwrap();
+    let child = egui::ViewportId::from_hash_of("gridcraft-test-child-window");
+    app.native_windows = true;
+    app.set_native_viewports([(w1, egui::ViewportId::ROOT), (w2, child)].into_iter().collect());
+
+    app.enter_window(w1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    admit(&mut app, &ctx, None, tx);
+    app.shots.requests[0].ready_at = 0.0;
+    // The user moves to the workbook's other window while the capture is queued.
+    app.enter_window(w2);
+    let _ = issue_with(&ctx, &mut app, raw_of(egui::vec2(400.0, 300.0)));
+    let reply = rx.try_recv().expect("the changed window is reported once");
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"], SCREENSHOT_WINDOW_CHANGED);
+    assert!(app.shots.requests.is_empty(), "nothing is captured for the other window");
 }

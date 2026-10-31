@@ -29,17 +29,21 @@ mod synthetic;
 
 pub use screenshots::{
     CaptureGeometry, SCREENSHOT_DOCUMENT_CHANGED, SCREENSHOT_MAX_AGGREGATE_BYTES, SCREENSHOT_MAX_BASE64_BYTES, SCREENSHOT_MAX_ENCODING_BYTES,
-    SCREENSHOT_MAX_IMAGE_BYTES, SCREENSHOT_MAX_PEAK_BYTES, SCREENSHOT_MAX_REQUESTS, SCREENSHOT_MAX_RETRIES, SCREENSHOT_VIEWPORT_CHANGED, Shots,
-    UNKNOWN_CAPTURE_BYTES, drain_screenshots, encoding_working_bytes, issue_screenshots, save_image,
+    SCREENSHOT_MAX_IMAGE_BYTES, SCREENSHOT_MAX_PEAK_BYTES, SCREENSHOT_MAX_REQUESTS, SCREENSHOT_MAX_RETRIES, SCREENSHOT_VIEWPORT_CHANGED,
+    SCREENSHOT_WINDOW_CHANGED, Shots, UNKNOWN_CAPTURE_BYTES, drain_screenshots, encoding_working_bytes, issue_screenshots, save_image,
 };
 use screenshots::{Shot, check_encoding_budget, check_peak_budget, reject_shot};
 #[cfg(test)]
 use screenshots::{base64_len, png_worst_bytes, validate_image};
 pub(crate) use screenshots::{current_capture_geometry, note_capture_geometry};
-pub use synthetic::{MAX_QUEUED_SYNTHETIC_BYTES, MAX_QUEUED_SYNTHETIC_EVENTS, MAX_SYNTHETIC_TEXT_BYTES};
+pub use synthetic::{MAX_QUEUED_SYNTHETIC_BYTES, MAX_QUEUED_SYNTHETIC_EVENTS, MAX_SYNTHETIC_TEXT_BYTES, SyntheticBatch, SyntheticInput};
 use synthetic::{cell_center, key_from, modifiers, push_click, push_drag, push_key, push_move, push_text};
 
 pub type ControlResponse = Json;
+
+/// `ui.cell.click`/`ui.cell.drag` aim at the active window's grid, so that window must have drawn
+/// it once (a window created a moment ago draws on its first frame).
+const NO_GRID_YET: &str = "no grid yet: the active window has not drawn its grid (a new window draws it on its first frame); retry";
 
 pub struct ControlRequest {
     pub method: String,
@@ -137,12 +141,23 @@ fn direct(app: &mut SheetApp, id: &str, p: &Json, via_app: bool) -> Result<Json,
     r
 }
 
+/// The content size of the window whose interface state `app` holds (the active window), in
+/// points: the root viewport's own rect, or the active native window's inner rect.
+fn active_window_size(app: &SheetApp, ctx: &egui::Context) -> egui::Vec2 {
+    match app.active_viewport() {
+        Some(viewport) if viewport != egui::ViewportId::ROOT => {
+            ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.inner_rect).map(|r| r.size())).unwrap_or_else(|| ctx.content_rect().size())
+        }
+        _ => ctx.content_rect().size(),
+    }
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
-    let r = ctx.content_rect();
+    let r = active_window_size(app, ctx);
     let v = app.view();
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
-        "window": [r.width(), r.height()],
+        "window": [r.x, r.y],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
@@ -172,6 +187,9 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
 
 /// Dispatches one control request: commands, inspection, UI state, dialogs, editing, synthetic input, open/save/quit and screenshots. Unknown methods (and unknown command ids) return an error. Immediate answers request a repaint; `ui.screenshot` is admitted asynchronously instead of being answered here.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
+    // A command earlier in this batch may have switched windows: the request acts on the window
+    // that is active now, with that window's interface state.
+    app.follow_active_window();
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let out = match method {
@@ -328,7 +346,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
-            match push_key(app, k, modifiers(p)) {
+            let window = app.session.active_window();
+            match push_key(app, window, k, modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
@@ -340,36 +359,43 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             if text.len() > MAX_SYNTHETIC_TEXT_BYTES {
                 return err(format!("text input is {} bytes, over the {MAX_SYNTHETIC_TEXT_BYTES}-byte limit for one event", text.len()));
             }
-            match push_text(app, text.to_string()) {
+            let window = app.session.active_window();
+            match push_text(app, window, text.to_string()) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
         }
-        "ui.move" => match push_move(app, egui::pos2(f("x"), f("y"))) {
-            Ok(()) => ok(Json::Null),
-            Err(e) => err(e),
-        },
+        "ui.move" => {
+            let window = app.session.active_window();
+            match push_move(app, window, egui::pos2(f("x"), f("y"))) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
+        }
         "ui.click" => {
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
-            match push_click(app, egui::pos2(f("x"), f("y")), button, count, modifiers(p)) {
+            let window = app.session.active_window();
+            match push_click(app, window, egui::pos2(f("x"), f("y")), button, count, modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
         }
         "ui.drag" => {
             let steps = p.get("steps").and_then(Json::as_u64).unwrap_or(8).min(u64::from(u32::MAX)) as usize;
-            match push_drag(app, egui::pos2(f("x"), f("y")), egui::pos2(f("toX"), f("toY")), steps, modifiers(p)) {
+            let window = app.session.active_window();
+            match push_drag(app, window, egui::pos2(f("x"), f("y")), egui::pos2(f("toX"), f("toY")), steps, modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
         }
         "ui.cell.click" => {
             let Some(c) = s("cell").and_then(CellRef::parse) else { return err("missing `cell`") };
-            let Some(pos) = cell_center(app, c) else { return err("no grid yet") };
+            let Some(pos) = cell_center(app, c) else { return err(NO_GRID_YET) };
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
-            match push_click(app, pos, button, count, modifiers(p)) {
+            let window = app.session.active_window();
+            match push_click(app, window, pos, button, count, modifiers(p)) {
                 Ok(()) => ok(json!({"x": pos.x, "y": pos.y})),
                 Err(e) => err(e),
             }
@@ -378,18 +404,21 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let (Some(a), Some(b)) = (s("from").and_then(CellRef::parse), s("to").and_then(CellRef::parse)) else {
                 return err("missing `from`/`to`");
             };
-            let (Some(pa), Some(pb)) = (cell_center(app, a), cell_center(app, b)) else { return err("no grid yet") };
-            match push_drag(app, pa, pb, 8, modifiers(p)) {
+            let (Some(pa), Some(pb)) = (cell_center(app, a), cell_center(app, b)) else { return err(NO_GRID_YET) };
+            let window = app.session.active_window();
+            match push_drag(app, window, pa, pb, 8, modifiers(p)) {
                 Ok(()) => ok(Json::Null),
                 Err(e) => err(e),
             }
         }
         "ui.resize" => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(f("width").max(400.0), f("height").max(300.0))));
+            let viewport = app.active_viewport().unwrap_or(egui::ViewportId::ROOT);
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::InnerSize(egui::vec2(f("width").max(400.0), f("height").max(300.0))));
             ok(Json::Null)
         }
         "ui.focus" => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            let viewport = app.active_viewport().unwrap_or(egui::ViewportId::ROOT);
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
         "ui.screenshot" => return Outcome::Screenshot { path: s("path").map(str::to_string) },
@@ -469,6 +498,14 @@ fn next_token(app: &mut SheetApp) -> u64 {
 /// issued. A rejected request gets one error reply and never evicts an earlier request.
 fn admit(app: &mut SheetApp, ctx: &egui::Context, path: Option<String>, reply: Sender<ControlResponse>) {
     let token = next_token(app);
+    // A capture is issued in the root viewport's pass (eframe does not capture immediate
+    // viewports), so it can only show the window in the root viewport. Refuse anything else
+    // instead of capturing another window's pixels.
+    if let Err(message) = capture_refusal(app) {
+        reject_shot(reply, token, message);
+        return;
+    }
+    let window = app.session.active_window();
     let geometry = current_capture_geometry(app, ctx);
     let expected = geometry.expected_size();
     let base64 = path.is_none();
@@ -541,6 +578,7 @@ fn admit(app: &mut SheetApp, ctx: &egui::Context, path: Option<String>, reply: S
         geometry,
         viewport_id: geometry.viewport_id,
         document,
+        window,
         epoch,
         expected,
         bytes,
@@ -556,6 +594,34 @@ fn admit(app: &mut SheetApp, ctx: &egui::Context, path: Option<String>, reply: S
 /// Builds the standard token-carrying timeout reply for a screenshot request.
 fn timeout_reply(message: &str, token: u64) -> Json {
     json!({"ok": false, "error": message, "request": token})
+}
+
+/// Whether `ui.screenshot` can capture the active window, or why not. A capture is issued in the
+/// root viewport's pass (eframe does not capture immediate viewports), so only the window in the
+/// root viewport can be captured; anything else is refused instead of showing another window.
+fn capture_refusal(app: &SheetApp) -> Result<(), String> {
+    let Some(window) = app.session.active_window() else { return Err("screenshot failed: no window is open".into()) };
+    if !app.native_windows || app.native_viewports.is_empty() {
+        return Ok(());
+    }
+    match app.native_viewports.get(&window) {
+        Some(viewport) if *viewport == egui::ViewportId::ROOT => Ok(()),
+        Some(_) => {
+            let root = app
+                .session
+                .windows()
+                .iter()
+                .find(|w| app.native_viewports.get(&w.id) == Some(&egui::ViewportId::ROOT))
+                .map(|w| (w.id, app.session.window_title(w.id).unwrap_or_default()));
+            Err(match root {
+                Some((id, title)) => format!(
+                    "screenshot failed: window {window} is not the root window; ui.screenshot captures only the window in the root viewport (window {id}, {title:?}). Activate it with window.activate {{\"window\":{id}}}."
+                ),
+                None => format!("screenshot failed: window {window} is not in the root viewport; ui.screenshot captures only the root window"),
+            })
+        }
+        None => Err(format!("screenshot failed: window {window} has no native window")),
+    }
 }
 
 #[cfg(test)]
