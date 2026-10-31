@@ -1,5 +1,8 @@
 //! Ribbon access keys through the complete egui input and UI path.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use egui::{Event, Key, Modifiers, PointerButton, os::OperatingSystem};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
@@ -15,15 +18,7 @@ fn harness(session: Session) -> Harness {
 }
 
 fn harness_on(session: Session, os: OperatingSystem) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_os(os).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::common::os_harness(session, os)
 }
 
 fn blank() -> Session {
@@ -267,6 +262,80 @@ fn mouse_press_and_window_focus_loss_cancel_keytips() {
     assert!(h.state().editor.is_none());
 }
 
+fn alt_down(h: &mut Harness, alt: Key) {
+    events(h, [Event::ModifiersChanged(Modifiers::ALT), key_event(alt, true, Modifiers::ALT)]);
+}
+
+fn alt_up(h: &mut Harness, alt: Key) {
+    events(h, [Event::ModifiersChanged(Modifiers::NONE), key_event(alt, false, Modifiers::NONE)]);
+}
+
+fn alt_letter(h: &mut Harness, key: Key) {
+    events(h, [key_event(key, true, Modifiers::ALT), key_event(key, false, Modifiers::ALT)]);
+}
+
+fn line_size(h: &Harness, cols: bool) -> Option<f32> {
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    if cols { &sh.cols } else { &sh.rows }.get(&0).and_then(|e| e.size)
+}
+
+#[test]
+fn letters_typed_with_alt_held_run_autofit_sequences() {
+    // #1846: Excel accepts Alt+H, O, A with Alt still held for the first letter (or all of them).
+    for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
+        let mut s = blank();
+        s.execute("cell.set", json!({"cell": "A1", "input": "a much longer piece of text than the column"})).unwrap();
+        s.execute("home.fontSize", json!({"range": "A1", "size": 28})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:1", "height": 10})).unwrap();
+        s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+        let mut h = harness_on(s, os);
+
+        // Alt held through H, O and I: AutoFit Column Width.
+        alt_down(&mut h, Key::AltLeft);
+        alt_letter(&mut h, Key::H);
+        assert_eq!(h.state().keytips.prefix(), Some("H"), "{os:?}: Alt+H opens the Home keytips");
+        alt_letter(&mut h, Key::O);
+        alt_letter(&mut h, Key::I);
+        alt_up(&mut h, Key::AltLeft);
+        assert_eq!(h.state().keytips.prefix(), None, "{os:?}");
+        assert!(line_size(&h, true).is_some_and(|w| w > 100.0), "{os:?}: column A was autofitted");
+
+        // Alt released after H: AutoFit Row Height.
+        alt_down(&mut h, Key::AltLeft);
+        alt_letter(&mut h, Key::H);
+        alt_up(&mut h, Key::AltLeft);
+        assert_eq!(h.state().keytips.prefix(), Some("H"), "{os:?}: releasing Alt keeps the level");
+        letter(&mut h, Key::O, false);
+        letter(&mut h, Key::A, false);
+        assert!(line_size(&h, false).is_some_and(|r| r > 10.0), "{os:?}: row 1 was autofitted");
+        assert_eq!(value(&h, "A1"), Value::Text("a much longer piece of text than the column".into()));
+        assert!(h.state().editor.is_none(), "{os:?}: no letter reached the grid");
+    }
+}
+
+#[test]
+fn alt_combinations_outside_a_sequence_still_cancel_keytips() {
+    let mut h = harness_on(blank(), OperatingSystem::Windows);
+    alt_down(&mut h, Key::AltLeft);
+    alt_letter(&mut h, Key::X);
+    alt_up(&mut h, Key::AltLeft);
+    assert_eq!(h.state().keytips.prefix(), None, "X starts no sequence");
+
+    // AltGr types characters (and is Ctrl+Alt on Windows): it never starts keytips.
+    let mut h = harness_on(blank(), OperatingSystem::Nix);
+    alt_down(&mut h, Key::AltRight);
+    alt_letter(&mut h, Key::H);
+    alt_up(&mut h, Key::AltRight);
+    assert_eq!(h.state().keytips.prefix(), None);
+
+    // macOS: Option is a text modifier (see #1864).
+    let mut h = harness_on(blank(), OperatingSystem::Mac);
+    alt_down(&mut h, Key::AltLeft);
+    alt_letter(&mut h, Key::H);
+    alt_up(&mut h, Key::AltLeft);
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
 #[test]
 fn held_keys_do_not_toggle_twice_or_leak_repeated_letters() {
     let mut h = harness(blank());
@@ -314,6 +383,25 @@ fn tab_letters_switch_to_their_ribbon_tabs() {
     letter(&mut h, Key::I, false);
     assert_eq!(h.state().ui.ribbon_tab, "Draw");
     assert_eq!(h.state().keytips.prefix(), None, "terminal tab units finish cleanly");
+}
+
+#[test]
+fn f_opens_the_file_view_and_its_letters_still_run() {
+    use gridcraft_ui_egui::backstage::Page;
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::F], false);
+    assert_eq!(h.state().backstage.as_ref().map(|b| b.page), Some(Page::Home), "F opens the File view on Home");
+    assert_eq!(h.state().keytips.prefix(), Some("F"));
+    // Esc backs out one level: the File view closes and the tab letters show again.
+    key(&mut h, Key::Escape);
+    assert!(h.state().backstage.is_none());
+    assert_eq!(h.state().keytips.prefix(), Some(""));
+    letter(&mut h, Key::F, false);
+    assert!(h.state().backstage.is_some());
+    letter(&mut h, Key::N, false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.new"), "F, N still runs New");
+    assert!(h.state().backstage.is_none(), "the command runs on the sheet, as before the view opened");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -495,7 +583,10 @@ fn editable_combos_filter_by_typing_and_move_by_arrows() {
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "custom sizes must apply");
-    assert_eq!(h.query_all_by_label("13.5").count(), 1, "the button must show the custom size");
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.value().as_deref() == Some("13.5")),
+        "the size box must show the custom size"
+    );
 
     // Closing without applying (Escape) and reopening must reset the filter to the full list.
     let mut h = harness(blank());
@@ -549,4 +640,131 @@ fn every_sequence_terminates_without_panicking() {
         // A finish/tab/dialog/wait state is all fine; the point is nothing panics.
     }
     assert_eq!(SEQUENCES.len(), SEQUENCES.len(), "every sequence ran");
+}
+
+/// The font list's highlight is a position in the filtered rows (#1365): with "ar" typed the rows
+/// are Aptos Narrow, Arial, Candara, Garamond, and the highlight starts on the current font's
+/// row (index 3, clamped to the filtered list). Down twice lands on the second row, Arial. Clearing
+/// the filter brings the other fonts back.
+#[test]
+fn font_dropdown_highlight_follows_the_filtered_rows() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    h.run_steps(3);
+    events(&mut h, [Event::Text("ar".into())]);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Georgia").count(), 0, "typing must narrow the list");
+    key(&mut h, Key::ArrowDown);
+    key(&mut h, Key::ArrowDown);
+    key(&mut h, Key::Enter);
+    h.run_steps(3);
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let name = d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).font.name.clone();
+    assert_eq!(name, "Arial", "the highlight is the second filtered row, not a full-list index");
+
+    // Clearing the filter shows the whole list again.
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    h.run_steps(3);
+    events(&mut h, [Event::Text("ar".into())]);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Georgia").count(), 0);
+    key(&mut h, Key::Backspace);
+    key(&mut h, Key::Backspace);
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Georgia").count() >= 1, "an emptied filter lists every font again");
+}
+
+fn borders(h: &Harness, cell: &str) -> gridcraft_engine::model::Borders {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    d.wb.styles.get(sh.style_id(CellRef::parse(cell).unwrap())).borders
+}
+
+/// [left, right, top, bottom] line styles of `cell`.
+fn sides(h: &Harness, cell: &str) -> [gridcraft_engine::model::BorderStyle; 4] {
+    let b = borders(h, cell);
+    [b.left.style, b.right.style, b.top.style, b.bottom.style]
+}
+
+fn selected(range: &str) -> Session {
+    let mut s = blank();
+    s.execute("selection.set", json!({"range": range})).unwrap();
+    s
+}
+
+#[test]
+fn border_keytips_apply_their_own_preset() {
+    use gridcraft_engine::model::BorderStyle::{Double, None as N, Thick, Thin};
+    // Alt, H, B, letter on A1 alone: each Borders menu letter draws its own preset (they all drew
+    // a bare bottom border before). Letters observed in Excel's Borders menu.
+    for (k, want) in [
+        (Key::O, [N, N, N, Thin]),
+        (Key::P, [N, N, Thin, N]),
+        (Key::L, [Thin, N, N, N]),
+        (Key::R, [N, Thin, N, N]),
+        (Key::A, [Thin, Thin, Thin, Thin]),
+        (Key::S, [Thin, Thin, Thin, Thin]),
+        (Key::T, [Thick, Thick, Thick, Thick]),
+        (Key::B, [N, N, N, Double]),
+        (Key::H, [N, N, N, Thick]),
+        (Key::D, [N, N, Thin, Thin]),
+        (Key::C, [N, N, Thin, Thick]),
+        (Key::U, [N, N, Thin, Double]),
+    ] {
+        let mut h = harness(selected("A1"));
+        sequence(&mut h, &[Key::H, Key::B, k], false);
+        assert!(h.state().message.is_none() && h.state().toast.is_none(), "H,B,{k:?} must run cleanly");
+        assert_eq!(sides(&h, "A1"), want, "H,B,{k:?}");
+    }
+}
+
+#[test]
+fn border_keytip_no_border_clears_a_bordered_cell() {
+    use gridcraft_engine::model::BorderStyle::None as N;
+    let mut s = selected("A1");
+    s.execute("home.borders", json!({"range": "A1", "preset": "all"})).unwrap();
+    let mut h = harness(s);
+    sequence(&mut h, &[Key::H, Key::B, Key::N], false);
+    assert_eq!(sides(&h, "A1"), [N, N, N, N], "H,B,N must clear every side, not add a bottom border");
+    assert_eq!(h.state().grid.last_border, "none", "the picked preset becomes the Borders button's face");
+}
+
+#[test]
+fn border_keytip_all_borders_covers_every_side_of_a_block() {
+    use gridcraft_engine::model::BorderStyle::Thin;
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::A], false);
+    for cell in ["A1", "B1", "A2", "B2"] {
+        assert_eq!(sides(&h, cell), [Thin; 4], "H,B,A must border every side of {cell}");
+    }
+}
+
+#[test]
+fn border_keytip_outside_borders_skips_the_inside_edges() {
+    use gridcraft_engine::model::BorderStyle::{None as N, Thin};
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::S], false);
+    assert_eq!(sides(&h, "A1"), [Thin, N, Thin, N]);
+    assert_eq!(sides(&h, "B2"), [N, Thin, N, Thin]);
+}
+
+#[test]
+fn border_keytip_more_borders_opens_format_cells_on_the_border_tab() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::B, Key::M], false);
+    let d = h.state().dialog.as_ref().expect("H,B,M opens Format Cells");
+    assert_eq!(d.tab, "Border");
+}
+
+#[test]
+fn border_keytips_without_a_command_stay_silent() {
+    // Erase Border (a pen mode), Line Color and Line Style are reserved: no border is drawn.
+    for k in [Key::E, Key::I, Key::Y] {
+        let mut h = harness(selected("A1"));
+        sequence(&mut h, &[Key::H, Key::B, k], false);
+        assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");
+        assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
+    }
 }

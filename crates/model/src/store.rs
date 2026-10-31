@@ -13,6 +13,10 @@ use crate::cell::Cell;
 
 const BAND: u32 = 64;
 
+fn has_value(cell: &Cell) -> bool {
+    !cell.value.is_empty() || cell.formula.is_some()
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Band {
     /// row → (col → cell)
@@ -57,6 +61,28 @@ impl CellStore {
             self.len += 1;
         }
     }
+    /// Puts every cell in the band its row says and recounts the length — serialized band keys
+    /// and the cached count are derived state, and the ones a file carries are not trusted. Cells
+    /// outside the sheet grid are dropped; returns how many (#1008).
+    pub fn rebuild(&mut self) -> usize {
+        let mut out = CellStore::new();
+        let mut dropped = 0;
+        for (_, band) in std::mem::take(&mut self.bands) {
+            for (row, cols) in band.rows.iter() {
+                for (col, cell) in cols.iter() {
+                    let at = CellRef::new(*row, *col);
+                    if at.is_valid() {
+                        out.set(at, cell.clone());
+                    } else {
+                        dropped += 1;
+                    }
+                }
+            }
+        }
+        *self = out;
+        dropped
+    }
+
     pub fn remove(&mut self, c: CellRef) -> Option<Cell> {
         let key = c.row / BAND;
         let band = self.bands.get_mut(&key)?;
@@ -118,7 +144,44 @@ impl CellStore {
     }
     /// Last stored row in column `col` at or above `below_or_at` (for Ctrl+arrow navigation).
     pub fn has(&self, c: CellRef) -> bool {
-        self.get(c).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some())
+        self.get(c).is_some_and(has_value)
+    }
+    /// Last row (inclusive, capped at `cap`) of the maximal run of contiguous rows at or after
+    /// `from.row` that store a cell in `from.col` with a non-empty *value* in `from.col`. `None`
+    /// when `from` itself doesn't qualify.
+    ///
+    /// Deliberately narrower than `has`/`get` (which also count a formula with no cached value
+    /// yet, for Ctrl+arrow navigation): this matches `Sheet::value_ref`, whose callers test the
+    /// `Value` it returns with `!v.is_empty()` regardless of whether a formula produced it — a
+    /// formula cell with an empty cached value (`=""`, or not yet recalculated) is "empty" to
+    /// them. A stored cell with no value and no formula (for example a formatted spill child) does
+    /// fall through to `spill` in `value_ref`, so `last_contiguous_nonempty` asks `value_ref`
+    /// about the row where this run stops.
+    ///
+    /// Walks each band's row map with `BTreeMap::range` (one in-order pass per band) instead of
+    /// one `get` per row, so a long, densely-populated run costs roughly one tree-traversal step
+    /// per row rather than one binary search per row.
+    pub fn contiguous_value_run(&self, from: CellRef, cap: u32) -> Option<u32> {
+        let mut last = None;
+        let mut expect = from.row;
+        while expect <= cap {
+            let band_key = expect / BAND;
+            let Some(band) = self.bands.get(&band_key) else { break };
+            let band_hi = ((band_key + 1) * BAND - 1).min(cap);
+            let mut advanced = false;
+            for (r, cols) in band.rows.range(expect..=band_hi) {
+                if *r != expect || cols.get(&from.col).is_none_or(|c| c.value.is_empty()) {
+                    return last;
+                }
+                last = Some(expect);
+                expect += 1;
+                advanced = true;
+            }
+            if !advanced {
+                break;
+            }
+        }
+        last
     }
     /// Positions whose cells differ between `self` and `other` (stored on one side only, or not
     /// equal). Bands both stores share are skipped, so comparing an edited copy with the store
@@ -153,6 +216,55 @@ impl CellStore {
             }
         }
         out
+    }
+    /// Approximate heap storage kept alive by this snapshot's bands that `newer` no longer
+    /// shares. This is for bounding Undo history, not for reporting process memory: BTreeMap
+    /// nodes and allocator overhead vary by platform. Shared formulas and values are counted
+    /// only when the newer band no longer holds the same Arc.
+    pub fn retained_bytes_against(&self, newer: &CellStore) -> usize {
+        use std::mem::size_of;
+
+        let mut bytes = 0usize;
+        for (key, band) in &self.bands {
+            let next = newer.bands.get(key);
+            if next.is_some_and(|b| Arc::ptr_eq(b, band)) {
+                continue;
+            }
+            bytes = bytes.saturating_add(size_of::<Band>());
+            for (row, cols) in &band.rows {
+                bytes = bytes.saturating_add(size_of::<u32>() + 3 * size_of::<usize>());
+                for (col, cell) in cols {
+                    // Cells and BTreeMap nodes are duplicated with a cloned band even when
+                    // their formula/value Arcs are still shared with the next snapshot.
+                    bytes = bytes.saturating_add(size_of::<u32>() + size_of::<Cell>() + 3 * size_of::<usize>());
+                    let next_cell = next.and_then(|b| b.rows.get(row)).and_then(|r| r.get(col));
+                    if let Some(formula) = &cell.formula
+                        && !next_cell.and_then(|c| c.formula.as_ref()).is_some_and(|f| Arc::ptr_eq(f, formula))
+                    {
+                        bytes = bytes.saturating_add(size_of::<crate::cell::Formula>() + formula.text.len());
+                        if let Some(expr) = &formula.expr {
+                            expr.walk(&mut |_| bytes = bytes.saturating_add(size_of::<gridcraft_formula::Expr>()));
+                        }
+                    }
+                    match &cell.value {
+                        gridcraft_core::Value::Text(text)
+                            if !next_cell.and_then(|c| c.value.as_text()).is_some_and(|t| std::ptr::eq(t, text.as_ref())) =>
+                        {
+                            bytes = bytes.saturating_add(text.len());
+                        }
+                        gridcraft_core::Value::Array(array)
+                            if !next_cell.is_some_and(|c| matches!(&c.value, gridcraft_core::Value::Array(a) if Arc::ptr_eq(a, array))) =>
+                        {
+                            bytes = bytes.saturating_add(
+                                size_of::<gridcraft_core::Array>() + array.data.len().saturating_mul(size_of::<gridcraft_core::Value>()),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        bytes
     }
     /// Removes every cell in `r` and returns them.
     pub fn take_range(&mut self, r: RangeRef) -> Vec<(CellRef, Cell)> {
@@ -218,30 +330,32 @@ mod tests {
     }
 
     #[test]
-    fn set_get_remove() {
+    fn set_get_remove() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         s.set(c(0, 0), Cell::value(1.0.into()));
         s.set(c(100, 5), Cell::value("x".into()));
         assert_eq!(s.len(), 2);
         assert_eq!(s.get(c(100, 5)).map(|x| x.value.clone()), Some(Value::from("x")));
-        assert_eq!(s.used_range().unwrap().a1(), "A1:F101");
+        assert_eq!(s.used_range().ok_or("none")?.a1(), "A1:F101");
         s.set(c(0, 0), Cell::default());
         assert_eq!(s.len(), 1);
         assert!(s.remove(c(100, 5)).is_some());
         assert!(s.is_empty());
         assert!(s.used_range().is_none());
+        Ok(())
     }
 
     #[test]
-    fn cow_snapshots() {
+    fn cow_snapshots() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         for r in 0..1000 {
             s.set(c(r, 0), Cell::value((r as f64).into()));
         }
         let snap = s.clone();
         s.set(c(5, 0), Cell::value(99.0.into()));
-        assert_eq!(snap.get(c(5, 0)).unwrap().value, Value::Number(5.0));
-        assert_eq!(s.get(c(5, 0)).unwrap().value, Value::Number(99.0));
+        assert_eq!(snap.get(c(5, 0)).ok_or("none")?.value, Value::Number(5.0));
+        assert_eq!(s.get(c(5, 0)).ok_or("none")?.value, Value::Number(99.0));
+        Ok(())
     }
 
     #[test]
@@ -259,14 +373,16 @@ mod tests {
     }
 
     #[test]
-    fn range_iteration_order() {
+    fn range_iteration_order() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = CellStore::new();
         s.set(c(70, 2), Cell::value(3.0.into()));
         s.set(c(1, 1), Cell::value(1.0.into()));
         s.set(c(1, 3), Cell::value(2.0.into()));
         s.set(c(500, 0), Cell::value(4.0.into()));
-        let v: Vec<f64> = s.iter_range(RangeRef::parse("A1:D100").unwrap()).map(|(_, x)| x.value.as_f64().unwrap()).collect();
+        let v: Vec<f64> =
+            s.iter_range(RangeRef::parse("A1:D100").ok_or("none")?).map(|(_, x)| x.value.as_f64()).collect::<Option<_>>().ok_or("none")?;
         assert_eq!(v, [1.0, 2.0, 3.0]);
+        Ok(())
     }
 
     #[test]

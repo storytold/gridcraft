@@ -124,8 +124,9 @@ fn mime_for(name: &str) -> &'static str {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
-    for a in &x.children {
+    for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
+        let n = n + 1;
         // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
         // fallback.
         let objs: Vec<&El> = a
@@ -156,13 +157,16 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data, mime: mime_for(&target).to_string(), alt });
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
                     let uri = gd.attr("uri").unwrap_or("");
                     if let Some(rid) = gd.child("chart").and_then(|c| c.attr("id")) {
-                        let Some(rel) = rels.iter().find(|r| r.id == rid) else { continue };
+                        let Some(rel) = rels.iter().find(|r| r.id == rid) else {
+                            cx.warn(format!("a chart without its chart part was skipped ({part}, object {n})"));
+                            continue;
+                        };
                         let target = rel.target.clone();
                         if let Some(cx_xml) = cx.optional_xml(&target)? {
                             let chartex = uri.contains("chartex");
@@ -174,11 +178,13 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                 }
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
                             }
+                        } else {
+                            cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
                         }
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
-                        cx.warn("a histogram, waterfall, treemap… chart without its chart part was skipped");
+                        cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
                     } else {
-                        cx.warn("an embedded object (SmartArt, OLE…) was skipped");
+                        cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
                     }
                 }
                 "sp" | "cxnSp" => {
@@ -187,7 +193,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         sheet.shapes.push(Shape { id, ..s });
                     }
                 }
-                "grpSp" => cx.warn("grouped shapes are not supported and were skipped"),
+                "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
                 _ => {}
             }
         }
@@ -228,8 +234,8 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
-/// alignment (`a:pPr algn`) and the first run's properties (`a:rPr`: size, bold, italic, fill,
-/// outline, `a:latin` typeface).
+/// alignment and direction (`a:pPr algn`, `rtl`) and the first run's properties (`a:rPr`: size,
+/// bold, italic, fill, outline, `a:latin` typeface).
 fn read_text_format(body: Option<&El>) -> ShapeFormat {
     let mut f = ShapeFormat::default();
     let Some(body) = body else { return f };
@@ -238,12 +244,13 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         "b" => ShapeTextAnchor::Bottom,
         _ => ShapeTextAnchor::Top,
     });
-    let first_p = body.kids("p").next();
-    f.align = first_p.and_then(|p| p.child("pPr")).and_then(|p| p.attr("algn")).map(|a| match a {
+    let ppr = body.kids("p").next().and_then(|p| p.child("pPr"));
+    f.align = ppr.and_then(|p| p.attr("algn")).map(|a| match a {
         "ctr" => ShapeTextAlign::Center,
         "r" => ShapeTextAlign::Right,
         _ => ShapeTextAlign::Left,
     });
+    f.rtl = ppr.is_some_and(|p| p.flag("rtl", false));
     let rpr = body.kids("p").flat_map(|p| p.kids("r")).find_map(|r| r.child("rPr"));
     if let Some(r) = rpr {
         // `sz` is in hundredths of a point (100..=400000 in the schema).
@@ -415,12 +422,14 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                         None => "",
                     };
                     let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
-                    let ppr = match f.align {
+                    let algn = match f.align {
                         None => "",
-                        Some(ShapeTextAlign::Left) => "<a:pPr algn=\"l\"/>",
-                        Some(ShapeTextAlign::Center) => "<a:pPr algn=\"ctr\"/>",
-                        Some(ShapeTextAlign::Right) => "<a:pPr algn=\"r\"/>",
+                        Some(ShapeTextAlign::Left) => " algn=\"l\"",
+                        Some(ShapeTextAlign::Center) => " algn=\"ctr\"",
+                        Some(ShapeTextAlign::Right) => " algn=\"r\"",
                     };
+                    let rtl = if f.rtl { " rtl=\"1\"" } else { "" };
+                    let ppr = if algn.is_empty() && rtl.is_empty() { String::new() } else { format!("<a:pPr{algn}{rtl}/>") };
                     let (rpr_attrs, rpr_body) = run_props(f, theme);
                     for line in sh.text.split('\n') {
                         if line.is_empty() {

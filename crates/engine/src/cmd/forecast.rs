@@ -11,7 +11,7 @@ use gridcraft_functions::Timeline;
 use gridcraft_model::{Anchor, Cell, Chart, ChartKind, Formula, LegendPos, Series, Sheet, StyleId, Table, TableColumn, TotalsFn};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, split_sheet, str_param};
 use crate::selection::current_region;
 
 const CMD: &str = "data.forecastSheet";
@@ -68,7 +68,7 @@ fn range_on(s: &Session, t: &str) -> Result<(usize, RangeRef)> {
     let (sh, body) = split_sheet(t);
     let si = match sh {
         Some(n) => d.wb.sheet_index(&n).ok_or_else(|| bad(CMD, format!("no sheet named `{n}`")))?,
-        None => d.wb.active_sheet,
+        None => d.wb.active_sheet(),
     };
     let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(CMD, format!("not a range: `{t}`")))?;
     let r = if r.is_full_cols() || r.is_full_rows() {
@@ -101,7 +101,7 @@ fn source(s: &Session, p: &Json) -> Result<(usize, Vec<CellRef>, Vec<CellRef>)> 
                 None => {
                     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
                     let sel = d.selection.current();
-                    (d.wb.active_sheet, if sel.is_single() { current_region(sh, d.selection.active) } else { sel })
+                    (d.wb.active_sheet(), if sel.is_single() { current_region(sh, d.selection.active) } else { sel })
                 }
             };
             if r.width() < 2 {
@@ -307,7 +307,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let stats_col = width + 1;
     let chart_col = if opts.statistics { stats_col + 3 } else { width + 1 };
 
-    let at = s.doc()?.wb.active_sheet;
+    let at = s.doc()?.wb.active_sheet();
     let index = edit(s, |cx| {
         let at = at.min(cx.wb.sheets.len());
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
@@ -411,6 +411,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 color: None,
                 secondary: false,
                 kind: (opts.column_chart && c >= 3).then_some(ChartKind::Line),
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             })
@@ -439,7 +440,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 *sc += 1;
             }
         }
-        cx.wb.active_sheet = at;
+        cx.wb.set_active_sheet(at);
         *cx.sel = crate::Selection::at(CellRef::new(0, 0));
         cx.structural = true;
         Ok(at)
@@ -501,7 +502,7 @@ mod tests {
         assert_eq!(r["periods"], 4);
         let wb = &s.doc().unwrap().wb;
         // Inserted before the data sheet and activated.
-        assert_eq!(wb.active_sheet, 0);
+        assert_eq!(wb.active_sheet(), 0);
         let sh = wb.sheet(0).unwrap();
         assert_eq!(sh.name, r["sheet"].as_str().unwrap());
         assert_eq!(value(&s, 0, "C1"), Value::text("Forecast(Sales)"));

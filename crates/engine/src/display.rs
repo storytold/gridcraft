@@ -33,6 +33,25 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
     format_value(v, &parsed(code), wb.date_system)
 }
 
+/// Whether typing `t` back into a General cell would not give the text `t` again (it would parse
+/// as a number, boolean, error, date or formula, or lose a leading apostrophe). Such text is shown
+/// for editing with a leading `'`, as Excel does for text carrying a quote prefix, so that
+/// committing the editor unchanged keeps the cell as text.
+fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bool {
+    if t.is_empty() {
+        return false;
+    }
+    let mut chars = t.chars();
+    let (first, second) = (chars.next(), chars.next());
+    if matches!(first, Some('=' | '\'')) {
+        return true;
+    }
+    if matches!(first, Some('+' | '-')) && second.is_some_and(|c| c.is_ascii_alphabetic() || c == '(') {
+        return true;
+    }
+    !matches!(gridcraft_core::parse::parse_input(t, sys).value, Value::Text(ref x) if x.as_ref() == t)
+}
+
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
 /// constant number in a date or time format is shown as a date (as the grid shows it), not as its
 /// serial. When the formatted text would not read back as the same date (for example
@@ -41,6 +60,13 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
+    if let Value::Text(t) = &cell.value
+        && cell.formula.is_none()
+        && wb.styles.get(cell.style).num_fmt.as_str() != "@"
+        && text_needs_quote_prefix(t, wb.date_system)
+    {
+        return format!("'{raw}");
+    }
     let Value::Number(n) = &cell.value else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
     if cell.formula.is_some() || !parsed(code).is_date() {
@@ -95,7 +121,13 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// and no General narrowing (Save As CSV/Text writes this). Formulas give their result.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format(&sheet.value(c), style.num_fmt.as_str(), wb);
+    value_text_as(wb, &sheet.value(c), style.num_fmt.as_str())
+}
+
+/// [`value_text`] for a value and a format code given apart from a cell (print takes the code
+/// from the cell's effective look, which a conditional format can override).
+pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    let f = format(v, code, wb);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;

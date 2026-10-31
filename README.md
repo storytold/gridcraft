@@ -7,14 +7,18 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png" width="128" height="128" alt="GridCraft icon: a spreadsheet page on a green tile">
+</p>
+
 <h1 align="center">GridCraft</h1>
 
 <p align="center">
-  <b>Spreadsheets and data; an open-source, clean-room reimplementation of Microsoft Excel, rebuilt in pure Rust.</b>
+  <b>Spreadsheets and data; an open-source, high-performance modern spreadsheet application, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  A fast, open-source, clean-room take on the Excel workflow. It runs natively on macOS,
+  A fast, open-source, clean-room take on modern spreadsheet workflows. It runs natively on macOS,
   Windows, Linux and BSD, and in the browser via WebAssembly.<br>
   <i>By the ArtCraft team.</i>
 </p>
@@ -24,6 +28,9 @@
   <img alt="Runs on macOS, Windows, Linux, BSD and the web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20BSD%20%C2%B7%20Web-1f9d55?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-147a40?style=flat-square">
   <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP-1f9d55?style=flat-square">
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_gridcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/gridcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -67,8 +74,8 @@
 <td width="50%" valign="top"><img src="docs/images/grades-formulas.png" alt="A gradebook table with averages and letter grades computed with IFS, green highlights on A grades and data bars, with the Formulas ribbon tab open showing the function library" width="100%"><p align="center"><sub><b>Formulas.</b> 500+ functions, dynamic arrays, LET and LAMBDA, structured table references.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/dark-insert.png" alt="The sales dashboard in dark mode with the Insert ribbon tab open, showing PivotTable, Table, Pictures, Shapes, chart, sparkline, link, comment, text box and symbol buttons" width="100%"><p align="center"><sub><b>Dark mode</b> and the Insert tab: tables, charts, sparklines, pictures, shapes, links and comments.</sub></p></td>
-<td width="50%" valign="top"><img src="docs/images/pivot.png" alt="A PivotTable summarising revenue by region and product with a Channel report filter, grand totals and currency formatting, with the PivotTable Fields pane open on the right showing ticked fields and the Filters, Columns, Rows and Values areas" width="100%"><p align="center"><sub><b>PivotTables.</b> Field list, filters, layouts, date grouping and show-values-as, saved to and read from XLSX.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/images/dark-insert.png" alt="The sales dashboard in dark mode with the Insert ribbon tab open, showing Pivot Table, Table, Pictures, Shapes, chart, sparkline, link, comment, text box and symbol buttons" width="100%"><p align="center"><sub><b>Dark mode</b> and the Insert tab: tables, charts, sparklines, pictures, shapes, links and comments.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/images/pivot.png" alt="A pivot table summarising revenue by region and product with a Channel report filter, grand totals and currency formatting, with the Pivot Table Fields pane open on the right showing ticked fields and the Filters, Columns, Rows and Values areas" width="100%"><p align="center"><sub><b>Pivot tables.</b> Field list, filters, layouts, date grouping and show-values-as, saved to and read from XLSX.</sub></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="docs/images/format-chart.png" alt="The sales dashboard with the column chart selected: resize handles on the chart, its source data outlined in the table, the Chart Design tab open and the Format Chart Area pane on the right" width="100%"><p align="center"><sub><b>Charts.</b> Seventeen chart types, Chart Design tab and a Format pane; selecting a chart outlines its source data.</sub></p></td>
@@ -78,19 +85,19 @@
 
 ## Why GridCraft
 
-- **Familiar.** Excel's ribbon, formula bar, Name Box, sheet tabs, keyboard shortcuts, fill
-  handle, point-mode formula entry with coloured references, Format Cells, Paste Special,
-  conditional formatting, tables, charts and more. If you know Excel, you already know GridCraft.
+- **Familiar.** Ribbon, formula bar, Name Box, sheet tabs, keyboard shortcuts, fill handle,
+  point-mode formula entry with coloured references, Format Cells, Paste Special,
+  conditional formatting, tables, charts and more. Everything is right where you expect it.
 - **Compatible.** XLSX is the native format: styles, themes, formulas (including dynamic arrays),
   tables, conditional formats, validation, comments, hyperlinks, charts, pictures, sparklines,
-  PivotTables and print settings round-trip. CSV and TSV too.
-  Excel 97-2003 `.xls` workbooks open with their values, formulas and number formats (formatting and objects not yet).
+  pivot tables and print settings round-trip. CSV and TSV too.
+  Legacy 97-2003 `.xls` workbooks open with their values, formulas and number formats (formatting and objects not yet).
   [XLSB worksheet data can be imported](docs/xlsb-import.md), using saved values instead of formulas.
   [ODS worksheet data can be imported](docs/ods-import.md), using saved values instead of formulas.
   [Static pictures can live inside cells](docs/cell-pictures.md), fitting their size and moving with the data.
 - **Capable.** A dependency-graph calculation engine with dynamic arrays and spilling,
   500+ worksheet functions plus LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY,
-  structured table references, Excel's full number-format language, sort and AutoFilter,
+  structured table references, a comprehensive number-format language, sort and AutoFilter,
   Flash Fill, data validation, outlining and subtotals.
 - **Fast.** Copy-on-write workbooks (undo snapshots are nearly free), incremental recalculation,
   and a virtualised grid that only lays out what's on screen.
@@ -119,7 +126,7 @@ cd apps/gridcraft-web && trunk build --release     # → dist/web (serve it with
 cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sample=sales opens a sample)
 ```
 
-You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
+You need [trunk](https://trunk-rs.github.io/trunk/) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
 
 ### Ribbon access keys
@@ -187,7 +194,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 | L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) |
 | L3 | `chart` (toolkit-free chart layout and rendering) |
 | L5 | `engine` (session, commands, history, clipboard, fill, sort, filter, file I/O) |
-| L6 | `ui-egui` (Excel-style UI, control channel) · `mcp` (MCP server) |
+| L6 | `ui-egui` (spreadsheet UI, control channel) · `mcp` (MCP server) |
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` |
 
 - **Contributor and agent rules** (clean-room, asset policy, never-crash, quality gates): [`AGENTS.md`](AGENTS.md)
@@ -197,9 +204,9 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 ## Roadmap
 
 GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
-compatibility are still rough. It covers 89% of the Excel ribbon commands in our catalog
-([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 of Excel's 523 worksheet functions
-([`docs/function-parity.md`](docs/function-parity.md)); weighted by what Excel users rely on, we
+compatibility are still rough. It covers 89% of standard ribbon commands in our catalog
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 standard worksheet functions
+([`docs/function-parity.md`](docs/function-parity.md)); this is a parity inventory, not a count of working implementations. Weighted by what spreadsheet users rely on, we
 estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large
 workbooks and multi-threaded recalc, chart depth, text in every script, and `.xls` import. Stage,
 numbers and estimates are in [ROADMAP.md](ROADMAP.md); the ranked work list is [`docs/gaps.md`](docs/gaps.md).
@@ -236,7 +243,7 @@ bring back a crash in some Intel UHD Graphics drivers (`igvk64.dll`, #120). The 
 web backend defaults are unchanged.
 
 **If the app is slow on an older Windows PC, or DirectX 12 can't start:** when DirectX 12 finds no
-graphics card with a driver for it, it only offers Microsoft's software renderer, which draws every
+graphics card with a driver for it, it only offers the Windows-provided software renderer, which draws every
 frame on the processor. In that case GridCraft uses OpenGL instead, without setting anything; if
 the first renderer fails to start, it tries the other one once. The log file records the choice
 (lines starting with `graphics:`). `WGPU_BACKEND` still overrides it (and then nothing else is
@@ -333,8 +340,6 @@ The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are tradem
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and GridCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Microsoft, Excel and Microsoft 365 are trademarks or registered trademarks of Microsoft Corporation in the United States and/or other countries. GridCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Microsoft Corporation; these names are used only to describe the workflows it is compatible with.</sub>
 
 <br>
 

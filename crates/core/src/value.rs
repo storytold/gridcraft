@@ -245,7 +245,7 @@ impl Value {
             Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Text(t) => Ok(t.to_string()),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_text()).unwrap_or(Ok(String::new())),
+            Value::Array(a) => a.data.first().map(Value::to_text).unwrap_or(Ok(String::new())),
         }
     }
     /// Coercion to a boolean as `IF` does it.
@@ -264,7 +264,7 @@ impl Value {
                 }
             }
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_bool()).unwrap_or(Ok(false)),
+            Value::Array(a) => a.data.first().map(Value::to_bool).unwrap_or(Ok(false)),
         }
     }
     /// Display text with General formatting (for logs, CSV and tests).
@@ -359,6 +359,10 @@ pub fn number_to_text(n: f64) -> String {
     if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
         return sci_text(n, 15);
     }
+    // A value just below 1e15 can round up to 1e15 at 15 significant digits.
+    if format!("{:.14e}", a).parse::<f64>().is_ok_and(|r| r >= 1e15) {
+        return sci_text(n, 15);
+    }
     // 15 significant digits, trailing zeros trimmed.
     let mag = a.log10().floor() as i32;
     let decimals = (14 - mag).clamp(0, 30) as usize;
@@ -403,6 +407,13 @@ mod tests {
     }
 
     #[test]
+    fn number_text_rounds_up_to_scientific_boundary() {
+        assert_eq!(number_to_text(999999999999999.9), "1E+15");
+        assert_eq!(number_to_text(-999999999999999.9), "-1E+15");
+        assert_eq!(number_to_text(999999999999999.0), "999999999999999");
+    }
+
+    #[test]
     fn coercion() {
         assert_eq!(Value::from("12").to_number(), Ok(12.0));
         assert_eq!(Value::from(" 1,234.5 ").to_number(), Ok(1234.5));
@@ -443,11 +454,12 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }

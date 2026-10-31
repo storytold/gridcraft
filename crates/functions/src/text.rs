@@ -5,8 +5,8 @@ use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::criteria::wildcard_find;
 use crate::util::{
-    A, MAX_CELLS, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar, text,
-    text_val,
+    A, MAX_CELLS, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, int, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar,
+    text, text_val,
 };
 use crate::{Arg, Ctx, FnSpec, VAR};
 
@@ -334,6 +334,8 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             if seen_dec {
                 return Err(CellError::Value);
             }
+        } else if c == '.' || c == ',' {
+            return Err(CellError::Value);
         } else {
             out.push(c);
         }
@@ -409,10 +411,11 @@ const THAI_DIGITS: [&str; 10] = ["ศูนย์", "หนึ่ง", "สอ�
 const THAI_PLACES: [&str; 6] = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
 
 /// Thai words for a group of up to six decimal digits (most significant first); empty for zero.
-/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด.
-fn thai_group(digits: &[u8]) -> String {
+/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด; `after`
+/// says the number already has a non-zero digit in a higher group (so 1,000,001 ends in เอ็ด).
+fn thai_group(digits: &[u8], after: bool) -> String {
     let n = digits.len();
-    let higher = digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
+    let higher = after || digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
     let mut out = String::new();
     for (i, &d) in digits.iter().enumerate() {
         let place = n - 1 - i;
@@ -445,7 +448,7 @@ fn thai_number(digits: &str) -> String {
     let mut start = 0;
     let mut len = first;
     while let Some(group) = d.get(start..start + len) {
-        out.push_str(&thai_group(group));
+        out.push_str(&thai_group(group, start > 0));
         start += len;
         len = 6;
         if start < d.len() {
@@ -505,19 +508,36 @@ fn delimiters(v: &Value) -> R<Vec<Vec<char>>> {
     as_array(v).iter().map(|d| d.to_text().map(|s| chars(&s))).collect()
 }
 
-/// Non-overlapping delimiter matches (start, end) in char positions, scanning left to right and
-/// preferring the longest delimiter at each position. Empty delimiters are ignored unless all
+/// Non-overlapping delimiter matches (start, end) in char positions, in ascending order. Scans left
+/// to right preferring the longest delimiter starting at each position, or (`from_end`) right to
+/// left preferring the longest delimiter ending at each position. Empty delimiters are ignored unless all
 /// delimiters are empty, in which case every position matches with zero length.
-fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<(usize, usize)> {
+fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
     let t = if insensitive { fold(text) } else { text.to_vec() };
     let ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
     if ds.is_empty() {
         return (0..=t.len()).map(|i| (i, i)).collect();
     }
     let mut out = Vec::new();
+    if from_end {
+        let mut j = t.len();
+        while j > 0 {
+            let best =
+                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
+            match best {
+                Some(l) => {
+                    out.push((j - l, j));
+                    j -= l;
+                }
+                None => j -= 1,
+            }
+        }
+        out.reverse();
+        return out;
+    }
     let mut i = 0;
     while i < t.len() {
-        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
         match best {
             Some(l) => {
                 out.push((i, i + l));
@@ -532,13 +552,13 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<(
 fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     let s = chars(&text(a, 0)?);
     let delims = delimiters(&arg(a, 1)?.value)?;
-    let inst = opt_int(a, 2, 1)?;
+    let inst = if has(a, 2) { int(a, 2)? } else { 1 };
     let mode = opt_int(a, 3, 0)?;
     let match_end = opt_bool(a, 4, false)?;
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
     }
-    let mut m = find_matches(&s, &delims, mode == 1);
+    let mut m = find_matches(&s, &delims, mode == 1, inst < 0);
     if match_end {
         if inst > 0 {
             if m.last().is_none_or(|x| x.0 != s.len()) {
@@ -568,12 +588,12 @@ fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char>> {
-    if delims.iter().all(|d| d.is_empty()) {
+    if delims.iter().all(Vec::is_empty) {
         return vec![s.to_vec()];
     }
     let mut out = Vec::new();
     let mut last = 0;
-    for (st, en) in find_matches(s, delims, insensitive) {
+    for (st, en) in find_matches(s, delims, insensitive, false) {
         out.push(s[last..st].to_vec());
         last = en;
     }
@@ -728,9 +748,9 @@ fn convert_replacement(r: &str) -> String {
     let mut i = 0;
     while i < c.len() {
         let ch = c[i];
-        if ch == '$' && c.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+        if ch == '$' && c.get(i + 1).is_some_and(char::is_ascii_digit) {
             let mut j = i + 1;
-            while c.get(j).is_some_and(|d| d.is_ascii_digit()) {
+            while c.get(j).is_some_and(char::is_ascii_digit) {
                 j += 1;
             }
             out.push_str("${");
@@ -745,23 +765,99 @@ fn convert_replacement(r: &str) -> String {
     out
 }
 
+/// A piece of a replacement: literal text or a capture group (by number or name).
+enum Piece {
+    Text(String),
+    Index(usize),
+    Name(String),
+}
+
+/// A replacement split into pieces as `regex::Captures::expand` reads it: `$$` is `$`, `$name` takes
+/// the longest run of `[_0-9A-Za-z]`, `${name}` ends at `}` (`${}` is empty), a name of digits is a
+/// group number, and a `$` that starts no reference is itself.
+fn template(rep: &str) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let mut lit = String::new();
+    let mut rest = rep;
+    while let Some(i) = rest.find('$') {
+        lit.push_str(&rest[..i]);
+        rest = &rest[i + 1..];
+        if let Some(r) = rest.strip_prefix('$') {
+            lit.push('$');
+            rest = r;
+            continue;
+        }
+        // A braced name is a reference even when empty (it expands to nothing).
+        let braced = rest.strip_prefix('{').and_then(|b| b.find('}').map(|j| (&b[..j], &b[j + 1..])));
+        let (name, after) = braced.unwrap_or_else(|| {
+            let j = rest.find(|c: char| !(c == '_' || c.is_ascii_alphanumeric())).unwrap_or(rest.len());
+            (&rest[..j], &rest[j..])
+        });
+        if braced.is_none() && name.is_empty() {
+            lit.push('$');
+            continue;
+        }
+        if !lit.is_empty() {
+            out.push(Piece::Text(std::mem::take(&mut lit)));
+        }
+        out.push(match name.parse::<usize>() {
+            Ok(n) => Piece::Index(n),
+            Err(_) => Piece::Name(name.to_string()),
+        });
+        rest = after;
+    }
+    lit.push_str(rest);
+    if !lit.is_empty() {
+        out.push(Piece::Text(lit));
+    }
+    out
+}
+
+/// Append a match's replacement to `out`, piece by piece; `None` once `out` would pass `limit`
+/// bytes, before anything that long is built (#2162).
+fn expand_capped(cap: &regex::Captures, pieces: &[Piece], out: &mut String, limit: usize) -> Option<()> {
+    for p in pieces {
+        let s = match p {
+            Piece::Text(t) => t.as_str(),
+            Piece::Index(i) => cap.get(*i).map_or("", |m| m.as_str()),
+            Piece::Name(n) => cap.name(n).map_or("", |m| m.as_str()),
+        };
+        if out.len().saturating_add(s.len()) > limit {
+            return None;
+        }
+        out.push_str(s);
+    }
+    Some(())
+}
+
 fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let rep = convert_replacement(&text(a, 2)?);
+    let rep = template(&convert_replacement(&text(a, 2)?));
     let occ = opt_int(a, 3, 0)?;
     let re = build_regex(&text(a, 1)?, case_arg(a, 4)?)?;
+    // Built match by match within a bound past which the text can only be too long (a character
+    // is at most four bytes), instead of building every replacement first (#2162).
+    let limit = MAX_TEXT * 4;
+    let mut out = String::new();
     if occ == 0 {
-        return check_len(re.replace_all(&s, rep.as_str()).into_owned());
+        let mut last = 0;
+        for cap in re.captures_iter(&s) {
+            let Some(m) = cap.get(0) else { continue };
+            out.push_str(s.get(last..m.start()).unwrap_or_default());
+            expand_capped(&cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+            last = m.end();
+        }
+        out.push_str(s.get(last..).unwrap_or_default());
+        return check_len(out);
     }
     let caps: Vec<regex::Captures> = re.captures_iter(&s).collect();
     let k = occ.unsigned_abs() as usize;
     let idx = if occ > 0 { k.checked_sub(1) } else { caps.len().checked_sub(k) };
     let Some(cap) = idx.and_then(|i| caps.get(i)) else { return text_val(s) };
     let Some(m) = cap.get(0) else { return text_val(s) };
-    let mut out = String::new();
-    out.push_str(&s[..m.start()]);
-    cap.expand(&rep, &mut out);
-    out.push_str(&s[m.end()..]);
+    out.push_str(s.get(..m.start()).unwrap_or_default());
+    expand_capped(cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+    out.push_str(s.get(m.end()..).unwrap_or_default());
     check_len(out)
 }
 
@@ -939,6 +1035,20 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 mod tests {
     use gridcraft_core::{CellError, Value};
 
+    /// The pieces expand exactly as `regex::Captures::expand` does.
+    #[test]
+    fn template_expands_like_regex() {
+        let re = regex::Regex::new(r"(?<y>\d+)-(\d+)").unwrap();
+        let cap = re.captures("x 2026-10 y").unwrap();
+        for rep in ["$1", "${1}", "$1a", "${1}a", "$y", "${y}!", "$$", "$$1", "a$", "$}", "${", "${}", "${y", "$0|$2|$9", "$-1", "€$1€", ""] {
+            let mut want = String::new();
+            cap.expand(rep, &mut want);
+            let mut got = String::new();
+            assert!(super::expand_capped(&cap, &super::template(rep), &mut got, usize::MAX).is_some());
+            assert_eq!(got, want, "{rep:?}");
+        }
+    }
+
     use crate::util::testutil::*;
 
     #[test]
@@ -959,6 +1069,17 @@ mod tests {
         is_text(bt(1.999), "สองบาทถ้วน");
         is_text(bt(0.005), "หนึ่งสตางค์");
         is_text(bt(-0.001), "ศูนย์บาทถ้วน");
+        // A final one is เอ็ด after higher digits in any group, millions included (#1234).
+        is_text(bt(21_000_001.0), "ยี่สิบเอ็ดล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001.0), "หนึ่งล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001_000_000.0), "หนึ่งล้านเอ็ดล้านบาทถ้วน");
+        is_text(bt(1001.0), "หนึ่งพันเอ็ดบาทถ้วน");
+        is_text(bt(11.0), "สิบเอ็ดบาทถ้วน");
+        is_text(bt(1.0), "หนึ่งบาทถ้วน");
+        is_text(bt(0.01), "หนึ่งสตางค์");
+        is_text(bt(0.21), "ยี่สิบเอ็ดสตางค์");
+        is_text(bt(1250.5), "หนึ่งพันสองร้อยห้าสิบบาทห้าสิบสตางค์");
+        is_text(bt(0.25), "ยี่สิบห้าสตางค์");
         is_err(ev("BAHTTEXT", vec![t("abc")]), CellError::Value);
         // Huge numbers give text (or #NUM! where rounding overflows), never a panic.
         assert!(matches!(bt(-1e300), Value::Text(_)));
@@ -1092,11 +1213,20 @@ mod tests {
         close(ev("VALUE", vec![t("12:00")]), 0.5);
         close(ev("VALUE", vec![t("2020-01-01")]), 43831.0);
         is_err(ev("VALUE", vec![t("abc")]), CellError::Value);
+        // Accounting negatives, as Excel 365 reads them.
+        close(ev("VALUE", vec![t("$(5)")]), -5.0);
+        close(ev("VALUE", vec![t("$ (1,000.50)")]), -1000.5);
+        close(ev("VALUE", vec![t("(5)%")]), -0.05);
+        for s in ["$(5)%", "$(5%)", "$5%", "(-5)", "((5))", "$(-5)", "(1/2)"] {
+            is_err(ev("VALUE", vec![t(s)]), CellError::Value);
+        }
         close(ev("NUMBERVALUE", vec![t("2.500,27"), t(","), t(".")]), 2500.27);
         close(ev("NUMBERVALUE", vec![t("3.5%")]), 0.035);
         close(ev("NUMBERVALUE", vec![t(" 1 000 ")]), 1000.0);
         close(ev("NUMBERVALUE", vec![t("")]), 0.0);
         is_err(ev("NUMBERVALUE", vec![t("1.2.3")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1.5"), t(","), t(" ")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1,5"), t("."), t(" ")]), CellError::Value);
         is_text(ev("FIXED", vec![n(1234.567), n(1.0)]), "1,234.6");
         is_text(ev("FIXED", vec![n(1234.567), n(-1.0)]), "1,230");
         is_text(ev("FIXED", vec![n(-1234.567), n(1.0), b(true)]), "-1234.6");
@@ -1127,6 +1257,12 @@ mod tests {
         is_err(ev("TEXTBEFORE", vec![t("abc"), t("b"), n(0.0)]), CellError::Value);
         is_text(ev("TEXTBEFORE", vec![t("abc"), t("")]), "");
         is_text(ev("TEXTAFTER", vec![t("abc"), t("")]), "abc");
+        // Negative instances search from the end, so overlapping delimiters match differently.
+        is_text(ev("TEXTBEFORE", vec![t("aaa"), t("aa"), n(-1.0)]), "a");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(-1.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("aaaa"), t("aa"), n(-2.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("AaA"), t("aa"), n(-1.0), n(1.0)]), "A");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(1.0)]), "a");
     }
 
     #[test]

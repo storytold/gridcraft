@@ -3,15 +3,15 @@
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, history", has_doc, inspect),
+        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
         cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
-        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels", has_doc, history),
+        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
     ]
 }
@@ -63,7 +63,8 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "title": d.display_title(),
         "path": d.path,
         "dirty": d.is_dirty(),
-        "activeSheet": wb.active_sheet,
+        "trust": d.trust,
+        "activeSheet": wb.active_sheet(),
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),
@@ -130,7 +131,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "text": crate::display::cell_text(&d.wb, sh, c),
         "input": sh.input_text(c),
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
-        "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
+        "spilledFrom": sh.spill_anchor(c).map(|a| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),
         "style": style,
         "merge": sh.merge_at(c).map(|m| m.a1()),
@@ -148,9 +149,11 @@ fn sel_stats(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn history(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
-    Ok(
-        json!({"undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(), "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>()}),
-    )
+    Ok(json!({
+        "undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "grouping": s.in_group(d.uid),
+    }))
 }
 
 fn list_commands(s: &mut Session, p: &Json) -> Result<Json> {

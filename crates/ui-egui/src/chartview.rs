@@ -1,9 +1,6 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
 //! we paint with egui), pictures and shapes.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
@@ -11,7 +8,7 @@ use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
-use crate::theme;
+use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -249,8 +246,6 @@ pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
 }
 
-static TEXTURES: std::sync::LazyLock<Mutex<HashMap<(u32, usize), egui::TextureHandle>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
 /// The shapes one floating object painted (indices into the painter's layer) and its logical
 /// rectangle, so a right-to-left sheet can move it as a whole instead of mirroring it.
 pub(crate) struct PaintedObject {
@@ -258,9 +253,20 @@ pub(crate) struct PaintedObject {
     pub rect: Rect,
 }
 
+/// Ctrl+6 (Options › Advanced › "For objects, show: Nothing"): objects are neither drawn nor
+/// clickable. Placeholders, which Excel no longer offers, show the objects.
+pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
+    wb.show_objects == gridcraft_engine::model::ShowObjects::None
+}
+
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
+    if objects_hidden(wb) {
+        return painted;
+    }
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
+    // The grid paints the active workbook: its pictures are cached under it.
+    let doc = app.session.active().map_or(0, |d| d.uid);
     for sp in &sh.shapes {
         let r = anchor_rect(geo, sh, &sp.anchor);
         if !r.intersects(p.clip_rect()) {
@@ -304,7 +310,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
             ShapeKind::Icon => {
                 if let Some(icon) = crate::icons::from_name(&sp.text) {
-                    crate::icons::paint(p, r, icon, if fill == Color32::TRANSPARENT { Color32::BLACK } else { fill });
+                    let t = Tokens::get(p.ctx());
+                    crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
                 label = false;
             }
@@ -332,21 +339,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             continue;
         }
         let start = p.add(egui::Shape::Noop);
-        let key = (im.id, im.data.len());
-        let mut cache = TEXTURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cache.contains_key(&key)
-            && let Ok(img) = image::load_from_memory(&im.data)
-        {
-            let rgba = img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let tex = p.ctx().load_texture(format!("img{}", im.id), ci, egui::TextureOptions::LINEAR);
-            cache.insert(key, tex);
-        }
-        if let Some(tex) = cache.get(&key) {
+        if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            p.rect_filled(r, 0.0, Color32::from_gray(230));
+            p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
         }
         if app.selected_chart == Some(im.id) {
             selection_frame(p, r);
@@ -361,7 +357,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let start = p.add(egui::Shape::Noop);
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
-        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
@@ -378,9 +374,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
                 {
                     let rr = geo.range_rect(sh, rf.range());
+                    let color = Tokens::get(p.ctx()).ref_color(0, true);
                     for pane in geo.range_panes(rf.range()) {
                         let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
-                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
+                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
                     }
                 }
             }
@@ -452,7 +449,7 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             if !r.contains(tr.left_top()) {
                 continue; // overflowed the card; skip (no scroll yet)
             }
-            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            let (fill, fg) = if *on { (tk.accent, tk.on_accent) } else { (tk.hover, tk.text_dim) };
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
@@ -472,7 +469,7 @@ pub enum SlicerAction {
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
 pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
-    if !geo.cells.contains(p) {
+    if !geo.cells.contains(p) || objects_hidden(wb) {
         return None;
     }
     for sl in sh.slicers.iter().rev() {
@@ -496,17 +493,20 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
+    let t = Tokens::get(p.ctx());
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
     for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+        p.circle_filled(c, 4.0, t.sheet_control_bg);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
     let _ = Align2::CENTER_CENTER;
 }
 
 /// The topmost object under `p`: (kind, id, rect).
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    let _ = app;
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
         if r.contains(p) && geo.cells.contains(p) {
