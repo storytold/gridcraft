@@ -9,14 +9,14 @@ use std::time::Duration;
 
 /// How often [`DesktopTheme::start`] re-reads the desktop's answer. The portal also publishes a
 /// change signal, but subscribing needs a connection kept alive for the life of every window; one
-/// round trip every few seconds is cheap and reacts soon enough after a theme switch.
-const POLL: Duration = Duration::from_secs(4);
+/// cheap round trip twice a second follows a theme switch with no visible lag.
+const POLL: Duration = Duration::from_millis(500);
 
 /// How long one read waits for the portal's reply. Without it a portal that never answers blocks
 /// the watcher for good, and the theme stops following the desktop. Shorter than [`POLL`]: a read
 /// that times out drops the connection, and the next poll asks again on a fresh one.
 #[cfg(target_os = "linux")]
-const REPLY: Duration = Duration::from_secs(2);
+const REPLY: Duration = Duration::from_millis(450);
 
 /// Whether the desktop asks applications to draw dark. `None` when it says nothing, and when
 /// there is no session bus or no portal to ask (a bare X server, a container), so the caller
@@ -31,6 +31,9 @@ pub fn prefers_dark() -> Option<bool> {
 pub struct DesktopTheme {
     /// `None` when no watcher thread could be started; the one-shot read still works.
     changes: Option<Receiver<Option<bool>>>,
+    /// The window to wake when the answer changes (set once the app has a context), so an idle
+    /// window repaints in the new theme at once instead of on its next input.
+    waker: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>>,
 }
 
 impl DesktopTheme {
@@ -38,6 +41,8 @@ impl DesktopTheme {
     /// first answer is sent straight away, so the caller does not have to ask for it separately.
     pub fn start() -> Self {
         let (tx, rx) = channel();
+        let waker: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>> = Default::default();
+        let wake = waker.clone();
         let started = std::thread::Builder::new().name("gridcraft-desktop-theme".into()).spawn(move || {
             let mut link = Link::default();
             let mut last = read(&mut link);
@@ -52,10 +57,22 @@ impl DesktopTheme {
                     if tx.send(now).is_err() {
                         return;
                     }
+                    if let Some(ctx) = wake.lock().ok().and_then(|g| g.clone()) {
+                        ctx.request_repaint();
+                    }
                 }
             }
         });
-        Self { changes: started.ok().map(|_| rx) }
+        Self { changes: started.ok().map(|_| rx), waker }
+    }
+
+    /// Gives the watcher the window to wake on a change (once; later calls are cheap no-ops).
+    pub fn set_waker(&self, ctx: &egui::Context) {
+        if let Ok(mut g) = self.waker.lock()
+            && g.is_none()
+        {
+            *g = Some(ctx.clone());
+        }
     }
 
     /// The desktop's new answer if it changed since the last call, to be polled once a frame.

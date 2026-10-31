@@ -26,7 +26,8 @@ fn wrapped_row_fits_word_wrapped_lines() {
     let wrapped = row_height(&mut s, 0);
     // Word wrap: 4 lines (one word each). The old estimate: ceil(28/10) = 3 lines.
     // Line height at 11pt is ~19.8, so 4 lines need ~79 vs ~59 for 3.
-    assert!(wrapped >= plain + 3.0 * 19.0, "4 word-wrapped lines must grow the row by ~4 line heights: plain={plain}, wrapped={wrapped}");
+    // (A new workbook's 26 px rows are taller than one line, so measure lines, not growth.)
+    assert!(wrapped > plain && wrapped >= 4.0 * 19.0, "4 word-wrapped lines need ~4 line heights: plain={plain}, wrapped={wrapped}");
 }
 
 #[test]

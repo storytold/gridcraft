@@ -203,10 +203,13 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
 }
 
 #[test]
-fn a_mouse_drag_keeps_the_outline_on_its_cells() {
-    // A gliding outline trails the pointer while selecting with the mouse and reads as lag; Excel
-    // draws it on the selection at once. Keyboard moves still glide (above).
+fn a_mouse_drag_lands_at_once_then_eases_the_range_it_extends() {
+    // The drag's first cell gets the outline at once, as in Excel (an outline gliding over from
+    // the old selection reads as lag); as the drag extends the range, its far edges ease after the
+    // pointer and come to rest on the range.
     let mut h = animated();
+    select(&mut h, "H12");
+    steps(&mut h, 60);
     let (b2, e8) = (cell_rect(&h, "B2"), cell_rect(&h, "E8"));
     let m = egui::Modifiers::NONE;
     h.input_mut().events.extend([
@@ -214,15 +217,22 @@ fn a_mouse_drag_keeps_the_outline_on_its_cells() {
         egui::Event::PointerButton { pos: b2.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: m },
     ]);
     h.step();
+    let mut eased = false;
     for k in 1..=6 {
         let p = b2.center() + (e8.center() - b2.center()) * (k as f32 / 6.0);
         h.input_mut().events.push(egui::Event::PointerMoved(p));
         steps(&mut h, 2);
+        eased |= gliding(&h);
+        // The anchor never travels from where the outline was (H12): only the far edges ease.
+        assert_eq!(outline(&h).min, b2.min, "the outline starts on B2 at once");
+        // Well past the glide's tenth of a second: at rest on the range.
+        steps(&mut h, 60);
         let sel = h.state().session.active().map(|d| d.selection.current()).unwrap();
         let shown = cell_rect(&h, &sel.start.a1()).union(cell_rect(&h, &sel.end.a1()));
-        assert!(!gliding(&h), "no glide while the button is held");
-        assert_eq!(outline(&h), shown, "the outline is on the dragged range {}", sel.a1());
+        assert!(!gliding(&h));
+        assert_eq!(outline(&h), shown, "the outline rests on the dragged range {}", sel.a1());
     }
+    assert!(eased, "extending the range eases");
     h.input_mut().events.push(egui::Event::PointerButton { pos: e8.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: m });
     h.step();
     assert_eq!(h.state().session.active().map(|d| d.selection.current().a1()).as_deref(), Some("B2:E8"));

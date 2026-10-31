@@ -138,6 +138,10 @@ fn yes() -> bool {
 /// Default width of a column and height of a row (pixels at 96 dpi) for the default font.
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
+/// Row height of the sheets in a new blank workbook: 30% taller than Excel's 20 px, so a fresh
+/// sheet reads as a roomy table rather than a dense ledger. Saved files carry it as their
+/// `defaultRowHeight`, so they open the same everywhere; files opened from disk keep their own.
+pub const NEW_WORKBOOK_ROW_HEIGHT: f32 = 26.0;
 
 /// Column width (points) → characters of the default font's digit width (7 px), without the
 /// cell padding: the value the Column Width dialog shows.

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (UI refresh: dialogs as soft cards, roomier rows in new workbooks, a zoom slider without +/-; streamlined ribbon, docked formula bar, command palette, Quick Analysis, card menus, grid polish, Backstage thumbnails; colorized ribbon icons; earlier: checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -182,7 +182,9 @@ pairs (text 4.5:1, glyphs 3:1) are checked by `theme::contrast_tests`.
 
 Pixel comparison against Excel screenshots hasn't been run since M1; fonts depend on the system
 (no Calibri; Carlito would match metrics, #29, #4, #168 for weights); icons are GridCraft's own
-by rule and will never match Office's, by design.
+by rule and will never match Office's, by design. The ribbon draws GridCraft's colorized icon set
+(160 designs, 20 px on large buttons and 16 px on small ones), in full colour when enabled and in the
+button's own colour when disabled.
 
 ## Work (50–80 h)
 
@@ -195,6 +197,9 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
+| 2026-10-30 | minor | UI refresh: dialogs drawn as soft cards with a title row and quiet buttons; new blank workbooks use 26 px rows (19.5 pt, 30% taller than Excel's 15 pt) and inserted sheets take the active sheet's row height; the status bar zoom drops its +/- buttons (slider, percentage and Ctrl+wheel stay) |
+| 2026-10-29 | minor | UI refresh: streamlined 62 px ribbon with short labels (full names stay as tooltips and accessible names) and no group captions; docked formula bar (cell name pill, fx, result preview, cancel/enter only while editing); icon-only Search, Share and Comments; one-button sheet view switcher and copyable statistic chips in the status bar; sheet-tab rename pill, colour dots and a "+" menu; command palette overlay with icons, paths and keycaps; Quick Analysis button and card (formatting, charts, totals); card-style ribbon menus with an icon column and shortcuts; contextual tabs slide in; grid selection polish, table field names in headers, wider resize zones, fading scrollbars, soft frozen-pane shadows, an empty-workbook hint; Backstage thumbnails drawn by the app (flip through sheets on hover), daily tip; modern checkboxes; no panel separator lines |
+| 2026-10-29 | minor | Colorized ribbon icons: every ribbon button draws its own design from GridCraft's colorized set (theme colour roles, light and dark), with new icons for commands that borrowed another command's icon; large buttons draw 20 px icons |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
 | 2026-10-27 | minor | Ctrl with the numpad's + inserts rows, columns or cells as Ctrl+Shift+= does, as in Excel; it did nothing because the numpad key arrives without Shift |

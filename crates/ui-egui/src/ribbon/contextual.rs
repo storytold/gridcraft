@@ -20,27 +20,27 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "table.rename", json!({"table": tname, "name": name}));
         }
     });
-    let __k = big_button(ui, Icon::Table, "Resize\nTable", "Resize Table", false);
+    let __k = big_button(ui, Icon::ResizeTable, "Resize\nTable", "Resize Table", false);
     control_keytip(app, ui, &__k, "dialog:tableResize");
     if __k.clicked() {
         app.open_dialog("tableResize", json!({}));
     }
-    sep(ui);
+    sep(ui, "Properties");
     let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
     control_keytip(app, ui, &__k, "data.removeDuplicates");
     if __k.clicked() {
         act(app, "data.removeDuplicates", json!({}));
     }
-    let __k = big_button(ui, Icon::Table, "Convert\nto Range", "Convert to Range", false);
+    let __k = big_button(ui, Icon::ConvertToRange, "Convert\nto Range", "Convert to Range", false);
     control_keytip(app, ui, &__k, "table.convertToRange");
     if __k.clicked() {
         act(app, "table.convertToRange", json!({"table": tname}));
     }
-    sep(ui);
-    if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
+    sep(ui, "Tools");
+    if big_button(ui, Icon::Slicer, "Insert\nSlicer", "Insert Slicer", false).clicked() {
         act(app, "table.insertSlicer", json!({"table": tname}));
     }
-    sep(ui);
+    sep(ui, "Filters");
     ui.vertical(|ui| {
         for (label, cmd, v) in [
             ("Header Row", "table.headerRow", header && filter),
@@ -48,7 +48,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Banded Rows", "table.bandedRows", banded),
         ] {
             let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
+            if crate::widgets::checkbox(ui, &mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
             }
         }
@@ -60,12 +60,12 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Banded Columns", "table.bandedColumns", banded_c),
         ] {
             let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
+            if crate::widgets::checkbox(ui, &mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
             }
         }
     });
-    sep(ui);
+    sep(ui, "Table Style Options");
     table_style_strip(app, ui, &tname, &style);
 }
 
@@ -110,7 +110,7 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
 
 pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_chart else { return };
-    let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
+    let ae = big_button(ui, Icon::ChartElement, "Add Chart\nElement", "Add Chart Element", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
         keytip(app, ui, sequence, ae.rect.center_bottom());
     }
@@ -131,15 +131,15 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
+    let __k = big_button(ui, Icon::SwitchRowCol, "Switch\nRow/Column", "Switch Row/Column", false);
     control_keytip(app, ui, &__k, "chart.switchRowColumn");
     if __k.clicked() {
         act(app, "chart.switchRowColumn", json!({"chart": id}));
     }
-    if big_button(ui, Icon::Table, "Select\nData", "Select Data", false).clicked() {
+    if big_button(ui, Icon::SelectData, "Select\nData", "Select Data", false).clicked() {
         app.open_dialog("selectData", json!({"chart": id}));
     }
-    let ct = big_button(ui, Icon::ChartBar, "Change\nChart Type", "Change Chart Type", true);
+    let ct = big_button(ui, Icon::ChangeChartType, "Change\nChart Type", "Change Chart Type", true);
     for sequence in keytip_table::group_extension(
         app.keytips.prefix().unwrap_or_default(),
         &["column", "bar", "line", "area", "pie", "doughnut", "scatter", "radar", "waterfall", "funnel", "treemap"],
@@ -161,20 +161,20 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Funnel", "funnel", ""),
             ("Treemap", "treemap", ""),
         ] {
-            if ui.button(label).clicked() {
+            if crate::widgets::menu_row(ui, None, label, None).clicked() {
                 act(app, "chart.set", json!({"chart": id, "type": k, "subtype": s}));
             }
         }
     });
-    if big_button(ui, Icon::Settings, "Format\nPane", "Format Chart pane", false).clicked() {
+    if big_button(ui, Icon::FormatPane, "Format\nPane", "Format Chart pane", false).clicked() {
         app.grid.pane = Some("formatChart".into());
     }
-    let __k = big_button(ui, Icon::TextBox, "Chart\nTitle", "Edit chart title", false);
+    let __k = big_button(ui, Icon::ChartTitle, "Chart\nTitle", "Edit chart title", false);
     control_keytip(app, ui, &__k, "chartTitle");
     if __k.clicked() {
         app.open_dialog("chartTitle", json!({"chart": id}));
     }
-    let __k = big_button(ui, Icon::Delete, "Delete\nChart", "Delete chart", false);
+    let __k = big_button(ui, Icon::DeleteChart, "Delete\nChart", "Delete chart", false);
     control_keytip(app, ui, &__k, "chart.delete");
     if __k.clicked() {
         act(app, "chart.delete", json!({"chart": id}));

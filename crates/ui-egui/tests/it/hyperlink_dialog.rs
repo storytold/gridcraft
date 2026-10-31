@@ -72,7 +72,7 @@ fn editing_a_link_confirms_and_undo_restores_it() {
         control(&mut h, "ui.dialog.set", json!({"field": "tooltip", "value": "Updated tip"}));
         if button {
             h.run_steps(4);
-            h.get_by_label("   OK   ").click();
+            h.get_by_label("OK").click();
             h.run_steps(4);
         } else {
             control(&mut h, "ui.dialog.confirm", json!({}));
@@ -124,7 +124,7 @@ fn unchanged_display_text_preserves_number_and_formula_cells() {
         assert_eq!(link.tooltip.as_deref(), Some("Original tip"));
         control(&mut h, "ui.dialog", json!({"name": "insertLink"}));
         h.run_steps(3);
-        h.get_by_label("   OK   ").click();
+        h.get_by_label("OK").click();
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
         assert_eq!(linked_cell(&h).0, before, "unedited OK for {input}");
@@ -150,7 +150,7 @@ fn editing_a_link_without_a_tooltip_keeps_it_absent() {
     assert_eq!(link.tooltip, None);
     control(&mut h, "ui.dialog", json!({"name": "insertLink"}));
     h.run_steps(3);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     assert_eq!(linked_cell(&h).1.tooltip, None);

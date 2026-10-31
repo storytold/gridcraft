@@ -30,7 +30,7 @@ fn choosing_a_magnification_and_pressing_ok_sets_that_zoom() {
     h.run_steps(6);
     h.get_by_label("50%").click();
     h.run_steps(6);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert_eq!(zoom(&h), 50);
@@ -116,7 +116,7 @@ fn fit_selection_zooms_so_the_selected_cells_fill_the_grid() {
     h.run_steps(6);
     h.get_by_label("Fit selection").click();
     h.run_steps(6);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     // The same answer the ribbon's Zoom to Selection gives for this grid.

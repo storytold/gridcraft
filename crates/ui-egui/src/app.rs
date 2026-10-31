@@ -23,11 +23,17 @@ mod print;
 mod quit;
 mod view;
 
+/// The window-coloured margin each side of the sheet card.
+pub(crate) const SHEET_GUTTER: i8 = 8;
+
 impl SheetApp {
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {
+        let thumbnails = crate::thumbnail::Thumbnails::new(services.thumbnail_dir.clone());
         SheetApp {
             session,
+            thumbnails,
+            thumbnail_mode: false,
             ui: UiState::default(),
             chrome: Chrome::default(),
             views: HashMap::new(),
@@ -60,6 +66,7 @@ impl SheetApp {
             fonts_rebind: false,
             fonts_han: None,
             effective_dark: false,
+            palette_state: (String::new(), String::new(), 0.0),
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
             name_box: None,
@@ -110,6 +117,7 @@ impl SheetApp {
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
+        self.desktop_theme.set_waker(ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
@@ -203,6 +211,8 @@ impl SheetApp {
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
+        // Widgets read the View › Animations choice from the context (they have no app).
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.animations"), self.ui.animations));
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {
             self.backstage = None;
@@ -223,18 +233,27 @@ impl SheetApp {
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
             }
-            if self.ui.status_bar {
-                tabs::status_bar(self, ui);
-            }
+            // The status items share the sheet-tab row (see `tabs::sheet_tabs`).
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
             panes::show(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
-                let g0 = now_ms();
-                grid::show(self, ui);
-                self.perf.grid_ms = now_ms() - g0;
-            });
+            // The sheet sits in a card: window-coloured gutters, a hairline border, rounded top
+            // corners; the sheet-tab strip below closes it.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: SHEET_GUTTER, right: SHEET_GUTTER, top: 0, bottom: 0 }))
+                .show(ui, |ui| {
+                    let card = ui.max_rect();
+                    ui.painter().rect_filled(card, 0.0, t.sheet_bg(self.ui.dark_sheet));
+                    let g0 = now_ms();
+                    grid::show(self, ui);
+                    self.perf.grid_ms = now_ms() - g0;
+                    // With the formula bar docked on top, the bar's row carries the rounded corners.
+                    if !self.session.prefs.formula_bar {
+                        widgets::card_frame(ui.painter(), card, &t, true);
+                    }
+                });
         }
+        crate::quick_analysis::show(self, &ctx);
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);

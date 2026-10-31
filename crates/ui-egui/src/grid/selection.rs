@@ -57,24 +57,37 @@ fn range_in_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> bool {
     r.start.row <= rows.1 && r.end.row >= rows.0 && r.start.col <= cols.1 && r.end.col >= cols.0
 }
 
-/// The four sides of a `width` wide outline centred on `rect`, cut to `clip` (a little beyond it).
-///
-/// A stroked rectangle that spans a whole column (20 million points tall) loses its precision in
-/// the tessellator and its left and right sides vanish; sides filled from rectangles that stay
-/// near the viewport do not. Sides wholly outside `clip` are left out.
-pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
-    if !rect.is_finite() || !clip.is_finite() {
-        return Vec::new();
+/// The rounding of the selection outline's corners (screen points).
+pub(crate) const OUTLINE_ROUNDING: f32 = 2.0;
+
+/// The selection outline: 2 points wide with softly rounded corners.
+fn paint_outline(p: &Painter, rect: Rect, color: Color32) {
+    if let Some(r) = outline_rect(rect, p.clip_rect()) {
+        p.rect_stroke(r, OUTLINE_ROUNDING, Stroke::new(2.0, color), StrokeKind::Middle);
     }
-    let h = width / 2.0;
-    let clip = clip.expand(width * 2.0);
-    let sides = [
-        Rect::from_min_max(pos2(rect.left() - h, rect.top() - h), pos2(rect.left() + h, rect.bottom() + h)),
-        Rect::from_min_max(pos2(rect.right() - h, rect.top() - h), pos2(rect.right() + h, rect.bottom() + h)),
-        Rect::from_min_max(pos2(rect.left() - h, rect.top() - h), pos2(rect.right() + h, rect.top() + h)),
-        Rect::from_min_max(pos2(rect.left() - h, rect.bottom() - h), pos2(rect.right() + h, rect.bottom() + h)),
-    ];
-    sides.into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
+}
+
+/// The rectangle to stroke for an outline around `rect`, cut to just beyond `clip`. A rectangle
+/// far larger than the view (a whole column is 20 million points tall) loses its precision in the
+/// tessellator and its sides vanish; cut, its cut edges fall outside the clip and are never seen,
+/// while the edges in view keep their rounded corners. `None` when nothing of it is near the view
+/// or the numbers are not sane.
+pub(crate) fn outline_rect(rect: Rect, clip: Rect) -> Option<Rect> {
+    if !rect.is_finite() || !clip.is_finite() {
+        return None;
+    }
+    let near = rect.intersect(clip.expand(8.0));
+    (near.width() > 0.0 && near.height() > 0.0).then_some(near)
+}
+
+/// How far the fill handle has grown under the pointer, 0 (at rest) to 1 (hovered). It eases in
+/// and out with View > Animations on.
+fn handle_hover(ctx: &egui::Context, app: &SheetApp, geo: &Geo, outline: Rect) -> f32 {
+    let zone = Rect::from_center_size(outline.right_bottom(), vec2(9.0, 9.0));
+    let over = app.grid.drag == crate::grid::Drag::None
+        && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|at| zone.contains(geo.mirror_pos(at)) && geo.in_cells(geo.mirror_pos(at)));
+    let secs = if crate::grid::animating(app, ctx) { 0.08 } else { 0.0 };
+    ctx.animate_bool_with_time(egui::Id::unique("gridcraft.fill_handle_hover"), over, secs)
 }
 
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
@@ -123,18 +136,17 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         }
     }
     if cur_here {
-        for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
-            p.rect_filled(side, 0.0, t.sel_border);
-        }
+        paint_outline(p, outline.expand(0.5), t.sel_border);
     }
     if active_here && sel.ranges.len() > 1 {
-        p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
+        p.rect_stroke(active, OUTLINE_ROUNDING, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
-    // Fill handle (bottom-right of the current area).
+    // Fill handle (bottom-right of the current area): it grows a little under the pointer.
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
-        let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
-        p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
-        p.rect_filled(h, 0.0, t.sel_border);
+        let grow = handle_hover(p.ctx(), app, geo, outline);
+        let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0) * (1.0 + grow / 3.0));
+        p.rect_filled(h.expand(1.0), 1.5, Color32::WHITE);
+        p.rect_filled(h, 1.0, t.sel_border);
     }
     // Fill-handle drag preview.
     if let crate::grid::Drag::Fill { target: Some(tr), .. } = &app.grid.drag
@@ -397,25 +409,29 @@ mod pane_tests {
 }
 
 #[cfg(test)]
-mod outline_band_tests {
+mod outline_rect_tests {
     use super::*;
 
     #[test]
-    fn whole_column_outline_keeps_left_and_right_sides_near_viewport() {
+    fn whole_column_outline_is_cut_near_the_viewport() {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
         let col = Rect::from_min_max(pos2(100.0, 40.0), pos2(180.0, 20_971_540.0));
-        let sides = outline_bands(col, 2.0, clip);
-        // Left, right and top (in view); the bottom is 20 million points away.
-        assert_eq!(sides.len(), 3);
-        assert!(sides.iter().all(|s| s.bottom() <= clip.bottom() + 4.0 + f32::EPSILON));
-        assert!(sides.iter().any(|s| s.left() < 100.0 && s.right() > 100.0 && s.height() > 500.0));
-        assert!(sides.iter().any(|s| s.left() < 180.0 && s.right() > 180.0 && s.height() > 500.0));
+        let r = outline_rect(col, clip).unwrap();
+        // Left, right and top stay where they are; the far bottom comes in to just past the view.
+        assert_eq!((r.left(), r.right(), r.top()), (100.0, 180.0, 40.0));
+        assert!(r.bottom() > clip.bottom() + 4.0 && r.bottom() <= clip.bottom() + 8.0);
+        // A cell in view is stroked as it is.
+        let cell = Rect::from_min_size(pos2(10.0, 10.0), vec2(64.0, 16.0));
+        assert_eq!(outline_rect(cell, clip), Some(cell));
     }
 
     #[test]
     fn outline_outside_the_view_and_non_finite_draw_nothing() {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
-        assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
-        assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
+        assert!(outline_rect(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), clip).is_none());
+        assert!(outline_rect(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), clip).is_none());
+        assert!(
+            outline_rect(Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Rect::from_min_max(pos2(0.0, f32::INFINITY), pos2(1.0, 1.0))).is_none()
+        );
     }
 }

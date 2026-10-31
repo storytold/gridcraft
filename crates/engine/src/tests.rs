@@ -1740,6 +1740,19 @@ fn autofit_skips_merged_cells() {
 }
 
 #[test]
+fn new_workbooks_have_roomier_rows_and_new_sheets_match() {
+    let mut s = Session::new();
+    s.new_workbook();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().default_row_height, gridcraft_model::NEW_WORKBOOK_ROW_HEIGHT);
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert!(wb.sheets.iter().all(|sh| sh.default_row_height == gridcraft_model::NEW_WORKBOOK_ROW_HEIGHT));
+    // Samples and opened files keep Excel's rows.
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().default_row_height, gridcraft_model::DEFAULT_ROW_HEIGHT);
+}
+
+#[test]
 fn open_fits_big_font_rows_from_the_font_not_the_sheet_default() {
     // Excel saves a sheet whose rows hold 16pt text with a 21pt (28px) default row height and no
     // `ht` on rows of that height. Those rows already fit their font: they open at about 28px,

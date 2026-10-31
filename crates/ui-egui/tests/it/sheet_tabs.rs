@@ -204,9 +204,9 @@ fn right_clicking_a_tab_activates_its_sheet_so_the_menu_acts_on_it() {
     assert!(texts.iter().any(|t| t == "Unprotect Sheet…"), "menu should offer Unprotect Sheet…, painted: {texts:?}");
 }
 
-/// The New sheet button's left edge. The scrollbar track starts 8 px after the 26 px button.
+/// The New sheet button's left edge. The scrollbar track starts 8 px after the 26 px button and its 14 px chevron.
 fn new_sheet_left(h: &Harness) -> f32 {
-    h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar").left() - 8.0 - 26.0
+    h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar").left() - 8.0 - 14.0 - 26.0
 }
 
 /// The painted background of the active tab: the smallest fill enclosing its name (the bar's own fill encloses it too).
@@ -242,4 +242,52 @@ fn overflowing_tabs_keep_their_share_and_the_new_sheet_button_after_it() {
         let plus = new_sheet_left(&h);
         assert!(plus >= viewport.right() && plus - viewport.right() <= 12.0, "{width}: + at {plus}, strip ends at {}", viewport.right());
     }
+}
+
+/// Where `text` was painted this frame, if it was.
+fn painted(h: &Harness, text: &str) -> Option<Rect> {
+    h.output().shapes.iter().find_map(|s| match &s.shape {
+        Shape::Text(t) if t.galley.job.text == text => Some(t.galley.rect.translate(t.pos.to_vec2())),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_new_sheet_chevron_offers_a_blank_sheet_or_a_copy_of_the_active_one() {
+    let mut h = harness_with(1200.0, 2, 1);
+    h.set_size(vec2(1200.0, 400.0));
+    h.run_steps(20);
+    let track = h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar");
+    let chevron = pos2(track.left() - 8.0 - 7.0, track.center().y);
+    click(&mut h, chevron);
+    let duplicate = painted(&h, "Duplicate current sheet").expect("the chevron opens the New sheet menu");
+    assert!(painted(&h, "Blank sheet").is_some());
+    click(&mut h, duplicate.center());
+    let names: Vec<String> = h.state().session.doc().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Tab00", "Tab01", "Tab01 (2)"], "Duplicate copies the active sheet after it");
+}
+
+#[test]
+fn clicking_a_status_bar_statistic_copies_its_value() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1200], [34]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    let mut h = crate::common::builder()
+        .with_size(vec2(1000.0, 60.0))
+        .build_ui_state(|ui, app: &mut SheetApp| gridcraft_ui_egui::tabs::status_bar(app, ui), crate::common::app(s));
+    h.run_steps(4);
+    let sum = painted(&h, "1,234").expect("the Sum chip shows its value");
+    assert!(painted(&h, "Sum").is_some_and(|label| label.right() < sum.left()), "the dim label sits before the value");
+    let at = sum.center();
+    h.input_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "1,234"));
+    assert!(copied, "the chip's value goes to the clipboard: {:?}", h.output().platform_output.commands);
+    assert_eq!(h.state().toast.as_ref().map(|(m, _)| m.as_str()), Some("Copied Sum"));
 }

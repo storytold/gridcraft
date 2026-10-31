@@ -1,8 +1,9 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--theme darkGreen|omarchy] [--backstage] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
+//!  [--dialog 'name={json}'] [--hf-edit header|footer]
+//!  [--quick-analysis formatting|charts|totals] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -17,9 +18,13 @@ fn main() {
     let mut cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
+    let mut palette = String::new();
+    let mut backstage = false;
+    let mut thumbnail = false;
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
+    let mut quick: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
     let mut out = "snapshot.png".to_string();
@@ -55,6 +60,12 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--backstage" => backstage = true,
+            "--thumbnail" => thumbnail = true,
+            "--theme" => {
+                i += 1;
+                palette = args.get(i).cloned().unwrap_or_default();
+            }
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -71,6 +82,10 @@ fn main() {
                 i += 1;
                 hf_edit = args.get(i).cloned();
             }
+            "--quick-analysis" => {
+                i += 1;
+                quick = args.get(i).cloned();
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -82,6 +97,19 @@ fn main() {
     // Catalog the installed fonts first (the app scans in the background from its first frame), so
     // the workbook's fonts are drawn in their own faces, not a substitute.
     let _ = gridcraft_ui_egui::fonts::catalog();
+    // --thumbnail: the workbook's Backstage thumbnail, drawn by the app's own renderer.
+    if thumbnail {
+        let wb = match (&input, &sample) {
+            (Some(p), _) => gridcraft_engine::io::open_bytes(p, &std::fs::read(p).expect("read")).expect("open").0,
+            (None, Some(s)) => gridcraft_engine::sample::build(s).expect("sample"),
+            _ => gridcraft_engine::model::Workbook::default(),
+        };
+        let img = gridcraft_ui_egui::thumbnail::render(wb, 0, dark).expect("thumbnail");
+        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+        image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba).expect("image").save(&out).expect("save");
+        println!("wrote {out} ({}x{})", img.size[0], img.size[1]);
+        return;
+    }
     let mut session = Session::new();
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
@@ -106,6 +134,10 @@ fn main() {
             {
                 let mut app = SheetApp::new(session, Default::default());
                 app.ui.dark = dark;
+                app.ui.palette = palette.clone();
+                if backstage {
+                    app.open_backstage(gridcraft_ui_egui::backstage::Page::Home);
+                }
                 if let Some(code) = &language
                     && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)
                 {
@@ -133,6 +165,18 @@ fn main() {
     // The workbook's installed fonts bind once the font scan is done; frames past the first few
     // apply them, so the snapshot shows them as the app does.
     harness.run_steps(14);
+    // The File view's thumbnails are drawn on a worker thread: give them time to arrive.
+    if backstage {
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            harness.run_steps(2);
+        }
+    }
+    // --quick-analysis formatting|charts|totals: the Quick Analysis card open on that tab.
+    if let Some(tab) = &quick {
+        gridcraft_ui_egui::quick_analysis::open(&harness.ctx, tab);
+        harness.run_steps(8);
+    }
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());

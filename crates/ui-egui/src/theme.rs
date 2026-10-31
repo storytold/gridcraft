@@ -179,36 +179,36 @@ impl Tokens {
     fn palette(dark: bool) -> Tokens {
         Tokens {
             dark,
-            window: pick(dark, Color32::from_rgb(0xF3, 0xF3, 0xF3), Color32::from_rgb(0x29, 0x29, 0x29)),
-            ribbon: pick(dark, Color32::from_rgb(0xFF, 0xFF, 0xFF), Color32::from_rgb(0x33, 0x33, 0x33)),
-            ribbon_border: pick(dark, Color32::from_rgb(0xE3, 0xE3, 0xE3), Color32::from_rgb(0x40, 0x40, 0x40)),
-            text: pick(dark, Color32::from_rgb(0x24, 0x24, 0x24), Color32::from_rgb(0xEE, 0xEE, 0xEE)),
-            text_dim: pick(dark, Color32::from_rgb(0x61, 0x61, 0x61), Color32::from_rgb(0xB0, 0xB0, 0xB0)),
-            text_disabled: pick(dark, Color32::from_rgb(0xB0, 0xB0, 0xB0), Color32::from_rgb(0x70, 0x70, 0x70)),
-            accent: pick(dark, Color32::from_rgb(0x10, 0x7C, 0x41), Color32::from_rgb(0x5C, 0xC5, 0x87)),
-            accent_dark: pick(dark, Color32::from_rgb(0x0B, 0x5E, 0x31), Color32::from_rgb(0x3F, 0xA8, 0x6C)),
-            accent_soft: pick(dark, Color32::from_rgb(0xDF, 0xF1, 0xE6), Color32::from_rgb(0x23, 0x45, 0x31)),
-            hover: pick(dark, Color32::from_rgb(0xEB, 0xEB, 0xEB), Color32::from_rgb(0x42, 0x42, 0x42)),
-            pressed: pick(dark, Color32::from_rgb(0xDD, 0xDD, 0xDD), Color32::from_rgb(0x4D, 0x4D, 0x4D)),
-            separator: pick(dark, Color32::from_rgb(0xE0, 0xE0, 0xE0), Color32::from_rgb(0x48, 0x48, 0x48)),
+            window: pick(dark, rgb(0xF5F6F5), rgb(0x161917)),
+            ribbon: pick(dark, rgb(0xFFFFFF), rgb(0x1F2321)),
+            ribbon_border: pick(dark, rgb(0xE3E5E3), rgb(0x323833)),
+            text: pick(dark, rgb(0x1F2321), rgb(0xE8ECE9)),
+            text_dim: pick(dark, rgb(0x5A615C), rgb(0xA3ABA6)),
+            text_disabled: pick(dark, rgb(0xA9AFAB), rgb(0x5E6560)),
+            accent: pick(dark, rgb(0x107C41), rgb(0x4CC283)),
+            accent_dark: pick(dark, rgb(0x0E6B38), rgb(0x3DA86C)),
+            accent_soft: pick(dark, rgb(0xE6F2EB), rgb(0x1F3A2B)),
+            hover: pick(dark, rgb(0xEEF0EE), rgb(0x2A2F2C)),
+            pressed: pick(dark, rgb(0xE2E5E2), rgb(0x343A36)),
+            separator: pick(dark, rgb(0xE6E8E6), rgb(0x2E332F)),
             grid_bg: Color32::WHITE,
-            desk: pick(dark, Color32::from_rgb(0xDE, 0xDE, 0xDE), Color32::from_rgb(0x3A, 0x3A, 0x3A)),
-            gridline: Color32::from_rgb(0xE1, 0xE1, 0xE1),
-            header_bg: pick(dark, Color32::from_rgb(0xF8, 0xF8, 0xF8), Color32::from_rgb(0x30, 0x30, 0x30)),
-            header_text: pick(dark, Color32::from_rgb(0x42, 0x42, 0x42), Color32::from_rgb(0xCC, 0xCC, 0xCC)),
-            header_line: pick(dark, Color32::from_rgb(0xD6, 0xD6, 0xD6), Color32::from_rgb(0x45, 0x45, 0x45)),
-            header_sel_bg: pick(dark, Color32::from_rgb(0xE1, 0xE1, 0xE1), Color32::from_rgb(0x45, 0x45, 0x45)),
-            header_sel_text: pick(dark, Color32::from_rgb(0x0B, 0x5E, 0x31), Color32::from_rgb(0x6F, 0xD3, 0x9A)),
-            header_all_bg: pick(dark, Color32::from_rgb(0xC8, 0xE6, 0xD3), Color32::from_rgb(0x2E, 0x55, 0x3E)),
+            desk: pick(dark, rgb(0xE2E5E2), rgb(0x2A2F2C)),
+            gridline: rgb(0xE6E8E6),
+            header_bg: pick(dark, rgb(0xF7F8F7), rgb(0x1C201E)),
+            header_text: pick(dark, rgb(0x5A615C), rgb(0xA3ABA6)),
+            header_line: pick(dark, rgb(0xE3E5E3), rgb(0x323833)),
+            header_sel_bg: pick(dark, rgb(0xE1F0E7), rgb(0x1F3A2B)),
+            header_sel_text: pick(dark, rgb(0x0E6B38), rgb(0x7FD8A6)),
+            header_all_bg: pick(dark, rgb(0xCDE6D6), rgb(0x2B5038)),
             sel_fill: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C), Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24)),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
-            input_bg: pick(dark, Color32::WHITE, Color32::from_rgb(0x1F, 0x1F, 0x1F)),
-            input_border: pick(dark, Color32::from_rgb(0xD1, 0xD1, 0xD1), Color32::from_rgb(0x50, 0x50, 0x50)),
-            tab_bar: pick(dark, Color32::from_rgb(0xF3, 0xF3, 0xF3), Color32::from_rgb(0x29, 0x29, 0x29)),
-            tab_active: pick(dark, Color32::WHITE, Color32::from_rgb(0x3A, 0x3A, 0x3A)),
-            status_bar: pick(dark, Color32::from_rgb(0xF3, 0xF3, 0xF3), Color32::from_rgb(0x29, 0x29, 0x29)),
+            input_bg: pick(dark, Color32::WHITE, rgb(0x1A1D1B)),
+            input_border: pick(dark, rgb(0xDADDDA), rgb(0x3A403C)),
+            tab_bar: pick(dark, rgb(0xF5F6F5), rgb(0x161917)),
+            tab_active: pick(dark, rgb(0xE6F2EB), rgb(0x1F3A2B)),
+            status_bar: pick(dark, rgb(0xF5F6F5), rgb(0x161917)),
             cell_text: Color32::BLACK,
-            menu_bg: pick(dark, Color32::WHITE, Color32::from_rgb(0x30, 0x30, 0x30)),
+            menu_bg: pick(dark, Color32::WHITE, rgb(0x1F2321)),
             shadow: pick(dark, Color32::from_black_alpha(40), Color32::from_black_alpha(90)),
             danger: pick(dark, Color32::from_rgb(0xC4, 0x2B, 0x1C), Color32::from_rgb(0xFF, 0x95, 0x85)),
             error_check_green: pick(dark, Color32::from_rgb(0x1E, 0x8E, 0x3E), Color32::from_rgb(0x4C, 0xC2, 0x6B)),
@@ -224,7 +224,7 @@ impl Tokens {
                 [rgb(0x2F6FCF), rgb(0x1E8A4C), rgb(0xC8601A), rgb(0xC8372D), rgb(0x8350C8), rgb(0x13808A), rgb(0x9C6C00), rgb(0x5A6B7D)],
                 [rgb(0x6EA8F7), rgb(0x5CC587), rgb(0xF0965A), rgb(0xF07B6E), rgb(0xB394EE), rgb(0x4CC7CF), rgb(0xF2C14E), rgb(0xA9B6C4)],
             ),
-            paper: pick(dark, Color32::WHITE, rgb(0x454545)),
+            paper: pick(dark, Color32::WHITE, rgb(0x3A403C)),
             ref_colors: pick(
                 dark,
                 SHEET_REF_COLORS,
@@ -248,7 +248,115 @@ impl Tokens {
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
+        if let Some(t) = active_palette() {
+            return t;
+        }
         if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
+    }
+
+    /// Dark Green: the dark theme on deep forest-green surfaces.
+    pub fn dark_green() -> Tokens {
+        let mut t = Tokens::dark();
+        t.window = rgb(0x0F1A14);
+        t.ribbon = rgb(0x14231B);
+        t.ribbon_border = rgb(0x24392D);
+        t.text = rgb(0xE6F0EA);
+        t.text_dim = rgb(0xA2B8AA);
+        t.text_disabled = rgb(0x5C7466);
+        t.accent = rgb(0x4CC283);
+        t.accent_dark = rgb(0x3DA86C);
+        t.accent_soft = rgb(0x1D3A2A);
+        t.hover = rgb(0x1B2E23);
+        t.pressed = rgb(0x234030);
+        t.separator = rgb(0x1F3328);
+        t.desk = rgb(0x16261D);
+        t.header_bg = rgb(0x122019);
+        t.header_text = rgb(0xA2B8AA);
+        t.header_line = rgb(0x24392D);
+        t.header_sel_bg = rgb(0x1D3A2A);
+        t.header_sel_text = rgb(0x8FE0B2);
+        t.input_bg = rgb(0x0C1510);
+        t.input_border = rgb(0x2C4536);
+        t.tab_bar = t.window;
+        t.tab_active = rgb(0x1D3A2A);
+        t.status_bar = t.window;
+        t.menu_bg = rgb(0x14231B);
+        t.paper = rgb(0x24392D);
+        t
+    }
+
+    /// The tokens for an Omarchy theme's `colors.toml` (its `mode`, surfaces, text, accent and
+    /// selection), on the light or dark palette as its mode says.
+    pub fn from_omarchy(colors: &str) -> Option<Tokens> {
+        let get = |key: &str| -> Option<Color32> {
+            colors.lines().find_map(|l| {
+                let (k, v) = l.split_once('=')?;
+                (k.trim() == key).then_some(())?;
+                let v = v.trim().trim_matches('"').trim_start_matches('#');
+                let n = u32::from_str_radix(v.get(..6)?, 16).ok()?;
+                Some(rgb(n))
+            })
+        };
+        let dark = colors.lines().any(|l| l.split_once('=').is_some_and(|(k, v)| k.trim() == "mode" && v.contains("dark")));
+        let bg = get("background")?;
+        let fg = get("foreground")?;
+        let accent = get("accent")?;
+        let card = get("lighter_background").unwrap_or(bg);
+        let deep = get("dark_background").unwrap_or(bg);
+        let mix = |a: Color32, b: Color32, k: f32| a.lerp_to_gamma(b, k);
+        let mut t = if dark { Tokens::dark() } else { Tokens::light() };
+        t.window = bg;
+        t.ribbon = card;
+        t.menu_bg = card;
+        t.input_bg = card;
+        t.paper = card;
+        t.ribbon_border = mix(bg, fg, 0.12);
+        t.separator = mix(bg, fg, 0.08);
+        t.input_border = mix(bg, fg, 0.18);
+        t.text = fg;
+        t.text_dim = mix(fg, bg, 0.32);
+        t.text_disabled = mix(fg, bg, 0.6);
+        t.accent = accent;
+        t.accent_dark = mix(accent, fg, 0.2);
+        t.accent_soft = get("selection").unwrap_or(mix(accent, bg, 0.82));
+        t.hover = deep;
+        t.pressed = mix(deep, fg, 0.08);
+        t.desk = deep;
+        t.header_bg = mix(bg, card, 0.5);
+        t.header_text = mix(fg, bg, 0.32);
+        t.header_line = mix(bg, fg, 0.12);
+        t.header_sel_bg = t.accent_soft;
+        t.header_sel_text = if dark { mix(accent, fg, 0.3) } else { mix(accent, fg, 0.35) };
+        t.tab_bar = bg;
+        t.tab_active = t.accent_soft;
+        t.status_bar = bg;
+        Some(t)
+    }
+}
+
+static PALETTE: std::sync::RwLock<Option<Tokens>> = std::sync::RwLock::new(None);
+
+/// The palette that replaces the light/dark one (Dark Green, the Omarchy theme), if any.
+pub fn active_palette() -> Option<Tokens> {
+    PALETTE.read().ok().and_then(|g| *g)
+}
+
+/// Installs `palette` over the light/dark tokens (or removes it), with egui's visuals to match.
+pub fn set_palette(ctx: &egui::Context, palette: Option<Tokens>, dark: bool) {
+    if let Ok(mut g) = PALETTE.write() {
+        *g = palette;
+    }
+    apply(ctx, palette.map_or(dark, |p| p.dark));
+}
+
+impl Tokens {
+    /// The sheet's background: the ribbon card's surface (white in the default light theme), or
+    /// white cells when the theme is dark and the sheet does not follow it (View › Dark sheet).
+    pub fn sheet_bg(&self, follow_dark: bool) -> Color32 {
+        // The sheet card is the ribbon card's surface in every palette, so the docked formula bar,
+        // the cells, the scrollbars and the sheet-tab strip read as one with the chrome. A dark
+        // theme with Dark sheet off keeps white cells.
+        if self.dark && !follow_dark { self.grid_bg } else { self.ribbon }
     }
 
     /// One colour of the category palette.
@@ -260,6 +368,58 @@ impl Tokens {
     pub fn ref_color(&self, index: usize, on_sheet: bool) -> Color32 {
         let set = if on_sheet { &self.sheet_ref_colors } else { &self.ref_colors };
         set.get(index % set.len()).copied().unwrap_or(self.text)
+    }
+
+    /// The colours of the ribbon's colorized icons (`icons/colored.rs`), one per [`IconRole`]: ink
+    /// is the text colour, paper the ribbon surface and accent the theme accent; the rest are the
+    /// icon set's own light and dark values.
+    pub fn icon_inks(&self) -> IconInks {
+        let d = self.dark;
+        IconInks([
+            self.text,
+            pick(d, rgb(0x8A918C), rgb(0x7D857F)),
+            self.accent,
+            pick(d, rgb(0xCBE7D6), rgb(0x35634A)),
+            pick(d, rgb(0xC42B1C), rgb(0xF27C6C)),
+            pick(d, rgb(0xF6D3CE), rgb(0x4E2C28)),
+            pick(d, rgb(0xD9861A), rgb(0xEBA54A)),
+            pick(d, rgb(0xF8E4C2), rgb(0x4D3D24)),
+            pick(d, rgb(0x1F5FC9), rgb(0x78A9F7)),
+            self.ribbon,
+        ])
+    }
+}
+
+/// A colour role of the colorized ribbon icons; [`Tokens::icon_inks`] gives each its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IconRole {
+    Ink,
+    Dim,
+    Accent,
+    AccentSoft,
+    Red,
+    RedSoft,
+    Amber,
+    AmberSoft,
+    Blue,
+    /// The surface behind the icon (fills that knock out what lies under them).
+    Paper,
+}
+
+impl IconRole {
+    /// A pale wash (accent soft, red soft, amber soft) rather than a solid colour.
+    pub fn is_soft(self) -> bool {
+        matches!(self, IconRole::AccentSoft | IconRole::RedSoft | IconRole::AmberSoft)
+    }
+}
+
+/// The colours of the [`IconRole`]s for one theme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IconInks([Color32; 10]);
+
+impl IconInks {
+    pub fn get(&self, role: IconRole) -> Color32 {
+        self.0.get(role as usize).copied().unwrap_or(Color32::GRAY)
     }
 }
 
@@ -283,7 +443,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     // Install both palettes before System can switch between the style slots.
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         let dark = theme == egui::Theme::Dark;
-        let t = if dark { Tokens::dark() } else { Tokens::light() };
+        let t = active_palette().filter(|p| p.dark == dark).unwrap_or(if dark { Tokens::dark() } else { Tokens::light() });
         let mut v = if dark { Visuals::dark() } else { Visuals::light() };
         v.panel_fill = t.window;
         v.window_fill = t.menu_bg;
@@ -304,8 +464,11 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.widgets.active.corner_radius = egui::CornerRadius::same(2);
         v.widgets.open.corner_radius = egui::CornerRadius::same(2);
         v.window_corner_radius = egui::CornerRadius::same(10);
-        v.menu_corner_radius = egui::CornerRadius::same(8);
-        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        // Menus and popups are cards: 10 px corners, a hairline in the ribbon's border colour and
+        // a soft, wide shadow (lighter than a window's, so a menu floats rather than looms).
+        v.menu_corner_radius = egui::CornerRadius::same(10);
+        v.window_stroke = Stroke::new(1.0, t.ribbon_border);
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 0, color: t.shadow.gamma_multiply(0.8) };
         ctx.set_visuals_of(theme, v);
     }
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
@@ -314,6 +477,9 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 3.0);
         s.spacing.interact_size.y = 22.0;
+        s.spacing.menu_margin = egui::Margin::same(6);
+        // A submenu sits just off its parent card, not overlapping it.
+        s.spacing.menu_spacing = 4.0;
         s.text_styles.insert(egui::TextStyle::Body, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Button, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Small, ui_font(11.0));

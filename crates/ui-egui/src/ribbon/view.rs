@@ -16,7 +16,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, cmd, json!({}));
         }
     }
-    sep(ui);
+    sep(ui, "Workbook Views");
     let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings))).unwrap_or((true, true));
     let lang = app.ui.language;
     let page_layout =
@@ -25,13 +25,13 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     ui.vertical(|ui| {
         // Rulers exist only in Page Layout view.
         let mut ruler = !app.session.hide_ruler;
-        let ruler_resp = ui.add_enabled(page_layout, egui::Checkbox::new(&mut ruler, lang.tr("Ruler")));
+        let ruler_resp = ui.add_enabled_ui(page_layout, |ui| crate::widgets::checkbox(ui, &mut ruler, lang.tr("Ruler"))).inner;
         control_keytip(app, ui, &ruler_resp, "view.ruler");
         if ruler_resp.changed() {
             act(app, "view.ruler", json!({"on": ruler}));
         }
         let mut g = s.0;
-        let resp = ui.checkbox(&mut g, lang.tr("Gridlines"));
+        let resp = crate::widgets::checkbox(ui, &mut g, lang.tr("Gridlines"));
         control_keytip(app, ui, &resp, "view.gridlines");
         if resp.changed() {
             act(app, "view.gridlines", json!({"on": g}));
@@ -40,42 +40,42 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     ui.add_space(6.0);
     ui.vertical(|ui| {
         let mut fb = app.session.prefs.formula_bar;
-        let resp = ui.checkbox(&mut fb, lang.tr("Formula Bar"));
+        let resp = crate::widgets::checkbox(ui, &mut fb, lang.tr("Formula Bar"));
         control_keytip(app, ui, &resp, "view.formulaBar");
         if resp.changed() || invoke(app, "view.formulaBar") {
             act(app, "view.formulaBar", json!({"on": checkbox_on(resp.changed(), fb)}));
         }
         let mut h = s.1;
-        let resp = ui.checkbox(&mut h, lang.tr("Headings"));
+        let resp = crate::widgets::checkbox(ui, &mut h, lang.tr("Headings"));
         control_keytip(app, ui, &resp, "view.headings");
         if resp.changed() {
             act(app, "view.headings", json!({"on": h}));
         }
     });
-    sep(ui);
+    sep(ui, "Show");
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
     control_keytip(app, ui, &__k, "dialog:zoom");
     if __k.clicked() {
         app.open_dialog("zoom", json!({}));
     }
-    let __k = big_button(ui, Icon::Search, "100%", "Zoom to 100%", false);
+    let __k = big_button(ui, Icon::Zoom100, "100%", "Zoom to 100%", false);
     control_keytip(app, ui, &__k, "view.zoom");
     if __k.clicked() || invoke(app, "view.zoom") {
         act(app, "view.zoom", json!({"percent": 100}));
     }
-    let __k = big_button(ui, Icon::Zoom, "Zoom to\nSelection", "Zoom to Selection", false);
+    let __k = big_button(ui, Icon::ZoomSelection, "Zoom to\nSelection", "Zoom to Selection", false);
     control_keytip(app, ui, &__k, "view.zoomToSelection");
     if __k.clicked() {
         let r = app.grid.cells_rect.unwrap_or(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 700.0)));
         act(app, "view.zoomToSelection", json!({"viewWidth": r.width(), "viewHeight": r.height()}));
     }
-    sep(ui);
-    let __k = big_button(ui, Icon::NewFile, "New\nWindow", "New Window", false);
+    sep(ui, "Zoom");
+    let __k = big_button(ui, Icon::NewWindow, "New\nWindow", "New Window", false);
     control_keytip(app, ui, &__k, "view.newWindow");
     if __k.clicked() {
         act(app, "view.newWindow", json!({}));
     }
-    let __k = big_button(ui, Icon::Table, "Arrange\nAll", "Arrange All", false);
+    let __k = big_button(ui, Icon::ArrangeAll, "Arrange\nAll", "Arrange All", false);
     control_keytip(app, ui, &__k, "view.arrangeAll");
     if __k.clicked() {
         app.open_dialog("arrangeAll", json!({}));
@@ -105,13 +105,17 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         let label = match mode {
             "system" => "System",
             "dark" => "Dark",
+            "darkGreen" => "Dark Green",
+            "omarchy" => "Omarchy",
             _ => "Light",
         };
         craft_ui::ComboBox::from_id_salt("display_theme")
             .selected_text(lang.tr(label))
             .width(88.0)
             .show_ui(ui, |ui| {
-                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                for (value, label) in
+                    [("system", "System"), ("light", "Light"), ("dark", "Dark"), ("darkGreen", "Dark Green"), ("omarchy", "Omarchy")]
+                {
                     if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
                         act(app, "view.theme", json!({"mode": value}));
                     }
@@ -119,13 +123,22 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             })
             .response
             .labelled_by(label_response.id);
+    });
+    // Two rows a column: a third would not fit the captionless card.
+    ui.vertical(|ui| {
+        ui.add_space(4.0);
+        let mut dark_sheet = app.ui.dark_sheet;
+        let tip = lang.tr("In a dark theme, show the sheet's cells, objects and charts dark too");
+        if crate::widgets::checkbox(ui, &mut dark_sheet, lang.tr("Dark sheet")).on_hover_text(tip).changed() {
+            act(app, "view.darkSheet", json!({"on": dark_sheet}));
+        }
         let mut animations = app.ui.animations;
         let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
-        if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
+        if crate::widgets::checkbox(ui, &mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
             act(app, "view.animations", json!({"on": animations}));
         }
     });
-    sep(ui);
+    sep(ui, "Window");
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.
     ui.vertical(|ui| {
         let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
@@ -166,7 +179,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
 /// View › Switch Windows: the open workbooks, the active one checked and unsaved ones marked;
 /// choosing one brings it forward.
 fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
-    let anchor = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
+    let anchor = big_button(ui, Icon::SwitchWindows, "Switch\nWindows", "Switch Windows", true);
     anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
     control_keytip(app, ui, &anchor, "view.switchWindows");
     let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");

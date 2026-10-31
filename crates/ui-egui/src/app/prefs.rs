@@ -12,6 +12,7 @@ impl SheetApp {
 
     /// Follows the desktop/system theme preference and records the effective theme.
     pub(super) fn sync_theme_preference(&mut self, ctx: &egui::Context) {
+        self.sync_palette(ctx);
         let preference = match (
             self.ui.system_theme,
             ctx.system_theme().or_else(|| self.desktop_dark.map(|d| if d { egui::Theme::Dark } else { egui::Theme::Light })),
@@ -20,11 +21,45 @@ impl SheetApp {
             (true, Some(egui::Theme::Light)) => egui::ThemePreference::Light,
             _ => self.ui.theme_preference(),
         };
+        let preference = match crate::theme::active_palette() {
+            Some(p) if p.dark => egui::ThemePreference::Dark,
+            Some(_) => egui::ThemePreference::Light,
+            None => preference,
+        };
         if ctx.options(|o| o.theme_preference) != preference {
             ctx.set_theme(preference);
             ctx.request_repaint();
         }
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
+    }
+
+    /// Installs the chosen palette (Dark Green, or the Omarchy theme, re-read every 0.4 s so
+    /// switching Omarchy themes recolours the app) and removes it when plain light/dark is chosen.
+    fn sync_palette(&mut self, ctx: &egui::Context) {
+        let want = self.ui.palette.clone();
+        let now = crate::now_ms();
+        let mut text = String::new();
+        if want == "omarchy" {
+            ctx.request_repaint_after(std::time::Duration::from_millis(400));
+            if want == self.palette_state.0 && now - self.palette_state.2 < 400.0 {
+                return;
+            }
+            self.palette_state.2 = now;
+            text = omarchy_colors().unwrap_or_default();
+            if text == self.palette_state.1 && want == self.palette_state.0 {
+                return;
+            }
+        } else if want == self.palette_state.0 {
+            return;
+        }
+        let palette = match want.as_str() {
+            "darkGreen" => Some(crate::theme::Tokens::dark_green()),
+            "omarchy" => crate::theme::Tokens::from_omarchy(&text),
+            _ => None,
+        };
+        crate::theme::set_palette(ctx, palette, self.ui.dark);
+        self.palette_state = (want, text, now);
+        ctx.request_repaint();
     }
 
     /// Keeps egui's own keyboard zoom and quit shortcuts off and applies GridCraft's zoom factor.
@@ -63,5 +98,19 @@ impl SheetApp {
         {
             self.message = Some(("GridCraft".into(), "The web version is always the latest release.".into()));
         }
+    }
+}
+
+/// The current Omarchy theme's colours (`~/.local/state/omarchy/current/theme/colors.toml`).
+fn omarchy_colors() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let home = std::env::var_os("HOME")?;
+        let path = std::path::Path::new(&home).join(".local/state/omarchy/current/theme/colors.toml");
+        std::fs::read_to_string(path).ok().filter(|s| s.len() < 64 * 1024)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
     }
 }

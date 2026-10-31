@@ -42,7 +42,7 @@ fn protect_and_unprotect_sheet_mask_the_password() {
     assert!(h.query_by_role(Role::PasswordInput).is_some());
     assert!(!secret_on_screen(&h));
 
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     assert!(h.state().session.active().unwrap().wb.active().unwrap().protection.as_ref().is_some_and(|p| p.password.is_some()));
@@ -52,7 +52,7 @@ fn protect_and_unprotect_sheet_mask_the_password() {
     h.run_steps(3);
     type_password(&mut h);
     assert!(!secret_on_screen(&h), "the typed password must not be readable");
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(h.state().session.active().unwrap().wb.active().unwrap().protection.is_none());
 }

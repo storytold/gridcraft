@@ -592,6 +592,9 @@ impl Session {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
+        for sh in wb.sheets.iter_mut() {
+            Arc::make_mut(sh).default_row_height = gridcraft_model::NEW_WORKBOOK_ROW_HEIGHT;
+        }
         self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
     }
 

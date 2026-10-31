@@ -19,6 +19,7 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::grid::{self, DISPLAY_SCALE, Geo};
 use crate::icons::Icon;
+use crate::ribbon::sep;
 use crate::theme::{self, Tokens};
 
 /// Ruler thickness in points.
@@ -885,7 +886,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         });
     }
-    sep(ui);
+    sep(ui, "Header & Footer");
     for (icon, label, tip, field) in [
         (Icon::PageNumber, "Page\nNumber", "Page Number", "&[Page]"),
         (Icon::PageCount, "Number\nof Pages", "Number of Pages", "&[Pages]"),
@@ -899,42 +900,36 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
             insert_field(app, field);
         }
     }
-    sep(ui);
+    sep(ui, "Header & Footer Elements");
     if big_button(ui, Icon::Header, "Go to\nHeader", "Go to Header", false).clicked() && footer {
         go_to(app, false);
     }
     if big_button(ui, Icon::Footer, "Go to\nFooter", "Go to Footer", false).clicked() && !footer {
         go_to(app, true);
     }
-    sep(ui);
+    sep(ui, "Navigation");
     let (first, odd_even, scale_doc, align) =
         app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
             (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
         });
     ui.vertical(|ui| {
         let (mut f, mut o) = (first, odd_even);
-        if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
+        if crate::widgets::checkbox(ui, &mut f, tr(app, "Different First Page")).changed() {
             set_option(app, "differentFirst", f);
         }
-        if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
+        if crate::widgets::checkbox(ui, &mut o, tr(app, "Different Odd & Even Pages")).changed() {
             set_option(app, "differentOddEven", o);
         }
     });
     ui.vertical(|ui| {
         let (mut sd, mut am) = (scale_doc, align);
-        if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
+        if crate::widgets::checkbox(ui, &mut sd, tr(app, "Scale with Document")).changed() {
             set_option(app, "scaleWithDoc", sd);
         }
-        if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
+        if crate::widgets::checkbox(ui, &mut am, tr(app, "Align with Page Margins")).changed() {
             set_option(app, "alignWithMargins", am);
         }
     });
-}
-
-fn sep(ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), egui::Sense::hover());
-    ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 
 #[cfg(test)]

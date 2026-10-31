@@ -38,7 +38,7 @@ fn dialog_offers_copy_action_and_runs_unique_extract() {
     control(&mut h, "ui.dialog.set", json!({"field": "copyTo", "value": "C1"}));
     control(&mut h, "ui.dialog.set", json!({"field": "unique", "value": true}));
     h.run_steps(6);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_none());

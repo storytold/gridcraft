@@ -1,6 +1,6 @@
 //! Original border diagrams, painted with the same strokes as worksheet cells.
 
-use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, vec2};
 use gridcraft_engine::model::{BorderStyle, Borders, Theme};
 
 use crate::grid::paint_border;
@@ -8,12 +8,16 @@ use crate::theme::{self, Tokens};
 
 /// A labelled menu button with a two-by-two diagram to distinguish inside edges
 /// from the selection outline. Labels stay available to accessibility tools.
+/// It is a menu row like every other ribbon menu's, with the diagram in the icon column.
 pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response {
-    let response = ui.add(egui::Button::new("").frame(false).min_size(vec2(254.0, 26.0)));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let t = Tokens::get(ui.ctx());
-    let rect = Rect::from_center_size(pos2(response.rect.left() + 16.0, response.rect.center().y), vec2(20.0, 16.0));
-    let edges = [
+    crate::widgets::menu_row_with(ui, label, None, false, |p, slot, ink| paint_preset(p, slot, preset, ink, &t))
+}
+
+/// The two-by-two diagram of a border preset: its unset edges dotted.
+fn paint_preset(p: &egui::Painter, slot: Rect, preset: &str, ink: Color32, t: &Tokens) {
+    let rect = Rect::from_center_size(slot.center(), vec2(18.0, 15.0));
+    let edges: [[Pos2; 2]; 6] = [
         [rect.left_top(), rect.right_top()],
         [rect.left_bottom(), rect.right_bottom()],
         [rect.left_top(), rect.left_bottom()],
@@ -40,13 +44,11 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
     };
     for (points, style) in edges.into_iter().zip(styles) {
         if style == None {
-            ui.painter().extend(egui::Shape::dotted_line(&points, t.text_disabled, 3.0, 0.45));
+            p.extend(egui::Shape::dotted_line(&points, t.text_disabled, 3.0, 0.45));
         } else {
-            paint_border(ui.painter(), points, style, t.text);
+            paint_border(p, points, style, ink);
         }
     }
-    ui.painter().text(pos2(response.rect.left() + 36.0, response.rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
-    response
 }
 
 /// Preview only reads the dialog draft. A white worksheet surface keeps automatic
