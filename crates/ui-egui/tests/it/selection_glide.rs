@@ -16,11 +16,11 @@ const DT: f32 = 1.0 / 240.0;
 fn app() -> SheetApp {
     let mut session = Session::new();
     session.new_workbook();
-    SheetApp::new(session, Default::default())
+    crate::common::app(session)
 }
 
 fn harness() -> Harness {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(DT).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(DT).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

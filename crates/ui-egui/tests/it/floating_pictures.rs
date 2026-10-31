@@ -2,8 +2,7 @@
 
 use std::io::Cursor;
 
-use egui::{Shape, TextureId, vec2};
-use gridcraft_engine::Session;
+use egui::{Shape, TextureId};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
@@ -15,17 +14,7 @@ fn png(color: [u8; 4]) -> Vec<u8> {
 }
 
 fn harness() -> egui_kittest::Harness<'static, SheetApp> {
-    let mut session = Session::new();
-    session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(&ui.ctx().clone());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::blank_harness(4)
 }
 
 fn picture_textures(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<TextureId> {

@@ -59,7 +59,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
     ("window.activate", "switches documents"),
-    ("view.newWindow", "opens another document"),
+    ("window.close", "closes the document under test"),
+    ("view.newWindow", "opens another window, whose view swaps with the first"),
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
@@ -232,7 +233,7 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(fail(step, kind, e)),
         Err(p) => {
-            let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+            let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
             Err(fail(step, kind, format!("panicked: {msg}")))
         }
     }
@@ -372,8 +373,8 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
     if wb.sheets.is_empty() {
         return Some("no sheets left".into());
     }
-    if wb.active_sheet >= wb.sheets.len() {
-        return Some(format!("active sheet {} of {}", wb.active_sheet, wb.sheets.len()));
+    if wb.active_sheet() >= wb.sheets.len() {
+        return Some(format!("active sheet {} of {}", wb.active_sheet(), wb.sheets.len()));
     }
     let mut tables = BTreeSet::new();
     for (i, sh) in wb.sheets.iter().enumerate() {
@@ -489,7 +490,7 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
 /// reset: undo restores view state as it was, but switching sheets isn't an undoable edit.
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
-    wb.active_sheet = 0;
+    wb.set_active_sheet(0);
     wb.names.retain(|n| n.name != WATCH_NAME);
     for sh in wb.sheets.iter_mut() {
         let sh = Arc::make_mut(sh);

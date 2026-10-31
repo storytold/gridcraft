@@ -8,6 +8,7 @@ use wasm_bindgen::JsValue;
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
+/// Starts the eframe web runner for the GridCraft canvas. It adjusts the WebGPU device limits to the adapter's, optionally selects the WebGL backend from the query string, and builds the shell with the requested sample or host bridge, browser language rules, stored preferences and the loading/error page state.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     wasm_bindgen_futures::spawn_local(async {
@@ -71,8 +72,10 @@ pub fn start() {
                             _ => {}
                         }
                     }
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
+                    // Follow the browser's language, except a CJK one. CJK coverage comes from
+                    // optional craft-fonts input, not a guaranteed web font set, so a CJK browser
+                    // cannot be assumed to render localized labels without tofu. Users can still
+                    // choose a language explicitly.
                     let browser = gridcraft_ui_egui::i18n::Language::system();
                     if !matches!(
                         browser,
@@ -167,8 +170,9 @@ impl eframe::App for WebShell {
         }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(raw);
+    /// Forwards a browser frame's raw input to the shared app before eframe handles it.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -226,8 +230,9 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
                 // With `noopener` the new browsing context can't hold a reference back to the
-                // editor window and navigate it while the user reads the linked page.
-                let _ = w.open_with_url_and_target(&url, "_blank,noopener");
+                // editor window and navigate it while the user reads the linked page. It must be a
+                // window *feature*: inside the target string it would only name the new window.
+                let _ = w.open_with_url_and_target_and_features(&url, "_blank", "noopener,noreferrer");
             }
         })),
         inbox: Some(inbox),
@@ -363,7 +368,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
         js_sys::Reflect::get(&window, &JsValue::from_str("showSaveFilePicker")).ok().and_then(|v| v.dyn_into().ok());
 
     if let Some(picker_fn) = show_picker_fn {
-        let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("xlsx").to_ascii_lowercase();
+        let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("xlsx").to_ascii_lowercase();
         let dot_ext = format!(".{ext}");
         let mime = mime_for(name);
 

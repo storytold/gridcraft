@@ -1,5 +1,6 @@
 //! Simplified Chinese translations for the interface strings in i18n.rs.
 
+/// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "粘贴",
@@ -208,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "分页符\n预览",
         "Page\nLayout" => "页面\n布局",
         "Formula Bar" => "编辑栏",
+        "Name Box" => "名称框",
+        "Cell Editor" => "单元格编辑器",
+        "Font Size" => "字号",
         "Gridlines" => "网格线",
         "Headings" => "标题",
         "Zoom" => "缩放",
@@ -305,6 +309,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "深色",
         "Sheet Options|View" => "屏幕",
         "Print" => "打印",
+        "Print What" => "打印内容",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "单击可添加数据",
         "Add header" => "添加页眉",
@@ -432,6 +437,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "下一个工作表",
         "All sheets" => "所有工作表",
         "New sheet (⇧F11)" => "新建工作表 (⇧F11)",
+        "Text Box" => "文本框",
+        "Macros" => "宏",
+        "Record Macro" => "录制宏",
+        "Stop Recording" => "停止录制",
+        "Use Relative References" => "使用相对引用",
+        "Run\nMacro" => "运行宏",
+        "Macros…" => "宏…",
+        "Recording" => "正在录制",
+        "Stop" => "停止",
+        "New Macro" => "新建宏",
+        "Show" => "显示",
         _ => return None,
     })
 }

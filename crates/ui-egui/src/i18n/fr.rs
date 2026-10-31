@@ -1,5 +1,6 @@
 //! French translations for the interface strings in i18n.rs.
 
+/// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Different First Page" => "Première page différente",
@@ -213,6 +214,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Aperçu des sauts\nde page",
         "Page\nLayout" => "Mise en\npage",
         "Formula Bar" => "Barre de formule",
+        "Name Box" => "Zone de nom",
+        "Cell Editor" => "Éditeur de cellule",
+        "Font Size" => "Taille de police",
         "Gridlines" => "Quadrillage",
         "Headings" => "En-têtes",
         "Zoom" => "Zoom",
@@ -311,6 +315,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Autres\nfonctions",
         "Sheet Options|View" => "Affichage",
         "Print" => "Impression",
+        "Print What" => "Quoi imprimer",
         "Click to add data" => "Cliquez pour ajouter des données",
         "Add header" => "Ajouter un en-tête",
         "Add footer" => "Ajouter un pied de page",
@@ -444,6 +449,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Feuille suivante",
         "All sheets" => "Toutes les feuilles",
         "New sheet (⇧F11)" => "Nouvelle feuille (⇧F11)",
+        "Text Box" => "Zone de texte",
+        "Macros" => "Macros",
+        "Record Macro" => "Enregistrer une macro",
+        "Stop Recording" => "Arrêter l’enregistrement",
+        "Use Relative References" => "Utiliser les références relatives",
+        "Run\nMacro" => "Exécuter la macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Enregistrement",
+        "Stop" => "Arrêter",
+        "New Macro" => "Nouvelle macro",
+        "Show" => "Afficher",
         _ => return None,
     })
 }
