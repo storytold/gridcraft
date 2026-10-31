@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Evaluator, Host, NameCache, precedents_with, stack_position};
 
 mod graph;
 mod pass_host;
@@ -37,11 +37,24 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Areas the formulas of the graph hold from names, so the budget on them holds across edits
+    /// as well as within one build (see [`NameCache`]), and what each formula holding some was
+    /// charged, given back when the formula is resolved again or removed.
+    name_areas: usize,
+    name_charges: HashMap<Key, usize>,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            name_areas: 0,
+            name_charges: HashMap::default(),
+        }
     }
 }
 
@@ -125,12 +138,19 @@ impl Calc {
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
         let mut circ = Vec::new();
+        let mut names = NameCache::default();
+        self.name_charges.clear();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if let Some(f) = &cell.formula
                     && let Some(e) = f.expr()
                 {
-                    let (areas, dynamic) = precedents(wb, si, &e);
+                    let before = names.stored();
+                    let (areas, dynamic) = precedents_with(wb, si, &e, &mut names);
+                    let charge = names.stored().saturating_sub(before);
+                    if charge > 0 {
+                        self.name_charges.insert((si, c), charge);
+                    }
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
@@ -139,6 +159,7 @@ impl Calc {
             }
         }
         self.graph.settle();
+        self.name_areas = names.stored();
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
     }
 
@@ -204,11 +225,23 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        // The budget on areas taken from names counts on from what the graph's formulas hold: an
+        // edited formula gives its charge back before it is resolved again, so editing or refilling
+        // the same readers doesn't spend it.
+        let mut names = NameCache::with_stored(self.name_areas);
         for &k in changed {
+            if let Some(old) = self.name_charges.remove(&k) {
+                names.give_back(old);
+            }
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
-                    let (areas, dynamic) = precedents(wb, k.0, &e);
+                    let before = names.stored();
+                    let (areas, dynamic) = precedents_with(wb, k.0, &e, &mut names);
+                    let charge = names.stored().saturating_sub(before);
+                    if charge > 0 {
+                        self.name_charges.insert(k, charge);
+                    }
                     self.graph.insert(k, Node { areas, dynamic });
                 }
                 None => {
@@ -231,6 +264,7 @@ impl Calc {
                 }
             }
         }
+        self.name_areas = names.stored();
         self.graph.settle();
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
