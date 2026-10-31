@@ -790,37 +790,42 @@ mod tests {
 
     #[test]
     fn lookup_accepts_system_and_browser_tags() {
-        assert_eq!(lookup("pt-BR").tag, "pt-BR");
-        assert_eq!(lookup("pt_BR.UTF-8").tag, "pt-BR");
-        assert_eq!(lookup("pt").tag, "pt-BR");
-        assert_eq!(lookup("pt-PT").tag, "pt-PT");
-        assert_eq!(lookup("pt-AO").tag, "pt-PT");
-        assert_eq!(lookup("de").tag, "de-DE");
-        assert_eq!(lookup("de-AT").tag, "de-DE");
-        assert_eq!(lookup("de_CH.UTF-8").tag, "de-CH");
-        assert_eq!(lookup("de-LI").tag, "de-CH");
-        assert_eq!(lookup("fr-CH").tag, "fr-CH");
-        assert_eq!(lookup("fr-BE").tag, "fr-FR");
-        assert_eq!(lookup("it_CH.UTF-8").tag, "it-CH");
-        assert_eq!(lookup("en-CH").tag, "en-CH");
-        assert_eq!(lookup("nl_NL.UTF-8").tag, "nl-NL");
-        assert_eq!(lookup("nl").tag, "nl-NL");
-        assert_eq!(lookup("en-AU").tag, "en-GB");
-        assert_eq!(lookup("en_GB.UTF-8").tag, "en-GB");
-        assert_eq!(lookup("en-IN").tag, "en-IN");
-        assert_eq!(lookup("en-CA").tag, "en-US");
-        assert_eq!(lookup("zh-Hant").tag, "zh-TW");
-        assert_eq!(lookup("zh-HK").tag, "zh-TW");
-        assert_eq!(lookup("zh").tag, "zh-CN");
-        // Extensions don't replace the region or script; an explicit territory beats the script.
-        assert_eq!(lookup("en-GB-u-ca-gregory").tag, "en-GB");
-        assert_eq!(lookup("zh-Hant-u-nu-latn").tag, "zh-TW");
-        assert_eq!(lookup("zh-Hant-CN").tag, "zh-CN");
-        assert_eq!(lookup("zh-Hans-TW").tag, "zh-TW");
-        assert_eq!(lookup("cs_CZ.UTF-8").tag, "cs-CZ");
-        assert_eq!(lookup("C").tag, "en-US");
-        assert_eq!(lookup("").tag, "en-US");
-        assert_eq!(lookup("xx-YY").tag, "en-US");
+        let cases = [
+            ("pt-BR", "pt-BR"),
+            ("pt_BR.UTF-8", "pt-BR"),
+            ("pt", "pt-BR"),
+            ("pt-PT", "pt-PT"),
+            ("pt-AO", "pt-PT"),
+            ("de", "de-DE"),
+            ("de-AT", "de-DE"),
+            ("de_CH.UTF-8", "de-CH"),
+            ("de-LI", "de-CH"),
+            ("fr-CH", "fr-CH"),
+            ("fr-BE", "fr-FR"),
+            ("it_CH.UTF-8", "it-CH"),
+            ("en-CH", "en-CH"),
+            ("nl_NL.UTF-8", "nl-NL"),
+            ("nl", "nl-NL"),
+            ("en-AU", "en-GB"),
+            ("en_GB.UTF-8", "en-GB"),
+            ("en-IN", "en-IN"),
+            ("en-CA", "en-US"),
+            ("zh-Hant", "zh-TW"),
+            ("zh-HK", "zh-TW"),
+            ("zh", "zh-CN"),
+            // Extensions don't replace the region or script; an explicit territory beats the script.
+            ("en-GB-u-ca-gregory", "en-GB"),
+            ("zh-Hant-u-nu-latn", "zh-TW"),
+            ("zh-Hant-CN", "zh-CN"),
+            ("zh-Hans-TW", "zh-TW"),
+            ("cs_CZ.UTF-8", "cs-CZ"),
+            ("C", "en-US"),
+            ("", "en-US"),
+            ("xx-YY", "en-US"),
+        ];
+        for (tag, expected) in cases {
+            assert_eq!(lookup(tag).tag, expected, "{tag}");
+        }
         assert_eq!(find("DE-de").map(|r| r.tag), Some("de-DE"));
         assert!(find("xx").is_none());
     }
