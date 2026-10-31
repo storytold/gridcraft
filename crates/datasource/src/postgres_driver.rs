@@ -60,7 +60,7 @@ fn value(row: &Row, i: usize) -> DbValue {
         Type::OID => get(row, i, |n: u32| DbValue::Int(n.into())),
         Type::FLOAT4 => get(row, i, |n: f32| DbValue::Float(n.into())),
         Type::FLOAT8 => get(row, i, DbValue::Float),
-        Type::NUMERIC => get(row, i, |n: Numeric| n.0.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(DbValue::Text(n.0), DbValue::Float)),
+        Type::NUMERIC => get(row, i, |n: Numeric| crate::decimal(&n.0)),
         Type::DATE => get(row, i, date),
         Type::TIMESTAMP => get(row, i, datetime),
         Type::TIMESTAMPTZ => get(row, i, |d: chrono::DateTime<chrono::Utc>| datetime(d.naive_utc())),

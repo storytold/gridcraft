@@ -104,7 +104,8 @@ fn value(s: &str, ty: &DataType) -> DbValue {
     let text = || DbValue::Text(s.to_string());
     match ty {
         DataType::Integer | DataType::SmallInt | DataType::BigInt | DataType::TinyInt => s.trim().parse().map_or_else(|_| text(), DbValue::Int),
-        DataType::Numeric { .. } | DataType::Decimal { .. } | DataType::Float { .. } | DataType::Real | DataType::Double => {
+        DataType::Numeric { .. } | DataType::Decimal { .. } => crate::decimal(s),
+        DataType::Float { .. } | DataType::Real | DataType::Double => {
             s.trim().parse::<f64>().ok().filter(|f| f.is_finite()).map_or_else(text, DbValue::Float)
         }
         DataType::Bit => match s.trim() {
