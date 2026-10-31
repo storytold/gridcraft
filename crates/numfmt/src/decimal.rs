@@ -4,6 +4,8 @@
 //! digits and then rounded half away from zero on that decimal string. That makes 2.675 with
 //! "0.00" show 2.68 and 1.005 show 1.01, as in Excel, even though neither is exact in binary.
 
+use std::fmt::Write as _;
+
 /// Most decimals we ever compute; placeholders beyond this are padded with zeros.
 pub(crate) const MAX_DECIMALS: usize = 400;
 
@@ -21,7 +23,8 @@ pub(crate) fn decimal_digits(a: f64) -> ([u8; 15], i32) {
     }
     // 16 digits, rounded. Unless the 16th is a 5 it decides the 15th exactly (4 or less rounds
     // down, 6 or more up), so one format serves almost every number.
-    let (d16, exp) = significant_digits(a, 16);
+    let mut d16 = [0u8; 16];
+    let exp = significant_digits(a, &mut d16);
     for (slot, d) in digits.iter_mut().zip(&d16) {
         *slot = *d;
     }
@@ -30,11 +33,8 @@ pub(crate) fn decimal_digits(a: f64) -> ([u8; 15], i32) {
         5 if is_exact_tie(a) => (digits, exp),
         5 => {
             // Not a tie: round the exact value (the 16-digit rounding above may be a double rounding).
-            let (d15, exp15) = significant_digits(a, 15);
             let mut out = [0u8; 15];
-            for (slot, d) in out.iter_mut().zip(&d15) {
-                *slot = *d;
-            }
+            let exp15 = significant_digits(a, &mut out);
             (out, exp15)
         }
         _ => {
@@ -59,12 +59,54 @@ pub(crate) fn decimal_digits(a: f64) -> ([u8; 15], i32) {
     }
 }
 
-/// `n` significant digits of `a` (rounded half to even on the exact binary value) and the power of
-/// ten of the first.
-fn significant_digits(a: f64, n: usize) -> (Vec<u8>, i32) {
-    let s = format!("{:.*e}", n.saturating_sub(1), a);
-    let (mant, exp) = s.split_once('e').unwrap_or((s.as_str(), "0"));
-    (mant.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0').collect(), exp.parse().unwrap_or(0))
+/// Writes `out.len()` significant digits of `a` (rounded half to even on the exact binary value)
+/// into `out` and returns the power of ten of the first.
+///
+/// Up to 32 digits are formatted in a stack buffer; more (the 800 of the tie check) use a string.
+fn significant_digits(a: f64, out: &mut [u8]) -> i32 {
+    fn parse(s: &str, out: &mut [u8]) -> i32 {
+        let (mant, exp) = s.split_once('e').unwrap_or((s, "0"));
+        let digits = mant.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0');
+        for (slot, d) in out.iter_mut().zip(digits) {
+            *slot = d;
+        }
+        exp.parse().unwrap_or(0)
+    }
+    let prec = out.len().saturating_sub(1);
+    if out.len() <= 32 {
+        let mut buf = StackStr::default();
+        if write!(buf, "{:.*e}", prec, a).is_ok() {
+            return parse(buf.as_str(), out);
+        }
+    }
+    parse(&format!("{:.*e}", prec, a), out)
+}
+
+/// A fixed-size string buffer for short number formatting; a write that does not fit fails.
+struct StackStr {
+    buf: [u8; 64],
+    len: usize,
+}
+
+impl Default for StackStr {
+    fn default() -> Self {
+        StackStr { buf: [0; 64], len: 0 }
+    }
+}
+
+impl StackStr {
+    fn as_str(&self) -> &str {
+        self.buf.get(..self.len).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("")
+    }
+}
+
+impl std::fmt::Write for StackStr {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len.checked_add(s.len()).ok_or(std::fmt::Error)?;
+        self.buf.get_mut(self.len..end).ok_or(std::fmt::Error)?.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 /// True when `a`'s exact decimal expansion has a 5 as its 16th significant digit and only zeros after.
@@ -72,27 +114,59 @@ fn is_exact_tie(a: f64) -> bool {
     let is_tie = |ds: &[u8]| ds.get(15) == Some(&5) && ds.get(16..).is_some_and(|t| t.iter().all(|&d| d == 0));
     // A cheap screen first (30 digits), then the exact expansion: a double has at most 767
     // significant digits and Rust prints every one of them.
-    is_tie(&significant_digits(a, 30).0) && is_tie(&significant_digits(a, 800).0)
+    let mut screen = [0u8; 30];
+    significant_digits(a, &mut screen);
+    if !is_tie(&screen) {
+        return false;
+    }
+    let mut exact = vec![0u8; 800];
+    significant_digits(a, &mut exact);
+    is_tie(&exact)
 }
 
 /// Rounds the number `digits × 10^exp` (see [`decimal_digits`]) to `decimals` places, half away
 /// from zero. Returns the integer digits ("" when the integer part is zero) and exactly
 /// `decimals` fraction digits.
 pub(crate) fn fixed_from_digits(digits: &[u8; 15], exp: i32, decimals: usize) -> (String, String) {
+    let (mut int, mut frac) = (String::new(), String::new());
+    fixed_into(digits, exp, decimals, &mut int, &mut frac);
+    (int, frac)
+}
+
+/// [`fixed_from_digits`] into caller-owned strings (cleared first), so a loop can reuse them.
+///
+/// The rounded digits are `lead` (at most 16, a carry can add a leading 1) followed by `zeros`
+/// zero digits (placeholders beyond the 15 known digits), which is all a `Vec` of them held.
+fn fixed_into(digits: &[u8; 15], exp: i32, decimals: usize, int: &mut String, frac: &mut String) {
+    int.clear();
+    frac.clear();
     let decimals_calc = decimals.min(MAX_DECIMALS);
     let keep = exp as i64 + decimals_calc as i64 + 1;
-    let mut m: Vec<u8> = if keep <= 0 {
-        if keep == 0 && digits.first().copied().unwrap_or(0) >= 5 { vec![1] } else { Vec::new() }
+    let mut head = [0u8; 16];
+    let mut head_len = 0usize;
+    let mut zeros = 0usize;
+    if keep <= 0 {
+        if keep == 0 && digits.first().copied().unwrap_or(0) >= 5 {
+            if let Some(h) = head.first_mut() {
+                *h = 1;
+            }
+            head_len = 1;
+        }
     } else if keep as usize >= digits.len() {
-        let mut v = digits.to_vec();
-        v.resize(keep as usize, 0);
-        v
+        for (h, d) in head.iter_mut().zip(digits) {
+            *h = *d;
+        }
+        head_len = digits.len();
+        zeros = keep as usize - digits.len();
     } else {
         let keep = keep as usize;
-        let mut v = digits.get(..keep).map(<[u8]>::to_vec).unwrap_or_default();
+        for (h, d) in head.iter_mut().zip(digits.iter().take(keep)) {
+            *h = *d;
+        }
+        head_len = keep;
         if digits.get(keep).copied().unwrap_or(0) >= 5 {
             let mut carry = true;
-            for d in v.iter_mut().rev() {
+            for d in head.iter_mut().take(keep).rev() {
                 if *d == 9 {
                     *d = 0;
                 } else {
@@ -102,26 +176,36 @@ pub(crate) fn fixed_from_digits(digits: &[u8; 15], exp: i32, decimals: usize) ->
                 }
             }
             if carry {
-                v.insert(0, 1);
+                head.copy_within(0..keep, 1);
+                if let Some(h) = head.first_mut() {
+                    *h = 1;
+                }
+                head_len += 1;
             }
         }
-        v
-    };
-    let lead = m.iter().take_while(|&&d| d == 0).count();
-    m.drain(..lead);
-    let to_s = |ds: &[u8]| ds.iter().map(|d| char::from(b'0' + d)).collect::<String>();
-    let (int, mut frac) = if m.len() <= decimals_calc {
-        let mut f = "0".repeat(decimals_calc - m.len());
-        f.push_str(&to_s(&m));
-        (String::new(), f)
-    } else {
-        let split = m.len() - decimals_calc;
-        (to_s(m.get(..split).unwrap_or(&[])), to_s(m.get(split..).unwrap_or(&[])))
-    };
-    if decimals > decimals_calc {
-        frac.push_str(&"0".repeat(decimals - decimals_calc));
     }
-    (int, frac)
+    let total = head_len + zeros;
+    let mut lead = head.iter().take(head_len).take_while(|&&d| d == 0).count();
+    if lead == head_len {
+        lead = total; // all zeros
+    }
+    let len = total - lead;
+    // Digit `k` of the rounded number after its leading zeros.
+    let digit_at = |k: usize| {
+        let pos = lead + k;
+        if pos < head_len { head.get(pos).map_or('0', |&d| char::from(b'0' + d)) } else { '0' }
+    };
+    if len <= decimals_calc {
+        frac.extend(std::iter::repeat_n('0', decimals_calc - len));
+        frac.extend((0..len).map(digit_at));
+    } else {
+        let split = len - decimals_calc;
+        int.extend((0..split).map(digit_at));
+        frac.extend((split..len).map(digit_at));
+    }
+    if decimals > decimals_calc {
+        frac.extend(std::iter::repeat_n('0', decimals - decimals_calc));
+    }
 }
 
 /// Rounds a non-negative number to `decimals` places (see [`fixed_from_digits`]).
@@ -145,21 +229,25 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
     let sign = if n < 0.0 { "-" } else { "" };
     let (digits, x) = decimal_digits(n.abs());
     let int_len = sign.len() + (x.max(0) as usize) + 1;
-    // Fixed notation for magnitudes from 1E-4 up to what fits.
+    // Fixed notation for magnitudes from 1E-4 up to what fits. The 15 digits are computed once;
+    // each width only re-rounds them, into strings that are reused.
+    let (mut i, mut f, mut s) = (String::new(), String::new(), String::new());
     if x >= -4 && int_len <= max_chars {
         let avail = max_chars - int_len;
-        let mut decimals = if avail >= 2 { avail - 1 } else { 0 };
+        // Zeros past the 400th decimal are trimmed below anyway, so a huge width needs no more.
+        let mut decimals = (if avail >= 2 { avail - 1 } else { 0 }).min(MAX_DECIMALS);
         loop {
-            let (i, f) = fixed_from_digits(&digits, x, decimals);
-            let f = f.trim_end_matches('0');
-            if i.is_empty() && f.is_empty() {
+            fixed_into(&digits, x, decimals, &mut i, &mut f);
+            let ft = f.trim_end_matches('0');
+            if i.is_empty() && ft.is_empty() {
                 break; // rounded away to zero: use scientific
             }
-            let mut s = String::from(sign);
+            s.clear();
+            s.push_str(sign);
             s.push_str(if i.is_empty() { "0" } else { &i });
-            if !f.is_empty() {
+            if !ft.is_empty() {
                 s.push('.');
-                s.push_str(f);
+                s.push_str(ft);
             }
             if s.chars().count() <= max_chars {
                 return Some(s);
@@ -172,19 +260,20 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
     }
     for md in (0..=max_chars.min(14)).rev() {
         let mut e = x;
-        let (mut mi, mut mf) = fixed_from_digits(&digits, 0, md);
-        if mi.len() > 1 {
+        fixed_into(&digits, 0, md, &mut i, &mut f);
+        if i.len() > 1 {
             e += 1;
-            (mi, mf) = fixed_from_digits(&digits, -1, md);
+            fixed_into(&digits, -1, md, &mut i, &mut f);
         }
-        let mf = mf.trim_end_matches('0');
-        let mut s = String::from(sign);
-        s.push_str(if mi.is_empty() { "0" } else { &mi });
-        if !mf.is_empty() {
+        let ft = f.trim_end_matches('0');
+        s.clear();
+        s.push_str(sign);
+        s.push_str(if i.is_empty() { "0" } else { &i });
+        if !ft.is_empty() {
             s.push('.');
-            s.push_str(mf);
+            s.push_str(ft);
         }
-        s.push_str(&format!("E{}{:02}", if e < 0 { '-' } else { '+' }, e.unsigned_abs()));
+        let _ = write!(s, "E{}{:02}", if e < 0 { '-' } else { '+' }, e.unsigned_abs());
         if s.chars().count() <= max_chars {
             return Some(s);
         }
@@ -208,6 +297,10 @@ mod tests {
         assert_eq!(fixed(0.0005, 3), ("".into(), "001".into()));
         assert_eq!(fixed(1e20, 0).0, "100000000000000000000");
         assert_eq!(fixed(0.0, 2), ("".into(), "00".into()));
+        // Past 400 decimals only zeros are added; huge exponents keep all their digits.
+        assert_eq!(fixed(1.5, 450), ("1".into(), format!("5{}", "0".repeat(449))));
+        assert_eq!(fixed(1e300, 1), (format!("1{}", "0".repeat(300)), "0".into()));
+        assert_eq!(fixed(123456789012345678.0, 0).0, "123456789012346000");
     }
 
     #[test]
