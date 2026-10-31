@@ -240,3 +240,33 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+
+#[test]
+fn german_entry_display_and_xlsx_roundtrip() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"de"})).unwrap();
+    let typed = "=WENNFEHLER(SVERWEIS(1;B1:C2;2;FALSCH);#NV)+zählenwenn(B1:B2;\">0\")+SUMME(1,5;2,25)";
+    assert!(enter(&mut app, typed));
+    assert_eq!(formula(&app), "IFERROR(VLOOKUP(1,B1:C2,2,FALSE),#N/A)+COUNTIF(B1:B2,\">0\")+SUM(1.5,2.25)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"de.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    let shown = "=WENNFEHLER(SVERWEIS(1;B1:C2;2;FALSCH);#NV)+ZÄHLENWENN(B1:B2;\">0\")+SUMME(1,5;2,25)";
+    assert_eq!(app.editor.as_ref().unwrap().text, shown);
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "IFERROR(VLOOKUP(1,B1:C2,2,FALSE),#N/A)+COUNTIF(B1:B2,\">0\")+SUM(1.5,2.25)");
+    // A leading + before a name that starts with an umlaut is a formula too.
+    assert!(enter(&mut app, "+ÜBERSETZEN(\"a\")"));
+    assert_eq!(formula(&app), "+TRANSLATE(\"a\")");
+    // Typed numbers take the decimal comma.
+    assert!(enter(&mut app, "1,5"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(1.5));
+}
+
+#[test]
+fn only_german_takes_a_non_ascii_letter_after_a_sign_as_a_formula() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    assert!(enter(&mut app, "-Árbol"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("-Árbol"));
+}
