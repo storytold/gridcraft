@@ -2,6 +2,7 @@ use super::{
     INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
 };
+use crate::motion;
 
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -172,8 +173,21 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.animations" => {
-                self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
-                Ok(json!({"on": self.ui.animations}))
+                // `{"mode": "system" | "on" | "off"}`, or the checkbox's `{"on": bool}`. Without
+                // either, it toggles what shows now.
+                self.read_system_animations();
+                let mode = if let Some(mode) = p.get("mode").filter(|mode| !mode.is_null()) {
+                    match mode.as_str().and_then(motion::Animations::parse) {
+                        Some(mode) => mode,
+                        None => return Some(Err("animations mode must be system, on, or off".into())),
+                    }
+                } else if p.get("on").and_then(Json::as_bool).unwrap_or(!self.animations_on()) {
+                    motion::Animations::On
+                } else {
+                    motion::Animations::Off
+                };
+                self.ui.animations = mode;
+                Ok(json!({"mode": mode.code(), "on": self.animations_on(), "system": self.system_animations}))
             }
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);

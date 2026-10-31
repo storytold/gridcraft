@@ -298,8 +298,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "Orientamento",
         "Display theme" => "Tema di visualizzazione",
         "Animations" => "Animazioni",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Fa scorrere il contorno della selezione fino alla cella di destinazione invece di saltare"
+        "Animation effects" => "Effetti di animazione",
+        "Use system setting" => "Usa impostazione di sistema",
+        "Animation effects|On" => "Attivato",
+        "Animation effects|Off" => "Disattivato",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Scorrimento e zoom fluidi, e il contorno della selezione che scorre fino alla cella di destinazione"
         }
         "System" => "Sistema",
         "Light" => "Chiaro",

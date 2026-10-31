@@ -14,6 +14,7 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
+//!   (`animations`: `"system"`, `"on"` or `"off"`; `true`/`false` read as on/off)
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
@@ -137,11 +138,22 @@ fn direct(app: &mut SheetApp, id: &str, p: &Json, via_app: bool) -> Result<Json,
     r
 }
 
+/// The UI preferences as `ui.inspect` and `ui.set` report them: the saved [`crate::UiState`],
+/// plus `animations`, whether animations run right now. Agents read that boolean before Animation
+/// effects had three values, so it stays; `animationEffects` is the choice itself.
+fn ui_preferences(app: &SheetApp) -> Json {
+    let mut ui = serde_json::to_value(&app.ui).unwrap_or_default();
+    if let Some(fields) = ui.as_object_mut() {
+        fields.insert("animations".into(), json!(app.animations_on()));
+    }
+    ui
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let r = ctx.content_rect();
     let v = app.view();
     json!({
-        "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
+        "ui": ui_preferences(app),
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
@@ -194,7 +206,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
-                ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
+                ("view.animations", "Animations", "{on?: bool} or {mode?: \"system\"|\"on\"|\"off\"} (toggles without either) → {on, mode, system}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
@@ -236,10 +248,19 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             if let Some(v) = p.get("ribbonCollapsed").and_then(Json::as_bool) {
                 app.ui.ribbon_collapsed = v;
             }
-            if let Some(v) = p.get("animations").and_then(Json::as_bool) {
-                app.ui.animations = v;
+            // `"system"`, `"on"` or `"off"`; the older `true`/`false` read as on/off.
+            match p.get("animations") {
+                Some(Json::Bool(on)) => {
+                    let _ = app.run("view.animations", json!({"on": on}));
+                }
+                Some(Json::String(mode)) => {
+                    if let Err(e) = app.run("view.animations", json!({"mode": mode})) {
+                        return err(e);
+                    }
+                }
+                _ => {}
             }
-            let mut out = serde_json::to_value(&app.ui).unwrap_or_default();
+            let mut out = ui_preferences(app);
             if let Some(o) = out.as_object_mut() {
                 o.insert("formulaBar".into(), json!(app.session.prefs.formula_bar));
             }

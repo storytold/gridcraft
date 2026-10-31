@@ -67,7 +67,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs; `confirm` runs the dialog's command with the same parameters as its OK button |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state. On the native app it works while hidden or occluded when the platform still reports the current content size (the request asks for a hidden paint); a minimized window has no capturable size, so its request stays queued until the window is restored and otherwise reports the 8 s timeout. In a **hidden browser tab** the web runner does not implement that paint request, so the capture waits until the tab is shown again or reports the 8 s timeout. Up to 4 outstanding requests; retained images are limited to 128 MiB each and 256 MiB in total (each request reserves the largest image the ±1-pixel rounding rule can retain), one capture's transient encoding working set to 256 MiB, a base64 reply to 64 MiB, and retained images plus one capture's encoding working set to 512 MiB; a request that would exceed a budget is refused without evicting earlier ones. See [Screenshot budgets](#screenshot-budgets). A resize/DPI/zoom/visibility/occlusion change during capture is retried within the bounded retry budget or reported instead of saving stale pixels; the identity intentionally includes zoom and occlusion even though the expected physical size may be unchanged, so a capture never crosses layout generations. Every reply — success, refusal or timeout — carries the request `token` as `request` |
-| `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
+| `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`; `animations` is `"system"`, `"on"` or `"off"`, and `true`/`false` read as on/off) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 
@@ -106,9 +106,20 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
-`{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
-outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
-the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
+`{command: "view.animations", params: {mode: "off"}}` sets Animation effects (File ▸ Options);
+`mode` accepts `"system"`, `"on"`, or `"off"`. Off stops the motion in the window: a wheel notch
+scrolls and zooms at once instead of easing in, the formula bar changes height at once, the
+selection outline jumps to a new selection instead of gliding there, the dashes round a copied
+range stand still, and menus and tooltips appear without fading. System, the default, follows the system's own setting while the app runs
+(Windows: Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects; macOS: Reduce motion;
+Linux and the BSDs: the desktop's animations setting, from the settings portal or, without one,
+KDE's `kdeglobals` and GTK's `settings.ini`; the web: `prefers-reduced-motion`) and animates where
+the system says nothing. `{on: bool}` is the View ▸ Animations checkbox's form (on or off), as
+before, and without parameters the command toggles what shows. It answers `{on, mode, system}`:
+whether animations run now (the `on` it always answered), the saved choice, and what the system
+says (`null` when it doesn't). `ui.inspect` and `ui.set` report `ui.animations`, as before a
+boolean, now whether animations run, and the choice as `ui.animationEffects`. The choice is saved
+in `ui.json` as `animationEffects`; the `animations` boolean older versions wrote is still read.
 
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and

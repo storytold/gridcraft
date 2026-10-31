@@ -1,10 +1,10 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
-/// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
-/// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
-/// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
-/// settings are saved with the workbook.
+/// Excel's File › Options page: General (display theme, animation effects, interface language and
+/// Show formula bar), Editing (AutoComplete) and Save (the autosave checkbox toggling
+/// `app.ui.autosave`), plus Formulas (calculation mode and iterative calculation) when a document is
+/// active. Theme, animation effects, language, formula bar, AutoComplete and calculation changes run
+/// their commands through `run_or_alert`; calculation settings are saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
@@ -35,7 +35,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
-/// The display theme and interface language controls of the General section.
+/// The display theme, animation effects and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         let label = ui.label(lang.tr("Display theme"));
@@ -58,6 +58,8 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+        animation_effects_option(app, ui, lang);
+        ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
         craft_ui::ComboBox::from_id_salt("backstage_language")
             .width(160.0)
@@ -73,6 +75,25 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .labelled_by(label.id);
         ui.end_row();
     });
+}
+
+/// The Animation effects row: Use system setting, On or Off.
+fn animation_effects_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let label = ui.label(lang.tr("Animation effects"));
+    let animations = app.ui.animations;
+    craft_ui::ComboBox::from_id_salt("backstage_animations")
+        .width(160.0)
+        .selected_text(lang.tr(animations.label()))
+        .show_ui(ui, |ui| {
+            for mode in crate::motion::Animations::ALL {
+                if ui.selectable_label(animations == mode, lang.tr(mode.label())).clicked() {
+                    app.run_or_alert("view.animations", json!({"mode": mode.code()}));
+                }
+            }
+        })
+        .response
+        .labelled_by(label.id)
+        .on_hover_text(lang.tr(crate::motion::HINT));
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.

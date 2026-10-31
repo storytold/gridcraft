@@ -971,8 +971,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Tab|Insert" => "Εισαγωγή",
         "AutoSave" => "Αυτόματη αποθήκευση",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Ομαλή μετακίνηση του περιγράμματος επιλογής στο νέο κελί αντί για απότομη μεταπήδηση"
+        "Animation effects" => "Εφέ κίνησης",
+        "Use system setting" => "Χρήση ρύθμισης συστήματος",
+        "Animation effects|On" => "Ενεργό",
+        "Animation effects|Off" => "Ανενεργό",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Ομαλή κύλιση και μεγέθυνση, και περίγραμμα επιλογής που μετακινείται ομαλά στο κελί όπου πηγαίνετε"
         }
         "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => {
             "Η δομή του βιβλίου εργασίας είναι κλειδωμένη: δεν επιτρέπεται προσθήκη, μετακίνηση, μετονομασία ή διαγραφή φύλλων."

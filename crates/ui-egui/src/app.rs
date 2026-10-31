@@ -62,6 +62,8 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            system_animations: None,
+            egui_motion: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -115,6 +117,7 @@ impl SheetApp {
         }
         self.sync_theme_preference(ctx);
         self.sync_input_options(ctx);
+        self.sync_animations(ctx);
         // The geometry captures are bound to. Native frames recorded it from their fresh
         // `RawInput` in `raw_input_hook` (including hidden logic-only ticks); the epoch is
         // monotonic, so a resize back to the original values is still a new epoch and old pixels
@@ -189,6 +192,7 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        self.sync_wheel_scrolling(&ctx);
         // A script may have switched windows since the last frame.
         self.follow_active_window();
         text_box::before_ui(self, &ctx);

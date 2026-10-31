@@ -55,8 +55,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         Geo::new(sh, rect, scroll)
     };
-    // Scrolling.
-    let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // Scrolling. With Animation effects off, `SheetApp::ui` has already replaced the scroll delta
+    // with the whole notch, for the whole window.
+    let (scroll_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers, i.time));
+    let zoom_delta = wheel_zoom_delta(app, ui);
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -218,11 +220,26 @@ fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
     if rtl { (available.left(), grid.left()) } else { (grid.right(), available.right()) }
 }
 
+/// This frame's Ctrl+wheel zoom factor: egui's, which eases a notch in over a few frames, or with
+/// Animation effects off the whole notch, so the zoom ladder steps in the frame the wheel turned.
+fn wheel_zoom_delta(app: &SheetApp, ui: &egui::Ui) -> f32 {
+    if app.animations_on() {
+        return ui.input(|i| i.zoom_delta());
+    }
+    let options = ui.ctx().options(|o| o.input_options);
+    ui.input(|i| crate::motion::unsmoothed_zoom(i, &options))
+}
+
 fn update_clipboard_repaint(app: &mut SheetApp, ui: &egui::Ui, now: f64) {
     if app.session.clipboard.is_some() {
-        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
-        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+        if app.animations_on() {
+            // By the clock, not per frame: a gliding outline repaints more often than the ants step.
+            app.grid.marching_phase = crate::selection_glide::ants_phase(now);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+        } else {
+            // Animation effects off: the dashes round the copied range stand still.
+            app.grid.marching_phase = 0.0;
+        }
     }
 }
 
@@ -253,7 +270,7 @@ fn selection_outline(
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
+        animate: app.animations_on() && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
@@ -355,7 +372,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
     let mut zooming = WheelZoom::at(app, place, zoom, now);
     if let Some((to, shown)) = zooming.glide {
-        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+        let glides = app.animations_on() && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
         let _ = app.session.run("view.zoom", json!({"percent": z}));
