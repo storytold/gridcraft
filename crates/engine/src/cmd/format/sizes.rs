@@ -57,6 +57,24 @@ pub(super) fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
         _ => return Err(bad("home.rowHeight", "missing `height` (pixels) or `points`")),
     };
     let (si, lines) = line_targets(s, p, true)?;
+    // Every row (Select All, or `1:1048576`): the sheet's default height changes, as Excel writes
+    // it (`defaultRowHeight` with `customHeight`), and only the rows already listed are updated.
+    // One entry per row would make a million entries that every frame walks (#2762). Hiding every
+    // row still lists them: a zero default height is not a hidden row.
+    let every_row = lines.iter().any(|&(a, b)| a == 0 && b >= gridcraft_core::MAX_ROWS - 1);
+    if every_row && h > 0.0 {
+        return edit(s, |cx| {
+            let sh = cx.sheet_mut(si)?;
+            sh.default_row_height = h as f32;
+            for e in sh.rows.values_mut() {
+                e.size = Some(h as f32);
+                e.hidden = false;
+                e.custom = true;
+            }
+            cx.structural = true;
+            Ok(Json::Null)
+        });
+    }
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
