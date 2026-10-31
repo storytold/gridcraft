@@ -303,3 +303,15 @@ fn many_listed_controls_read_in_linear_time() {
     // About 0.4 s here; scanning every shape for every control took over 8 s.
     assert!(took < std::time::Duration::from_secs(3), "{took:?}");
 }
+
+/// The sheet relates each control properties part with the relationship type MS-XLSX defines and
+/// Excel writes (in the officeDocument namespace); Excel finds the part by that type.
+#[test]
+fn the_properties_parts_use_the_ctrl_prop_relationship_type() {
+    let bytes = write_xlsx(&book()).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let rels = text(&mut pkg, "xl/worksheets/_rels/sheet1.xml.rels");
+    let types: Vec<&str> = rels.split("Type=\"").skip(1).filter_map(|r| r.split('"').next()).filter(|t| t.ends_with("/ctrlProp")).collect();
+    assert_eq!(types.len(), 4, "{rels}");
+    assert!(types.iter().all(|t| *t == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp"), "{types:?}");
+}

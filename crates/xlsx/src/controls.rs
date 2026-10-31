@@ -25,7 +25,8 @@ use crate::write::{Out, Rels};
 use crate::xml::{El, esc, esc_attr};
 
 pub const CT_CTRL_PROP: &str = "application/vnd.ms-excel.controlproperties+xml";
-pub const REL_CTRL_PROP: &str = "http://schemas.microsoft.com/office/2006/relationships/ctrlProp";
+/// The worksheet relationship to a control properties part (MS-XLSX), as Excel writes it.
+pub const REL_CTRL_PROP: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
