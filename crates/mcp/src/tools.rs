@@ -286,7 +286,7 @@ fn base_tool_definitions() -> Vec<Value> {
                 json!({
                     "range": string("Source data range including headers, e.g. \"A1:C6\""),
                     "type": enumeration("Chart type", CHART_TYPES),
-                    "subtype": enumeration("Variant (optional)", &["clustered", "stacked", "stacked100", "markers"]),
+                    "subtype": enumeration("Variant (optional)", &["clustered", "stacked", "stacked100", "markers", "stacked100Markers"]),
                     "title": string("Chart title"),
                     "at": string("Top-left anchor cell (default: right of the data)"),
                 }),

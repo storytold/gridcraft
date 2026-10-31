@@ -765,6 +765,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Line" => "Linie",
         "Line with Markers" => "Linii cu marcaje",
         "Stacked Line" => "Linii stivuite",
+        "100% Stacked Line" => "Linii 100% stivuite",
+        "100% Stacked Line with Markers" => "Linii 100% stivuite cu marcaje",
         "Pie" => "Radială",
         "Doughnut" => "Inel",
         "Area" => "Arie",

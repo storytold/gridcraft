@@ -785,6 +785,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Line", "折れ線"),
     ("Line with Markers", "マーカー付き折れ線"),
     ("Stacked Line", "積み上げ折れ線"),
+    ("100% Stacked Line", "100% 積み上げ折れ線"),
+    ("100% Stacked Line with Markers", "マーカー付き 100% 積み上げ折れ線"),
     ("Pie", "円"),
     ("Doughnut", "ドーナツ"),
     ("Area", "面"),

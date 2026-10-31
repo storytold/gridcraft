@@ -29,12 +29,15 @@ fn group_kind(g: &El) -> Option<ChartKind> {
             }
         }
         "lineChart" | "line3DChart" => {
-            if stacked || pct {
-                ChartKind::LineStacked
-            } else {
-                let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                if !group_markers || (all_none && g.kids("ser").next().is_some()) { ChartKind::Line } else { ChartKind::LineMarkers }
+            let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+            let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+            let markers = group_markers && !(all_none && g.kids("ser").next().is_some());
+            match (stacked, pct, markers) {
+                (true, _, _) => ChartKind::LineStacked,
+                (_, true, true) => ChartKind::LineStacked100Markers,
+                (_, true, false) => ChartKind::LineStacked100,
+                (_, _, true) => ChartKind::LineMarkers,
+                (_, _, false) => ChartKind::Line,
             }
         }
         "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
@@ -224,21 +227,33 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
     let (first, first_kind) = *groups.first()?;
     let first_axes = axis_ids(first);
+    let no_marker = |s: &El| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+    // A 100% stacked line group whose series differ in markers opens as a combo chart, so each series keeps its own.
+    let mixed = first_kind == ChartKind::LineStacked100Markers && first.kids("ser").any(no_marker) && !first.kids("ser").all(no_marker);
+    let combo = groups.len() > 1 || mixed;
     let mut series = vec![];
+    let mut orders = vec![];
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
             let mut ser = read_series(s);
-            if groups.len() > 1 {
+            if combo {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
-                ser.kind = Some(*k);
+                ser.kind = Some(if *k == ChartKind::LineStacked100Markers && no_marker(s) { ChartKind::LineStacked100 } else { *k });
             }
             if gi > 0 {
                 ser.secondary = axis_ids(g) != first_axes;
             }
+            orders.push(s.child_val("order").and_then(|v| v.trim().parse::<u32>().ok()));
             series.push(ser);
         }
     }
-    let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
+    // A combo chart lists its series group by group; `c:order` gives the order they are drawn in.
+    if combo && orders.iter().all(Option::is_some) {
+        let mut keyed: Vec<(Option<u32>, Series)> = orders.into_iter().zip(series).collect();
+        keyed.sort_by_key(|(o, _)| *o);
+        series = keyed.into_iter().map(|(_, s)| s).collect();
+    }
+    let kind = if combo { ChartKind::Combo } else { first_kind };
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
@@ -284,6 +299,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 enum G {
     Bar { bar: bool, grouping: &'static str },
     Line { stacked: bool, markers: bool },
+    Line100 { markers: bool },
     Pie,
     Doughnut,
     Area { grouping: &'static str },
@@ -303,6 +319,8 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::Line => G::Line { stacked: false, markers: false },
         ChartKind::LineMarkers => G::Line { stacked: false, markers: true },
         ChartKind::LineStacked => G::Line { stacked: true, markers: false },
+        ChartKind::LineStacked100 => G::Line100 { markers: false },
+        ChartKind::LineStacked100Markers => G::Line100 { markers: true },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
         ChartKind::Area => G::Area { grouping: "standard" },
@@ -533,7 +551,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
-    let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
+    let line_like = matches!(g, G::Line { .. } | G::Line100 { .. } | G::Radar | G::Scatter { lines: true });
     match (&color, line_like) {
         (Some(c), true) => {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
@@ -552,7 +570,9 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
+        G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true } | G::Stock => {
+            x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
+        }
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
     }
@@ -581,7 +601,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
                 x.push_str(&cat_data(c, &s.values, wb, si));
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
-            if matches!(g, G::Line { .. }) {
+            if matches!(g, G::Line { .. } | G::Line100 { .. }) {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
         }
@@ -655,7 +675,17 @@ fn dlbls(show: bool) -> String {
 }
 
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
+    let sers: String = series
+        .iter()
+        .map(|(i, s)| {
+            // In a combo chart's 100% stacked line group, each series writes its own markers.
+            let sg = match (g, s.kind.map(group_for)) {
+                (G::Line100 { .. }, Some(own @ G::Line100 { .. })) if ch.kind == ChartKind::Combo => own,
+                _ => g,
+            };
+            series_xml(s, *i, sg, wb, si)
+        })
+        .collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -670,6 +700,9 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
             if stacked { "stacked" } else { "standard" }
         ),
+        G::Line100 { .. } => {
+            format!("<c:lineChart><c:grouping val=\"percentStacked\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>")
+        }
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
@@ -737,6 +770,25 @@ fn strip_book(link: &str) -> &str {
     link.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(link, |(_, rest)| rest)
 }
 
+/// Splits a combo chart's series into one group per kind, in the order each kind first appears.
+/// Columns, bars, lines and areas keep their own grouping and markers; 100% stacked lines share one group
+/// whose series write their own markers; other kinds are written as plain lines.
+fn combo_groups<'a>(series: &[(usize, &'a Series)], kind: impl Fn(usize, &Series) -> Option<ChartKind>) -> Vec<(G, Vec<(usize, &'a Series)>)> {
+    let mut groups: Vec<(G, Vec<(usize, &'a Series)>)> = vec![];
+    for &(i, x) in series {
+        let g = match kind(i, x).filter(|k| *k != ChartKind::Combo).map(group_for) {
+            Some(g @ (G::Bar { .. } | G::Line { .. } | G::Area { .. })) => g,
+            Some(G::Line100 { .. }) => G::Line100 { markers: true },
+            _ => G::Line { stacked: false, markers: false },
+        };
+        match groups.iter_mut().find(|(k, _)| *k == g) {
+            Some((_, members)) => members.push((i, x)),
+            None => groups.push((g, vec![(i, x)])),
+        }
+    }
+    groups
+}
+
 /// Chart part XML for a model chart on sheet `si`.
 pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
     let mut s = String::from(
@@ -766,7 +818,9 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if ch.kind == ChartKind::Combo {
         // Series without a kind of their own: the first is a column, the others lines (as drawn).
         let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
+        let is_line = |k: Option<ChartKind>| {
+            matches!(k.map(group_for), Some(G::Line { .. } | G::Line100 { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }))
+        };
         let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
         let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
         let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
@@ -774,16 +828,12 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
             s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
         }
-        if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+        for (g, members) in combo_groups(&lines, |i, x| kind(i, x)) {
+            s.push_str(&group_xml(g, &members, ch, (1, 2), wb, si));
         }
-        if !sec.is_empty() {
-            let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                Some(b @ G::Bar { .. }) => b,
-                _ => G::Line { stacked: false, markers: false },
-            };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
-            secondary = Some(g);
+        for (g, members) in combo_groups(&sec, |_, x| x.kind) {
+            s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
+            secondary.get_or_insert(g);
         }
     } else {
         primary_g = match group_for(ch.kind) {
