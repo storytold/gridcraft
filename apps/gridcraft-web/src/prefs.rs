@@ -22,7 +22,7 @@ pub fn restore(app: &mut SheetApp, ui: Option<&str>, prefs: Option<&str>) {
     {
         // No usable saved language: keep the browser's, as the desktop keeps the system's.
         let language = gridcraft_ui_egui::i18n::saved_language(&json).unwrap_or(app.ui.language);
-        app.ui = state;
+        app.ui = state.at_startup();
         app.ui.language = language;
     }
     if let Some(s) = prefs.filter(readable)

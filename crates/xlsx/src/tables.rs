@@ -46,10 +46,11 @@ pub fn builtin_format(id: u32) -> Option<&'static str> {
     BUILTIN_FORMATS.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
 }
 
-/// Id to write for a format code when it is a locale-independent built-in (currency formats 5–8
-/// are written as custom formats because their meaning depends on the reader's locale).
+/// Id to write for a format code when it is a locale-independent built-in. The currency formats
+/// 5–8 and the accounting formats with a currency, 42 and 44, are written as custom formats because
+/// their meaning depends on the reader's locale.
 pub fn builtin_id(code: &str) -> Option<u32> {
-    BUILTIN_FORMATS.iter().find(|(i, c)| *c == code && !(5..=8).contains(i)).map(|(i, _)| *i)
+    BUILTIN_FORMATS.iter().find(|(i, c)| *c == code && !matches!(i, 5..=8 | 42 | 44)).map(|(i, _)| *i)
 }
 
 pub use gridcraft_core::color::INDEXED;
