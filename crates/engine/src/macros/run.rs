@@ -1050,6 +1050,7 @@ struct Saved {
     unlocked_ranges: Vec<(String, String)>,
     trust: Trust,
     go_to_recent: Vec<String>,
+    validation_circles: Vec<(String, Vec<CellRef>)>,
     clipboard: Option<crate::Clipboard>,
     prefs: crate::Prefs,
     mode: crate::Mode,
@@ -1080,6 +1081,7 @@ impl Saved {
             unlocked_ranges: d.map(|d| d.unlocked_ranges.clone()).unwrap_or_default(),
             trust: d.map_or(Trust::Local, |d| d.trust),
             go_to_recent: d.map(|d| d.go_to_recent.clone()).unwrap_or_default(),
+            validation_circles: d.map(|d| d.validation_circles.clone()).unwrap_or_default(),
             clipboard: s.clipboard.clone(),
             prefs: s.prefs.clone(),
             mode: s.mode,
@@ -1111,6 +1113,7 @@ impl Saved {
             d.unlocked_ranges = self.unlocked_ranges;
             d.trust = self.trust;
             d.go_to_recent = self.go_to_recent;
+            d.validation_circles = self.validation_circles;
         }
         s.active = self.active.min(s.docs.len().saturating_sub(1));
         s.clipboard = self.clipboard;

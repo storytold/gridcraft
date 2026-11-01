@@ -176,7 +176,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Data Validation", "データの入力規則"),
     ("Data Validation…", "データの入力規則…"),
     ("Circle Invalid Data", "無効なデータをマーク"),
-    ("Clear Validation", "入力規則のクリア"),
+    ("Clear Validation Circles", "入力規則マークのクリア"),
     ("Group", "グループ化"),
     ("Ungroup", "グループ解除"),
     ("Show Detail", "詳細データの表示"),

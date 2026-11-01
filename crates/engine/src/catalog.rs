@@ -211,6 +211,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("data.removeDuplicates", "Data", "Data Tools", "Remove Duplicates"),
     ("data.validation", "Data", "Data Tools", "Data Validation"),
     ("data.circleInvalid", "Data", "Data Tools", "Circle Invalid Data"),
+    ("data.clearValidationCircles", "Data", "Data Tools", "Clear Validation Circles"),
     ("data.consolidate", "Data", "Data Tools", "Consolidate"),
     ("data.relationships", "Data", "Data Tools", "Relationships"),
     ("data.scenarioManager", "Data", "Forecast", "Scenario Manager"),

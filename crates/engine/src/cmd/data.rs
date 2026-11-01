@@ -32,7 +32,7 @@ use sort::{quick_sort, sort};
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
 pub use validation::{check_validation, list_items};
-use validation::{circle_invalid, validate_cmd, validation};
+use validation::{circle_invalid, clear_validation_circles, validate_cmd, validation};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -98,7 +98,24 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
-        cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
+        cmd!(
+            noundo "data.circleInvalid",
+            "Circle Invalid Data",
+            ["Data", "Data Tools", "Data Validation"],
+            None,
+            "{} → {invalid: cells}; circles them on the active sheet, replacing its circles, until it runs again or data.clearValidationCircles (document.inspect: sheets[].validationCircles; not saved, no undo step)",
+            has_doc,
+            circle_invalid
+        ),
+        cmd!(
+            noundo "data.clearValidationCircles",
+            "Clear Validation Circles",
+            ["Data", "Data Tools", "Data Validation"],
+            None,
+            "{} (removes the active sheet's validation circles; the rules stay)",
+            has_doc,
+            clear_validation_circles
+        ),
         cmd!(
             "data.group",
             "Group",

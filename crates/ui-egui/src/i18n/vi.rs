@@ -176,7 +176,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Xác thực dữ liệu",
         "Data Validation…" => "Xác thực dữ liệu…",
         "Circle Invalid Data" => "Khoanh dữ liệu không hợp lệ",
-        "Clear Validation" => "Xóa xác thực",
+        "Clear Validation Circles" => "Xóa vòng tròn xác thực",
         "Group" => "Nhóm",
         "Ungroup" => "Bỏ nhóm",
         "Show Detail" => "Hiện chi tiết",

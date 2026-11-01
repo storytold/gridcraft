@@ -114,6 +114,9 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// The ovals Data › Data Validation › Circle Invalid Data draws around invalid cells. A sheet
+    /// colour.
+    pub sheet_invalid_circle: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -146,6 +149,8 @@ const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
 const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
 const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
 const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+/// Circle Invalid Data's ovals, the same in both themes (the sheet stays white).
+const SHEET_INVALID_CIRCLE: Color32 = rgb(0xE0201B);
 
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,6 +249,7 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            sheet_invalid_circle: SHEET_INVALID_CIRCLE,
         }
     }
 
@@ -395,6 +401,7 @@ mod contrast_tests {
         ] {
             add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
         }
+        add("validation circle on sheet", t.sheet_invalid_circle, t.grid_bg, GLYPH);
         // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
         add("breakpoint on window", t.breakpoint, t.window, GLYPH);
         add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
@@ -439,6 +446,7 @@ mod contrast_tests {
             (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),
             (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
         );
+        assert_eq!(l.sheet_invalid_circle, d.sheet_invalid_circle);
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
         }

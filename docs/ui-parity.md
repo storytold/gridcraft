@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Circle Invalid Data draws its circles and Clear Validation Circles removes them; earlier: checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 277 / 293) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
+separately in [parity-checklist.md](parity-checklist.md) (277 / 293).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -61,6 +61,7 @@ this logic, with one undo step.
 | AutoComplete in columns, function autocomplete and argument tips | done; cell helpers clip to the worksheet and hide when the editor scrolls out (#200) |
 | Header resize and double-click AutoFit | done (#42, #88 for header dividers) |
 | Data › Advanced Filter | dialog offers in-place or copy-to filtering, list and optional criteria ranges, and unique records; Alt+A,Q opens it (#1622). The engine's copy-to path clears only the result footprint and rejects worksheet overflow (#1031). |
+| Data › Data Validation menu: Circle Invalid Data, Clear Validation Circles | done (#3102, #3104): the menu has Excel's three items, Data Validation…, Circle Invalid Data and Clear Validation Circles (key tips AVV, AVI, AVR). Circle Invalid Data draws a red oval with no fill around each cell of the active sheet whose value breaks its rule, a little larger than the cell, over the grid; the ovals follow scrolling, zoom and frozen panes, a hidden row or column hides its oval, and they move with their cells when rows, columns or cells are inserted or deleted. Running it again replaces them, and each sheet keeps its own. They stay when values change until it runs again, as measured in Excel. Clear Validation Circles removes the active sheet's circles and keeps the rules. The circles are not part of the workbook: not saved, printed or exported, no undo step; `document.inspect` lists them per sheet (`validationCircles`). Excel drops them on Save; GridCraft keeps them on screen. The menu's former Clear Validation item, which deleted the selected cells' rules, is gone; `data.validation {"clear": true}` still removes rules for scripts |
 | Outline symbols for grouped rows / columns (band beside the headers, brackets, − / +, level buttons 1…n+1) | done (#373): clicks run `data.hideDetail` / `data.showDetail` / `data.showLevels`, frozen panes and right-to-left sheets included; Data › Outline › Settings (`data.outlineSettings`) puts summary rows above and summary columns left of their detail, saved as `outlinePr` (the dialog's Automatic styles check box and Apply Styles button are missing), View › Show Outline Symbols (Ctrl+8) hides the bands and is saved with the sheet, and a block of cells still groups rows without the Rows / Columns dialog |
 | Reorder selected whole columns by dragging their headers | done (10-11) |
 | Freeze panes, split panes | freeze done; split to verify |
@@ -194,6 +195,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Data › Data Validation: Circle Invalid Data draws red ovals around the invalid cells of the active sheet (it returned the list and drew nothing), and Clear Validation Circles (`data.clearValidationCircles`, key tip AVR) removes them and keeps the rules (#3102). The menu's third item is Clear Validation Circles, as in Excel; Clear Validation, which deleted the selected cells' rules, is gone (#3104). Ribbon catalog count 276 / 292 → 277 / 293 |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |

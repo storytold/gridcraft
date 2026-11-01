@@ -165,7 +165,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Ověření dat",
         "Data Validation…" => "Ověření dat…",
         "Circle Invalid Data" => "Zakroužkovat neplatná data",
-        "Clear Validation" => "Vymazat ověření",
+        "Clear Validation Circles" => "Vymazat kroužky ověření",
         "Group" => "Seskupit",
         "Ungroup" => "Zrušit seskupení",
         "Show Detail" => "Zobrazit podrobnosti",

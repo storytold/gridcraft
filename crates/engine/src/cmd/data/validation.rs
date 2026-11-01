@@ -272,6 +272,8 @@ pub(super) fn validate_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 
+/// Circle Invalid Data: lists the active sheet's cells whose value breaks their rule and circles
+/// exactly those, replacing the sheet's circles from before (session state, no undo step).
 pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sheet = d.wb.active_sheet();
@@ -289,5 +291,17 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             }
         }
     }
+    let name = sh.name.clone();
+    let mut seen = std::collections::HashSet::new();
+    let circles = bad_cells.iter().filter_map(|a| CellRef::parse(a)).filter(|c| seen.insert(*c)).collect();
+    s.doc_mut()?.set_validation_circles(&name, circles);
     Ok(json!({"invalid": bad_cells}))
+}
+
+/// Clear Validation Circles: removes the active sheet's circles and leaves every rule alone.
+pub(super) fn clear_validation_circles(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc_mut()?;
+    let Some(name) = d.wb.active().map(|sh| sh.name.clone()) else { return Err(EngineError::NoDocument) };
+    d.set_validation_circles(&name, Vec::new());
+    ok()
 }

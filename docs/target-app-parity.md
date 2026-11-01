@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** trivial (catalog count 277 / 293: Clear Validation Circles; earlier: automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **276 / 292 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **277 / 293 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -54,7 +54,7 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   COPILOT and PY: **523 functions**. Ours: every `f!(…)` spec in `crates/functions/src/*.rs` plus
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
-- **Ribbon catalog:** `crates/engine/src/catalog.rs` (292 unique ids across 15 tabs) against the
+- **Ribbon catalog:** `crates/engine/src/catalog.rs` (293 unique ids across 15 tabs) against the
   313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Catalog count 276 / 292 → 277 / 293: Data › Data Validation › Clear Validation Circles (#3102) (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |

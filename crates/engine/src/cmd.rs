@@ -387,6 +387,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
             }
         }
     }
+    if !d.validation_circles.is_empty() {
+        d.follow_validation_circles(&wb, &edits);
+    }
     if let Some(log) = d.edits.as_mut() {
         log.extend(edits);
     }

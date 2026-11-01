@@ -222,6 +222,12 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The cells Circle Invalid Data circled (`data.circleInvalid`), by sheet name: drawn over
+    /// the grid until the command runs again on that sheet or Clear Validation Circles
+    /// (`data.clearValidationCircles`) removes them. Session-only, like the Go To list: never
+    /// saved and no undo step. They move with their cells when rows, columns or cells are
+    /// inserted or deleted; a sheet that is renamed or deleted loses its circles.
+    pub validation_circles: Vec<(String, Vec<CellRef>)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -326,7 +332,39 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            validation_circles: vec![],
         }
+    }
+    /// The cells circled by Circle Invalid Data on the sheet named `sheet`, in the order the
+    /// command listed them; empty when it has none.
+    pub fn validation_circles_on(&self, sheet: &str) -> &[CellRef] {
+        self.validation_circles.iter().find(|(name, _)| name == sheet).map_or(&[], |(_, cells)| cells.as_slice())
+    }
+    /// Replaces the circles of the sheet named `sheet` with `cells` (none removes them).
+    pub(crate) fn set_validation_circles(&mut self, sheet: &str, cells: Vec<CellRef>) {
+        self.validation_circles.retain(|(name, _)| name != sheet);
+        if !cells.is_empty() {
+            self.validation_circles.push((sheet.to_string(), cells));
+        }
+    }
+    /// Moves the validation circles with their cells through the structural edits a command
+    /// made (`edits`: the edited sheet's name and the edit, in order), and drops the circles of
+    /// cells deleted with them and of sheets `wb` no longer has by that name (deleted or renamed).
+    pub(crate) fn follow_validation_circles(&mut self, wb: &Workbook, edits: &[(String, gridcraft_formula::adjust::Edit)]) {
+        use gridcraft_formula::adjust::Edit;
+        for (sheet, cells) in self.validation_circles.iter_mut() {
+            for (_, e) in edits.iter().filter(|(target, _)| target == sheet) {
+                *cells = cells
+                    .iter()
+                    .filter_map(|&c| match e {
+                        // Cells cut and pasted to another sheet take nothing along.
+                        Edit::MoveToSheet { from, .. } if from.contains(c) => None,
+                        _ => cmd::sheet::map_range(RangeRef::cell(c), e).map(|r| r.start),
+                    })
+                    .collect();
+            }
+        }
+        self.validation_circles.retain(|(sheet, cells)| !cells.is_empty() && wb.sheets.iter().any(|sh| sh.name == *sheet));
     }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)

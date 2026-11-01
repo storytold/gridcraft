@@ -64,9 +64,14 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("removeDuplicates", json!({}));
     }
     let dv = big_button(ui, Icon::Validation, "Data\nValidation", "Data Validation", true);
-    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["data.validation", "data.circleInvalid"]) {
+    for sequence in keytip_table::group_extension(
+        app.keytips.prefix().unwrap_or_default(),
+        &["data.validation", "data.circleInvalid", "data.clearValidationCircles"],
+    ) {
         keytip(app, ui, sequence, dv.rect.center_bottom());
     }
+    // Excel's three items; the third clears the circles, not the rules (scripts remove rules with
+    // `data.validation {"clear": true}`).
     egui::Popup::menu(&dv).show(|ui| {
         menu_items(
             app,
@@ -74,7 +79,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             &[
                 ("Data Validation…", "dialog:dataValidation", json!({})),
                 ("Circle Invalid Data", "data.circleInvalid", json!({})),
-                ("Clear Validation", "data.validation", json!({"clear": true})),
+                ("Clear Validation Circles", "data.clearValidationCircles", json!({})),
             ],
         );
     });

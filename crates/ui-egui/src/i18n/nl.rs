@@ -173,7 +173,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Gegevensvalidatie",
         "Data Validation…" => "Gegevensvalidatie…",
         "Circle Invalid Data" => "Ongeldige gegevens omcirkelen",
-        "Clear Validation" => "Validatie wissen",
+        "Clear Validation Circles" => "Validatiecirkels wissen",
         "Group" => "Groeperen",
         "Ungroup" => "Groep opheffen",
         "Show Detail" => "Details weergeven",

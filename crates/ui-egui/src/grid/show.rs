@@ -1,4 +1,6 @@
 #[cfg(test)]
+use super::Pos2;
+#[cfg(test)]
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
@@ -9,12 +11,10 @@ use super::quadrant::{QuadrantPaint, mirror_painted, paint_quadrant};
 use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
-    Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
-    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
+    Align2, Arc, CellRef, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp,
+    Stroke, StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
     zoom_glide_step,
 };
-#[cfg(test)]
-use super::{CellRef, Pos2};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -725,6 +725,11 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     if let Some(o) = &app.grid.macro_overlay {
         crate::macro_editor::paint_overlay(p, geo, sh, o);
     }
+    // Circle Invalid Data: the engine keeps the circled cells per sheet; they are drawn from the
+    // cells every frame, so scrolling, zoom and frozen panes move them along.
+    if let Some(d) = app.session.active() {
+        paint_validation_circles(p, geo, sh, d.validation_circles_on(&sh.name));
+    }
     // Trace precedents / dependents arrows.
     if let Some(trace) = &app.grid.trace
         && app.session.active().is_some_and(|d| d.uid == trace.uid && d.revision == trace.revision)
@@ -754,6 +759,44 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
         }
     }
     let _ = (wb, si);
+}
+
+/// Red ovals with no fill around `cells` (a merged cell's whole area), a little larger than the
+/// cell, as Excel draws Circle Invalid Data. An oval starts no further up or left than the sheet's
+/// first row and column, so those cells' ovals are whole rather than cut by the headings. Each is
+/// clipped to the pane its cell is in, so a cell scrolled under frozen rows or columns shows none;
+/// a cell in a hidden row or column has none.
+fn paint_validation_circles(p: &Painter, geo: &Geo, sh: &Sheet, cells: &[CellRef]) {
+    if cells.is_empty() {
+        return;
+    }
+    let clip = p.clip_rect();
+    let zoom = geo.z / DISPLAY_SCALE;
+    let stroke = Stroke::new((1.5 * zoom).clamp(1.0, 3.0), Tokens::get(p.ctx()).sheet_invalid_circle);
+    let margin = vec2(5.0, 3.0) * zoom;
+    let sheet_start = pos2(geo.x(sh, 0), geo.y(sh, 0)) + vec2(stroke.width, stroke.width) / 2.0;
+    // Rows and columns that can show part of an oval: a cheap test before the geometry, for a
+    // sheet with many circles.
+    let rows = geo.row_at(sh, clip.top()).saturating_sub(1)..=geo.row_at(sh, clip.bottom()).saturating_add(1);
+    let cols = geo.col_at(sh, clip.left()).saturating_sub(1)..=geo.col_at(sh, clip.right()).saturating_add(1);
+    for &c in cells {
+        let area = sh.merge_at(c).unwrap_or(RangeRef::cell(c));
+        if area.end.row < *rows.start() || area.start.row > *rows.end() || area.end.col < *cols.start() || area.start.col > *cols.end() {
+            continue;
+        }
+        let r = geo.range_rect(sh, area);
+        if r.width() <= 0.0 || r.height() <= 0.0 {
+            continue;
+        }
+        let mut oval = r.expand2(margin);
+        oval.min = oval.min.max(sheet_start);
+        for pane in geo.range_panes(area) {
+            let pane = pane.intersect(clip);
+            if pane.is_positive() && pane.intersects(oval) {
+                p.with_clip_rect(pane).add(egui::Shape::ellipse_stroke(oval.center(), oval.size() / 2.0, stroke));
+            }
+        }
+    }
 }
 
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
@@ -944,5 +987,133 @@ mod trace_arrow_tests {
         let revisions: Vec<u64> = app.session.documents().iter().map(|d| d.revision).collect();
         assert_eq!(revisions[0], revisions[1]);
         assert!(arrows(&mut app).1.is_empty(), "Book1's arrows are not drawn on Book2");
+    }
+}
+
+#[cfg(test)]
+mod validation_circle_tests {
+    use super::*;
+
+    /// The sheet of #3102 (Qty in A1:A6, whole numbers 1 to 10 on A2:A6) after Circle Invalid
+    /// Data, which circles A3, A4 and A5.
+    fn app() -> SheetApp {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [5], [20], ["abc"], [0], [7]]})).unwrap();
+        let rule = json!({"range": "A2:A6", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"});
+        s.execute("data.validation", rule).unwrap();
+        let mut app = SheetApp::new(s, Default::default());
+        app.run("data.circleInvalid", json!({})).unwrap();
+        app
+    }
+
+    /// The ovals `paint_overlays` draws on the active sheet scrolled to `scroll`, with the clip
+    /// each is drawn in.
+    fn ovals(app: &mut SheetApp, scroll: egui::Vec2) -> (Geo, Vec<(egui::epaint::EllipseShape, Rect)>) {
+        let d = app.session.active().unwrap();
+        let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet(), d.selection.clone());
+        let sh = wb.sheet(si).unwrap();
+        let geo = Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), scroll);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let p = ui.painter().with_clip_rect(geo.cells);
+            paint_overlays(OverlayInput { app, ui, painter: &p, geo: &geo, workbook: &wb, sheet_index: si, sheet: sh, selection: &sel });
+        });
+        // No renderer consumes the font atlas upload here.
+        out.textures_delta.clear();
+        let ovals = out
+            .shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Ellipse(e) => Some((e, s.clip_rect)),
+                _ => None,
+            })
+            .collect();
+        (geo, ovals)
+    }
+
+    fn cell(app: &SheetApp, geo: &Geo, a1: &str) -> Rect {
+        let d = app.session.active().unwrap();
+        geo.cell_rect(d.wb.sheet(d.wb.active_sheet()).unwrap(), CellRef::parse(a1).unwrap())
+    }
+
+    /// Each oval rings its cell: around it, a little wider and taller (in column A it starts at the
+    /// column's left edge instead of under the row headings), red, not filled.
+    fn rings(app: &SheetApp, geo: &Geo, oval: &egui::epaint::EllipseShape, a1: &str) -> bool {
+        let r = cell(app, geo, a1);
+        let red = Tokens::light().sheet_invalid_circle;
+        let bounds = Rect::from_center_size(oval.center, oval.radius * 2.0);
+        bounds.expand(oval.stroke.width).contains_rect(r)
+            && bounds.width() > r.width()
+            && bounds.height() > r.height()
+            && bounds.width() < 2.0 * r.width()
+            && bounds.height() < 2.0 * r.height()
+            && r.shrink2(r.size() / 4.0).contains(oval.center)
+            && oval.fill == Color32::TRANSPARENT
+            && oval.stroke.color == red
+            && oval.stroke.width >= 1.0
+    }
+
+    #[test]
+    fn a_red_oval_rings_each_circled_cell() {
+        let mut app = app();
+        let (geo, ovals) = ovals(&mut app, vec2(0.0, 0.0));
+        assert_eq!(ovals.len(), 3, "{ovals:?}");
+        for ((oval, _), a1) in ovals.iter().zip(["A3", "A4", "A5"]) {
+            assert!(rings(&app, &geo, oval, a1), "{a1}: {oval:?}");
+            // Column A's ovals stay right of the row headings, where the cells start.
+            assert!(oval.center.x - oval.radius.x > geo.cells.left(), "{a1}: {oval:?}");
+        }
+    }
+
+    #[test]
+    fn the_ovals_follow_zoom_and_scrolling() {
+        let mut app = app();
+        let width = ovals(&mut app, vec2(0.0, 0.0)).1[0].0.radius.x;
+        app.run("view.zoom", json!({"percent": 150})).unwrap();
+        let (geo, zoomed) = ovals(&mut app, vec2(0.0, 0.0));
+        assert_eq!(zoomed.len(), 3, "the circles survive a zoom (#3097 lost the trace arrows there)");
+        assert!(rings(&app, &geo, &zoomed[0].0, "A3"), "{zoomed:?}");
+        assert!(zoomed[0].0.radius.x > width * 1.4, "{} at 150% against {width}", zoomed[0].0.radius.x);
+        // Scrolled by two rows, the ovals move up with their cells.
+        let d = app.session.active().unwrap();
+        let down = d.wb.active().unwrap().row_top(2) as f32;
+        let (geo, scrolled) = ovals(&mut app, vec2(0.0, down));
+        assert_eq!(scrolled.len(), 3);
+        assert!(rings(&app, &geo, &scrolled[1].0, "A4"), "{scrolled:?}");
+        // Scrolled well past them, nothing is drawn.
+        assert!(ovals(&mut app, vec2(0.0, 2000.0)).1.is_empty());
+    }
+
+    #[test]
+    fn hidden_rows_and_frozen_panes_hide_their_ovals() {
+        let mut app = app();
+        app.run("home.hideRows", json!({"rows": "4:4"})).unwrap();
+        let (geo, ovals1) = ovals(&mut app, vec2(0.0, 0.0));
+        assert_eq!(ovals1.len(), 2, "A4's row is hidden: {ovals1:?}");
+        assert!(rings(&app, &geo, &ovals1[0].0, "A3") && rings(&app, &geo, &ovals1[1].0, "A5"));
+        app.run("home.unhideRows", json!({"rows": "3:5"})).unwrap();
+        // Rows 1 and 2 frozen and two rows scrolled: A3 is under the frozen rows, A5 is the first row below them.
+        app.run("view.freezePanes", json!({"cell": "A3"})).unwrap();
+        let d = app.session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let down = (sh.row_top(4) - sh.row_top(2)) as f32;
+        let (geo, frozen) = ovals(&mut app, vec2(0.0, down));
+        let split = geo.cells.top() + geo.frozen_h;
+        assert!(frozen.iter().all(|(_, clip)| clip.top() >= split), "drawn in the scrolling pane only: {frozen:?}");
+        assert!(frozen.iter().any(|(oval, _)| rings(&app, &geo, oval, "A5")), "{frozen:?}");
+        assert!(!frozen.iter().any(|(oval, _)| rings(&app, &geo, oval, "A3")), "A3 is under the frozen rows: {frozen:?}");
+    }
+
+    #[test]
+    fn other_sheets_and_cleared_circles_draw_nothing() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        assert!(ovals(&mut app, vec2(0.0, 0.0)).1.is_empty(), "Sheet1's circles stay on Sheet1");
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        assert_eq!(ovals(&mut app, vec2(0.0, 0.0)).1.len(), 3, "and come back with it");
+        app.run("data.clearValidationCircles", json!({})).unwrap();
+        assert!(ovals(&mut app, vec2(0.0, 0.0)).1.is_empty());
     }
 }
