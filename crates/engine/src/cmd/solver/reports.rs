@@ -281,9 +281,6 @@ pub(super) fn prepare_reports(
     if kinds.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    if d.wb.protected_structure {
-        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
-    }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
     let mut built = Vec::new();
     let mut skipped = Vec::new();
@@ -316,6 +313,11 @@ pub(super) fn prepare_reports(
             .find(|n| d.wb.sheet_index(n).is_none() && !built.iter().any(|(b, _): &(String, Lines)| b == n))
             .ok_or_else(|| EngineError::Other("Too many report sheets.".into()))?;
         built.push((name, lines));
+    }
+    // Only a report sheet changes the workbook's structure, so a request whose reports were all
+    // skipped still succeeds in a protected workbook.
+    if !built.is_empty() && d.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     Ok((built, skipped))
 }
