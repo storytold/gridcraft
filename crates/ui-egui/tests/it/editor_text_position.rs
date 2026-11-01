@@ -131,3 +131,25 @@ fn text_pos_mirrored(ctx: &Context, app: &mut SheetApp) -> Pos2 {
         })
         .expect("Abc drawn in B3")
 }
+
+/// A justified cell wraps like Wrap Text, in the cell and in the editor: the typed text starts where
+/// the wrapped text is drawn (Middle and Bottom in a tall row).
+#[test]
+fn typed_justified_text_sits_where_the_entered_text_is_drawn() {
+    let text = "Abc def ghi jkl mno";
+    for align in ["home.alignMiddle", "home.alignBottom"] {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.execute("home.rowHeight", json!({"rows": "3:3", "height": 90})).unwrap();
+        session.execute(align, json!({"range": "B3"})).unwrap();
+        session.execute("home.justify", json!({"range": "B3"})).unwrap();
+        session.execute("cell.set", json!({"cell": "B3", "input": text})).unwrap();
+        session.execute("selection.set", json!({"cell": "B3"})).unwrap();
+        let ctx = Context::default();
+        let mut app = SheetApp::new(session, Default::default());
+        let entered = text_pos_of(&ctx, &mut app, text);
+        app.begin_edit(None, false);
+        let typed = text_pos_of(&ctx, &mut app, text);
+        assert!((typed.y - entered.y).abs() < 0.5, "{align}, justified: typed at y {} but drawn at y {}", typed.y, entered.y);
+    }
+}

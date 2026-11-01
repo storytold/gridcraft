@@ -38,7 +38,8 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let shown = lines;
     // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
     // Otherwise it widens to the text's one-line width.
-    let wrap = st.align.wrap;
+    // Justify wraps too, as the cell draws it.
+    let wrap = st.align.wrap || st.align.h == HAlign::Justify;
     let (w, h) = if wrap {
         // The field wraps at the width it is given (the editor's less its 2 px inset a side): its
         // frame is `Frame::NONE`, so no text margin is taken off.
@@ -81,7 +82,7 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // Measured as the cell lays it out: wrapped text at the cell's wrap width (padding and
     // indent off), so a wrapped Middle or Bottom cell puts it at the same height.
     let sample = if ed.text.is_empty() { " ".to_string() } else { ed.text.clone() };
-    let wrapped = st.align.wrap || st.align.h == HAlign::Justify;
+    let wrapped = wrap;
     let text_h = if wrapped {
         let wrap_w = (rect.width() - 2.0 * 2.5 * geo.z - st.align.indent as f32 * 9.0 * geo.z).max(4.0);
         ui.painter().layout_job(egui::text::LayoutJob::simple(sample, font.clone(), Color32::BLACK, wrap_w)).size().y
