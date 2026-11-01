@@ -66,6 +66,14 @@ the existing account-scoped `openRequest`, opens no local dialog and accepts no 
 The host still supplies bytes for that request. Refused clicks use the normal persistent alert
 UI, while the Backstage panel owns the theme and the separate provider/device sections.
 
+Backstage Save on a provider-bound workbook uses the ordinary Save route and retains its
+resource ID even when there is no device path. Save As still requests a new destination.
+The explicit UI command `ui.chooseProviderSave` takes `{ "saveAs": bool }` (default false)
+and returns `{ "handled": bool }`. Backstage uses this result to offer the provider chooser
+or retain its existing local picker/download fallback. It is discoverable through the
+control command catalog. This explicit interactive UI request does not intercept ordinary
+programmatic `file.save`/`file.saveAs` calls or exports.
+
 Supported Save packages: **XLSX, XLSM and native JSON**.
 
 The ordinary workbook serializer includes every sheet and supported embedded workbook resources. A workbook carrying VBA defaults to XLSM; choosing XLSX for it is rejected so that saving cannot silently strip the VBA project. Formula evaluation and active-content trust rules are unchanged. Password-required reads fail explicitly without binding the previously active workbook.

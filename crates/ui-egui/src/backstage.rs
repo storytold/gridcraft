@@ -254,7 +254,10 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
     }
-    if app.session.active().is_some_and(|d| d.path.is_some()) {
+    let provider_bound = app.session.active().is_some_and(|doc| {
+        app.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(doc.uid))
+    });
+    if app.session.active().is_some_and(|d| d.path.is_some()) || provider_bound {
         app.run_or_alert("file.save", json!({}));
         out.close = true;
     } else {
@@ -714,22 +717,34 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
-            if app.choose_provider_save(true) {
-                out.close = true;
-                return;
-            }
-            let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
-            let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
-                out.close = true;
-            }
+            save_as_workbook(app, out);
         } else if export_as(app, fmt) {
             out.close = true;
         }
     }
     ui.add_space(18.0);
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+}
+
+/// Offers the explicit provider UI command before the normal local Save As picker/download.
+fn save_as_workbook(app: &mut SheetApp, out: &mut Outcome) {
+    match app.run("ui.chooseProviderSave", json!({"saveAs":true})) {
+        Ok(result) if result["handled"] == true => {
+            out.close = true;
+            return;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            app.message = Some(("GridCraft".into(), error));
+            return;
+        }
+    }
+    let before = app.session.active().map(|doc| (doc.path.clone(), doc.is_dirty()));
+    app.open_dialog("saveAs", json!({}));
+    let after = app.session.active().map(|doc| (doc.path.clone(), doc.is_dirty()));
+    if after != before || app.services.pick_save.is_none() {
+        out.close = true;
+    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
@@ -899,6 +914,149 @@ mod tests {
         assert_eq!(text.iter().filter(|text| text.starts_with("Provider")).count(), 100);
         assert!(text.iter().any(|text| text == "Provider099.xlsx"));
         assert!(text.iter().any(|text| text == "Device-only.xlsx"));
+    }
+
+    /// Open a real provider XLSX, then edit it without introducing a device path.
+    fn provider_book() -> (SheetApp, crate::file_providers::Host) {
+        let host = crate::file_providers::Host::default();
+        host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+        let connection = host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "existing-book".into(), name: "Original.xlsx".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        let mut source = gridcraft_engine::Session::new();
+        source.new_workbook();
+        let bytes = gridcraft_engine::io::save_bytes(&source.active().unwrap().wb, "Original.xlsx").unwrap();
+        let read = host.request_open("existing-book").unwrap();
+        host.open(read, "Original.xlsx".into(), bytes).unwrap();
+        let services = crate::Services { file_providers: Some(host.clone()), ..Default::default() };
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+        app.provider_tick();
+        host.take_events();
+        let doc = app.session.active().unwrap();
+        assert!(doc.path.is_none());
+        assert!(host.bound(doc.uid));
+        app.session.run("cell.set", json!({"cell":"A1","input":"Edit after provider open"})).unwrap();
+        (app, host)
+    }
+
+    #[test]
+    fn backstage_save_retains_the_bound_provider_overwrite_destination() {
+        let (mut app, host) = provider_book();
+        let mut out = Outcome::default();
+        save(&mut app, &mut out);
+        assert!(out.close);
+        assert_eq!(out.page, None);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["saveAs"], false);
+        assert_eq!(events[0].metadata["resourceId"], "existing-book");
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "provider", "").unwrap();
+        app.provider_tick();
+        let events = host.take_events();
+        let saved = events.iter().find(|event| event.metadata["type"] == "save").unwrap();
+        assert_eq!(saved.metadata["resourceId"], "existing-book");
+        assert!(saved.bytes.as_ref().is_some_and(|bytes| !bytes.is_empty()));
+        assert!(app.session.active().unwrap().is_dirty());
+        host.result(request.into(), "saved".into(), "existing-book".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn backstage_save_keeps_save_as_for_unbound_or_disabled_provider_books() {
+        for bound in [false, true] {
+            let (mut app, host) = provider_book();
+            if bound {
+                host.set_enabled(false).unwrap();
+            } else {
+                host.disconnect().unwrap();
+                host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+            }
+            let mut out = Outcome::default();
+            save(&mut app, &mut out);
+            assert!(!out.close);
+            assert_eq!(out.page, Some(Page::SaveAs));
+            assert!(host.take_events().is_empty());
+        }
+    }
+
+    #[test]
+    fn save_as_provider_handoff_is_a_discoverable_result_bearing_ui_command() {
+        let (mut app, host) = provider_book();
+        let ctx = egui::Context::default();
+        let crate::control::Outcome::Done(commands) =
+            crate::control::handle(&mut app, &ctx, "engine.commands", &json!({"search":"chooseProviderSave"}))
+        else {
+            panic!("command discovery must be synchronous");
+        };
+        assert!(commands["result"].as_array().unwrap().iter().any(|command| command["id"] == "ui.chooseProviderSave"));
+        let crate::control::Outcome::Done(result) = crate::control::handle(
+            &mut app,
+            &ctx,
+            "engine.execute",
+            &json!({"command":"ui.chooseProviderSave","params":{"saveAs":true}}),
+        ) else {
+            panic!("the explicit UI request must return handled status");
+        };
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["handled"], true);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["saveAs"], true);
+        assert!(events[0].metadata["resourceId"].is_null());
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "cancel", "").unwrap();
+        let mut out = Outcome::default();
+        save_as_workbook(&mut app, &mut out);
+        assert!(out.close);
+        assert_eq!(host.take_events()[0].metadata["saveAs"], true);
+    }
+
+    #[test]
+    fn save_as_local_cancel_and_browser_fallback_survive_missing_or_disabled_providers() {
+        for missing in [false, true] {
+            let (mut app, host) = provider_book();
+            if missing {
+                app.services.file_providers = None;
+            } else {
+                host.set_enabled(false).unwrap();
+            }
+            let picker_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+            let calls = picker_calls.clone();
+            app.services.pick_save = Some(Box::new(move |_| {
+                calls.set(calls.get() + 1);
+                None
+            }));
+            let mut out = Outcome::default();
+            save_as_workbook(&mut app, &mut out);
+            assert_eq!(picker_calls.get(), 1);
+            assert!(!out.close, "a cancelled native picker keeps the panel open");
+            assert!(host.take_events().is_empty());
+            let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+            let copies = downloads.clone();
+            app.services.pick_save = None;
+            app.services.download = Some(Box::new(move |_, bytes| {
+                assert!(!bytes.is_empty());
+                copies.set(copies.get() + 1);
+            }));
+            save_as_workbook(&mut app, &mut out);
+            assert!(out.close);
+            assert_eq!(downloads.get(), 1);
+            assert!(app.session.active().unwrap().is_dirty());
+            assert!(host.take_events().is_empty());
+        }
+    }
+
+    #[test]
+    fn save_as_ui_command_rejects_non_boolean_modes_without_choosing() {
+        let (mut app, host) = provider_book();
+        assert!(app.run("ui.chooseProviderSave", json!({"saveAs":"yes"})).is_err());
+        assert!(host.take_events().is_empty());
     }
 
     #[test]
