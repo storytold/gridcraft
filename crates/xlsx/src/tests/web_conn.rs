@@ -248,3 +248,36 @@ fn a_connection_with_whitespace_after_its_name_is_scanned() {
     assert!(text.contains("name=\"Spaced\""), "the whitespace-formatted foreign connection is kept verbatim");
     assert!(text.contains("name=\"prices\""), "our connection is merged in");
 }
+
+#[test]
+/// A foreign connection using a prefix declared on the connections root (Power Query's
+/// style) keeps its binding through the merge: clearing the last web query rewrites the
+/// part, and the saved file must still declare the prefix the foreign block uses.
+fn a_root_declared_prefix_survives_removing_the_last_web_query() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xel="http://schemas.microsoft.com/office/excel/2010/xconnections"><xel:connection id="9" name="PQ" type="5"/><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (mut reopened, _) = read_xlsx(&bytes).expect("reopens");
+    reopened.web_queries.clear();
+    let bytes2 = write_xlsx(&reopened).expect("saves again");
+    let mut pkg = crate::package::Package::open(&bytes2).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("<xel:connection"), "the prefixed foreign connection is kept");
+    assert!(text.contains("xmlns:xel="), "the root's prefix declaration survives the merge");
+    assert!(!text.contains("gone.example") && !text.contains("https://example.com"), "the removed web query is gone");
+    // The part parses: the prefix is bound.
+    assert!(crate::xml::parse(&part).is_ok(), "the merged part is well-formed XML");
+}

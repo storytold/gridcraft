@@ -276,6 +276,31 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
     formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
 }
 
+/// The attributes of a raw start tag (`<connections xmlns="..." k="v">`), each as it was
+/// written: name, `=` and quoted value, quote-aware so a value holding spaces stays whole.
+/// The element name itself is not an attribute and is skipped.
+fn raw_attributes(tag: &str) -> impl Iterator<Item = String> + '_ {
+    let mut out = Vec::new();
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // The name: up to `=`.
+        let Some(eq) = tag[i..].find('=').map(|e| i + e) else { break };
+        // The value: a quote-delimited string (the closing quote is the boundary, so spaces
+        // inside survive). The attribute is the raw slice, name, `=` and value as written.
+        let q = bytes.get(eq + 1).copied().unwrap_or(b'"');
+        let vstart = eq + 2;
+        let Some(vend) = tag[vstart..].find(q as char).map(|v| vstart + v) else { break };
+        let name_start = tag[..eq].rfind(char::is_whitespace).map(|w| w + 1).unwrap_or(0);
+        let attribute = &tag[name_start..=vend];
+        if !attribute.starts_with(char::is_whitespace) {
+            out.push(attribute.to_string());
+        }
+        i = vend + 1;
+    }
+    out.into_iter()
+}
+
 /// The end of the element starting at `s` (`<connection ...`): the whole block, whether it
 /// is self-closing (`<connection id="1"/>`) or holds children (`<connection ...><webPr .../>/// </connection>`). A depth count walks the tags: an inner `/>` closes a child, not the
 /// connection, and a later block's `</connection>` never ends an earlier self-closing one.
@@ -353,13 +378,34 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // newline between `<connection` and its first attribute is valid, and a flat search for
     // "<connection " would skip such a block (and drop it from the merge).
     loop {
-        // The element name may be followed by any XML whitespace, not only a space: a tab or a
-        // newline between `<connection` and its first attribute is valid. `<connection` also
-        // prefixes `<connections` (the root), so every occurrence is checked until one is an
-        // element of its own.
-        let Some(start) = rest.match_indices("<connection").map(|(s, _)| s).find(|&s| {
+        // The element may carry a namespace prefix (`<xel:connection`, Power Query's style)
+        // and its name may be followed by any XML whitespace, not only a space. `<connection`
+        // also prefixes `<connections` (the root), so every occurrence is checked until one
+        // is an element of its own.
+        let unprefixed = rest.match_indices("<connection").map(|(s, _)| s).find(|&s| {
             rest.as_bytes().get(s + "<connection".len()).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
-        }) else { break };
+        });
+        // A prefixed element (`<xel:connection`, Power Query's style) is found by its
+        // `:connection` tail: each occurrence walks back to its `<`, and the text between
+        // must be a prefix name. The block scan itself starts at the `<`, prefix included.
+        let prefixed = rest.match_indices(":connection").map(|(s, _)| s).find(|&s| {
+            let Some(lt) = rest[..s].rfind('<') else { return false };
+            let prefix = &rest[lt + 1..s];
+            !prefix.is_empty() && prefix.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+                // `s` is the colon's index, so the element name ends one past it plus its length.
+                && matches!(rest.as_bytes().get(s + 1 + "connection".len()), Some(b' ' | b'\t' | b'\r' | b'\n'))
+        });
+        // The block starts at the `<` before the prefix (`<xel:connection`), not at the name.
+        // Whichever element comes first in the part, prefixed or not: scanning by one form
+        // and jumping past the other would drop it (an unprefixed match further right must
+        // not shadow an earlier prefixed one).
+        let prefixed_start = prefixed.map(|c| rest[..c].rfind('<').unwrap_or(c));
+        let start = match (unprefixed, prefixed_start) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
         let after = &rest[start..];
         let end = block_end(after)?;
         let block = &after[..end];
@@ -368,26 +414,28 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
         }
         rest = &after[end..];
     }
-    // The rebuilt root keeps the original's namespace and attribute declarations: a
-    // foreign connection block may rely on one (Power Query's `xel:`, say) declared on the
-    // root, and copying the block under a root without it would not be XML it parses from.
-    // GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew), and the
-    // parser gives every attribute exactly as the file held it.
-    let x = crate::xml::parse(data).ok()?;
-    let mut root = String::new();
-    for (k, v) in &x.attrs {
-        if k == "xmlns" || k == "xmlns:gc" {
-            continue;
-        }
-        let _ = write!(root, " {k}=\"{}\"", crate::xml::esc_attr(v));
-    }
+    // The rebuilt root keeps the original's namespace declarations exactly as the file held
+    // them: a foreign connection block may rely on one (Power Query's `xel:`, say) declared
+    // on the root, and copying the block under a root without it would not be XML it parses
+    // from. The parser drops xmlns:* from its attribute list, so the raw start tag is scanned
+    // instead; GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew),
+    // and every other declaration is copied verbatim between the element name and its `>`.
+    let Some(tag_start) = raw.find("<connections") else { return None };
+    let Some(tag_end) = raw[tag_start..].find('>').map(|e| tag_start + e) else { return None };
+    // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
+    // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
+    let kept_decls: String = raw_attributes(&raw[tag_start..=tag_end])
+        .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
+        .filter(|a| !a.starts_with("xmlns:gc=") && a.trim_end_matches(['\"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
+        .map(|a| format!(" {a}"))
+        .collect();
     let mut w = String::from(crate::write::XML_DECL);
-    let _ = write!(w, "<connections{root} xmlns=\"{}\" xmlns:gc=\"{}\">",
-        crate::write::NS_MAIN,
+    let _ = write!(w, "<connections{kept_decls} xmlns:gc=\"{}\">",
         crate::write::GC_NS);
     w.push_str(&foreign);
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
+    let x = crate::xml::parse(data).ok()?;
     let mut id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0) + 1;
     for q in &wb.web_queries {
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };

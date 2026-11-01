@@ -247,6 +247,11 @@ impl SheetApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.reap_fetches();
+            // A reaped worker still running needs a pass when it ends: without one, its
+            // result can sit retained until some later UI activity happens to run.
+            if self.reaped.iter().any(|h| h.as_ref().is_none_or(|h| !h.is_finished())) {
+                ctx.request_repaint();
+            }
             // This block runs in every window's pass; a fetch belongs to the window that
             // started it, so only that window polls or discards it \u{2014} another window drawing
             // first must not consume a result the owning window's dialog still expects. The
