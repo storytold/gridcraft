@@ -189,6 +189,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
+                (
+                    "ui.shapeTool",
+                    "Draw Shape",
+                    "{kind?: rectangle|roundedRectangle|ellipse|triangle|line|arrow|textBox (rectangle), on?: bool} arms the pointer: the next drag on the sheet draws the shape; {on: false} disarms → {kind}",
+                ),
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),

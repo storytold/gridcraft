@@ -1105,6 +1105,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         _ => ShapeKind::Rectangle,
     };
     let line_like = matches!(kind, ShapeKind::Line | ShapeKind::Arrow);
+    let min_side = if line_like { 0.0 } else { SHAPE_MIN_SIDE };
     let d = s.doc()?;
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
@@ -1122,9 +1123,10 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
             cell: at,
             dx: f64_param(p, "dx").unwrap_or(0.0).clamp(0.0, SHAPE_SIZE_MAX) as f32,
             dy: f64_param(p, "dy").unwrap_or(0.0).clamp(0.0, SHAPE_SIZE_MAX) as f32,
-            // A vertical line is zero points wide; other shapes keep at least a point.
-            width: f64_param(p, "width").unwrap_or(144.0).clamp(if line_like { 0.0 } else { 1.0 }, SHAPE_SIZE_MAX) as f32,
-            height: f64_param(p, "height").unwrap_or(if line_like { 0.0 } else { 96.0 }).clamp(0.0, SHAPE_SIZE_MAX) as f32,
+            // A vertical line is zero points wide and a horizontal one zero high; other shapes
+            // keep at least a point each way, so a flat drag doesn't make an empty box.
+            width: f64_param(p, "width").unwrap_or(144.0).clamp(min_side, SHAPE_SIZE_MAX) as f32,
+            height: f64_param(p, "height").unwrap_or(if line_like { 0.0 } else { 96.0 }).clamp(min_side, SHAPE_SIZE_MAX) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
         },
         fill,
@@ -1145,6 +1147,8 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// The largest offset or side, in points, `insert.shape` takes (as `object.move` does).
 const SHAPE_SIZE_MAX: f64 = 10_000.0;
+/// The smallest side, in points, of a shape other than a line or arrow.
+const SHAPE_MIN_SIDE: f64 = 1.0;
 
 /// A text box holds at most as many characters as a cell.
 const SHAPE_TEXT_MAX_CHARS: usize = 32_767;

@@ -49,6 +49,24 @@ fn hostile_shape_offsets_and_sizes_are_clamped() {
 }
 
 #[test]
+fn only_lines_and_arrows_may_be_flat() {
+    // Review of #3078: a rectangle or text box drawn flat was 0 high (or wide).
+    let mut session = workbook();
+    for kind in ["rectangle", "roundedRectangle", "ellipse", "triangle", "textBox"] {
+        session.execute("insert.shape", json!({"kind": kind, "width": 120, "height": 0})).unwrap();
+        assert_eq!((last(&session).anchor.width, last(&session).anchor.height), (120.0, 1.0), "{kind}");
+        session.execute("insert.shape", json!({"kind": kind, "width": 0, "height": -5})).unwrap();
+        assert_eq!((last(&session).anchor.width, last(&session).anchor.height), (1.0, 1.0), "{kind}");
+    }
+    for kind in ["line", "arrow"] {
+        session.execute("insert.shape", json!({"kind": kind, "width": 120, "height": 0})).unwrap();
+        assert_eq!((last(&session).anchor.width, last(&session).anchor.height), (120.0, 0.0), "{kind}");
+        session.execute("insert.shape", json!({"kind": kind, "width": 0, "height": 80})).unwrap();
+        assert_eq!((last(&session).anchor.width, last(&session).anchor.height), (0.0, 80.0), "{kind}");
+    }
+}
+
+#[test]
 fn ink_to_shape_keeps_a_lines_stroke_direction() {
     for (points, flips) in [
         (vec![[300, 200], [250, 180], [100, 120]], (true, true)),

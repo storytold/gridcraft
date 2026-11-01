@@ -197,3 +197,137 @@ fn a_drawn_lines_direction_survives_saving_and_reopening() {
     assert_eq!(after.anchor.cell, before.anchor.cell);
     assert!((after.anchor.width - before.anchor.width).abs() < 1.0 && (after.anchor.height - before.anchor.height).abs() < 1.0);
 }
+
+/// A screen point `[x, y]` sheet points from the top-left corner of A1 (no scrolling, LTR).
+fn at_sheet(h: &Harness, q: [f32; 2]) -> Pos2 {
+    let sh = h.state().session.doc().unwrap().wb.active().unwrap();
+    let g = geo(h);
+    g.cell_rect(sh, CellRef::parse("A1").unwrap()).min + vec2(q[0], q[1]) * g.z
+}
+
+/// The drawn shape's box in sheet points: left, top, width, height.
+fn sheet_box(h: &Harness, s: &Shape) -> [f32; 4] {
+    let sh = h.state().session.doc().unwrap().wb.active().unwrap();
+    [sh.col_left(s.anchor.cell.col) as f32 + s.anchor.dx, sh.row_top(s.anchor.cell.row) as f32 + s.anchor.dy, s.anchor.width, s.anchor.height]
+}
+
+#[test]
+fn a_flat_dragged_rectangle_keeps_a_positive_height() {
+    // Review of #3078: a rectangle dragged exactly sideways was 0 high, an oval dragged straight down 0 wide.
+    for (label, delta) in [("Rectangle", vec2(120.0, 0.0)), ("Oval", vec2(0.0, 90.0))] {
+        let mut h = harness();
+        pick_shape(&mut h, label);
+        let from = cell_center(&h, "H14");
+        drag(&mut h, from, from + delta, Modifiers::NONE);
+        let s = last_shape(&h);
+        assert!(s.anchor.width >= 1.0 && s.anchor.height >= 1.0, "{label}: {}x{}", s.anchor.width, s.anchor.height);
+        let (a, b) = (sheet_point(&h, from), sheet_point(&h, from + delta));
+        let dragged = (b[0] - a[0]).max(b[1] - a[1]);
+        assert!((s.anchor.width.max(s.anchor.height) - dragged).abs() < 0.5, "{label}: the dragged side is kept: {:?}", s.anchor);
+    }
+}
+
+#[test]
+fn picking_a_shape_turns_the_pen_off_and_the_pen_disarms_the_shape() {
+    // Review of #3078: with the pen on, a drag after picking a shape drew ink instead.
+    let mut h = harness();
+    h.state_mut().run("draw.pen", json!({"on": true})).unwrap();
+    pick_shape(&mut h, "Line");
+    assert_eq!(h.state().session.draw_tool, "", "arming a shape turns the pen off");
+    assert_eq!(h.state().grid.shape_tool.as_deref(), Some("line"));
+    let from = cell_center(&h, "H14");
+    drag(&mut h, from, from + vec2(100.0, 30.0), Modifiers::NONE);
+    let shapes = &h.state().session.doc().unwrap().wb.active().unwrap().shapes;
+    assert_eq!(shapes.iter().map(|s| s.kind).collect::<Vec<_>>(), [ShapeKind::Line], "the drag drew the line, not ink");
+
+    for tool in ["draw.pen", "draw.eraser", "draw.lasso"] {
+        h.state_mut().run("ui.shapeTool", json!({"kind": "arrow"})).unwrap();
+        h.state_mut().run(tool, json!({"on": true})).unwrap();
+        assert!(h.state().grid.shape_tool.is_none(), "{tool} disarms the shape");
+    }
+}
+
+#[test]
+fn on_a_right_to_left_sheet_a_dragged_line_follows_the_pointer() {
+    // Review of #3078: on a right-to-left sheet objects are placed mirrored but not mirrored
+    // themselves, so the line's direction must follow the drag as seen.
+    for (kind, delta) in [("Line", vec2(-120.0, 0.0)), ("Arrow", vec2(-90.0, -60.0)), ("Arrow", vec2(80.0, 50.0)), ("Line", vec2(70.0, -40.0))] {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.execute("view.rightToLeft", json!({"on": true})).unwrap();
+        let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 800.0)), crate::common::app(session), 4);
+        pick_shape(&mut h, kind);
+        let sh = h.state().session.doc().unwrap().wb.active().unwrap();
+        let from = geo(&h).screen_cell_rect(sh, CellRef::parse("H14").unwrap()).center();
+        let to = from + delta;
+        drag(&mut h, from, to, Modifiers::NONE);
+        h.run_steps(1);
+        assert!(painted_segment(&h, from, to), "{kind} {delta:?}: painted from the press to the release point");
+        if kind == "Arrow" {
+            assert!(painted_head(&h, to), "{kind} {delta:?}: the head is at the release point");
+        }
+        assert_eq!(last_shape(&h).flip_h, delta.x < 0.0, "{kind} {delta:?}: flipH is the direction seen");
+    }
+}
+
+#[test]
+fn shift_snapped_ends_stay_inside_the_sheet() {
+    // Review of #3078: a snapped end could fall left of column A or above row 1.
+    let press = [30.0, 5.0];
+    let mut h = harness();
+    pick_shape(&mut h, "Line");
+    let (from, to) = (at_sheet(&h, press), at_sheet(&h, [-20.0, -20.0]));
+    drag(&mut h, from, to, Modifiers::SHIFT);
+    let (start, end) = ends(&h, &last_shape(&h));
+    assert!(close(start, press), "the line starts at the press point: {start:?}");
+    assert!(end[0] >= 0.0 && end[1].abs() < 0.01, "the end is fitted onto the sheet's top edge: {end:?}");
+    let angle = (end[1] - start[1]).atan2(end[0] - start[0]).to_degrees();
+    assert!((angle + 165.0).abs() < 0.5, "the fitted line keeps the snapped angle: {angle}");
+
+    let mut h = harness();
+    pick_shape(&mut h, "Rectangle");
+    let (from, to) = (at_sheet(&h, press), at_sheet(&h, [-20.0, -20.0]));
+    drag(&mut h, from, to, Modifiers::SHIFT);
+    let b = sheet_box(&h, &last_shape(&h));
+    assert!(b.iter().zip([25.0, 0.0, 5.0, 5.0]).all(|(a, e)| (a - e).abs() < 0.01), "the square fits above row 1: {b:?}");
+}
+
+#[test]
+fn a_real_drag_that_snaps_short_is_not_a_click() {
+    // Review of #3078: the snapped end decided click or drag, so a long Shift drag whose square
+    // fitted to a sliver became a default-size shape.
+    let mut h = harness();
+    pick_shape(&mut h, "Rectangle");
+    let (from, to) = (at_sheet(&h, [30.0, 1.5]), at_sheet(&h, [0.0, 0.0]));
+    drag(&mut h, from, to, Modifiers::SHIFT);
+    let s = last_shape(&h);
+    assert!(
+        s.anchor.width < 10.0 && s.anchor.height < 10.0,
+        "a drawn (fitted) square, not the 144x96 default: {}x{}",
+        s.anchor.width,
+        s.anchor.height
+    );
+}
+
+#[test]
+fn the_shape_tool_command_arms_validates_and_is_listed() {
+    let mut h = harness();
+    let app = h.state_mut();
+    app.grid.shape_from = Some([1.0, 2.0]);
+    assert_eq!(app.run("ui.shapeTool", json!({})), Ok(json!({"kind": "rectangle"})), "empty params arm the default shape");
+    assert_eq!(app.grid.shape_tool.as_deref(), Some("rectangle"));
+    assert_eq!(app.grid.shape_from, None, "arming clears a pending press");
+    assert!(app.run("ui.shapeTool", json!({"kind": "star"})).is_err());
+    assert!(app.run("ui.shapeTool", json!({"kind": 7})).is_err());
+    assert_eq!(app.grid.shape_tool.as_deref(), Some("rectangle"), "a rejected kind changes nothing");
+    assert_eq!(app.run("ui.shapeTool", json!({"kind": "arrow"})), Ok(json!({"kind": "arrow"})));
+    assert_eq!(app.run("ui.shapeTool", json!({"on": false})), Ok(json!({"kind": null})));
+    assert!(app.grid.shape_tool.is_none());
+    let ctx = h.ctx.clone();
+    let gridcraft_ui_egui::control::Outcome::Done(listed) = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.commands", &json!({}))
+    else {
+        panic!("engine.commands returns a response");
+    };
+    let entry = listed["result"].as_array().unwrap().iter().find(|c| c["id"] == "ui.shapeTool").expect("ui.shapeTool is listed").clone();
+    assert_eq!(entry["ui"], true);
+}

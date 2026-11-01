@@ -39,8 +39,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         ] {
             // As in Excel the pick arms the pointer: the shape is drawn by dragging on the sheet.
             if ui.button(label).clicked() {
-                app.grid.shape_tool = Some(kind.into());
-                app.grid.shape_from = None;
+                act(app, "ui.shapeTool", json!({"kind": kind}));
             }
         }
     });
