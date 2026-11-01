@@ -158,33 +158,62 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
-            egui::Popup::menu(&ba).show(|ui| {
-                for (label, preset) in [
-                    ("Bottom Border", "bottom"),
-                    ("Top Border", "top"),
-                    ("Left Border", "left"),
-                    ("Right Border", "right"),
-                    ("No Border", "none"),
-                    ("All Borders", "all"),
-                    ("Outside Borders", "outside"),
-                    ("Thick Outside Borders", "thickOutside"),
-                    ("Bottom Double Border", "doubleBottom"),
-                    ("Thick Bottom Border", "thickBottom"),
-                    ("Top and Bottom Border", "topBottom"),
-                    ("Top and Thick Bottom Border", "topThickBottom"),
-                    ("Top and Double Bottom Border", "topDoubleBottom"),
-                    ("Inside Borders", "inside"),
-                ] {
-                    if crate::border_preview::preset_button(ui, label, preset).clicked() {
-                        app.grid.last_border = preset.to_string();
-                        act(app, "home.borders", json!({"preset": preset}));
+            let border_line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
+            let border_line_color_open = ui.data(|d| d.get_temp::<bool>(border_line_color_id)).unwrap_or(false);
+            let border_line_color_forced = app.ui.keytip_invoke == Some("home.borderLineColor");
+            ui.data_mut(|d| d.insert_temp(border_line_color_id, border_line_color_open || border_line_color_forced));
+            let border_keytip =
+                app.keytips.prefix().is_some_and(|prefix| prefix.starts_with("HB")) || border_line_color_open || border_line_color_forced;
+            egui::Popup::menu(&ba)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .open_memory(if border_keytip { Some(egui::SetOpenCommand::Bool(true)) } else { popup_command(false, ba.clicked()) })
+                .show(|ui| {
+                    for (label, preset) in [
+                        ("Bottom Border", "bottom"),
+                        ("Top Border", "top"),
+                        ("Left Border", "left"),
+                        ("Right Border", "right"),
+                        ("No Border", "none"),
+                        ("All Borders", "all"),
+                        ("Outside Borders", "outside"),
+                        ("Thick Outside Borders", "thickOutside"),
+                        ("Bottom Double Border", "doubleBottom"),
+                        ("Thick Bottom Border", "thickBottom"),
+                        ("Top and Bottom Border", "topBottom"),
+                        ("Top and Thick Bottom Border", "topThickBottom"),
+                        ("Top and Double Bottom Border", "topDoubleBottom"),
+                        ("Inside Borders", "inside"),
+                    ] {
+                        if crate::border_preview::preset_button(ui, label, preset).clicked() {
+                            app.grid.last_border = preset.to_string();
+                            act(app, "home.borders", json!({"preset": preset, "color": app.grid.last_border_color.clone()}));
+                        }
                     }
-                }
-                ui.separator();
-                if ui.button("More Borders…").clicked() {
-                    app.open_dialog("formatCells", json!({"tab": "Border"}));
-                }
-            });
+                    ui.separator();
+                    let line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
+                    let forced = invoke(app, "home.borderLineColor");
+                    let mut line_color_open = ui.data(|d| d.get_temp::<bool>(line_color_id)).unwrap_or(false) || forced;
+                    let line_color = ui.button("Line Color");
+                    if line_color.clicked() {
+                        line_color_open = !line_color_open;
+                    }
+                    ui.data_mut(|d| d.insert_temp(line_color_id, line_color_open));
+                    egui::Popup::menu(&line_color)
+                        .id(line_color.id.with("line_color_popup"))
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .open_memory(if line_color_open { Some(egui::SetOpenCommand::Bool(true)) } else { None })
+                        .show(|ui| {
+                            if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme_colors(app), "Automatic") {
+                                let c = if c == "none" { "auto".to_string() } else { c };
+                                app.grid.last_border_color = c.clone();
+                                act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": c}));
+                                ui.data_mut(|d| d.insert_temp(line_color_id, false));
+                            }
+                        });
+                    if ui.button("More Borders…").clicked() {
+                        app.open_dialog("formatCells", json!({"tab": "Border"}));
+                    }
+                });
             let fill = app.grid.last_fill.clone();
             let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
