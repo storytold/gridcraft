@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{Services, SheetApp};
 
