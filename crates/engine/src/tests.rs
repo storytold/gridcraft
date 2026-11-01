@@ -1092,7 +1092,7 @@ fn sorting_a_selected_column_expands_to_the_adjacent_data() {
     let quick = "data.sortDescending";
     let cases = [(quick, json!({})), (quick, json!({"column": 0})), ("data.sort", by_letter), ("data.sort", by_offset)];
     for (cmd, params) in cases {
-        for sel in ["B2:B4", "B:B"] {
+        for sel in ["B2:B4", "B3:B4", "B:B"] {
             let mut s = s();
             s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 3], ["c", 1], ["a", 2]]})).unwrap();
             s.execute("selection.set", json!({"range": sel})).unwrap();
@@ -1105,6 +1105,63 @@ fn sorting_a_selected_column_expands_to_the_adjacent_data() {
             }
         }
     }
+}
+
+/// A gap in the data, or something further down that stretches the used range, does not make the
+/// sort fall back to one column: the region around the selection's first cell is sorted as a block.
+#[test]
+fn sorting_a_column_expands_even_when_the_region_does_not_hold_the_whole_selection() {
+    let rows = json!([["Name", "Score"], ["b", 3], ["c", 1], ["a", 2]]);
+    // B1:B7 over a data block that ends at row 4 (row 5 empty), with more data further down.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows.clone()})).unwrap();
+    s.execute("range.setValues", json!({"range": "A7", "values": [["z", 9]]})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B7"})).unwrap();
+    s.execute("data.sortDescending", json!({})).unwrap();
+    for (cell, want) in [("A2", "b"), ("A3", "a"), ("A4", "c"), ("A7", "z")] {
+        assert_eq!(v(&s, cell), Value::from(want), "gap {cell}");
+    }
+    assert_eq!(v(&s, "B7"), Value::Number(9.0));
+    // B1:B30 with something at E20 that only extends the used range.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows.clone()})).unwrap();
+    s.execute("cell.set", json!({"cell": "E20", "input": "x"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B30"})).unwrap();
+    s.execute("data.sortDescending", json!({})).unwrap();
+    for (cell, want) in [("A2", "b"), ("A3", "a"), ("A4", "c")] {
+        assert_eq!(v(&s, cell), Value::from(want), "used range {cell}");
+    }
+    assert_eq!(v(&s, "E20"), Value::from("x"));
+}
+
+/// The expansion has limits: an explicit `range` is sorted as given, a sort by columns is not
+/// widened, and a region that takes in a table the selection is not in is left alone.
+#[test]
+fn sort_expansion_leaves_explicit_ranges_column_sorts_and_tables_alone() {
+    let rows = json!([["Name", "Score"], ["b", 3], ["c", 1], ["a", 2]]);
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows.clone()})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:B4"})).unwrap();
+    s.execute("data.sortDescending", json!({"range": "B2:B4"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::from("b"), "explicit range keeps column A where it was");
+    assert_eq!(v(&s, "A3"), Value::from("c"));
+    assert_eq!(v(&s, "B3"), Value::Number(2.0));
+
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows.clone()})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:B4"})).unwrap();
+    s.execute("data.sort", json!({"orientation": "columns", "header": false, "keys": [{"row": 2, "order": "asc"}]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::from("Name"), "a sort by columns does not take in column A");
+    assert_eq!(v(&s, "B2"), Value::Number(3.0));
+
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score", "Rank"], ["b", 3, 1], ["a", 2, 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C3"})).unwrap();
+    s.execute("data.sortDescending", json!({})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Number(2.0), "the plain column is sorted");
+    assert_eq!(v(&s, "A2"), Value::from("b"), "the table next to it keeps its rows");
+    assert_eq!(v(&s, "B2"), Value::Number(3.0));
 }
 
 /// Delete and the Clear commands on a filtered selection clear only the rows showing, as in
