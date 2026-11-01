@@ -80,7 +80,10 @@ pub struct Dialog {
 /// reference at the caret instead of selecting it, and a drag grows it into a range.
 #[derive(Clone, Debug)]
 struct RefPick {
+    /// The box grid clicks go to: the last of `keys` that had the keyboard.
     key: &'static str,
+    /// Every box of the dialog that takes references (the second value of "between" too).
+    keys: &'static [&'static str],
     /// The sheet the dialog was opened on, by name: its index changes when sheets are inserted or
     /// moved while the dialog is open. References to another sheet carry that sheet's name.
     sheet: String,
@@ -828,7 +831,9 @@ impl Dialog {
                     fields,
                     json!({"preset": "lightRedFillDarkRedText", "period": "today"}),
                 );
-                if ty == "expression" {
+                if ty == "expression" || ty == "cellIs" {
+                    let (key, keys): (&'static str, &'static [&'static str]) =
+                        if ty == "expression" { ("formula", &["formula"]) } else { ("value", &["value", "value2"]) };
                     let (sheet, applies_to) = app
                         .session
                         .active()
@@ -839,7 +844,7 @@ impl Dialog {
                             )
                         })
                         .unwrap_or_default();
-                    d.pick = Some(RefPick { key: "formula", sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+                    d.pick = Some(RefPick { key, keys, sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
                 }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));

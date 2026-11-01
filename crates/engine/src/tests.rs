@@ -2995,6 +2995,107 @@ fn delete_on_filtered_checkboxes_skips_the_hidden_rows() {
 }
 
 #[test]
+fn clear_formats_and_clear_all_remove_conditional_formats_in_the_selection_only() {
+    let mut s = s();
+    for (i, r) in ["A1", "A2", "A3"].iter().enumerate() {
+        s.execute("cell.set", json!({"cell": r, "input": (i + 1).to_string()})).unwrap();
+    }
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale"}})).unwrap();
+    let ranges = |s: &Session| -> Vec<String> {
+        s.doc().unwrap().wb.sheet(0).unwrap().cond_formats.iter().flat_map(|c| c.ranges.iter().map(|r| r.a1())).collect()
+    };
+    assert_eq!(ranges(&s), ["A1:A3"]);
+    s.execute("edit.clearFormats", json!({"range": "A2"})).unwrap();
+    assert_eq!(ranges(&s), ["A1", "A3"]);
+    s.execute("edit.clearAll", json!({"range": "A1:A3"})).unwrap();
+    assert!(ranges(&s).is_empty());
+}
+
+#[test]
+fn paste_formats_and_all_carry_conditional_formats_and_values_do_not() {
+    let mut s = s();
+    for (i, r) in ["A1", "A2", "A3"].iter().enumerate() {
+        s.execute("cell.set", json!({"cell": r, "input": (i + 1).to_string()})).unwrap();
+    }
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale"}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>1", "preset": "yellowFill"}}))
+        .unwrap();
+    let rules = |s: &Session| -> Vec<(String, String)> {
+        s.doc()
+            .unwrap()
+            .wb
+            .sheet(0)
+            .unwrap()
+            .cond_formats
+            .iter()
+            .map(|c| {
+                let kind = match &c.rule {
+                    gridcraft_model::CfRule::ColorScale { .. } => "scale".to_string(),
+                    gridcraft_model::CfRule::Expression { formula, .. } => format!("expr {formula}"),
+                    _ => "other".into(),
+                };
+                (c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","), kind)
+            })
+            .collect()
+    };
+    s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+    // Values alone carry no formatting.
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1"})).unwrap();
+    assert_eq!(rules(&s).len(), 2);
+    // Formats copy both rules, with the formula's relative reference moved.
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "C1"})).unwrap();
+    let r = rules(&s);
+    assert_eq!(r.len(), 4);
+    assert!(r.contains(&("C1:C3".into(), "scale".into())));
+    assert!(r.contains(&("C1:C3".into(), "expr C1>1".into())), "{r:?}");
+    // Pasting again replaces what the destination had instead of stacking.
+    s.execute("edit.pasteSpecial", json!({"what": "all", "at": "C1"})).unwrap();
+    assert_eq!(rules(&s).len(), 4);
+    // Pasting over part of a covered area splits the old rule instead of dropping it.
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "C2"})).unwrap();
+    let r = rules(&s);
+    assert!(r.contains(&("C2".into(), "scale".into())), "{r:?}");
+    assert!(
+        r.contains(&("C1,C3".into(), "scale".into())) || (r.contains(&("C1".into(), "scale".into())) && r.contains(&("C3".into(), "scale".into()))),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn pasting_formats_from_one_cell_over_a_range_makes_one_rule_over_the_range() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "colorScale"}})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C5"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    let on_c: Vec<_> = sh.cond_formats.iter().filter(|c| c.ranges.iter().any(|r| r.start.col == 2)).collect();
+    assert_eq!(on_c.len(), 1);
+    assert_eq!(on_c[0].ranges.iter().map(|r| r.count()).sum::<u64>(), 5);
+    assert!(s.doc().unwrap().wb.styles.get(sh.cell(gridcraft_core::CellRef::new(4, 2)).map_or(Default::default(), |c| c.style)).font.bold);
+}
+
+#[test]
+fn the_format_painter_carries_conditional_formats_over_the_painted_range() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "colorScale"}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "C1:C5", "rule": {"type": "dataBar"}})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("edit.formatPainter", json!({})).unwrap();
+    s.execute("edit.formatPainter", json!({"apply": "C1:C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    // The destination's own rule is replaced by one copied scale over the whole range.
+    assert_eq!(sh.cond_formats.len(), 2);
+    let scale = sh.cond_formats.iter().find(|c| matches!(c.rule, gridcraft_model::CfRule::ColorScale { .. })).unwrap();
+    assert_eq!(scale.ranges.iter().map(|r| r.count()).sum::<u64>(), 5);
+    assert!(sh.cond_formats.iter().all(|c| !matches!(c.rule, gridcraft_model::CfRule::DataBar { .. })));
+}
+
+#[test]
 fn checkboxes_survive_xlsx_as_cell_controls() {
     let mut s = s();
     s.execute("insert.checkbox", json!({"range": "A1:A2"})).unwrap();

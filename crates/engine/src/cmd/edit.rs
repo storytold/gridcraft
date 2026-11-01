@@ -34,8 +34,8 @@ pub use go_to::go_to_names;
 use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
-use paste_special::paste_special;
 pub(crate) use paste_special::rewrite_all_formulas;
+use paste_special::{copy_cond_formats, paste_special};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -242,6 +242,10 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         })
     };
     edit(s, |cx| {
+        if matches!(what, "all" | "formats") {
+            // Conditional formats are formatting too, and may cover cells that hold nothing.
+            super::data::remove_cond_format_cells(&mut cx.sheet_mut(sheet)?.cond_formats, &ranges);
+        }
         for r in &ranges {
             let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
                 Some(u) => match r.intersection(&u) {
@@ -329,6 +333,7 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
         let Some((wb, sheet, src, sticky)) = s.format_painter.clone() else { return Err(EngineError::Other("Pick up a format first.".into())) };
         let dest_sheet = s.doc()?.wb.active_sheet();
         let same = std::sync::Arc::ptr_eq(&wb, &s.doc()?.wb) || s.doc()?.wb.styles == wb.styles;
+        let mut cf_formulas = false;
         edit(s, |cx| {
             let Some(src_sheet) = wb.sheet(sheet) else { return Ok(()) };
             let (h, w) = (src.height(), src.width());
@@ -397,9 +402,24 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
                 cx.sheet_mut(dest_sheet)?.set_style(c, st);
                 cx.touch(dest_sheet, c);
             }
+            // The painter lifts conditional formats along with the cell formats.
+            let mut tiles = Vec::new();
+            for tr in 0..dest.height().div_ceil(h) {
+                for tc in 0..dest.width().div_ceil(w) {
+                    let Some(origin) = dest.start.offset((tr * h) as i64, (tc * w) as i64) else { continue };
+                    let clip = RangeRef::new(origin, origin.offset_clamped(h as i64 - 1, w as i64 - 1)).intersection(&dest);
+                    tiles.extend(clip.map(|clip| (origin, clip)));
+                }
+            }
+            cf_formulas = copy_cond_formats(cx.sheet_mut(dest_sheet)?, src_sheet, src, &tiles);
             *cx.sel = crate::Selection::range(dest);
             Ok(())
         })?;
+        // Rules with formulas from another workbook leave this one untrusted, as pasting them does.
+        if cf_formulas && !same {
+            let d = s.doc_mut()?;
+            d.trust = d.trust.receive(crate::Trust::FromFile);
+        }
         if !sticky {
             s.format_painter = None;
         }

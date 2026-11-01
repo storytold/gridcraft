@@ -1,3 +1,5 @@
+use gridcraft_model::{CfRule, CfValueKind};
+
 use super::{
     Cell, CellRef, CfOperator, EngineError, ErrorStyle, Json, RangeRef, Result, Session, Validation, ValidationKind, Value, Workbook, bad,
     bool_param, cell_param, edit, json, ok, str_param, target_ranges, target_sheet,
@@ -45,6 +47,16 @@ pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation
         }
     }
     validations.retain(|d| !d.ranges.is_empty());
+}
+
+/// Removes the cells of `cuts` from every conditional format, keeping the rest of each rule's ranges.
+pub(in super::super) fn remove_cond_format_cells(cond_formats: &mut Vec<gridcraft_model::CondFormat>, cuts: &[RangeRef]) {
+    for cf in cond_formats.iter_mut() {
+        for cut in cuts {
+            cf.ranges = cf.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        }
+    }
+    cond_formats.retain(|c| !c.ranges.is_empty());
 }
 
 pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
@@ -246,6 +258,41 @@ pub(in super::super) fn move_rule_formula(f: &str, first: CellRef, to: CellRef) 
     let has_relative = gridcraft_formula::parse(f.trim_start_matches('=')).is_ok_and(|e| gridcraft_formula::print(&e) != moved);
     let eq = if f.starts_with('=') { "=" } else { "" };
     if has_relative { format!("{eq}{moved}") } else { f.to_string() }
+}
+
+/// A conditional-format rule copied from a range anchored at `from` to one anchored at `to`: the
+/// relative references in its formulas move with it. The flag says the rule holds formulas.
+pub(in super::super) fn move_cf_rule(rule: &CfRule, from: CellRef, to: CellRef) -> (CfRule, bool) {
+    let formulas = std::cell::Cell::new(false);
+    let text = |f: &str| {
+        if f.trim_start().starts_with('=') {
+            formulas.set(true);
+        }
+        move_rule_formula(f, from, to)
+    };
+    let kind = |k: &CfValueKind| match k {
+        CfValueKind::Formula(f) => {
+            formulas.set(true);
+            CfValueKind::Formula(move_rule_formula(f, from, to))
+        }
+        other => other.clone(),
+    };
+    let moved = match rule {
+        CfRule::CellIs { op, a, b, style } => CfRule::CellIs { op: *op, a: text(a), b: b.as_deref().map(text), style: style.clone() },
+        CfRule::Expression { formula, style } => {
+            formulas.set(true);
+            CfRule::Expression { formula: move_rule_formula(formula, from, to), style: style.clone() }
+        }
+        CfRule::ColorScale { stops } => CfRule::ColorScale { stops: stops.iter().map(|(k, c)| (kind(k), *c)).collect() },
+        CfRule::DataBar { min, max, color, gradient, show_value } => {
+            CfRule::DataBar { min: kind(min), max: kind(max), color: *color, gradient: *gradient, show_value: *show_value }
+        }
+        CfRule::IconSet { set, thresholds, reverse, show_value } => {
+            CfRule::IconSet { set: set.clone(), thresholds: thresholds.iter().map(kind).collect(), reverse: *reverse, show_value: *show_value }
+        }
+        other => other.clone(),
+    };
+    (moved, formulas.get())
 }
 
 fn compare_op(op: CfOperator, n: f64, a: Option<f64>, b: Option<f64>) -> bool {
