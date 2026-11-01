@@ -720,6 +720,65 @@ fn deleting_a_multi_area_row_selection_removes_every_area_and_undoes_once() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // native-only test: timing the two deletes
+fn deleting_many_separate_rows_takes_about_as_long_as_one_block() {
+    // #2287: every 10th row of a 12,000-row sheet, as 1,200 single-row areas.
+    let (rows, step) = (12_000u32, 10u32);
+    let values: Vec<serde_json::Value> = (0..rows).map(|r| json!([r, r + 100_000, r + 200_000])).collect();
+    let deleted = |r: u32| r >= 1 && (r - 1).is_multiple_of(step);
+    let list = (0..rows).filter(|&r| deleted(r)).map(|r| format!("{0}:{0}", r + 1)).collect::<Vec<_>>().join(",");
+    let build = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": format!("=SUM(A1:A{rows})")})).unwrap();
+        s.execute("cell.set", json!({"cell": "E3", "input": "=B25"})).unwrap();
+        s
+    };
+    let mut block = build();
+    let t = std::time::Instant::now();
+    block.execute("home.deleteRows", json!({"rows": format!("2:{}", rows / step + 1)})).unwrap();
+    let block_time = t.elapsed();
+
+    let mut s = build();
+    let t = std::time::Instant::now();
+    s.execute("home.deleteRows", json!({"rows": list})).unwrap();
+    let separate_time = t.elapsed();
+
+    let kept: Vec<u32> = (0..rows).filter(|&r| !deleted(r)).collect();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(sh.used_range().unwrap().end.row as usize, kept.len() - 1);
+    for (i, r) in kept.iter().enumerate() {
+        assert_eq!(sh.value(CellRef::new(i as u32, 0)), Value::Number(*r as f64));
+        assert_eq!(sh.value(CellRef::new(i as u32, 2)), Value::Number((*r + 200_000) as f64));
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], format!("=SUM(A1:A{})", kept.len()));
+    // B25 loses rows 2, 12 and 22 above it; the formula itself moves from E3 to E2.
+    assert_eq!(s.execute("cell.get", json!({"cell": "E2"})).unwrap()["formula"], "=B22");
+    assert!(
+        separate_time < block_time * 20 + std::time::Duration::from_millis(500),
+        "separate rows took {separate_time:?}, one block took {block_time:?}"
+    );
+}
+
+#[test]
+fn deleting_many_separate_columns_matches_per_area_result() {
+    let mut s = s();
+    let values: Vec<serde_json::Value> = (0..50).map(|r| json!((0..40).map(|c| r * 100 + c).collect::<Vec<_>>())).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    s.execute("cell.set", json!({"cell": "A60", "input": "=SUM(A1:AN1)+H2"})).unwrap();
+    // Columns B, E, H (refs) and F:G.
+    s.execute("home.deleteColumns", json!({"cols": "B:B,E:E,H:H,F:G"})).unwrap();
+    let kept: Vec<u32> = (0..40).filter(|c| ![1, 4, 5, 6, 7].contains(c)).collect();
+    for r in 0..50u32 {
+        for (i, c) in kept.iter().enumerate() {
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(r, i as u32)), Value::Number((r * 100 + c) as f64));
+        }
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "A60"})).unwrap()["formula"], "=SUM(A1:AI1)+#REF!");
+}
+
+#[test]
 fn move_columns_reorders_without_overwriting_and_undoes_once() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4, 5, 6, 7, 8]]})).unwrap();

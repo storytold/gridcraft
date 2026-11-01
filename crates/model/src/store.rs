@@ -295,6 +295,44 @@ impl CellStore {
             }
         }
     }
+    /// Deletes the rows in `spans` (`(first, count)`, ascending and disjoint) and closes the gaps
+    /// in one pass: each later cell moves up once by the number of deleted rows above it.
+    pub fn delete_rows(&mut self, spans: &[(u32, u32)]) {
+        self.delete_lines(spans, true);
+    }
+    /// Column form of [`CellStore::delete_rows`].
+    pub fn delete_cols(&mut self, spans: &[(u32, u32)]) {
+        self.delete_lines(spans, false);
+    }
+    fn delete_lines(&mut self, spans: &[(u32, u32)], rows: bool) {
+        let Some(&(first, _)) = spans.first() else { return };
+        // Lines deleted before the end of each span, for mapping a kept line to its new place.
+        let mut before = Vec::with_capacity(spans.len());
+        let mut total = 0u32;
+        for &(_, count) in spans {
+            total = total.saturating_add(count);
+            before.push(total);
+        }
+        let map = |v: u32| -> Option<u32> {
+            let i = spans.partition_point(|&(at, _)| at <= v);
+            let Some(i) = i.checked_sub(1) else { return Some(v) };
+            let (at, count) = spans.get(i).copied().unwrap_or_default();
+            if v - at < count { None } else { Some(v - before.get(i).copied().unwrap_or_default()) }
+        };
+        let keys: Vec<CellRef> = if rows {
+            let r = RangeRef::new(CellRef::new(first, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, gridcraft_core::MAX_COLS - 1));
+            self.iter_range(r).map(|(c, _)| c).collect()
+        } else {
+            self.iter().filter(|(c, _)| c.col >= first).map(|(c, _)| c).collect()
+        };
+        let moved: Vec<(CellRef, Cell)> = keys.into_iter().filter_map(|c| self.remove(c).map(|cell| (c, cell))).collect();
+        for (c, cell) in moved {
+            let to = if rows { map(c.row).map(|r| CellRef::new(r, c.col)) } else { map(c.col).map(|x| CellRef::new(c.row, x)) };
+            if let Some(to) = to {
+                self.set(to, cell);
+            }
+        }
+    }
     /// Shifts cells within rows `r0..=r1` and columns `>= from` horizontally (Insert/Delete Cells
     /// with shift right/left).
     pub fn shift_cols_in_rows(&mut self, r0: u32, r1: u32, from: u32, delta: i64) {
