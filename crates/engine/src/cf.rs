@@ -2,6 +2,7 @@
 //! gets.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
 use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
@@ -23,8 +24,19 @@ pub struct CfLook {
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
 #[derive(Default)]
 pub struct CfCache {
-    stats: HashMap<usize, RuleStats>,
+    /// Rule index → its statistics, shared by every rule over the same ranges reading the same
+    /// statistics: a file can hold thousands of top-N rules over `A:A`, and one scan serves them.
+    stats: HashMap<usize, Arc<RuleStats>>,
+    shared: HashMap<(Vec<RangeRef>, StatsNeed), Arc<RuleStats>>,
+    /// Cells left to visit gathering statistics through this cache (see [`STATS_BUDGET`]).
+    budget: Option<usize>,
 }
+
+/// Cells one cache may visit gathering statistics. Statistics are gathered from the cells that
+/// hold values, once per distinct range list, so real workbooks stay far below this; a file
+/// built to make every look-up scan millions of cells gets statistics over what fits, rather
+/// than freezing the grid (#3066 review).
+const STATS_BUDGET: usize = 20_000_000;
 
 #[derive(Default, Clone)]
 struct RuleStats {
@@ -36,7 +48,7 @@ struct RuleStats {
 
 /// Which statistics a rule reads. Scanning the rule's whole range for them costs O(range), so
 /// rules that read none (cell value, formula, text, blanks, errors, dates) never scan.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum StatsNeed {
     /// Sorted numbers, their mean and deviation (top/bottom N, above average, scales, bars, icons).
     Numbers,
@@ -55,8 +67,8 @@ fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
 }
 
 impl RuleStats {
-    fn build(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> RuleStats {
-        let (sorted, counts) = numbers_in(sh, ranges, need);
+    fn build(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed, budget: &mut usize) -> RuleStats {
+        let (sorted, counts) = numbers_in(sh, ranges, need, budget);
         let n = sorted.len().max(1) as f64;
         let avg = sorted.iter().sum::<f64>() / n;
         let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
@@ -70,7 +82,10 @@ thread_local! {
     static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, HashMap<String, usize>) {
+/// The numbers (or text counts) in `ranges`, read from the cells that hold a value or formula and
+/// from spilled results, not from every position: a whole-column range costs what it holds.
+/// Visits at most `budget` cells, counting it down.
+fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed, budget: &mut usize) -> (Vec<f64>, HashMap<String, usize>) {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
     for r in ranges {
@@ -78,7 +93,19 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
             Some(x) => x,
             None => continue,
         };
-        for c in r.iter().take(2_000_000) {
+        // A stored cell without a value or formula shows what spilled into it (`Sheet::value`);
+        // the spill pass picks those up.
+        let stored = sh.cells.iter_range(r).filter(|(_, cell)| !cell.value.is_empty() || cell.formula.is_some()).map(|(c, _)| c);
+        let spilled = sh
+            .spill
+            .range(r.start..=r.end)
+            .map(|(c, _)| *c)
+            .filter(|c| r.contains(*c) && !sh.cells.get(*c).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some()));
+        for c in stored.chain(spilled).take(2_000_000) {
+            if *budget == 0 {
+                break;
+            }
+            *budget -= 1;
             #[cfg(test)]
             SCANNED.with(|n| n.set(n.get() + 1));
             let v = sh.value(c);
@@ -230,6 +257,16 @@ impl CfCache {
         Self::default()
     }
 
+    /// Statistics of rule `idx`, gathered on first use and shared with every rule over the same
+    /// ranges that reads the same statistics.
+    fn stats_for(&mut self, sh: &Sheet, idx: usize, cf: &CondFormat, need: StatsNeed) -> &RuleStats {
+        let budget = self.budget.get_or_insert(STATS_BUDGET);
+        let shared = &mut self.shared;
+        self.stats.entry(idx).or_insert_with(|| {
+            shared.entry((cf.ranges.clone(), need)).or_insert_with(|| Arc::new(RuleStats::build(sh, &cf.ranges, need, budget))).clone()
+        })
+    }
+
     /// Conditional look of `c`, or `None` when no rule applies.
     pub fn look(&mut self, wb: &Workbook, sheet: usize, c: CellRef) -> Option<CfLook> {
         let sh = wb.sheet(sheet)?;
@@ -246,7 +283,7 @@ impl CfCache {
         for (idx, cf) in rules {
             let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
-                Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
+                Some(need) => self.stats_for(sh, idx, cf, need),
                 None => &no_stats,
             };
             let text = v.display();
@@ -493,9 +530,10 @@ mod tests {
         let sh = d.wb.sheet(0).unwrap();
         for ranges in ["A1:B6", "A1:A3", "B2:B9", "D1:E4", "A1:A2"].map(|r| vec![RangeRef::parse(r).unwrap()]) {
             let full = all_stats_before(sh, &ranges);
-            let numbers = RuleStats::build(sh, &ranges, StatsNeed::Numbers);
+            let mut budget = usize::MAX;
+            let numbers = RuleStats::build(sh, &ranges, StatsNeed::Numbers, &mut budget);
             assert_eq!((numbers.sorted, numbers.avg.to_bits(), numbers.std.to_bits()), (full.sorted, full.avg.to_bits(), full.std.to_bits()));
-            assert_eq!(RuleStats::build(sh, &ranges, StatsNeed::Counts).counts, full.counts);
+            assert_eq!(RuleStats::build(sh, &ranges, StatsNeed::Counts, &mut budget).counts, full.counts);
         }
     }
 
@@ -584,6 +622,40 @@ mod tests {
         assert_eq!(fill(cache.look(&wb, 0, CellRef::parse("H9").unwrap())), None);
         assert_eq!(fill(cache.look(&wb, 0, CellRef::parse("H500000").unwrap())), None);
         assert_eq!(SCANNED.with(|n| n.get()), 10);
+    }
+
+    /// #3066 review: statistics come from the cells that hold values, once per distinct range
+    /// list. Thousands of top-N rules over `A:A` with values only at its two ends visit two cells,
+    /// not a million positions per rule.
+    #[test]
+    fn whole_column_statistics_read_stored_cells_once_per_range_list() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1048576", "input": "9"})).unwrap();
+        for _ in 0..2_000 {
+            s.execute("home.conditionalFormat", json!({"range": "A:A", "rule": {"type": "top10", "rank": 1, "preset": "lightRedFill"}})).unwrap();
+        }
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        SCANNED.with(|n| n.set(0));
+        let filled = |l: Option<CfLook>| l.and_then(|l| l.style).is_some();
+        assert!(filled(cache.look(&d.wb, 0, CellRef::parse("A1048576").unwrap())), "the top value");
+        assert!(!filled(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap())), "not the top value");
+        assert_eq!(SCANNED.with(|n| n.get()), 2);
+    }
+
+    /// Spilled results count towards a rule's statistics, as their cells show them.
+    #[test]
+    fn statistics_include_spilled_values() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(5)"})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A5", "rule": {"type": "top10", "rank": 1, "preset": "lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut filled = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
+        assert_eq!([filled("A1"), filled("A4"), filled("A5")], [false, false, true]);
     }
 
     #[test]
