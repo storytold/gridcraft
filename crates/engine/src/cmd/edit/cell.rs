@@ -5,6 +5,16 @@ use super::{
 
 // ---------------------------------------------------------------- entry
 
+/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
+/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+pub(crate) fn is_formula_input(input: &str) -> bool {
+    input.starts_with('=')
+        || (input.len() > 1
+            && (input.starts_with('+') || input.starts_with('-'))
+            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+}
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
@@ -18,12 +28,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
-    if is_formula {
+    if is_formula_input(input) {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
