@@ -35,3 +35,6 @@ pub fn control_addr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod folder_confinement_tests;

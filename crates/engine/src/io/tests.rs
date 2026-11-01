@@ -18,23 +18,89 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+/// Isolate each native save fixture and clean it on normal return or unwinding. Set
+/// `GRIDCRAFT_RETAIN_TEST_FIXTURES` to retain diagnostics on workstations that forbid cleanup.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_fixture(label: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("gridcraft-save-{label}-"))
+        .disable_cleanup(std::env::var_os("GRIDCRAFT_RETAIN_TEST_FIXTURES").is_some())
+        .tempdir()
+        .unwrap()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn save_fails_upfront_when_the_temp_name_is_taken() {
-    // Another local user who can write the directory must not be able to point the
-    // save's predictable temporary name at their own file: creation is exclusive.
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn stale_temporary_file_does_not_block_save_or_get_removed() {
+    let fixture = save_fixture("stale");
+    let dir = fixture.path();
+    let stale = dir.join("book.xlsx.sctmp");
+    std::fs::write(&stale, b"stale contents").unwrap();
+    let dest = dir.join("book.xlsx");
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+    assert_eq!(std::fs::read(stale).unwrap(), b"stale contents");
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn planted_temporary_symlink_does_not_block_save_or_modify_its_target() {
+    let fixture = save_fixture("planted");
+    let dir = fixture.path();
     let victim = dir.join("victim.txt");
     std::fs::write(&victim, b"original").unwrap();
     let dest = dir.join("book.xlsx");
-    std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
-    let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-    assert!(!dir.join("book.xlsx").exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
+    let planted = dir.join("book.xlsx.sctmp");
+    std::os::unix::fs::symlink(&victim, &planted).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(victim).unwrap(), b"original");
+    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+    assert!(std::fs::symlink_metadata(planted).unwrap().file_type().is_symlink());
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn atomic_save_uses_the_pinned_parent_after_a_directory_swap() {
+    let fixture = save_fixture("parent-swap");
+    let dir = fixture.path();
+    for sub in ["allowed/sub", "outside"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    std::fs::write(dir.join("outside/book.xlsx"), b"outside sentinel").unwrap();
+    let roots = crate::file_access::AutomationRoots::new(None, Some(&dir.join("allowed"))).unwrap();
+    let dest = dir.join("allowed/sub/book.xlsx");
+    let (parent, name) = crate::file_access::confine(roots.as_ref(), || crate::file_access::write_parent(dest.to_str().unwrap())).unwrap();
+    std::fs::rename(dir.join("allowed/sub"), dir.join("allowed/retained-sub")).unwrap();
+    std::os::unix::fs::symlink(dir.join("outside"), dir.join("allowed/sub")).unwrap();
+    atomic_write(&parent, &name, b"inside saved").unwrap();
+    assert_eq!(std::fs::read(dir.join("outside/book.xlsx")).unwrap(), b"outside sentinel");
+    assert_eq!(std::fs::read(dir.join("allowed/retained-sub/book.xlsx")).unwrap(), b"inside saved");
+    assert_eq!(std::fs::read_dir(dir.join("outside")).unwrap().count(), 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn simultaneous_atomic_saves_do_not_share_temporary_names() {
+    let fixture = save_fixture("parallel");
+    let dir = fixture.path();
+    let destination = dir.join("book.xlsx");
+    let barrier = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for n in 0..8u8 {
+            let destination = &destination;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                write_file(destination.to_str().unwrap(), &[n; 64]).unwrap();
+            });
+        }
+    });
+    let saved = std::fs::read(destination).unwrap();
+    assert_eq!(saved.len(), 64);
+    assert!(saved.iter().all(|v| *v == saved[0]));
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

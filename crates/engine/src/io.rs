@@ -658,7 +658,7 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
-    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let f = crate::file_access::open_read(path).map_err(EngineError::Other)?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
     if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
@@ -681,40 +681,52 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
     script_sandbox_check(path)?;
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    // The temporary file is created exclusively, so an existing file or symlink at that
-    // path (planted by another local user) makes the save fail instead of truncating the
-    // link's target; and it inherits the destination's access restrictions, so saving a
-    // private workbook doesn't widen who can read it.
-    let tmp = format!("{path}.sctmp");
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
-    let mut opts = std::fs::OpenOptions::new();
+    let (dir, name) = crate::file_access::write_parent(path).map_err(EngineError::Other)?;
+    atomic_write(&dir, &name, bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+}
+
+/// Each save owns an exclusively created, unpredictable temporary name. A stale temporary
+/// file never blocks a later save; creation, cleanup and rename stay on the pinned directory.
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_write(dir: &cap_std::fs::Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let prior = dir.metadata(name).ok().map(|m| m.permissions());
+    let mut opts = cap_std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
-    if let Some(p) = &prior {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+    {
+        use cap_std::fs::{OpenOptionsExt, PermissionsExt};
+        opts.mode(prior.as_ref().map_or(0o600, |p| p.mode()));
     }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
+    let mut created = None;
+    for _ in 0..32 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(std::io::Error::other)?;
+        let suffix = u128::from_le_bytes(random);
+        let tmp = format!(".gridcraft-{suffix:032x}.sctmp");
+        match dir.open_with(&tmp, &opts) {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    let (tmp, mut file) = created.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cannot create a unique save file"))?;
     #[cfg(not(unix))]
-    if let Some(p) = &prior {
-        let _ = f.set_permissions(p.clone());
+    if let Some(p) = prior {
+        let _ = file.set_permissions(p);
     }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // A write or rename that fails (full disk, the workbook locked by another app) leaves
-        // no temporary file beside the user's workbook.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })
+    let result = file.write_all(bytes).and_then(|()| file.flush());
+    // Close before rename, including on Windows; no other attempt ever owns this name.
+    drop(file);
+    let result = result.and_then(|()| dir.rename(&tmp, dir, name));
+    if result.is_err() {
+        let _ = dir.remove_file(&tmp);
+    }
+    result
 }
 
 #[cfg(target_arch = "wasm32")]

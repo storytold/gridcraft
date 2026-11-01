@@ -25,6 +25,13 @@ gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 image = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-std = "4.0.3"
+getrandom = "0.4"
+
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3.27"
