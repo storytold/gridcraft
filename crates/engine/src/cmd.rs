@@ -553,6 +553,7 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.
 /// Rows with a user-set height keep it.
+/// Wrapped text in hidden columns uses the stored or sheet-default width, not zero display width.
 ///
 /// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
@@ -604,7 +605,9 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
             // starts one, and each line folds at the column width.
             if st.align.wrap {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
-                let w = sh.col_width(c).max(1.0) - 6.0;
+                // Hidden columns have zero display width, but their cells still wrap at
+                // the stored (or sheet-default) width when fitting a row.
+                let w = sh.cols.get(&c).and_then(|info| info.size).unwrap_or(sh.default_col_width).max(1.0) - 6.0;
                 lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
