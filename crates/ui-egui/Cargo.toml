@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 skrifa = { workspace = true }
+icu_segmenter = { workspace = true }
 web-time = { workspace = true }
 
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
@@ -32,9 +33,11 @@ web-time = { workspace = true }
 zbus = "=5.19.0"
 
 [dev-dependencies]
+tempfile = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 epaint_default_fonts = { workspace = true }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+sha2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }

@@ -382,6 +382,7 @@ struct PanesInput<'a> {
 
 fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     let PanesInput { app, painter, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
+    crate::thai_layout::begin_frame_budget(painter.ctx());
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
     let (sc0, sc1) = geo.scroll_cols(sh);

@@ -383,6 +383,21 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
+        let thai_wrap_w = crate::thai_layout::available_text_width(*rect, text_left, pad, indent, halign);
+        // Show Formulas paints stored formula source through the legacy renderer.
+        let showing_formula_source = sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some());
+        if !showing_formula_source
+            && crate::thai_layout::is_eligible(&text, st, &v, numeric).is_ok()
+            && let crate::thai_layout::ThaiLayoutResult::Ready(thai_cell) =
+                crate::thai_layout::layout_cell(p, &text, &font, color, thai_wrap_w, halign, z)
+        {
+            crate::thai_layout::paint_thai_cell(
+                p,
+                &thai_cell,
+                crate::thai_layout::ThaiCellPaint { rect: *rect, text_left, halign, valign: st.align.v, pad, indent, z, color },
+            );
+            return;
+        }
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
         job.halign = match halign {
             HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
