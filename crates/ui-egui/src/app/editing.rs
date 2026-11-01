@@ -100,7 +100,8 @@ impl SheetApp {
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
-            Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+            // A code edit commits the code as typed, whatever a completion holds.
+            Some(full) if !ed.code_edit && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.

@@ -390,8 +390,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         ed.completion = None;
+        // Python code is never completed from the column's text values.
         if app.ui.autocomplete
             && !ed.is_formula()
+            && !ed.code_edit
             && !entry_shrank(chars_before, &ed.text)
             && ed.caret == ed.text.chars().count()
             && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))

@@ -113,3 +113,16 @@ fn deleting_all_the_code_clears_a_python_cell_with_no_cached_value() {
     assert!(h.state().editor.is_none());
     assert_eq!(python(&h), None, "the code is removed, not kept as an unchanged empty cell");
 }
+
+#[test]
+fn a_code_edit_is_never_completed_from_the_column() {
+    let mut h = harness();
+    // A2 holds text that starts with A1's code: typing at the end of the code would offer it.
+    h.state_mut().session.execute("cell.set", json!({"cell": "A2", "input": "1 + 1 and more"})).unwrap();
+    select_a1(&mut h);
+    key(&mut h, Key::F2);
+    text(&mut h, " ");
+    assert_eq!(h.state().editor.as_ref().and_then(|e| e.completion.clone()), None, "no completion while code is edited");
+    key(&mut h, Key::Enter);
+    assert_eq!(python(&h), Some(("1 + 1 ".into(), true)), "the typed code is kept");
+}
