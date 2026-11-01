@@ -381,6 +381,38 @@ fn romanian_letters_use_the_latin_font() {
 }
 
 #[test]
+fn romanian_comma_below_and_cedilla_letters_stay_distinct() {
+    // Romanian writes ș ț with a comma below (U+0218..U+021B); the older cedilla letters ş ţ
+    // (U+015E, U+015F, U+0162, U+0163) are other characters and keep their own codes and glyphs.
+    // The standard fonts name the T cedilla `Tcommaaccent`, which the AGL maps back to U+0162.
+    let pairs = [('Ș', 'Ş', 'S', "Scedilla"), ('ș', 'ş', 's', "scedilla"), ('Ț', 'Ţ', 'T', "Tcommaaccent"), ('ț', 'ţ', 't', "tcommaaccent")];
+    let widths: Vec<u16> = ext_widths(Font::Helvetica).split(' ').map(|w| w.parse().unwrap()).collect();
+    for (i, (comma, cedilla, base, cedilla_glyph)) in pairs.into_iter().enumerate() {
+        let code = ext_code(comma).unwrap();
+        assert_eq!(usize::from(code), i + 1, "{comma:?}");
+        let cedilla_code = ext_code(cedilla).unwrap();
+        assert_ne!(code, cedilla_code, "{comma:?} {cedilla:?}");
+        // Named by code point, which every viewer maps back to the letter (the AGL's
+        // `Tcommaaccent` would map to the cedilla letter U+0162).
+        assert_eq!(metrics::COMMA_BELOW.get(i).map(|e| e.0), Some(format!("uni{:04X}", comma as u32).as_str()));
+        let cedilla_name = metrics::LATIN_EXT_A.get(usize::from(cedilla_code - 0x80)).map(|e| e.0);
+        assert_eq!(cedilla_name, Some(cedilla_glyph), "{cedilla:?}");
+        // Each advances like its base letter.
+        assert_eq!(widths[usize::from(code) - 1], Font::Helvetica.char_width(base), "{comma:?}");
+    }
+    // Mixed with other Latin Extended-A letters and plain text, in one run of the same face.
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ăşșţțőŁ");
+    let c = page_content(&doc).to_string();
+    // ă 0x83, ş 0xDF, ș 0x02, ţ 0xE3, ț 0x04, ő 0xD1, Ł 0xC1, all in /F14 (Helvetica's twin).
+    assert!(c.contains("/F14 10 Tf\n<83DF02E304D1C1> Tj\n"), "{c}");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"/Differences [1 /uni0218 /uni0219 /uni021A /uni021B 128 /Amacron").is_some());
+}
+
+#[test]
 fn latin_extended_letters_use_each_faces_own_resource() {
     // Every face routed to a `/Differences` resource has the Latin glyphs; the symbolic standard
     // fonts (Symbol, ZapfDingbats) lack them and must never be in this list.
