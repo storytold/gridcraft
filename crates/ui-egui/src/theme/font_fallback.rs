@@ -51,6 +51,7 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         HanOrder::Chinese => (zh, ja),
     };
     vec![
+        ("sys-latin-extended", latin_extended()),
         first,
         second,
         ("sys-cjk-hangul", cjk_hangul()),
@@ -60,6 +61,36 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
+}
+
+/// Generic Latin-extended fallback: a broad Western family that covers letters such as ẞ and ẻ,
+/// which are common in interface translations and case-folding tests but not guaranteed in the
+/// primary system face. Using a second broader face keeps the app from crashing when the first UI
+/// or cell face is missing a letter in the Latin Extended Additional block.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn latin_extended() -> Vec<(String, u32)> {
+    let win = windows_fonts();
+    let mac = "/System/Library/Fonts";
+    let mut v: Vec<(String, u32)> = vec![
+        (format!("{win}\\arial.ttf"), 0),
+        (format!("{win}\\tahoma.ttf"), 0),
+        (format!("{win}\\arialuni.ttf"), 0),
+        (format!("{mac}/Arial.ttf"), 0),
+        (format!("{mac}/Helvetica.ttc"), 0),
+    ];
+    for d in [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts",
+        "/usr/share/fonts/google-noto",
+        "/usr/local/share/fonts",
+    ] {
+        v.push((format!("{d}/NotoSans-Regular.ttf"), 0));
+        v.push((format!("{d}/DejaVuSans.ttf"), 0));
+        v.push((format!("{d}/LiberationSans-Regular.ttf"), 0));
+    }
+    v
 }
 
 /// Linux directories that hold CJK fonts across distributions: Debian/Ubuntu (`opentype/noto`,

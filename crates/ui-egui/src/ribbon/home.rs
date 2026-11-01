@@ -189,7 +189,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 ui.menu_button(line_color_label, |ui| {
                     let colors = theme_colors(app);
                     let automatic = app.ui.language.tr("Automatic");
-                    if let Some(color) = color_palette(ui, &colors, &automatic) {
+                    if let Some(color) = color_palette(ui, &colors, automatic) {
                         app.grid.last_border_color = if color == "none" { "auto".into() } else { color };
                         ui.close();
                     }

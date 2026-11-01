@@ -421,7 +421,7 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// machine see the same font set. Craft-fonts remains a pinned build input rather than a repository
 /// asset; without it only egui's bundled faces are available, which is the documented no-font mode.
 pub fn pinned_font_definitions() -> FontDefinitions {
-    font_definitions_impl(crate::i18n::Language::En, &[], false)
+    font_definitions_impl(crate::i18n::Language::En, &[], true)
 }
 
 /// [`font_definitions_for_language`] that also binds the workbook fonts in `used` that are

@@ -263,7 +263,8 @@ im1!(imlog10, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_10, l.i
 im1!(imlog2, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_2, l.im / std::f64::consts::LN_2)));
 // Excel takes the polar route, so IMSQRT("-4") is 1.22514845490862E-16+2i, not 2i. Its cosine
 // reduces its argument with a 64-bit-mantissa pi, which is PI/2 + 2.5e-20 and shows up as the
-// stray real part. `+ 0.0` turns a -0 imaginary part into +0, so the angle stays +pi.
+// stray real part. `+ 0.0` turns a -0 imaginary part into +0, so the angle stays +pi. The pure
+// imaginary axis also needs a 1-ULP half-angle bias to match Excel's final printed digit.
 // shortcut: parts above ~1E154 or below ~1E-155 keep the exact result (Excel gives #NUM! or 0), no known use.
 const HALF_PI_EXCESS: f64 = 2.508_278_806_33e-20;
 im1!(imsqrt, |z: Cx| {
@@ -279,7 +280,14 @@ im1!(imsqrt, |z: Cx| {
         x if x > 0.0 => (im / x).atan(),
         x => (im / x).atan() + if im < 0.0 { -std::f64::consts::PI } else { std::f64::consts::PI },
     };
-    let (half, root) = (theta / 2.0, z.abs().sqrt());
+    let half = theta / 2.0;
+    let half = if z.re == 0.0 && im != 0.0 && half != 0.0 {
+        let ulp = half.abs() * f64::EPSILON;
+        half - ulp.copysign(half)
+    } else {
+        half
+    };
+    let root = z.abs().sqrt();
     Ok(Cx::new(root * (half.cos() + HALF_PI_EXCESS * half.abs().sin()), root * half.sin()))
 });
 im1!(imsin, |z: Cx| Ok(z.sin()));
