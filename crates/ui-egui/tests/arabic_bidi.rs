@@ -114,3 +114,53 @@ fn conditional_reading_order_reaches_the_formula_bar() {
         assert_eq!(formula_bar.galley.rows[0].rtl_paragraph, rtl);
     }
 }
+
+fn painted_galleys(h: &Harness, text: &str) -> Vec<std::sync::Arc<egui::Galley>> {
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        text_shapes(&shape.shape, text, &mut painted);
+    }
+    painted.into_iter().map(|s| s.galley.clone()).collect()
+}
+
+#[test]
+fn explicit_left_keeps_wrapped_right_to_left_lines_on_the_left() {
+    let text = "مرحبا بالعالم\nا";
+    let mut h = app(text, "RightToLeft", false);
+    h.state_mut()
+        .session
+        .execute("home.formatCells", json!({"range": "B2", "style": {"align": {"h": "Left", "wrap": true, "reading_order": "RightToLeft"}}}))
+        .unwrap();
+    h.run_steps(2);
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        text_shapes(&shape.shape, text, &mut painted);
+    }
+    let cell = painted.iter().max_by(|a, b| a.pos.y.total_cmp(&b.pos.y)).unwrap();
+    assert!(cell.galley.rows.len() > 1);
+    assert!(cell.galley.rows.iter().all(|row| row.rtl_paragraph));
+    for row in &cell.galley.rows {
+        let left = row.pos.x + row.glyphs.iter().map(|g| g.pos.x).fold(f32::INFINITY, f32::min);
+        assert!(left.abs() < 0.5, "row starts at {left}");
+    }
+}
+
+#[test]
+fn right_to_left_editor_keeps_a_trailing_space_inside_the_text() {
+    let text = "مرحبا ";
+    let mut h = app("", "RightToLeft", false);
+    h.key_press(Key::F2);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Text(text.into()));
+    h.run_steps(3);
+    let galleys = painted_galleys(&h, text);
+    assert!(!galleys.is_empty());
+    for galley in galleys {
+        for row in &galley.rows {
+            for glyph in &row.glyphs {
+                let x = row.pos.x + glyph.pos.x;
+                assert!(x >= -0.5, "{:?} at {x}", glyph.chr);
+            }
+        }
+    }
+}

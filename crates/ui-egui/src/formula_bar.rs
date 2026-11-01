@@ -329,7 +329,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let reading_order = cell_reading_order(app, ed.sheet, ed.cell);
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
-        let mut job = egui::text::LayoutJob { direction: crate::text_direction::cell_direction(reading_order, s), ..Default::default() };
+        let mut job = egui::text::LayoutJob {
+            direction: crate::text_direction::cell_direction(reading_order, s),
+            keep_trailing_whitespace: true,
+            ..Default::default()
+        };
         let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();

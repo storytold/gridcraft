@@ -387,6 +387,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
         job.direction = direction;
+        job.halign_min_is_start = false;
         job.halign = match halign {
             HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
             HAlign::Right => egui::Align::RIGHT,
