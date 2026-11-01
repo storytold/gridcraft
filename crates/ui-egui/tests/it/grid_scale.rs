@@ -86,3 +86,31 @@ fn headings_shrink_with_a_small_grid_size() {
     assert!((after.header_h - before.header_h * 0.5).abs() <= 1.0, "column headings at 50%: {} → {}", before.header_h, after.header_h);
     assert!((after.header_w - before.header_w * 0.5).abs() <= 1.0, "row headings at 50%: {} → {}", before.header_w, after.header_w);
 }
+
+/// Clicking hits the cell under the pointer at any Cell grid size: the hit test lays the grid out
+/// with the same factor the painter uses (130% and 50%, near and far from the origin).
+#[test]
+fn clicks_select_the_cell_under_the_pointer_at_any_grid_size() {
+    use egui::{Event, Modifiers, PointerButton};
+    use gridcraft_engine::core::CellRef;
+    let _reset = Reset;
+    for percent in [130, 50] {
+        let mut h = harness();
+        h.state_mut().run("view.gridScale", json!({"percent": percent})).unwrap();
+        h.run_steps(2);
+        for cell in ["B2", "D7", "F12"] {
+            let at = CellRef::parse(cell).unwrap();
+            let pos = {
+                let app = h.state();
+                let sh = app.session.active().unwrap().wb.active().unwrap();
+                geo(&h).cell_rect(sh, at).center()
+            };
+            h.input_mut().events.push(Event::PointerMoved(pos));
+            h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+            let active = h.state().session.active().unwrap().selection.active;
+            assert_eq!(active, at, "a click on {cell} at {percent}%");
+        }
+    }
+}
