@@ -81,7 +81,12 @@ pub fn classify_in(target: &str, workbook_path: Option<&str>) -> LinkKind {
         return LinkKind::Refused("Save the workbook first: links to files are found next to it.".into());
     };
     let rel: std::path::PathBuf = path.split(['/', '\\']).filter(|part| !part.is_empty() && *part != ".").collect();
-    LinkKind::LocalFile(dir.join(rel).to_string_lossy().into_owned())
+    let joined = dir.join(rel).to_string_lossy().into_owned();
+    // A workbook on a network share makes even a relative link a network location.
+    if is_network(&joined) {
+        return LinkKind::Refused("Links to network locations aren't opened.".into());
+    }
+    LinkKind::LocalFile(joined)
 }
 
 /// Whether `path` is an absolute path to a document [`classify_in`] would open: the last check
@@ -197,6 +202,8 @@ mod tests {
         assert_eq!(classify_in("C:\\Docs\\a.PDF", None), LinkKind::LocalFile("C:\\Docs\\a.PDF".into()));
         assert_eq!(classify_in("file:///C:/Docs/a.pdf", None), LinkKind::LocalFile("C:/Docs/a.pdf".into()));
         assert!(matches!(classify_in("a.pdf", None), LinkKind::Refused(_)));
+        assert!(matches!(classify_in("Receipts/a.pdf", Some("\\\\host\\share\\book.xlsx")), LinkKind::Refused(_)));
+        assert!(matches!(classify_in("Receipts/a.pdf", Some("//host/share/book.xlsx")), LinkKind::Refused(_)));
         for bad in [
             "calc.exe",
             "C:\\Windows\\calc.exe",
