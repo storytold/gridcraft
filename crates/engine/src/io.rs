@@ -135,8 +135,15 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted, reading a delimited text file in `encoding`.
+/// Parses bytes that aren't encrypted, reading a delimited text file in `encoding`, then
+/// takes the workbook's macros out of their hidden names.
 fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text, encoding)?;
+    warnings.extend(crate::macros::load(&mut wb));
+    Ok((wb, warnings))
+}
+
+fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -177,7 +184,10 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
+                // The file's macros are read after this (`macros::load`), so they come along.
+                let macros = std::mem::take(&mut wb.macros_read);
                 wb = Workbook::new();
+                wb.macros_read = macros;
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
@@ -268,9 +278,12 @@ pub fn save_bytes_as_encoded(wb: &Workbook, path: &str, kind: FileKind, encoding
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
+        // Macros travel in hidden names.
         FileKind::Xlsx => {
+            let named = crate::macros::with_names(wb)?;
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-            gridcraft_xlsx::write_xlsx_named(wb, gridcraft_xlsx::XlsxKind::from_path(path), book).map_err(|e| EngineError::Other(e.to_string()))
+            gridcraft_xlsx::write_xlsx_named(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book)
+                .map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
@@ -281,7 +294,7 @@ pub fn save_bytes_as_encoded(wb: &Workbook, path: &str, kind: FileKind, encoding
         // Shift-JIS file stays a `;` Shift-JIS file).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','), encoding)).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t', encoding)).transpose().map(Option::unwrap_or_default),
-        FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
 }
@@ -323,6 +336,39 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8, encoding: CsvEncoding) -> Resul
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
+/// times as ISO 8601, booleans `TRUE`/`FALSE`, errors as their text, text as stored. Save As CSV
+/// writes displayed text instead ([`save_bytes`]) and stays the default.
+pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
+    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
+    gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
+        gridcraft_core::Value::Number(n) if n.is_finite() => {
+            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
+                Some(((date, time), d)) => iso(&d, date, time),
+                None => n.to_string(),
+            }
+        }
+        gridcraft_core::Value::Text(t) => t.to_string(),
+        v => crate::display::value_text_as(wb, &v, "General"),
+    })
+    .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.
+fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
+    let day = format!("{:04}-{:02}-{:02}", d.year, d.month, d.day);
+    let mut clock = format!("{:02}:{:02}:{:02}", d.hour, d.minute, d.second);
+    if d.milli != 0 {
+        clock.push_str(&format!(".{:03}", d.milli));
+    }
+    match (date, time) {
+        (true, true) => format!("{day}T{clock}"),
+        (false, true) => clock,
+        _ => day,
+    }
 }
 
 pub(crate) fn esc(s: &str) -> String {
@@ -630,13 +676,14 @@ impl Drop for ScriptSandbox {
 /// thread is being torn down).
 fn script_sandbox_check(path: &str) -> Result<()> {
     if SCRIPT_SANDBOX.try_with(|c| c.get() > 0).unwrap_or(true) {
-        return Err(EngineError::Other(format!("{path}: scripts can't read or write files")));
+        return Err(EngineError::Other(format!("{path}: scripts, and macro steps without the permission, can't read or write files")));
     }
     Ok(())
 }
 
 /// The largest native file the reader still touches: its own cap plus one, used to stop
 /// reads whose bytes arrive faster than metadata can claim (device files, growing files).
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -2,7 +2,7 @@
 
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             save_bytes
         ),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, encoding?}", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE); `encoding` names the code page for this CSV/TSV write", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -241,7 +241,11 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = crate::io::save_bytes_encoded(&wb, &target, encoding)?;
+    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        crate::io::csv_values_bytes(&wb)?
+    } else {
+        crate::io::save_bytes_encoded(&wb, &target, encoding)?
+    };
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
 }

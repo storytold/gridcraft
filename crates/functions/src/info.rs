@@ -311,11 +311,8 @@ fn hyperlink(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         let v = a.get(1).map(scalar).unwrap_or(Value::Empty);
         return Ok(empty_to_zero(v));
     }
-    let link = a.first().map(scalar).unwrap_or(Value::Empty);
-    if let Value::Error(e) = link {
-        return Err(e);
-    }
-    Ok(link)
+    // Excel returns the link as text, so HYPERLINK(1) is "1" and ISTEXT is TRUE.
+    Ok(Value::Text(text(a, 0)?.into()))
 }
 
 fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -608,6 +605,12 @@ mod tests {
         is_text(ev("HYPERLINK", vec![t("http://x.com")]), "http://x.com");
         is_text(ev("HYPERLINK", vec![t("http://x.com"), t("Click")]), "Click");
         close(ev("HYPERLINK", vec![t("http://x.com"), n(5.0)]), 5.0);
+        // Excel 16: without a friendly name the result is the link as text.
+        is_text(ev("HYPERLINK", vec![n(1.0)]), "1");
+        is_text(ev("HYPERLINK", vec![n(1.5)]), "1.5");
+        is_text(ev("HYPERLINK", vec![b(true)]), "TRUE");
+        is_text(ev("HYPERLINK", vec![rf(Value::Empty)]), "");
+        is_err(ev("HYPERLINK", vec![e(CellError::Div0)]), CellError::Div0);
         is_text(ev("ENCODEURL", vec![t("a b&c/é")]), "a%20b%26c%2F%C3%A9");
         is_err(ev("WEBSERVICE", vec![t("http://x")]), CellError::Value);
         is_err(ev("FILTERXML", vec![t("<a/>"), t("//a")]), CellError::Value);

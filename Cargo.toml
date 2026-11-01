@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.12.1"
+version = "0.14.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -26,7 +26,8 @@ gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 # Every craft-libs crate (craft-update and craft-window here, craft-ui in ui-egui, craft-print in
 # the app) comes from one storytold/craft-libs revision.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", version = "=0.1.0", features = ["egui"] }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "04aa1703b32d299e54f78fcde4182f2b393a9116", version = "=0.1.0", features = ["egui"] }
 
 # foundation
 thiserror = "2"
@@ -34,7 +35,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
-chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 quick-xml = "0.41"
@@ -71,10 +73,11 @@ craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-li
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
-type_complexity = "allow"
 
 [profile.dev.package."*"]
 opt-level = 2
