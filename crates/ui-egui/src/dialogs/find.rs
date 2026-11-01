@@ -7,12 +7,15 @@ use super::{Dialog, Json, Key, SheetApp, json};
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
     // is undone without closing it first); inside a text box they edit the typed text instead.
+    // The keys go through the grid's own shortcut table, so both keep the sheet's bindings.
     if !ui.ctx().egui_wants_keyboard_input() {
-        let redo = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y));
-        if redo {
-            app.run_or_alert("edit.redo", json!({}));
-        } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Z)) {
-            app.run_or_alert("edit.undo", json!({}));
+        let pressed = ui.input_mut(|i| {
+            [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Z), (Modifiers::COMMAND, Key::Y)]
+                .into_iter()
+                .find(|&(m, key)| i.consume_key(m, key))
+        });
+        if let Some((m, key)) = pressed {
+            crate::ribbon::shortcut(app, key, m);
         }
     }
     ui.horizontal(|ui| {
