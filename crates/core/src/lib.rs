@@ -13,5 +13,5 @@ pub use addr::{
     CategoryLevels, CellRef, MAX_COLS, MAX_ROWS, RangeRef, category_levels, col_to_letters, letters_to_col, quote_sheet, sheet_needs_quotes,
     split_sheet, unquote_sheet,
 };
-pub use date::DateSystem;
+pub use date::{DateOrder, DateSystem};
 pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};

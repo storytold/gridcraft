@@ -13,6 +13,15 @@ pub enum DateSystem {
     D1904,
 }
 
+/// The order of calendar components (MDY, DMY, YMD).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DateOrder {
+    #[default]
+    Mdy,
+    Dmy,
+    Ymd,
+}
+
 /// A calendar date and time of day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct DateTime {

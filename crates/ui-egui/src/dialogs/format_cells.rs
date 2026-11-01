@@ -54,6 +54,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "0.00E+00",
                     "# ?/?",
                     "m/d/yyyy",
+                    "dd/mm/yyyy",
                     "d-mmm-yy",
                     "mmmm d, yyyy",
                     "h:mm AM/PM",

@@ -205,6 +205,50 @@ impl NumberFormat {
         Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
     }
 
+    /// Calendar date order (MDY, DMY, YMD) if this format contains calendar date tokens.
+    pub fn date_order(&self) -> Option<gridcraft_core::DateOrder> {
+        let s = self.inner.sections.first().filter(|s| s.kind == SecKind::Date)?;
+        let mut first = None;
+        let mut second = None;
+        for t in &s.toks {
+            if let Tok::Date(d) = t
+                && d.is_calendar()
+            {
+                match d {
+                    DatePart::Day(_) => {
+                        if first.is_none() {
+                            first = Some('d');
+                        } else if second.is_none() && first != Some('d') {
+                            second = Some('d');
+                        }
+                    }
+                    DatePart::Month(_) => {
+                        if first.is_none() {
+                            first = Some('m');
+                        } else if second.is_none() && first != Some('m') {
+                            second = Some('m');
+                        }
+                    }
+                    DatePart::Year(_) => {
+                        if first.is_none() {
+                            first = Some('y');
+                        } else if second.is_none() && first != Some('y') {
+                            second = Some('y');
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match (first, second) {
+            (Some('d'), _) => Some(gridcraft_core::DateOrder::Dmy),
+            (Some('m'), _) => Some(gridcraft_core::DateOrder::Mdy),
+            (Some('y'), Some('d')) => Some(gridcraft_core::DateOrder::Dmy),
+            (Some('y'), _) => Some(gridcraft_core::DateOrder::Ymd),
+            _ => None,
+        }
+    }
+
     pub fn is_percent(&self) -> bool {
         self.num_sections().iter().any(|s| s.kind == SecKind::Number && s.percent > 0)
     }
