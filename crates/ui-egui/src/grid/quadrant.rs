@@ -418,6 +418,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let layout = |text: String| {
         let mut job = egui::text::LayoutJob::simple(text, font.clone(), color, f32::INFINITY);
         job.direction = direction;
+        job.halign_min_is_start = false;
         p.layout_job(job)
     };
     let mut galley = layout(first_line.clone());

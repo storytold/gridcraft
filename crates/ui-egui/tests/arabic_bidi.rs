@@ -195,3 +195,34 @@ fn wrapped_right_to_left_rows_follow_the_physical_alignment_on_both_sheet_geomet
         assert!(side.iter().all(|x| (x - first).abs() <= 1.0), "sheet_rtl {sheet_rtl}, {h_align}: rows at {edges:?}");
     }
 }
+
+fn single_line_right_edge(text: &str, order: &str, sheet_rtl: bool) -> f32 {
+    let h = app(text, order, sheet_rtl);
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        text_shapes(&shape.shape, text, &mut painted);
+    }
+    let cell = painted.iter().max_by(|a, b| a.pos.y.total_cmp(&b.pos.y)).unwrap();
+    assert_eq!(cell.galley.rows.len(), 1);
+    cell.galley
+        .rows
+        .iter()
+        .flat_map(|row| row.glyphs.iter().map(move |g| cell.pos.x + row.pos.x + g.pos.x + g.advance_width))
+        .fold(f32::NEG_INFINITY, f32::max)
+}
+
+#[test]
+fn a_mark_on_the_first_letter_keeps_single_line_right_to_left_text_flush_right() {
+    for (marked, plain) in [("يُرجى مراجعة", "يرجى مراجعة"), ("بَاب", "باب")] {
+        for sheet_rtl in [false, true] {
+            for order in ["RightToLeft", "Context"] {
+                let marked_right = single_line_right_edge(marked, order, sheet_rtl);
+                let plain_right = single_line_right_edge(plain, order, sheet_rtl);
+                assert!(
+                    (marked_right - plain_right).abs() <= 1.0,
+                    "{marked}, sheet_rtl {sheet_rtl}, {order}: ends at {marked_right}, unmarked at {plain_right}"
+                );
+            }
+        }
+    }
+}
