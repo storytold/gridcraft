@@ -13,7 +13,7 @@ use gridcraft_model::{
 };
 
 use crate::IoError;
-use crate::fmla::from_file;
+use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
@@ -547,7 +547,12 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
 }
 
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    let model = from_file(f.text.trim());
+    let mut model = from_file(f.text.trim());
+    if let Some(known) = cx.known_function
+        && let Some(unwrapped) = unwrap_google_sheets(&model, known)
+    {
+        model = unwrapped;
+    }
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {
         "shared" => {

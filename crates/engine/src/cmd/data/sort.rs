@@ -272,7 +272,9 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
 /// line index on the moving axis and is the identity outside `b0..=b1`. `sh` is the post-sort
 /// grid (row heights already reordered), so re-fitting uses the heights the object lands on.
 /// Objects pinned absolutely ("Don't move or size with cells") never move; "move but don't size"
-/// keeps its size; "move and size" is re-fitted when its whole extent stays inside the body.
+/// keeps its size; "move and size" is re-fitted when its whole extent stays inside the body, and
+/// keeps its size when the sort turns its lines around (its bottom line now sorts before its top
+/// line), since the lines then enclose nothing to stretch it between.
 fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: bool, b0: u32, b1: u32, dst_of: &[u32]) -> Anchor {
     if a.mode == AnchorMode::Absolute {
         return a;
@@ -290,7 +292,10 @@ fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: b
         let y1 = sh.row_top(nr) + a.dy as f64;
         let x2 = sh.col_left(nbc) + tdx as f64;
         let y2 = sh.row_top(nbr) + tdy as f64;
-        Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode: a.mode }
+        // An extent that is not positive means the sort put the bottom-right line before the
+        // top-left one on that axis: the object keeps its old size there.
+        let fit = |extent: f64, old: f32| if extent > 0.0 { extent as f32 } else { old.max(0.0) };
+        Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: fit(x2 - x1, a.width), height: fit(y2 - y1, a.height), mode: a.mode }
     } else {
         Anchor { cell: CellRef::new(nr, nc), ..a }
     }

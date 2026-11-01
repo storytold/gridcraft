@@ -42,6 +42,7 @@ impl SheetApp {
                 self.enter_window(window);
                 let title = self.session.active().map(|d| d.display_title()).unwrap_or_default();
                 self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
+                self.bring_forward = true;
             }
             None => {
                 self.allow_close = true;

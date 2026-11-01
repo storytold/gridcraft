@@ -34,6 +34,7 @@ pub mod fonts;
 pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -287,6 +288,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
+    /// to the front, also when the app is hidden or the window minimized (a Dock quit).
+    pub bring_forward: bool,
     /// View › Switch Windows opens its list on the next frame the View tab draws (asked for by a
     /// key tip, the command search or a menu, possibly while another tab was showing).
     pub(crate) open_switch_windows: bool,

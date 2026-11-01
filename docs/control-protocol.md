@@ -59,7 +59,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
 | `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, selected object, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
-| `ui.object.select` | `{id?, kind?}` | Selects a floating object on the active sheet (no `id` clears the selection); replies `{selected, rect}`, the rect in window points |
+| `ui.object.select` | `{id?, kind?}` | Selects a floating object on the active sheet and replies `{selected, rect}`, the rect in window points; with no `id` it clears the selection and replies `null` |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
 | `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
 | `ui.key` / `ui.text` | `{key, shift?, cmd?, alt?, ctrl?}` / `{text}` | Keyboard input (typing in the grid starts editing); same shared queue limits, and one `ui.text` string may be at most 1 MiB |
