@@ -11,9 +11,17 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
-        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html, delimiter?, decimal?, bom? (csv, as file.exportCsv)} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(
+            noundo "file.exportCsv",
+            "Export as CSV",
+            ["File", "Export"],
+            None,
+            "{path, sheet?, delimiter?: \",\" | \";\" (default: the delimiter the file was opened with, else \",\"), decimal?: \".\" | \",\" (decimal comma and period-grouped numbers), bom?: bool (UTF-8 byte order mark, which Excel needs to read accents), values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE), with the separator the file was opened with and without `delimiter`, `decimal` or `bom`",
+            has_doc,
+            |s, p| export(s, p, "csv")
+        ),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -158,8 +166,39 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
-    let bytes = crate::io::save_bytes(&d.wb, &name)?;
+    // The CSV options are read (and checked) only for CSV output.
+    let style = if fmt.eq_ignore_ascii_case("csv") { csv_style(p, &d.wb, "file.saveBytes")? } else { None };
+    let bytes = match style {
+        Some(style) => crate::io::csv_bytes(&d.wb, style)?,
+        None => crate::io::save_bytes(&d.wb, &name)?,
+    };
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
+}
+
+/// The CSV style `delimiter`, `decimal` and `bom` ask for, or `None` when none is given (the export
+/// then writes as it always has).
+fn csv_style(p: &Json, wb: &gridcraft_model::Workbook, cmd: &str) -> Result<Option<crate::io::CsvStyle>> {
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    if ["delimiter", "decimal", "bom"].iter().all(|k| given(k).is_none()) {
+        return Ok(None);
+    }
+    let delimiter = match given("delimiter").map(|v| v.as_str()) {
+        // Unasked, keep the separator the file was opened with (tab too), as plain CSV saves do.
+        None => wb.csv_delimiter.unwrap_or(b','),
+        Some(Some(",")) => b',',
+        Some(Some(";")) => b';',
+        Some(_) => return Err(bad(cmd, "`delimiter` is \",\" or \";\"")),
+    };
+    let decimal_comma = match given("decimal").map(|v| v.as_str()) {
+        None | Some(Some(".")) => false,
+        Some(Some(",")) => true,
+        Some(_) => return Err(bad(cmd, "`decimal` is \".\" or \",\"")),
+    };
+    let bom = match given("bom") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`bom` is true or false"))?,
+    };
+    Ok(Some(crate::io::CsvStyle { delimiter, decimal_comma, bom }))
 }
 
 /// File › Close closes the active window; the workbook closes with its last window.
@@ -191,10 +230,18 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
+    let style = if ext == "csv" { csv_style(p, &wb, "file.exportCsv")? } else { None };
     let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        // Raw values are for scripts, which read them as written: the display options don't apply.
+        if style.is_some() {
+            return Err(bad("file.exportCsv", "`values` writes raw values; `delimiter`, `decimal` and `bom` style the displayed export"));
+        }
         crate::io::csv_values_bytes(&wb)?
     } else {
-        crate::io::save_bytes(&wb, &target)?
+        match style {
+            Some(style) => crate::io::csv_bytes(&wb, style)?,
+            None => crate::io::save_bytes(&wb, &target)?,
+        }
     };
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))

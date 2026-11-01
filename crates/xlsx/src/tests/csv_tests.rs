@@ -244,6 +244,22 @@ fn hebrew_1255_bytes_are_not_read_as_arabic() {
 }
 
 #[test]
+fn semicolon_csv_reads_decimal_comma_numbers() {
+    let wb = read_csv("1,5;-1.234,50;12,5%;1.234;3;15.03.2026;a,b\r\n".as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(v(&wb, 0, 0), Value::Number(1.5));
+    assert_eq!(v(&wb, 0, 1), Value::Number(-1234.5));
+    assert_eq!(v(&wb, 0, 2), Value::Number(0.125));
+    // No decimal comma: read as it always was.
+    assert_eq!(v(&wb, 0, 3), Value::Number(1.234));
+    assert_eq!(v(&wb, 0, 4), Value::Number(3.0));
+    assert_eq!(v(&wb, 0, 6), Value::text("a,b"));
+    // A comma file keeps `1,5` as its own field.
+    let wb = read_csv(b"1,5\r\n", &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(v(&wb, 0, 1), Value::Number(5.0));
+}
+
+#[test]
 fn delimiter_sniffing() {
     assert_eq!(sniff_delimiter("a;b;c\n1;2;3\n", '"'), b';');
     assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
@@ -253,6 +269,11 @@ fn delimiter_sniffing() {
     assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
     assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
     assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
+    // Decimal commas outnumber the semicolons on every line, but they sit between digits.
+    assert_eq!(sniff_delimiter("1,5;2,25;3,125\r\n4,1;5,2;6,3\r\n", '"'), b';');
+    // Commas that separate text are still the delimiter, semicolons or not.
+    assert_eq!(sniff_delimiter("a,b;c\r\nd,e;f\r\n", '"'), b',');
+    assert_eq!(sniff_delimiter("1,2,3\r\n4,5,6\r\n", '"'), b',');
     let wb = read_csv(b"x;y\n1,5;2", &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 1, 1), Value::Number(2.0));
     // The workbook remembers the separator it was read with, sniffed or given.
