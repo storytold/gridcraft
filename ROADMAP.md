@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -138,6 +138,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-01 | XLSX keeps the first visible workbook window's active sheet and display settings together, falling back to the first view when all are hidden. Tab ratios are normalized to 0–1000 on import and export; invalid numeric text uses 600. Synthetic round trips cover isolated attributes, missing views, and active tabs after sheet deletion/reordering; firstSheet remains separate #2264 work (#3057). |
 | 2026-10-31 | Esc in File › Info, Print or Options first leaves the text field; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
+| 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
+| 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
 | 2026-10-25 | PDF text preserves distinct Unicode aliases of a shared font glyph, including across pages; supplementary Unicode extraction and bounded encoding maps covered by regression tests |
 | 2026-10-25 | CLI/MCP PDF exports preserve multiple workbook font families through named mappings, with per-family styles and matching layout metrics |
 | 2026-10-25 | PDF export and print accept explicit TrueType faces per request through CLI/MCP, including Latin text, with all four styles and matching advance widths; embedding adapted from #1555 |
@@ -253,6 +255,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 |---|---|---|
 | 2026-11-01 | trivial | Workbook views: selected window settings stay together, tab ratios are bounded, and regressions cover isolated settings and sheet edits; readiness estimates unchanged (#3057) |
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
+| 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
+| 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-29 | trivial | Reconcile PDF font export and upstream macro engine/interface progress; preserve both feature histories |
 | 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
 | 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |

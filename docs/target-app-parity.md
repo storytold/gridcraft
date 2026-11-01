@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (macro interface and catalog count 276 / 292; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (the Insert Function dialog is named as in Excel; macro interface and catalog count 276 / 292; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -314,7 +314,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   galleries (cell styles, table styles, colour palettes, conditional formatting menus),
   contextual Table/Chart Design tabs, formula bar with Name Box, virtualised grid (smooth
   scrolling, zoom, frozen panes, text overflow), sheet tabs (rename, reorder, colour, hide),
-  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Formula Builder, Find and
+  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Insert Function, Find and
   Replace, Sort, Name Manager, Data Validation, Paste Special…), command palette, dark mode.
 - Agents: every action is an engine command; JSON control channel in the desktop app (pointer,
   keyboard, dialogs, screenshots); MCP server (headless or bridged); CLI (`info`, `convert`,
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-29 | trivial | Reconcile PDF font export and upstream macro automation assessment; no score change |
 | 2026-10-26 | trivial | Reconcile PDF font export and desktop workbook-window updates from main; no score change |
 | 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
