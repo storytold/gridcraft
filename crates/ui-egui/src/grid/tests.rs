@@ -40,6 +40,13 @@ fn heading_labels_scale_with_the_zoom_without_a_cap() {
 use super::*;
 
 #[test]
+fn automatic_worksheet_ink_meets_wcag_on_bright_and_dark_fills() {
+    for fill in [Color32::WHITE, Color32::BLACK, Color32::from_rgb(0, 255, 0), Color32::from_rgb(31, 56, 100), Color32::from_gray(128)] {
+        assert!(theme::contrast(super::cell_paint::ink_on(fill), fill) >= 4.5, "unreadable automatic ink on {fill:?}");
+    }
+}
+
+#[test]
 fn list_picker_fits_up_to_eight_rows_then_scrolls() {
     assert_eq!(list_picker_height(5, 18.0, 3.0), 5.0 * 18.0 + 4.0 * 3.0);
     assert_eq!(list_picker_height(8, 18.0, 3.0), 8.0 * 18.0 + 7.0 * 3.0);

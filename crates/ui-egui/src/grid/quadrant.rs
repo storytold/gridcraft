@@ -1,5 +1,5 @@
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
+    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, ink_on, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
@@ -204,7 +204,7 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
         if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
-            p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
+            p.rect_filled(rect.shrink(0.5), 0.0, q.tokens.grid_bg);
         }
         looks.push((anchor, rect, lk, cfl));
     }
@@ -367,7 +367,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if text.is_empty() {
         return;
     }
-    let color = ncolor.unwrap_or(lk.text_color);
+    // Automatic ink follows the displayed background; authored font/number-format colors stay intact.
+    let automatic = lk.style.font.color == gridcraft_engine::model::Color::Auto;
+    let ink = if automatic { ink_on(lk.fill.unwrap_or(t.grid_bg)) } else { lk.text_color };
+    let color = ncolor.unwrap_or(ink);
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,

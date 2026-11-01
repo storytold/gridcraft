@@ -27,6 +27,44 @@ fn preferences(h: &egui_kittest::Harness<'static, SheetApp>) -> Value {
     serde_json::to_value(&h.state().ui).unwrap()
 }
 
+#[test]
+fn worksheet_modes_are_independent_persist_and_leave_workbooks_unchanged() {
+    for chrome_dark in [false, true] {
+        let mut h = harness(UiState { dark: chrome_dark, ..UiState::default() });
+        let initial = Tokens::get(&h.ctx);
+        assert_eq!(initial.grid_bg == egui::Color32::WHITE, !chrome_dark, "default follows the interface");
+        let workbook = h.state().session.active().unwrap().wb.clone();
+        for sheet_dark in [true, false] {
+            h.state_mut().run("view.worksheetDarkMode", json!({"on": sheet_dark})).unwrap();
+            h.run_steps(2);
+            let t = Tokens::get(&h.ctx);
+            assert_eq!(t.grid_bg == egui::Color32::WHITE, !sheet_dark);
+            assert!(gridcraft_ui_egui::theme::contrast(t.cell_text, t.grid_bg) >= 4.5);
+            assert_appearance(&h, chrome_dark);
+            assert!(std::sync::Arc::ptr_eq(&workbook, &h.state().session.active().unwrap().wb), "display changes must not edit workbook styles");
+        }
+        // The ribbon invokes the same UI command, independently of the display theme combo.
+        h.state_mut().run("ui.ribbonTab", json!({"tab": "View"})).unwrap();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Switch Modes").click();
+        h.run_steps(2);
+        assert_eq!(preferences(&h)["worksheetDark"], true);
+        assert_appearance(&h, chrome_dark);
+        let saved = serde_json::to_string(&h.state().ui).unwrap();
+        let mut restored = harness(serde_json::from_str(&saved).unwrap());
+        restored.state_mut().session.new_workbook();
+        restored.run_steps(2);
+        assert_ne!(Tokens::get(&restored.ctx).grid_bg, egui::Color32::WHITE);
+        assert_eq!(preferences(&restored)["worksheetDark"], true);
+        let ctx = restored.ctx.clone();
+        let control::Outcome::Done(catalog) = control::handle(restored.state_mut(), &ctx, "engine.commands", &json!({"search": "worksheetDarkMode"}))
+        else {
+            panic!("command catalog must return a response");
+        };
+        assert!(catalog["result"].as_array().unwrap().iter().any(|c| c["id"] == "view.worksheetDarkMode"));
+    }
+}
+
 fn system_theme(h: &mut egui_kittest::Harness<'static, SheetApp>, theme: Option<Theme>) {
     h.input_mut().system_theme = theme;
     h.run_steps(2);
