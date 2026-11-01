@@ -4312,6 +4312,78 @@ fn conditional_format_styles_take_hex_colours_and_quoted_values() {
     assert!(matches!(rule(&s, 0), CfRule::CellIs { ref a, .. } if a == "\"say \"\"hi\"\"\""));
 }
 
+/// #2762: a height for every row (Select All, or `1:1048576`) becomes the sheet's default height
+/// instead of a million listed rows, which every frame walked to build the row index.
+#[test]
+fn a_height_for_every_row_sets_the_default_row_height() {
+    let sheet = |s: &Session| s.doc().unwrap().wb.active().unwrap().clone();
+    for by_selection in [false, true] {
+        let mut s = s();
+        s.execute("home.rowHeight", json!({"rows": "3:3", "height": 20})).unwrap();
+        if by_selection {
+            // An empty sheet has no current region, so Select All takes the whole sheet.
+            s.execute("edit.selectAll", json!({})).unwrap();
+            s.execute("home.rowHeight", json!({"height": 40})).unwrap();
+        } else {
+            s.execute("home.rowHeight", json!({"rows": "1:1048576", "height": 40})).unwrap();
+        }
+        let sh = sheet(&s);
+        assert!(sh.rows.len() < 10, "by selection {by_selection}: {} rows listed", sh.rows.len());
+        assert_eq!(sh.default_row_height, 40.0);
+        for r in [0, 2, 1_000_000, gridcraft_core::MAX_ROWS - 1] {
+            assert_eq!(sh.row_height(r), 40.0, "row {r}");
+        }
+        assert_eq!(sh.row_top(1000), 40_000.0);
+        // Saved and opened again.
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()).unwrap();
+        assert_eq!(back.sheets[0].row_height(500_000), 40.0);
+        assert_eq!(back.sheets[0].row_height(2), 40.0);
+        // Undo puts back the default height and the row that had its own.
+        s.execute("edit.undo", json!({})).unwrap();
+        let sh = sheet(&s);
+        assert_eq!(sh.default_row_height, gridcraft_model::DEFAULT_ROW_HEIGHT);
+        assert_eq!((sh.row_height(2), sh.row_height(500_000)), (20.0, gridcraft_model::DEFAULT_ROW_HEIGHT));
+    }
+    // Hiding every row still hides them: a zero default height would not be a hidden row.
+    let mut s = s();
+    s.execute("home.rowHeight", json!({"rows": "1:1048576", "height": 0})).unwrap();
+    let sh = sheet(&s);
+    assert!(sh.is_row_hidden(0) && sh.is_row_hidden(gridcraft_core::MAX_ROWS - 1));
+}
+
+/// #2762, after the default height changes: a row given its own height keeps it, rows inserted
+/// later take the new default, and the file carries `defaultRowHeight` with `customHeight="1"`.
+#[test]
+fn rows_after_a_default_row_height_change() {
+    let sheet = |s: &Session| s.doc().unwrap().wb.active().unwrap().clone();
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A3", "input": "x"})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:1048576", "height": 40})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "5:5", "height": 24})).unwrap();
+    let sh = sheet(&s);
+    assert_eq!((sh.row_height(4), sh.row_height(3), sh.row_height(5)), (24.0, 40.0, 40.0));
+
+    // Two rows inserted above: they take the default, and the rows below move down with their heights.
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    let sh = sheet(&s);
+    assert_eq!((sh.row_height(0), sh.row_height(1)), (40.0, 40.0));
+    assert_eq!((sh.row_height(6), sh.row_height(4)), (24.0, 40.0));
+    assert!(sh.rows.len() < 10, "{} rows listed", sh.rows.len());
+
+    // 40 px is 30 pt. The row with its own height is written; the empty rows that only follow
+    // the default are not.
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/worksheets/sheet1.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"defaultRowHeight="30" customHeight="1""#), "{xml}");
+    assert!(xml.contains(r#"<row r="7" ht="18" customHeight="1""#), "{xml}");
+    assert!(xml.matches("<row ").count() < 10, "{xml}");
+    let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let sh = &back.sheets[0];
+    assert_eq!((sh.default_row_height, sh.row_height(6), sh.row_height(100_000)), (40.0, 24.0, 40.0));
+}
+
 #[test]
 fn row_height_and_column_width_take_a_list_of_areas() {
     // Issue #341: header drags on a multi-area selection size every selected line in one step.
