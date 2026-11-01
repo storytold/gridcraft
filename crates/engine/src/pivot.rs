@@ -23,7 +23,6 @@ mod compute;
 mod items;
 mod output;
 
-use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
 use compute::compute_from;
 pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
@@ -293,6 +292,11 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
         let e = widths.entry(c.col).or_insert(0.0);
         *e = e.max(wpt.min(320.0));
     }
+    // The charts' label formats by series items, read while their names still point at the old
+    // report.
+    let sheet_name = wb.sheet(sheet).ok_or("There's no such sheet.")?.name.clone();
+    let report = pt.last_range.map(|area| charts::OldReport { area, top: pt.anchor.row });
+    let label_formats = charts::chart_label_formats(wb, &pt, &sheet_name, sheet, report, out.chart_value_item);
     let shm = wb.sheet_mut(sheet).ok_or("There's no such sheet.")?;
     if let Some(old) = pt.last_range {
         shm.take_cells(old);
@@ -309,13 +313,13 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = Some(area);
     }
-    let sheet_name = shm.name.clone();
-    rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
+    charts::rebind_charts(wb, &pt, &sheet_name, sheet, origin, &out, label_formats);
     Ok(area)
 }
 
 #[cfg(test)]
 mod fit_tests {
+    use super::charts::{joined_match_count, joined_name_match, rebuilt_item_set, same_items, value_item_match};
     use super::data_cols_exceed_sheet;
 
     #[test]
@@ -325,5 +329,49 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(64, false, 256));
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
+    }
+    #[test]
+    fn joined_item_names_with_separator_are_rejected_when_ambiguous() {
+        let saved = ["A - B - C"].map(String::from);
+        let rebuilt = [["A", "B - C"].map(String::from), ["A - B", "C"].map(String::from)];
+        let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
+        assert_eq!(joined_match_count(&saved, &candidates), 2);
+        assert!(same_items(&saved, &saved, false));
+    }
+    #[test]
+    fn joined_match_count_precomputes_key_matches() {
+        let unique = [String::from("A - B - C")];
+        let ambiguous = [String::from("A - B"), String::from("C")];
+        let candidates = [unique.as_slice(), ambiguous.as_slice()];
+        assert_eq!(joined_match_count(&[String::from("A - B - C")], &candidates), 1);
+    }
+    #[test]
+    fn unique_joined_item_name_matches_single_rebuilt_sequence() {
+        let saved = [String::from("A - B - C")];
+        let first = [String::from("A - B"), String::from("C")];
+        let second = [String::from("X"), String::from("Y")];
+        let candidates = [first.as_slice(), second.as_slice()];
+        assert!(same_items(&saved, &first, false));
+        assert_eq!(joined_match_count(&saved, &candidates), 1);
+    }
+    #[test]
+    fn value_item_match_is_not_gated_by_joined_match() {
+        let saved = [String::from("Sales"), String::from("A")];
+        let value_items = [String::from("A"), String::from("Sales")];
+        let joined_items = [String::from("Sales - A")];
+        let candidates = [value_items.as_slice(), joined_items.as_slice()];
+        assert!(value_item_match(&saved, &value_items, true));
+        assert!(joined_name_match(&saved, &joined_items));
+        assert_eq!(joined_match_count(&saved, &candidates), 1);
+        assert!(same_items(&saved, &value_items, true));
+    }
+    #[test]
+    fn rebuilt_item_set_matches_content() {
+        let first = [String::from("A")];
+        let second = [String::from("B")];
+        let items = [first.as_slice(), second.as_slice()];
+        let set = rebuilt_item_set(items);
+        assert!(set.contains(first.as_slice()));
+        assert!(!set.contains([String::from("C")].as_slice()));
     }
 }

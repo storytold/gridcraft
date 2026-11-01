@@ -95,6 +95,16 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
 
+/// The data labels' format: typed for the labels, else the source values' format.
+fn label_fmt(s: &SeriesData) -> Fmt {
+    Fmt::new(s.label_number_format.as_deref().unwrap_or(&s.number_format))
+}
+
+/// A value axis' format: typed on the axis, else the first series' source format.
+fn axis_fmt(typed: Option<&str>, data: &ChartData) -> Fmt {
+    Fmt::new(typed.or_else(|| data.series.first().map(|s| s.number_format.as_str())).unwrap_or("General"))
+}
+
 fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
@@ -115,6 +125,7 @@ fn sanitize(d: &ChartData) -> ChartData {
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
                 number_format: s.number_format.clone(),
+                label_number_format: s.label_number_format.clone(),
             })
             .collect(),
     }

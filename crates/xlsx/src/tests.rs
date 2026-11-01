@@ -5,6 +5,7 @@ mod cellmetadata;
 mod chart_book_names;
 mod chart_bool_default;
 mod chart_combo_kinds;
+mod chart_number_format;
 mod chart_ref_offsets;
 mod csv_tests;
 mod encrypted_tests;
