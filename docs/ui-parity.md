@@ -69,7 +69,7 @@ this logic, with one undo step.
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
 | Move and resize charts, pictures and shapes | charts can't be resized (#190) |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
-| Quick Analysis (Ctrl+Q) | missing |
+| Quick Analysis (Ctrl+Q) | partial: the button at the selection corner opens Formatting, Charts, Totals and Tables; no Ctrl+Q, no Sparklines tab, no live previews |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
 | Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
 
