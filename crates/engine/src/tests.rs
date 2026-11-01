@@ -4336,6 +4336,29 @@ fn row_height_and_column_width_take_a_list_of_areas() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(1), 120.0, "a bad list changes nothing");
 }
 
+/// Widening or narrowing a column re-fits the rows whose wrapped text is in it, as Excel does;
+/// a row given a height by hand keeps it.
+#[test]
+fn column_width_refits_wrapped_rows() {
+    // Rows are 0-based here: 0 is row 1.
+    let height = |s: &Session, r: u32| s.doc().unwrap().wb.active().unwrap().rows.get(&r).and_then(|i| i.size);
+    let mut s = s();
+    let long = "Received for goods from An Phat Company under invoice 0000123 dated 02/10/2026";
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long], [long]]})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1:A2", "on": true})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "2:2", "height": 40})).unwrap();
+    let narrow = height(&s, 0).expect("wrapped text grows the row");
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 600})).unwrap();
+    let wide = height(&s, 0).unwrap_or(15.0);
+    assert!(wide < narrow / 2.0, "the row fits the wide column: {narrow} -> {wide}");
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 64})).unwrap();
+    assert_eq!(height(&s, 0), Some(narrow), "and grows back when it narrows");
+    assert_eq!(height(&s, 1), Some(40.0), "a row sized by hand keeps its height");
+    // A width of 0 hides the column; the row keeps its height instead of fitting a zero-wide cell.
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 0})).unwrap();
+    assert_eq!(height(&s, 0), Some(narrow), "hiding the column leaves the row as it was");
+}
+
 /// Programmatic callers lay out a sheet that isn't the active one: `sheet` (or a `Sheet!` prefix on
 /// `rows`, `cols` or `cell`) picks it, instead of being ignored in favour of the active sheet.
 #[test]
