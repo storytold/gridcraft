@@ -41,6 +41,13 @@ pub fn parse_input_with_order(s: &str, sys: DateSystem, order: DateOrder) -> Par
     if let Some((n, f)) = parse_numeric(t, sys, order) {
         return Parsed { value: Value::number(n), format: f };
     }
+    // Day-first fallback is a convenience for typed cell entry, not arithmetic coercion.
+    if order == DateOrder::Mdy
+        && let Some((n, f)) = parse_numeric(t, sys, DateOrder::Dmy)
+        && f.is_some_and(|f| matches!(f, "dd/mm/yyyy" | "dd-mm-yyyy" | "dd.mm.yyyy"))
+    {
+        return Parsed { value: Value::number(n), format: f };
+    }
     Parsed { value: Value::text(s), format: None }
 }
 
@@ -453,14 +460,8 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
                 // An explicit DMY cell format makes the interpretation unambiguous.
                 return valid_ymd(sys, y, y_val, x).map(|serial| (serial, dmy_fmt));
             } else {
-                // Primary: Month = x, Day = y_val
-                if let Some(s) = valid_ymd(sys, y, x, y_val) {
-                    return Some((s, mdy_fmt));
-                }
-                // Fallback: Day = x, Month = y_val (e.g. 25/09/2026, 25 > 12)
-                if let Some(s) = valid_ymd(sys, y, y_val, x) {
-                    return Some((s, dmy_fmt));
-                }
+                // Numeric coercion preserves its established month-first interpretation.
+                return valid_ymd(sys, y, x, y_val).map(|serial| (serial, mdy_fmt));
             }
         }
     }
@@ -588,9 +589,14 @@ fn parse_datetime(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, Op
         if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
             continue;
         }
-        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys, order)), parse_time(b)) {
-            let fmt = match order {
-                DateOrder::Dmy => "dd/mm/yyyy h:mm",
+        let parsed_date = t.get(..i).and_then(|a| parse_date(a, sys, order));
+        let parsed_dmy_date = if order == DateOrder::Mdy { t.get(..i).and_then(|a| parse_date(a, sys, DateOrder::Dmy)) } else { None };
+        if let (Some((d, date_fmt)), Some((tf, _, _))) = (parsed_date.or(parsed_dmy_date), parse_time(b)) {
+            let fmt = match date_fmt {
+                "dd/mm/yyyy" => "dd/mm/yyyy h:mm",
+                "dd-mm-yyyy" => "dd-mm-yyyy h:mm",
+                "dd.mm.yyyy" => "dd.mm.yyyy h:mm",
+                _ if order == DateOrder::Dmy => "dd/mm/yyyy h:mm",
                 _ => "m/d/yyyy h:mm",
             };
             return Some((d + tf, Some(fmt)));
@@ -867,6 +873,12 @@ mod tests {
         let p_mdy_25 = parse_input_with_order("25/09/2026", DateSystem::D1900, DateOrder::Mdy);
         assert_eq!(p_mdy_25.value, Value::Number(46290.0));
         assert_eq!(p_mdy_25.format, Some("dd/mm/yyyy"));
+        assert_eq!(parse_number_text_in("25/09/2026", DateSystem::D1900), None);
+        assert_eq!(parse_number_text_in("05/04/2026", DateSystem::D1900), Some(46146.0));
+
+        let dmy_datetime = parse_input_with_order("25.09.2026 18:30", DateSystem::D1900, DateOrder::Mdy);
+        assert_eq!(dmy_datetime.value, Value::Number(46290.0 + 18.5 / 24.0));
+        assert_eq!(dmy_datetime.format, Some("dd.mm.yyyy h:mm"));
 
         // Dashed and dotted forms
         assert_eq!(parse_input_with_order("25-09-2026", DateSystem::D1900, DateOrder::Dmy).value, Value::Number(46290.0));
