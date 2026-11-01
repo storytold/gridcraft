@@ -111,15 +111,28 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
     Ok(out)
 }
 
+/// Encoded characters of a script that are decoded: enough for its first [`MAX_SCRIPT_CHARS`]
+/// characters of code, whatever its escapes. One character takes at most 14 encoded characters
+/// (a UTF-16 pair of `_xHHHH_` escapes) and a `\r\n` line break becomes one character, so
+/// `2 × (MAX_SCRIPT_CHARS + 1)` decoded characters cover the code kept, and two more escapes'
+/// worth keep the last of them, and the line break after it, from being cut.
+const MAX_ENCODED_CHARS: usize = 14 * (2 * (MAX_SCRIPT_CHARS + 1) + 2);
+
 /// A `pythonScript` element's code (ST_Xstring), with `\n` line breaks, cut after
-/// [`MAX_SCRIPT_CHARS`] characters.
+/// [`MAX_SCRIPT_CHARS`] characters. The limit is measured on the decoded code, so escapes in the
+/// file (`_x000D_`, `_x0009_`) don't cut a script that fits; decoding is linear and reads at most
+/// [`MAX_ENCODED_CHARS`] characters.
 fn script_code(el: &El) -> String {
     let text = el.child("code").map(|c| c.text.as_str()).unwrap_or_default();
-    let text = match text.char_indices().nth(MAX_SCRIPT_CHARS) {
+    let encoded = match text.char_indices().nth(MAX_ENCODED_CHARS) {
         Some((at, _)) => text.get(..at).unwrap_or_default(),
         None => text,
     };
-    gridcraft_model::python::normalize_code(&xml::decode_xstring(text))
+    let code = gridcraft_model::python::normalize_code(&xml::decode_xstring(encoded));
+    match code.char_indices().nth(MAX_SCRIPT_CHARS) {
+        Some((at, _)) => code.get(..at).unwrap_or_default().to_string(),
+        None => code,
+    }
 }
 
 /// `PY(index, 0|1, params…)`, as a file's formula holds it: the index, whether the return type is

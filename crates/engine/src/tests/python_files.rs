@@ -318,6 +318,25 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
 }
 
 #[test]
+fn a_script_is_measured_after_its_escapes_are_decoded() {
+    let max = gridcraft_model::python::MAX_FORMULA_CHARS;
+    // 2,000 tabs written as `_x0009_`: 14,000 characters in the file, 2,004 as code, which fits.
+    let escaped = format!("x = 1{}end", "_x0009_".repeat(2_000));
+    assert!(escaped.chars().count() > max);
+    // Code longer than a cell may hold once decoded is still refused.
+    let long = format!("{}{}", "_x0009_".repeat(10), "y".repeat(max));
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c><c r=\"B1\"><f>_xlfn._xlws.PY(1,0)</f><v>2</v></c></row></sheetData>";
+    let (wb, warnings) = crate::io::open_bytes("escapes.xlsx", &excel_shaped(data, Some(&[&escaped, &long]))).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let a1 = sh.cell(CellRef::parse("A1").unwrap()).unwrap().py.as_ref().map(|p| p.code.clone());
+    assert_eq!(a1, Some(format!("x = 1{}end", "\t".repeat(2_000))), "read in full");
+    let b1 = sh.cell(CellRef::parse("B1").unwrap()).unwrap();
+    assert!(b1.py.is_none(), "too long once decoded: only the value");
+    assert_eq!(b1.value, Value::Number(2.0));
+    assert!(warnings.iter().any(|w| w.contains("B1")), "{warnings:?}");
+}
+
+#[test]
 fn many_cells_naming_one_long_script_take_from_one_budget() {
     // 20,000 cells name one script of 8,000 characters: 160 MB of code if each took a copy.
     let long = "x".repeat(8_000);
