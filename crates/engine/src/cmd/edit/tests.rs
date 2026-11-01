@@ -292,6 +292,125 @@ fn an_array_entered_outside_the_selection_covers_only_its_cell() {
     assert_eq!(sh.value(CellRef::parse("K20").unwrap()), Value::text("keep"));
 }
 
+/// The value a full recalculation from scratch gives `a1` on the active sheet.
+fn fully_recalculated(s: &Session, a1: &str) -> Value {
+    let mut fresh = (*s.doc().unwrap().wb).clone();
+    gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+    fresh.active().unwrap().value(CellRef::parse(a1).unwrap())
+}
+
+#[test]
+fn array_entering_a_constant_recalculates_readers_of_the_cells_it_fills() {
+    // Found by the command-sequence fuzzer (seeds 4, 1213): only the array's first cell was
+    // marked changed, so formulas reading the cells it cleared kept their old values.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5, 6, "=B1+1"]]})).unwrap();
+    s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7", "array": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    // Excel fills both cells with the constant and forms no array.
+    for a in ["A1", "B1"] {
+        let c = sh.cell(CellRef::parse(a).unwrap()).unwrap();
+        assert_eq!(c.value, Value::number(7.0));
+        assert!(c.formula.is_none());
+    }
+    assert_eq!(sh.value(CellRef::parse("C1").unwrap()), Value::number(8.0));
+
+    // The fuzzer's minimal repro on the budget sample.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "budget"})).unwrap();
+    s.execute("selection.set", json!({"active": "C5", "range": "C5:D5"})).unwrap();
+    s.execute("cell.set", json!({"array": true, "cell": "C5", "input": "7"})).unwrap();
+    let in_memory = s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("D15").unwrap());
+    assert_eq!(in_memory, fully_recalculated(&s, "D15"));
+}
+
+#[test]
+fn array_entering_a_formula_fills_every_cell_as_an_array() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A2", "input": "5"})).unwrap();
+    for (input, want) in [("=1", 1.0), ("=A2", 5.0)] {
+        s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": input, "array": true})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        for a in ["A1", "B1"] {
+            assert_eq!(sh.value(CellRef::parse(a).unwrap()), Value::number(want), "{input} {a}");
+        }
+        let f = sh.cell(CellRef::parse("A1").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+        assert_eq!(f.array, Some(RangeRef::parse("A1:B1").unwrap()));
+    }
+}
+
+#[test]
+fn readers_of_an_empty_array_result_cell_see_its_result() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=B1+1"})).unwrap();
+    s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=5", "array": true})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("D1").unwrap()), Value::number(6.0));
+    assert_eq!(fully_recalculated(&s, "D1"), Value::number(6.0));
+}
+
+#[test]
+fn a_whole_column_constant_fills_its_whole_area() {
+    // The loop stopped after a million addresses, so cells further down the column kept
+    // their old content (and their readers weren't recalculated).
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "D1048000", "input": "41"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=D1048000+1"})).unwrap();
+    s.execute("selection.set", json!({"active": "D1", "range": "D:D"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "1", "array": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("D1048000").unwrap()), Value::number(1.0));
+    assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::number(2.0));
+    assert_eq!(fully_recalculated(&s, "F1"), Value::number(2.0));
+}
+
+#[test]
+fn clearing_more_than_a_million_cells_recalculates_readers_of_all_of_them() {
+    // Clear marked only the first million addresses of the range as changed, so formulas
+    // reading a cleared cell further down kept its old value.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "D1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1048000", "input": "41"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=D1048000+1"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "D:D"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("D1048000").unwrap()), Value::Empty);
+    assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::number(1.0));
+}
+
+#[test]
+fn clearing_a_spill_recalculates_readers_of_its_spilled_cells() {
+    // Clear marks only the cells the sheet holds; a spill's other cells go with its anchor.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=A3+1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("C1").unwrap()), Value::number(4.0));
+    s.execute("edit.clearContents", json!({"range": "A1:A5"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("C1").unwrap()), Value::number(1.0));
+    assert_eq!(fully_recalculated(&s, "C1"), Value::number(1.0));
+}
+
+#[test]
+fn readers_of_an_array_formulas_cells_see_its_results() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[1], [2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=C3+C4+1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C2:C4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "=B2:B3*2", "array": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("E1").unwrap()), fully_recalculated(&s, "E1"));
+}
+
 #[test]
 fn wildcards() {
     assert!(wildcard("hello", "h*o"));
