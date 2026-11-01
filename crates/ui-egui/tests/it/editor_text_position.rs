@@ -91,3 +91,43 @@ fn typed_wrapped_text_sits_where_the_entered_text_is_drawn() {
         assert!((typed.y - entered.y).abs() < 0.5, "{align}: typed at y {} but drawn at y {}", typed.y, entered.y);
     }
 }
+
+/// A right-to-left sheet mirrors the grid across, not up or down: the typed text still sits at the
+/// height the cell draws it (Top, Middle and Bottom in a tall row).
+#[test]
+fn typed_text_sits_where_it_is_drawn_on_a_right_to_left_sheet() {
+    for align in ["home.alignTop", "home.alignMiddle", "home.alignBottom"] {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.execute("view.rightToLeft", json!({"on": true})).unwrap();
+        session.execute("home.rowHeight", json!({"rows": "3:3", "height": 90})).unwrap();
+        session.execute(align, json!({"range": "B3"})).unwrap();
+        session.execute("cell.set", json!({"cell": "B3", "input": "Abc"})).unwrap();
+        session.execute("selection.set", json!({"cell": "B3"})).unwrap();
+        let ctx = Context::default();
+        let mut app = SheetApp::new(session, Default::default());
+        let entered = text_pos_mirrored(&ctx, &mut app);
+        app.begin_edit(None, false);
+        let typed = text_pos_mirrored(&ctx, &mut app);
+        assert!((typed.y - entered.y).abs() < 0.5, "{align}, right-to-left: typed at y {} but drawn at y {}", typed.y, entered.y);
+    }
+}
+
+/// Where "Abc" shows in B3 on a right-to-left sheet, whose cells are mirrored on screen.
+fn text_pos_mirrored(ctx: &Context, app: &mut SheetApp) -> Pos2 {
+    for _ in 0..3 {
+        frame(ctx, app);
+    }
+    let out = frame(ctx, app);
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    let geo = grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let cell = geo.mirror_rect(geo.cell_rect(sh, CellRef::parse("B3").unwrap()));
+    out.shapes
+        .iter()
+        .rev()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Abc" && cell.expand(40.0).contains(t.pos) => Some(t.pos),
+            _ => None,
+        })
+        .expect("Abc drawn in B3")
+}
