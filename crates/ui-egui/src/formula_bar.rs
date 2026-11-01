@@ -298,10 +298,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let EditorKeyOutcome { action, arrow, cancel } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
-    let refs = formula_refs(&ed.text);
+    // Only a formula's references are coloured: plain text such as `A1` keeps the text colour.
+    let refs = if ed.is_formula() { formula_refs(&ed.text) } else { Vec::new() };
     let t = Tokens::get(ui.ctx());
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
-    let cell_text_color = if on_sheet { t.cell_text } else { t.text };
+    // The in-cell editor sets the cell's font colour as the override (see `grid::editor`).
+    let cell_text_color = if on_sheet { ui.visuals().override_text_color.unwrap_or(t.cell_text) } else { t.text };
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();

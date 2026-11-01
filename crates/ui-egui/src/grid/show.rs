@@ -205,7 +205,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if geo.paper.is_some() {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
-    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    show_grid_interactions(app, ui, &resp, &geo, sh, &wb, &mut cf);
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
@@ -322,7 +322,9 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
     }
 }
 
-fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+/// `cf` is the conditional-format cache the cells were painted with this frame (the in-cell
+/// editor reuses its statistics rather than scanning the rules' ranges again).
+fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut CfCache) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -340,7 +342,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     update_cursor(app, ui, resp, geo, sh);
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
-        in_cell_editor(app, ui, geo, sh, wb);
+        in_cell_editor(app, ui, geo, sh, wb, cf);
     }
     filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
