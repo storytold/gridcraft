@@ -30,6 +30,7 @@ fn save_fixture(label: &str) -> tempfile::TempDir {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 #[test]
 fn stale_temporary_file_does_not_block_save_or_get_removed() {
     let fixture = save_fixture("stale");
