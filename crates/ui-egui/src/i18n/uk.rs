@@ -296,8 +296,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "Орієнтація",
         "Display theme" => "Тема оформлення",
         "Animations" => "Анімація",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Рамка виділення плавно ковзає до нової комірки, а не перескакує"
+        "Animation effects" => "Ефекти анімації",
+        "Use system setting" => "Використовувати системне налаштування",
+        "Animation effects|On" => "Увімкнено",
+        "Animation effects|Off" => "Вимкнено",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Плавне прокручування й масштабування, а рамка виділення плавно ковзає до нової комірки"
         }
         "System" => "Системна",
         "Light" => "Світла",

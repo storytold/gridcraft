@@ -39,6 +39,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod motion;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -86,8 +87,12 @@ pub struct UiState {
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
-    /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
-    pub animations: bool,
+    /// Animation effects (File ▸ Options, View ▸ Animations): on, off, or following the system's
+    /// setting (see [`motion`]). Saved as `animationEffects`. The checkbox this replaced saved a
+    /// boolean under `animations`; that is still read (unticked means Off) but no longer written,
+    /// so an older GridCraft sharing `ui.json` can still read the file.
+    #[serde(rename = "animationEffects", alias = "animations", deserialize_with = "motion::lenient")]
+    pub animations: motion::Animations,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
@@ -135,7 +140,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             formula_bar_expanded: false,
             status_bar: true,
-            animations: true,
+            animations: motion::Animations::System,
             autocomplete: true,
             autosave: false,
             recent: vec![],
@@ -251,6 +256,10 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// What the system last said about its animation effects ([`Services::animations_enabled`]).
+    system_animations: Option<bool>,
+    /// egui's own animation settings while Animation effects has them off ([`motion::apply`]).
+    egui_motion: Option<motion::EguiMotion>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,

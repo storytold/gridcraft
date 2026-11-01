@@ -41,6 +41,11 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+    /// Whether the system has animation effects on, or `None` when it doesn't say: Windows'
+    /// Animation effects, macOS' Reduce motion, the Linux/BSD desktop's setting, the browser's
+    /// `prefers-reduced-motion`. Animation effects ▸ Use system setting follows it. Asked every
+    /// frame, so the host answers from memory. Without the hook, animations stay on.
+    pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).

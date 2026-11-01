@@ -223,8 +223,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Donkere modus",
         "Display theme" => "Weergavethema",
         "Animations" => "Animaties",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "De selectierand naar de nieuwe cel laten glijden in plaats van erheen springen"
+        "Animation effects" => "Animatie-effecten",
+        "Use system setting" => "Systeeminstelling gebruiken",
+        "Animation effects|On" => "Aan",
+        "Animation effects|Off" => "Uit",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Vloeiend schuiven en zoomen, en een selectierand die naar de nieuwe cel glijdt"
         }
         "System" => "Systeem",
         "Light" => "Licht",

@@ -1,6 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::updates_ui;
 use super::{SheetApp, desktop_theme};
+use crate::motion;
 
 impl SheetApp {
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
@@ -45,6 +46,41 @@ impl SheetApp {
         if (ctx.zoom_factor() - zoom).abs() > 0.001 {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
+        }
+    }
+
+    /// Whether animation effects run right now: the Animation effects preference, where Use
+    /// system setting follows what the system says ([`motion::Animations::enabled`]).
+    pub fn animations_on(&self) -> bool {
+        self.ui.animations.enabled(self.system_animations)
+    }
+
+    /// What the system last said about its animation effects (`None`: it doesn't say).
+    pub fn system_animations(&self) -> Option<bool> {
+        self.system_animations
+    }
+
+    /// Asks the host what the system says about animation effects.
+    pub(super) fn read_system_animations(&mut self) {
+        self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
+    }
+
+    /// Follows the system's animation setting and switches egui's own motion to match. The host
+    /// is asked every frame (it answers from memory), so a change made in the system's settings is
+    /// followed while the app runs. An idle window isn't woken to ask: nothing moves until the
+    /// next frame, and that frame asks before it draws. (The Linux/BSD watcher hears of a change
+    /// by itself, and repaints the window.)
+    pub(super) fn sync_animations(&mut self, ctx: &egui::Context) {
+        self.read_system_animations();
+        motion::apply(ctx, self.animations_on(), &mut self.egui_motion);
+    }
+
+    /// With Animation effects off, a wheel notch scrolls whole, not eased in over the next frames.
+    /// Runs in each window's pass: every window has its own input.
+    pub(super) fn sync_wheel_scrolling(&self, ctx: &egui::Context) {
+        if !self.animations_on() {
+            let options = ctx.options(|o| o.input_options);
+            ctx.input_mut(|i| i.smooth_scroll_delta = motion::unsmoothed_scroll(i, &options));
         }
     }
 

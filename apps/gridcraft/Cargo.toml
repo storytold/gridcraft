@@ -26,6 +26,10 @@ winresource = "0.1"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+# The desktop's animations setting, from the XDG settings portal over D-Bus
+# (`animations/desktop.rs`). Already in the tree through AccessKit and the UI crate's desktop
+# theme, pinned to the same version so nothing is built twice.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
@@ -44,6 +48,11 @@ arboard = { workspace = true, features = ["wayland-data-control"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.
 pollster = "1"
+# Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (`animations.rs`), read through the
+# Windows Runtime's `UISettings`: its bindings are safe to call, where the Win32 call
+# (`SystemParametersInfo`) needs unsafe, which our workspace forbids. Already in the tree through
+# wgpu's DirectX 12 backend and AccessKit, at this version; this adds one small namespace to it.
+windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
@@ -52,6 +61,10 @@ muda = { version = "0.21", default-features = false }
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
+# System Settings ▸ Accessibility ▸ Display ▸ Reduce motion (`animations.rs`), read through
+# `NSWorkspace`: a safe call in these bindings. Already in the tree through eframe, muda, rfd and
+# arboard; pinned exactly to their version. This adds only the `NSAccessibility` bindings.
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
 # pinned exactly to the same versions.

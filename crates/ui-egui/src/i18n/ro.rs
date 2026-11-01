@@ -301,8 +301,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "Orientare",
         "Display theme" => "Temă de afișare",
         "Animations" => "Animații",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Mută lin conturul selecției la celula spre care vă deplasați, în loc să sară acolo"
+        "Animation effects" => "Efecte de animație",
+        "Use system setting" => "Folosește setarea sistemului",
+        "Animation effects|On" => "Activat",
+        "Animation effects|Off" => "Dezactivat",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Derulare și zoom line, iar conturul selecției se mută lin la celula spre care vă deplasați"
         }
         "System" => "Sistem",
         "Light" => "Luminoasă",
