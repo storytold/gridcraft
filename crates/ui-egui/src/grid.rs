@@ -136,7 +136,10 @@ pub enum Drag {
         id: u32,
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
-        resize: bool,
+        grab: crate::frame::Grab,
+        /// The object's screen rect and angle as the drag began.
+        rect: Rect,
+        deg: f32,
     },
 }
 

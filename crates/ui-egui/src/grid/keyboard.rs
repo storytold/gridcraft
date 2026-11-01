@@ -1,5 +1,5 @@
 use super::geo::Geo;
-use super::interact::delete_selected_object;
+use super::interact::{delete_selected_object, object_key};
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
@@ -70,6 +70,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                if object_key(app, geo, sh, key, m) {
+                    continue;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;

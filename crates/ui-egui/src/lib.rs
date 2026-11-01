@@ -32,6 +32,7 @@ mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+pub mod frame;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
