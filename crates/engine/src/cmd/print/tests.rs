@@ -40,6 +40,70 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
 }
 
 #[test]
+fn unrenderable_arabic_does_not_overwrite_the_export_destination() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-failed-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, b"previous document").unwrap();
+    let result = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap()}));
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous document");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Text("مرحبا 😀".into()));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn wrapping_keeps_combining_marks_with_their_letters() {
+    let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+    let lines = wrap_lines(word, Font::Helvetica, 10.0, 7.0);
+    assert_eq!(lines.concat(), word);
+    assert!(lines.iter().all(|line| line == "a\u{301}"));
+}
+
+#[test]
+fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return; // Optional font input; required-font CI exercises this regression.
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+    s.execute("home.bold", json!({"range": "A2"})).unwrap();
+    s.execute("home.italic", json!({"range": "A3"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+    s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    // Keep the chart below the table in this synthetic workbook.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for chart in &mut wb.sheet_mut(0).unwrap().charts {
+            chart.anchor.cell = CellRef::new(8, 0);
+            chart.anchor.width = 500.0;
+            chart.anchor.height = 280.0;
+        }
+    }
+    let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/Subtype /Type3"));
+    for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+    }
+    let lines = wrap_lines("العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0);
+    assert_eq!(lines.concat(), "العَرَبِيَّةالعَرَبِيَّة");
+    assert!(lines.iter().all(|line| !line.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+    assert!(lines.iter().all(|line| gridcraft_pdf::text_width(Font::Helvetica, 20.0, line) <= 40.0));
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic PDF artifact: {}", path.display());
+}
+
+#[test]
 fn header_sections_split_join_and_field_names() {
     let spec = "&L&\"Arial,Bold\"Sales &&Co&CPage &P of &N&R&D";
     let parts = split_header_footer(spec);

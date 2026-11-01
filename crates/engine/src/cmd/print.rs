@@ -19,7 +19,9 @@ use gridcraft_model::{
 use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param,
+};
 
 mod draw;
 mod header_footer;
@@ -91,7 +93,7 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 pub const MAX_PAGES: usize = 2000;
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<(Vec<u8>, usize)> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -167,7 +169,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    Ok((doc.finish().map_err(|error| EngineError::Other(error.to_string()))?, n))
 }
 
 // ---------------------------------------------------------------- commands
@@ -177,7 +179,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    render_pdf(&d.wb, &lays, &d.display_title(), &path)
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {

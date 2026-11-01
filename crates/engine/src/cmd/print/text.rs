@@ -1,5 +1,6 @@
 use super::draw::{Block, Look, rgb_of};
 use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
@@ -16,27 +17,32 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
                 out.push(std::mem::take(&mut line));
                 line = word.to_string();
             }
-            // Break a single over-long word by characters. The cut that fits is found by binary
-            // search (each try measures one candidate prefix), so an over-long word costs
-            // O(n log n) measurements instead of re-measuring the whole cut per character for
-            // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let chars: Vec<char> = line.chars().collect();
-                let (mut lo, mut hi) = (1usize, chars.len());
-                while lo < hi {
-                    let mid = lo + (hi - lo).div_ceil(2);
-                    let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
-                        lo = mid;
-                    } else {
-                        hi = mid - 1;
-                    }
-                }
-                if lo == chars.len() {
+            // Keep marks with their base letter. Binary search avoids shaping every prefix of
+            // a long Arabic word; each emitted prefix is measured in its final joined form.
+            while gridcraft_pdf::text_width(font, size, &line) > width {
+                let boundaries: Vec<usize> = line.grapheme_indices(true).map(|(i, _)| i).chain(std::iter::once(line.len())).collect();
+                let count = boundaries.len().saturating_sub(1);
+                if count <= 1 {
                     break;
                 }
-                out.push(chars[..lo].iter().collect());
-                line = chars[lo..].iter().collect();
+                let (mut low, mut high, mut split) = (1, count - 1, 1);
+                while low <= high {
+                    let mid = low + (high - low) / 2;
+                    let end = boundaries.get(mid).copied().unwrap_or(line.len());
+                    let prefix = line.get(..end).unwrap_or_default();
+                    if gridcraft_pdf::text_width(font, size, prefix) <= width {
+                        split = mid;
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                let end = boundaries.get(split).copied().unwrap_or(line.len());
+                out.push(line.get(..end).unwrap_or_default().to_string());
+                line = line.get(end..).unwrap_or_default().to_string();
+                if out.len() > 2000 {
+                    return out;
+                }
             }
             if out.len() > 2000 {
                 return out;
@@ -188,12 +194,25 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
-    let line_h = size * 1.2;
+    let extents = lines
+        .iter()
+        .filter_map(|line| pg.text_vertical_extents(font, size, line))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -218,9 +237,9 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
             pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
         }
@@ -229,12 +248,12 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
+        let stacked = lines.concat();
+        let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
+        let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = gridcraft_pdf::text_width(font, size, ch);
+            pg.text(x + (w - cw) / 2.0, yy, size, font, color, ch);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
