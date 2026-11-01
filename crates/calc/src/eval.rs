@@ -354,6 +354,8 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// The value of a name: a LET/LAMBDA binding first (any script, any case), then a defined
+    /// name in the sheet's or workbook's scope, `Sheet1!Name` included.
     fn name(&mut self, n: &str) -> Ev {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
             return v.clone();

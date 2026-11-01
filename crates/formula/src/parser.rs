@@ -55,6 +55,8 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
     Err(typed)
 }
 
+/// Parses a formula (`=` optional) written in `locale`'s syntax: its separators, decimal mark,
+/// array separators and local booleans. Function names are left as written for the caller.
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     parse_top(src, locale, false)
 }
@@ -66,7 +68,7 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, locale };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -106,7 +108,7 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
-    input: bool,
+    locale: crate::FormulaLocale,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -419,6 +421,8 @@ impl Parser {
         Ok(Expr::Name(w.to_string()))
     }
 
+    /// An array constant after its `{`: numbers, strings, booleans and errors, with the locale's
+    /// column and row separators.
     fn array(&mut self) -> Result<Expr, ParseError> {
         let mut rows = vec![Vec::new()];
         loop {
@@ -434,7 +438,9 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
+                Tok::Word(w) => self
+                    .locale
+                    .boolean(&w)
                     .map(Expr::Bool)
                     .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
                 Tok::Error(e) => Expr::Error(e),

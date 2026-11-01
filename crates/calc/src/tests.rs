@@ -953,6 +953,7 @@ fn spilled_blank_cells_show_zero() {
     assert_eq!(t.get("F3"), Value::Number(0.0));
 }
 
+/// LET, LAMBDA and the helpers taking a LAMBDA, including a non-ASCII binding called in another case.
 #[test]
 fn let_lambda() {
     let mut t = T::new();
@@ -964,6 +965,12 @@ fn let_lambda() {
     assert_eq!(t.num("A3"), 6.0);
     t.set("A4", "=SUM(MAP({1,2,3},LAMBDA(v,v*v)))");
     assert_eq!(t.num("A4"), 14.0);
+    // Variable names ignore case in any script, so a localized call can name a LET lambda.
+    t.set("A6", "=LET(zählenwenn,LAMBDA(x,x*2),ZÄHLENWENN(3))");
+    assert_eq!(t.num("A6"), 6.0);
+    // A built-in function's name calls the built-in even where a LET binding takes it.
+    t.set("A7", "=LET(SUM,LAMBDA(x,x*2),SUM(3))");
+    assert_eq!(t.num("A7"), 3.0);
 }
 
 #[test]
@@ -1919,6 +1926,16 @@ fn offset_extreme_arguments_return_ref() {
         ("=ROWS(OFFSET(A1,0,0,1048576,1))", 1048576.0),
     ] {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
+    }
+}
+
+/// Every canonical name in a language table is a function the engine evaluates.
+#[test]
+fn formula_language_tables_only_name_functions_the_engine_knows() {
+    // A typo'd canonical name in a language table would turn a valid local name into #NAME?.
+    for locale in gridcraft_formula::FormulaLocale::ALL {
+        let unknown: Vec<&str> = locale.translations().iter().map(|(en, _)| *en).filter(|en| !crate::eval::is_known_function(en)).collect();
+        assert!(unknown.is_empty(), "{locale:?}: {unknown:?}");
     }
 }
 

@@ -44,6 +44,8 @@ impl<'h> Evaluator<'h> {
         r
     }
 
+    /// LET(name, value, …, body): binds each name in order (matched in any case and script), then
+    /// evaluates the body; the bindings go out of scope afterwards.
     pub(super) fn let_(&mut self, args: &[Expr]) -> Ev {
         if args.len() < 3 || args.len().is_multiple_of(2) {
             return err(CellError::Value);

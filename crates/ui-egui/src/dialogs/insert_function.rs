@@ -68,7 +68,12 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     } else {
         let id = lib::category_id(&category);
         // The catalog is fixed (some 500 functions), so All lists every one.
-        lib::all().iter().filter(|f| id.is_none_or(|id| f.category == id) && matches(f)).collect()
+        let mut all: Vec<&lib::FnEntry> = lib::all().iter().filter(|f| id.is_none_or(|id| f.category == id) && matches(f)).collect();
+        if locale != gridcraft_engine::formula::FormulaLocale::En {
+            // The catalog is sorted by English name; list it by the name shown.
+            all.sort_by_cached_key(|f| locale.function_name(&f.name));
+        }
+        all
     };
     let t = crate::theme::Tokens::get(ui.ctx());
     let font = egui::TextStyle::Body.resolve(ui.style());
