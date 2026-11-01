@@ -58,6 +58,15 @@ with a file open.
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
+Get & Transform (Power Query) goes through `execute_command`: the `data.from*` source commands
+create and load queries, `query.navigator` lists what a source offers, `query.set`,
+`query.addStep`, `query.removeStep`, `query.renameStep` and `query.moveStep` edit them,
+`query.preview` shows rows at any applied step, `data.refresh` / `data.refreshAll` refresh, and
+`query.mText` returns the M-like text. The headless server (`gridcraft-cli mcp`) reads files, makes
+HTTP(S) requests and, on Windows, reaches ODBC sources itself; with `--connect` the app does. A
+workbook opened with queries or WEBSERVICE calls keeps external content disabled until
+`data.enableContent`. Query JSON and the step reference are in [cli.md](cli.md#get--transform-power-query).
+
 Every tool that acts on a workbook (all but `list_commands`, `list_functions`, `list_windows`, `open_workbook`,
 `new_workbook` and `screenshot`) also takes `window` or `doc`, an id from `list_windows`, and acts in that window
 (for `doc`, the workbook's most recent window) without bringing it forward. Without them it acts in the active window.

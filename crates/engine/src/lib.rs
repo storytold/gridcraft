@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod query;
 pub mod record;
 pub mod sample;
 pub mod selection;
@@ -222,6 +223,14 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// External content (query refresh, WEBSERVICE) is disabled until the user chooses Enable
+    /// Content: set when a workbook opened from a file holds queries or WEBSERVICE calls.
+    pub external_blocked: bool,
+    /// Source content kept between Power Query previews.
+    pub fetch_cache: query::FetchCache,
+    /// When each query was last refreshed (query name, Unix milliseconds), for Refresh Status and
+    /// "refresh every N minutes". Not saved.
+    pub refreshed_at: Vec<(String, f64)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -326,6 +335,18 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            external_blocked: false,
+            fetch_cache: query::FetchCache::default(),
+            refreshed_at: vec![],
+        }
+    }
+    /// Whether this document may reach external data: `Ok`, or why not (the Trust Center setting,
+    /// or the Security Warning not yet answered with Enable Content).
+    pub fn external_allowed(&self, prefs: &Prefs) -> std::result::Result<(), String> {
+        match prefs.external_content {
+            ExternalContent::DisableAll => Err(EXTERNAL_DISABLED.into()),
+            _ if self.external_blocked => Err(EXTERNAL_BLOCKED.into()),
+            _ => Ok(()),
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -372,6 +393,25 @@ impl DocState {
     }
 }
 
+/// Why external data is refused while the Security Warning is showing.
+pub const EXTERNAL_BLOCKED: &str = "Security Warning: External data connections have been disabled. Choose Enable Content to allow them.";
+/// Why external data is refused when the Trust Center disables it.
+pub const EXTERNAL_DISABLED: &str = "External data connections are disabled (File › Options › Trust Center › External Content).";
+
+/// File › Options › Trust Center › External Content › Security settings for Data Connections.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalContent {
+    /// Enable all Data Connections (not recommended).
+    EnableAll,
+    /// Prompt user about Data Connections: a workbook opened with queries or WEBSERVICE calls
+    /// shows the Security Warning bar until Enable Content.
+    #[default]
+    Prompt,
+    /// Disable all Data Connections.
+    DisableAll,
+}
+
 /// Engine-side preferences.
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -390,6 +430,13 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Trust Center: data connections.
+    pub external_content: ExternalContent,
+    /// Get Data › Recent Sources: files, folders and URLs used, most recent first.
+    pub recent_sources: Vec<String>,
+    /// Query Options › Default Query Load Settings: load new queries as a table on a new worksheet
+    /// (`false`: only create connections).
+    pub load_to_worksheet: bool,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -424,6 +471,9 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            external_content: ExternalContent::Prompt,
+            recent_sources: vec![],
+            load_to_worksheet: true,
         }
     }
 }
@@ -519,11 +569,39 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Data › Queries & Connections: the task pane is open.
+    pub queries_pane: bool,
+    /// External data access injected by the host (network, ODBC); `None` uses [`query::StdAccess`].
+    data_access: Option<Arc<dyn query::DataAccess>>,
 }
 
 impl Session {
     pub fn new() -> Session {
         Session::default()
+    }
+    /// Injects external data access (the native app's HTTP client and ODBC). Without it, files
+    /// are read through `std::fs` and web and ODBC sources are unavailable.
+    pub fn set_data_access(&mut self, access: Arc<dyn query::DataAccess>) {
+        self.data_access = Some(access);
+    }
+    /// The data access in use.
+    pub fn data_access(&self) -> Arc<dyn query::DataAccess> {
+        self.data_access.clone().unwrap_or_else(|| Arc::new(query::StdAccess))
+    }
+    /// Gives each document's calculation the WEBSERVICE fetcher when its external content is
+    /// allowed and the web is reachable here; otherwise WEBSERVICE gives `#VALUE!`.
+    pub fn sync_web_service(&mut self) {
+        let access = self.data_access();
+        let web_ok = access.web_available().is_ok();
+        let prefs = self.prefs.clone();
+        for d in self.docs.iter_mut() {
+            let allowed = web_ok && d.external_allowed(&prefs).is_ok();
+            match (&d.calc.web, allowed) {
+                (None, true) => d.calc.web = Some(query::web_service_fetcher(access.clone())),
+                (Some(_), false) => d.calc.web = None,
+                _ => {}
+            }
+        }
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
@@ -664,6 +742,7 @@ impl Session {
         if locked && !macros::debug::runs_while_locked(id, query) {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
+        self.sync_web_service();
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
@@ -1083,13 +1162,15 @@ impl Session {
     pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
         let r = self.execute(id, params);
         let requests = self.take_ui_requests();
-        let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
+        let asked_for_file =
+            requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if matches!(name.as_str(), "open" | "saveAs" | "importFile" | "fromWeb")));
         // A call that only opened a dialog is not recorded (see `execute`), so the recording
         // has no step to take back here.
         if r.is_ok() && asked_for_file {
             let what = match id {
                 "file.open" => "`path` or `base64`",
                 "data.getData" | "data.fromTextCsv" => "`path` or `text`",
+                "data.fromWeb" | "data.fromODataFeed" => "`url`",
                 _ => "`path`",
             };
             let msg = format!("missing {what}: programmatic calls never open dialogs");

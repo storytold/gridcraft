@@ -59,6 +59,71 @@ gridcraft-cli run --in book.xlsx \
 
 Command ids and parameters: `gridcraft-cli commands`.
 
+## Get & Transform (Power Query)
+
+Queries are commands like everything else, so `run` builds, inspects and refreshes them. The CLI
+reads files itself, makes HTTP(S) requests (http and https only, 30-second timeout, 64 MB cap) and,
+on Windows, reaches ODBC data sources, like the desktop app. A new query reads its source once,
+gets Power Query's own Promoted Headers and Changed Type steps, and is loaded as a table on a new
+sheet named after it (`load: "connectionOnly"` keeps only the query; `sheet` and `cell` load it
+into an existing sheet).
+
+```sh
+# A CSV file becomes a query and a table; a filter step is added and the table refreshed.
+gridcraft-cli run --cmd 'data.fromTextCsv={"path":"sales.csv"}' \
+  --cmd 'query.addStep={"name":"sales","step":{"op":"filterRows","column":"Region","conditions":[{"op":"equals","value":"North"}]}}' \
+  --cmd 'data.refresh={"query":"sales"}' --out report.xlsx
+
+# What a web page offers (its HTML tables), then the second one.
+gridcraft-cli run --cmd 'query.navigator={"source":{"kind":"web","url":"https://example.com/stats"}}'
+gridcraft-cli run --cmd 'data.fromWeb={"url":"https://example.com/stats","item":"Table 2"}' --out stats.xlsx
+
+# A workbook opened from a file with queries or WEBSERVICE calls keeps its external content
+# disabled until it is enabled explicitly (Excel's Security Warning).
+gridcraft-cli run --in report.xlsx --cmd data.enableContent --cmd data.refreshAll --out report.xlsx
+```
+
+Sources: `data.fromTextCsv {path|text, delimiter?, encoding?}`, `data.fromExcelWorkbook {path,
+item, itemKind?: sheet|table|definedName}`, `data.fromXml {path, item?}`, `data.fromJson {path,
+item?}`, `data.fromFolder {path, combine?, extension?}`, `data.fromWeb {url, item?}`,
+`data.fromODataFeed {url, item?}`, `data.fromOdbc {connection, table?|sql?}`,
+`data.fromSqlServer {server, database?, table?|sql?}`, `data.fromAccess {path, table?|sql?}`,
+`data.fromTableRange {table?|range?}`, `data.blankQuery`, `data.mergeQueries`,
+`data.appendQueries`. `query.navigator {source}` lists what a source offers; `query.preview
+{name|query, step?}` shows a query's rows at any applied step; `query.mText {name}` gives the
+read-only M-like text. `data.refreshAll` refreshes every query, then every PivotTable.
+
+A query definition (`query.set {query}`, `query.get`) is JSON: `{name, source: {kind, …},
+steps: [{name?, op, …}], load: {to: table|connectionOnly, sheet?, cell?}, refresh: {onOpen,
+everyMinutes, background, inRefreshAll}}`. Source kinds: `csv {path, delimiter?, encoding?}`,
+`text {text, delimiter?}`, `workbook {path, item, itemKind?}`, `xml {path, item?}`,
+`json {path, item?}`, `folder {path, combine?, extension?}`, `web {url, item?}`,
+`odata {url, item?}`, `odbc {connection, table?, sql?}`, `currentWorkbook {name}`,
+`query {name}`, `blank`. Applied steps (`query.addStep {name, step, at?}`):
+
+| `op` | Params |
+|---|---|
+| `promoteHeaders`, `demoteHeaders`, `removeBlankRows`, `transpose` | — |
+| `changeType` | `columns: [{column, type: text\|number\|whole\|currency\|percentage\|date\|dateTime\|time\|logical\|any}]`, `locale?` (`de-DE`…) |
+| `chooseColumns`, `removeColumns`, `reorderColumns` | `columns` |
+| `renameColumns` | `renames: [{from, to}]` |
+| `duplicateColumn` | `column`, `newColumn?` |
+| `keepTopRows`, `keepBottomRows`, `removeTopRows`, `removeBottomRows` | `count` |
+| `keepRange` | `first` (1-based), `count` |
+| `removeDuplicates`, `removeErrors` | `columns?` (all when absent) |
+| `filterRows` | `column`, `values?: [...]` (`null` for blanks), `conditions?: [{op, value?}]`, `or?`; ops `equals`, `notEquals`, `beginsWith`, `notBeginsWith`, `endsWith`, `notEndsWith`, `contains`, `notContains`, `greaterThan`, `greaterOrEqual`, `lessThan`, `lessOrEqual`, `isNull`, `isNotNull` |
+| `sort` | `keys: [{column, descending?}]` |
+| `replaceValues` | `columns`, `find`, `replace`, `whole?` |
+| `splitColumn` | `column`, `delimiter`, `mode?: each\|leftMost\|rightMost`, `count?` |
+| `transformText` | `columns`, `function: lower\|upper\|proper\|trim\|clean` |
+| `fillDown`, `fillUp` | `columns` |
+| `groupBy` | `keys`, `aggregations: [{name, op: count\|countDistinct\|sum\|average\|median\|min\|max, column?}]` |
+| `unpivot` | `columns`, `attribute?`, `value?` |
+| `mergeQueries` | `query`, `left`, `right` (key columns), `join?: leftOuter\|rightOuter\|fullOuter\|inner\|leftAnti\|rightAnti`, `columns?`, `prefix?` |
+| `appendQueries` | `queries` |
+| `addIndexColumn` | `newColumn?`, `start?`, `step?` |
+| `addConditionalColumn` | `newColumn`, `rules: [{column, op, value?, output: {value?\|column?}}]`, `otherwise` |
+
 ## `check`
 
 ```sh

@@ -11,3 +11,5 @@ workspace = true
 [dependencies]
 gridcraft-core = { workspace = true }
 regex = { workspace = true }
+# FILTERXML parses its XML argument (pure Rust, wasm-safe).
+quick-xml = { workspace = true }

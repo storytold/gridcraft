@@ -1020,6 +1020,22 @@ impl Dialog {
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
+            // Get & Transform (drawn by `power_query::dialog`).
+            "navigator" => Dialog::custom("navigator", "Navigator", params.clone()),
+            "fromWeb" => {
+                let title = if params.get("odata").and_then(Json::as_bool) == Some(true) { "OData feed" } else { "From Web" };
+                Dialog::custom("fromWeb", title, params.clone())
+            }
+            "fromOdbc" => Dialog::custom("fromOdbc", "From ODBC", params.clone()),
+            "fromSqlServer" => Dialog::custom("fromSqlServer", "SQL Server database", params.clone()),
+            "loadTo" => Dialog::custom("loadTo", "Import Data", params.clone()),
+            "queryProperties" => Dialog::custom("queryProperties", "Query Properties", params.clone()),
+            "dataSourceSettings" => Dialog::custom("dataSourceSettings", "Data Source Settings", params.clone()),
+            "queryOptions" => Dialog::custom("queryOptions", "Query Options", params.clone()),
+            "recentSources" => Dialog::custom("recentSources", "Recent Sources", params.clone()),
+            "existingConnections" => Dialog::custom("existingConnections", "Existing Connections", params.clone()),
+            "mergeQueries" => Dialog::custom("mergeQueries", "Merge", params.clone()),
+            "appendQueries" => Dialog::custom("appendQueries", "Append", params.clone()),
             "comments" => {
                 app.grid.pane = None;
                 app.run_or_alert("review.showComments", json!({"on": true}));

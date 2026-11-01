@@ -10,7 +10,7 @@ use serde_json::{Value as Json, json};
 
 use super::{
     CommandSpec, EngineError, Result, Session, always, anchor_mode_name, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc,
-    ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+    ok, split_sheet, str_param, target_ranges, target_sheet, u32_param,
 };
 
 mod cells;
@@ -23,7 +23,7 @@ mod window;
 pub(crate) use cells::is_checkbox_cell;
 use cells::{background, checkbox, draw_border, new_cell_style, recently_used, theme_colors, theme_fonts, toggle_checkbox, use_in_formula};
 use chart::{add_element, change_colors, format_series, move_chart, quick_layout, select_data};
-use data::{from_csv, from_table_range, queries, table_resize};
+use data::table_resize;
 use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline};
 pub(crate) use scripts::has_scripts;
 use scripts::{all_scripts, delete_script, new_script, record, run_script, stop_action, trust_scripts};
@@ -191,35 +191,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
             .execute("data.removeDuplicates", p.clone())),
-        // Get & Transform
-        cmd!(
-            "data.fromTextCsv",
-            "From Text/CSV",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
-            has_doc,
-            from_csv
-        ),
-        cmd!(
-            "data.getData",
-            "Get Data",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text} (CSV/TSV/JSON array of objects) → new sheet table",
-            has_doc,
-            from_csv
-        ),
-        cmd!(
-            "data.fromTableRange",
-            "From Table/Range",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{range?} → copies the table/range to a new sheet as a table",
-            has_doc,
-            from_table_range
-        ),
-        cmd!(query "data.queriesConnections", "Queries & Connections", ["Data", "Queries & Connections"], None, "{} → imported tables", has_doc, queries),
         // Automate
         cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping}", has_doc, record),
         cmd!(

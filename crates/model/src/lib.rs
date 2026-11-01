@@ -11,6 +11,7 @@ pub mod features;
 pub mod macros;
 pub mod password;
 pub mod preserved;
+pub mod query;
 pub mod sheet;
 pub mod store;
 pub mod style;
@@ -21,6 +22,7 @@ pub use features::*;
 pub use macros::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
+pub use query::{ExcelQuery, Query, QuerySource, QueryStep, StepOp};
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{

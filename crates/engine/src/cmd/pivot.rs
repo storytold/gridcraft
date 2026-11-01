@@ -29,7 +29,8 @@ mod params;
 use charts::{insert_pivot_chart, recommended};
 use create::{insert_pivot, options, show_details, summarize_table};
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
-use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
+pub(crate) use layout::refresh_pivots;
+use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, sort};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -178,15 +179,6 @@ pub fn specs() -> Vec<CommandSpec> {
             layout
         ),
         cmd!("pivot.refresh", "Refresh", ["PivotTable Analyze", "Data"], Some("Alt+F5"), "{pivot?, replace?}", has_doc, refresh),
-        cmd!(
-            "data.refreshAll",
-            "Refresh All",
-            ["Data", "Queries & Connections"],
-            Some("Cmd+Alt+F5"),
-            "{replace?} refreshes every PivotTable → {refreshed, errors}",
-            has_doc,
-            refresh_all
-        ),
         cmd!(
             "pivot.changeSource",
             "Change Data Source",

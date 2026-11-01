@@ -265,48 +265,48 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AF1", Entry::Continue), // Excel: Data from Picture Menu; group level: feature gap; reserved until the command lands
     ("AF1C", Entry::Finish(Action::Command("insert.picture"))), // Excel: Picture from Clipboard (source TBD)
     ("AF1P", Entry::Finish(Action::Command("insert.picture"))), // Excel: Picture from File (source TBD)
-    ("AFA", Entry::Finish(Action::Pending("data.fromAccess"))), // pending; Excel: Get External Data: From Access; gap #12 Get & Transform; reserved until the command lands
+    ("AFA", Entry::Finish(Action::Command("data.fromAccess"))), // Excel: Get External Data: From Access
     ("AFC", Entry::Finish(Action::Command("data.forecastSheet"))), // Excel: Forecast Sheet; IN FLIGHT: vangel76 PR #325; reserved until the command lands
     ("AFE", Entry::Finish(Action::Pending("data.analyzeData"))),   // pending; Excel: Analyze Data; AI feature GAP; reserved until the command lands
     ("AFF", Entry::Finish(Action::Command("edit.flashFill"))),     // Excel: Flash Fill
     ("AFO", Entry::Finish(Action::Pending("data.fromOtherSources"))), // pending; Excel: Get External Data: From Other Sources; gap #12; reserved until the command lands
-    ("AFT", Entry::Finish(Action::Pending("data.fromText"))), // pending; Excel: Get External Data: From Text; gap #12; reserved until the command lands
-    ("AFW", Entry::Finish(Action::Pending("data.fromWeb"))),  // pending; Excel: Get External Data: From Web; reserved until the command lands
-    ("AG", Entry::Continue),                                  // Excel: Group Menu; group level: containment(Group)
+    ("AFT", Entry::Finish(Action::Command("data.fromTextCsv"))), // Excel: Get External Data: From Text; Legacy Get External Data: From Text; GridCraft imports it as a query (From Text/CSV)
+    ("AFW", Entry::Finish(Action::Dialog("fromWeb"))),           // Excel: Get External Data: From Web
+    ("AG", Entry::Continue),                                     // Excel: Group Menu; group level: containment(Group)
     ("AGA", Entry::Finish(Action::Pending("data.autoOutline"))), // pending; Excel: Auto Outline; Auto Outline; reserved until the command lands
-    ("AGG", Entry::Finish(Action::Command("data.group"))),    // Excel: Group
-    ("AH", Entry::Finish(Action::Command("data.hideDetail"))), // Excel: Hide Detail
-    ("AJ", Entry::Finish(Action::Command("data.showDetail"))), // Excel: Show Detail
+    ("AGG", Entry::Finish(Action::Command("data.group"))),       // Excel: Group
+    ("AH", Entry::Finish(Action::Command("data.hideDetail"))),   // Excel: Hide Detail
+    ("AJ", Entry::Finish(Action::Command("data.showDetail"))),   // Excel: Show Detail
     ("AK", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Edit Links; Edit Links (Queries & Connections);
-    ("AM", Entry::Finish(Action::Dialog("removeDuplicates"))), // Excel: Remove Duplicates
+    ("AM", Entry::Finish(Action::Dialog("removeDuplicates"))),   // Excel: Remove Duplicates
     ("AO", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Queries & Connections
-    ("AP1", Entry::Finish(Action::Command("file.properties"))), // Excel: Properties
-    ("APN", Entry::Continue),                                 // Excel: Get Data (Power Query) Menu; group level: Power Query variants = GAP
-    ("APND", Entry::Finish(Action::Pending("data.fromDatabase"))), // pending; Excel: From Database (Microsoft Query); gap #12; reserved until the command lands
-    ("APNE", Entry::Finish(Action::Pending("data.powerQueryEditor"))), // pending; Excel: Launch Power Query Editor; gap #12; reserved until the command lands
-    ("APNG", Entry::Finish(Action::Command("data.getData"))),          // Excel: Get Data (Power Query); containment(Get Data)
-    ("APNH", Entry::Finish(Action::Pending("data.fromHtml"))),         // pending; Excel: From HTML; gap #12; reserved until the command lands
-    ("APNL", Entry::Finish(Action::Pending("data.fromSqlServer"))), // pending; Excel: From SQL Server ODBC; gap #12; reserved until the command lands
-    ("APNS", Entry::Finish(Action::Pending("data.dataSourceSettings"))), // pending; Excel: Data Source Settings; gap #12; reserved until the command lands
-    ("APNT", Entry::Finish(Action::Pending("data.fromTextLegacy"))), // pending; Excel: From Text (Legacy); gap #12; reserved until the command lands
-    ("APR", Entry::Finish(Action::Pending("data.recentSources"))),   // pending; Excel: Recent Sources; gap #12; reserved until the command lands
+    ("AP1", Entry::Finish(Action::Command("data.properties"))), // Excel: Properties; Properties (Queries & Connections): the query table at the active cell
+    ("APN", Entry::Continue),                                   // Excel: Get Data (Power Query) Menu; group level: Power Query variants = GAP
+    ("APND", Entry::Finish(Action::Command("data.fromMicrosoftQuery"))), // Excel: From Database (Microsoft Query); Microsoft Query is disabled with its reason
+    ("APNE", Entry::Finish(Action::Command("data.powerQueryEditor"))),   // Excel: Launch Power Query Editor
+    ("APNG", Entry::Finish(Action::Command("data.getData"))),            // Excel: Get Data (Power Query); containment(Get Data)
+    ("APNH", Entry::Finish(Action::Dialog("fromWeb"))), // Excel: From HTML; Legacy From HTML; GridCraft reads HTML tables with From Web
+    ("APNL", Entry::Finish(Action::Dialog("fromSqlServer"))), // Excel: From SQL Server ODBC
+    ("APNS", Entry::Finish(Action::Command("data.dataSourceSettings"))), // Excel: Data Source Settings
+    ("APNT", Entry::Finish(Action::Command("data.fromTextCsv"))), // Excel: From Text (Legacy); Legacy From Text; GridCraft imports it as a query (From Text/CSV)
+    ("APR", Entry::Finish(Action::Command("data.recentSources"))), // Excel: Recent Sources
     ("APS", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Show Queries
-    ("APT", Entry::Finish(Action::Pending("data.fromTable"))),       // pending; Excel: From Table (query); gap #12; reserved until the command lands
-    ("AQ", Entry::Finish(Action::Dialog("advancedFilter"))),         // Excel: Advanced Filter
-    ("AR", Entry::Continue),                                         // group: group: Queries & Connections
-    ("ARA", Entry::Finish(Action::Command("data.refreshAll"))),      // Excel: Refresh All
-    ("ARC", Entry::Finish(Action::Pending("data.cancelRefresh"))),   // pending; Excel: Cancel Refresh; gap #12; reserved until the command lands
-    ("ARO", Entry::Finish(Action::Pending("data.connectionProperties"))), // pending; Excel: Connection Properties; gap #12; reserved until the command lands
-    ("ARR", Entry::Finish(Action::Command("pivot.refresh"))),             // Excel: Refresh
-    ("ARS", Entry::Finish(Action::Pending("data.refreshStatus"))),        // pending; Excel: Refresh Status; gap #12; reserved until the command lands
-    ("ASA", Entry::Finish(Action::Command("data.sortAscending"))),        // Excel: Sort A to Z
-    ("ASD", Entry::Finish(Action::Command("data.sortDescending"))),       // Excel: Sort Z to A
-    ("ASS", Entry::Finish(Action::Dialog("sort"))),                       // Excel: Sort
-    ("AT", Entry::Finish(Action::Command("data.filter"))),                // Excel: Filter
-    ("AU", Entry::Continue),                                              // Excel: Ungroup Menu; group level: containment(Ungroup)
+    ("APT", Entry::Finish(Action::Command("data.fromTableRange"))), // Excel: From Table (query)
+    ("AQ", Entry::Finish(Action::Dialog("advancedFilter"))),      // Excel: Advanced Filter
+    ("AR", Entry::Continue),                                      // group: group: Queries & Connections
+    ("ARA", Entry::Finish(Action::Command("data.refreshAll"))),   // Excel: Refresh All
+    ("ARC", Entry::Finish(Action::Command("data.cancelRefresh"))), // Excel: Cancel Refresh
+    ("ARO", Entry::Finish(Action::Command("data.connectionProperties"))), // Excel: Connection Properties
+    ("ARR", Entry::Finish(Action::Command("data.refresh"))), // Excel: Refresh; Refresh (Refresh All menu): the query table or PivotTable at the active cell
+    ("ARS", Entry::Finish(Action::Command("data.refreshStatus"))), // Excel: Refresh Status
+    ("ASA", Entry::Finish(Action::Command("data.sortAscending"))), // Excel: Sort A to Z
+    ("ASD", Entry::Finish(Action::Command("data.sortDescending"))), // Excel: Sort Z to A
+    ("ASS", Entry::Finish(Action::Dialog("sort"))),          // Excel: Sort
+    ("AT", Entry::Finish(Action::Command("data.filter"))),   // Excel: Filter
+    ("AU", Entry::Continue),                                 // Excel: Ungroup Menu; group level: containment(Ungroup)
     ("AUC", Entry::Finish(Action::Pending("data.clearOutline"))), // pending; Excel: Clear Outline; feature gap; reserved until the command lands
-    ("AUU", Entry::Finish(Action::Command("data.ungroup"))),      // Excel: Ungroup
-    ("AV", Entry::Continue),                                      // Excel: Data Validation Menu; group level: containment(Data Validation)
+    ("AUU", Entry::Finish(Action::Command("data.ungroup"))), // Excel: Ungroup
+    ("AV", Entry::Continue),                                 // Excel: Data Validation Menu; group level: containment(Data Validation)
     ("AVI", Entry::Finish(Action::Command("data.circleInvalid"))), // Excel: Circle Invalid Data
     ("AVR", Entry::Finish(Action::Pending("data.clearValidationCircles"))), // pending; Excel: Clear Validation Circles; reserved until the command lands
     ("AVV", Entry::Finish(Action::Command("data.validation"))),             // Excel: Data Validation
@@ -314,9 +314,9 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AWG", Entry::Finish(Action::Dialog("goalSeek"))),                     // Excel: Goal Seek
     ("AWS", Entry::Finish(Action::Command("data.scenarioManager"))),        // Excel: Scenario Manager
     ("AWT", Entry::Finish(Action::Command("data.dataTable"))),              // Excel: Data Table
-    ("AX", Entry::Finish(Action::Pending("data.existingConnections"))), // pending; Excel: Existing Connections; gap #12; reserved until the command lands
-    ("AY", Entry::Finish(Action::Command("data.reapply"))),             // Excel: Reapply Filter; containment(Reapply)
-    ("RA1", Entry::Finish(Action::Dialog("accessibility"))),            // Excel: Check Accessibility
+    ("AX", Entry::Finish(Action::Command("data.existingConnections"))),     // Excel: Existing Connections
+    ("AY", Entry::Finish(Action::Command("data.reapply"))),                 // Excel: Reapply Filter; containment(Reapply)
+    ("RA1", Entry::Finish(Action::Dialog("accessibility"))),                // Excel: Check Accessibility
     ("RA2", Entry::Finish(Action::Command("review.showComments"))), // Excel: Show All Comments; Show All Comments; reserved until the command lands
     ("RC", Entry::Finish(Action::Dialog("comment"))),               // Excel: New Comment
     ("RD", Entry::Finish(Action::Command("review.deleteComment"))), // Excel: Delete Comment

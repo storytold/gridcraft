@@ -15,6 +15,10 @@ pub struct Services {
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
+    /// Get Data › From File: pick a data file of a kind (`csv`, `excel`, `xml`, `json`, `access`).
+    pub pick_data_file: Option<PickSave>,
+    /// Get Data › From Folder: pick a folder.
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
