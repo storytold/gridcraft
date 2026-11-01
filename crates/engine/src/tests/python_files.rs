@@ -243,6 +243,55 @@ fn a_py_formula_naming_a_missing_script_keeps_only_its_value() {
     assert_eq!(wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().py.as_ref().map(|p| p.code.as_str()), Some("5"));
 }
 
+/// `bytes` with the part `name` stored uncompressed and one byte of its data changed, so the
+/// archive is intact but reading the part fails its checksum.
+fn with_damaged_part(bytes: &[u8], name: &str, marker: &str) -> Vec<u8> {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let entry = f.name().to_string();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        let options = zip::write::SimpleFileOptions::default();
+        let options = if entry == name { options.compression_method(zip::CompressionMethod::Stored) } else { options };
+        out.start_file(entry, options).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    let mut zipped = out.finish().unwrap().into_inner();
+    let at = zipped.windows(marker.len()).position(|w| w == marker.as_bytes()).expect("the marker is stored as it is");
+    zipped[at + 1] ^= 0x20;
+    zipped
+}
+
+#[test]
+fn a_damaged_python_part_is_a_warning_and_the_workbook_opens_with_its_values() {
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>5</v></c><c r=\"B1\"><v>9</v></c></row></sheetData>";
+    let good = excel_shaped(data, Some(&["5"]));
+    // The part's data fails its checksum (a damaged archive entry).
+    let damaged = with_damaged_part(&good, "xl/python/python1.xml", "<pythonScripts>");
+    // The part is not well-formed XML, before its first script.
+    let broken = |at: &'static str, with: &'static str| {
+        with_parts(&good, move |name, text| if name == "xl/python/python1.xml" { text.replace(at, with) } else { text.to_string() }, &[])
+    };
+    let malformed = broken("<pythonScripts>", "<pythonScripts><!-- never closed");
+    for (name, bytes) in [("damaged.xlsx", damaged), ("malformed.xlsx", malformed)] {
+        let (wb, warnings) = crate::io::open_bytes(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let sh = wb.sheet(0).unwrap();
+        let a1 = sh.cell(CellRef::parse("A1").unwrap()).unwrap();
+        assert_eq!(a1.value, Value::Number(5.0), "{name}: the cached value is kept");
+        assert!(a1.py.is_none() && a1.formula.is_none(), "{name}: as for a missing script, only the value");
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(9.0), "{name}: the rest of the sheet is read");
+        let part = warnings.iter().filter(|w| w.contains("Python part is damaged")).count();
+        assert_eq!(part, 1, "{name}: {warnings:?}");
+    }
+    // Damaged after its first script, the part keeps what it read before the damage.
+    let (wb, warnings) = crate::io::open_bytes("late.xlsx", &broken("</pythonScripts>", "<!-- never closed")).unwrap();
+    let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
+    assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some("5"));
+    assert_eq!(warnings.iter().filter(|w| w.contains("Python part is damaged")).count(), 1, "{warnings:?}");
+}
+
 #[test]
 fn many_cells_naming_one_long_script_take_from_one_budget() {
     // 20,000 cells name one script of 8,000 characters: 160 MB of code if each took a copy.

@@ -71,7 +71,7 @@ impl ScriptsIn {
 pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn, IoError> {
     let mut out = ScriptsIn { budget: MAX_CODE_BYTES, ..ScriptsIn::default() };
     let Some(rel) = rels.iter().find(|r| !r.external && r.kind.eq_ignore_ascii_case(REL_KIND)) else { return Ok(out) };
-    let bytes = match cx.pkg.read_limited(&rel.target, MAX_PART_BYTES) {
+    let bytes = match cx.pkg.read_optional_limited(&rel.target, MAX_PART_BYTES) {
         Ok(Some(b)) => b,
         Ok(None) => {
             cx.warn(format!("missing part {}", rel.target));
@@ -81,7 +81,12 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
             cx.warn(format!("the Python part is too large ({m}); Python cells kept only their values"));
             return Ok(out);
         }
-        Err(e) => return Err(e),
+        // A damaged entry (a bad checksum or compressed stream) is a damaged part: its cells keep
+        // their values, as when the part is missing.
+        Err(e) => {
+            cx.warn(format!("the Python part is damaged ({e}); Python cells kept only their values"));
+            return Ok(out);
+        }
     };
     let mut over = 0usize;
     let parsed = xml::parse_streaming(&bytes, &["pythonScript"], &mut |el: El| {
