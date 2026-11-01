@@ -28,6 +28,7 @@ mod sheet_copy_spill;
 mod sheet_name_quoting;
 mod sparse_clear_invalidation;
 mod stored_list_shape;
+mod subtotal_filter_roundtrip;
 mod table_resize_overlap;
 mod table_total_row_last_row;
 mod workbook_author;
