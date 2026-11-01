@@ -2,6 +2,7 @@
 //! an item, presses Escape or clicks elsewhere.
 
 use egui::{Event, Modifiers, PointerButton, Pos2};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::{SheetApp, grid};
@@ -35,6 +36,30 @@ fn center(h: &Harness, cell: &str) -> Pos2 {
 
 fn button(h: &mut Harness, pos: Pos2, pressed: bool) {
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+}
+
+fn context_menu_content_bounds(h: &Harness) -> egui::Rect {
+    [
+        "Cut",
+        "Copy",
+        "Paste",
+        "Paste Special…",
+        "Insert…",
+        "Delete…",
+        "Clear Contents",
+        "Filter by Selected Cell's Value",
+        "Sort A to Z",
+        "Sort Z to A",
+        "New Comment",
+        "New Note",
+        "Format Cells…",
+        "Pick From Drop-down List…",
+        "Define Name…",
+        "Link…",
+    ]
+    .into_iter()
+    .map(|label| h.query_all_by_label(label).max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("context item is rendered").rect())
+    .fold(egui::Rect::NOTHING, egui::Rect::union)
 }
 
 /// Press and release arrive in the same frame (a quick click).
@@ -99,4 +124,23 @@ fn a_quick_right_click_between_pixels_keeps_the_menu_open_on_retina() {
     button(&mut h, pos, false);
     h.run_steps(4);
     assert!(h.state().grid.context_menu.is_some(), "the menu stays open");
+}
+
+#[test]
+/// Hovering a long command keeps both its size and rendered position fixed.
+fn hovering_a_long_context_item_does_not_resize_the_menu() {
+    let mut h = harness();
+    quick_right_click(&mut h, "C5");
+    let item = h.get_by_label("Filter by Selected Cell's Value").rect();
+    let rendered_menu = context_menu_content_bounds(&h);
+    let menu = h.state().grid.context_menu.unwrap();
+    h.input_mut().events.push(Event::PointerMoved(item.center()));
+    h.run_steps(2);
+
+    let hovered_item = h.get_by_label("Filter by Selected Cell's Value").rect();
+    assert_eq!(hovered_item.size(), item.size(), "hovering keeps the command's dimensions fixed");
+    assert_eq!(hovered_item.min, item.min, "hovering keeps the rendered command position fixed");
+    assert_eq!(context_menu_content_bounds(&h), rendered_menu, "hovering preserves the rendered menu bounds");
+    let menu_after = h.state().grid.context_menu.unwrap();
+    assert_eq!(menu_after, menu, "hovering does not move the menu anchor");
 }
