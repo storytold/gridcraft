@@ -225,6 +225,11 @@ fn a_button_runs_its_macro_and_cmd_or_right_click_only_selects() {
     h.run_steps(2);
     assert_eq!(h.state().selected_object, Some(ObjRef::new(ObjKind::Control, ids.button)));
     assert_eq!(cell(&h, "H1"), Value::Empty);
+    assert_eq!(h.state().grid.object_menu.map(|(_, kind, id)| (kind, id)), Some(("control", ids.button)));
+    // Escape closes the menu (which would otherwise take the next click at the pointer), then
+    // the selection is dropped, so the click below reaches the button itself.
+    key(&mut h, Key::Escape);
+    assert!(h.state().grid.object_menu.is_none(), "Escape closes the control's menu");
     h.state_mut().selected_object = None;
     // A plain click runs the macro, as one undo step.
     let before = undo_len(&h);
@@ -393,6 +398,7 @@ fn assign_action_and_format_control_dialogs() {
     h.get_by_label("Assign Action…").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("assignAction"));
+    assert!(h.state().grid.object_menu.is_none(), "choosing an item closes the menu");
     // The dialog settles its size (and so its place) over the first frames.
     h.run_steps(30);
     let radio = h.get_by_label("Run a command").rect();
