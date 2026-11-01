@@ -10,9 +10,9 @@ fn filter_blanks_include_empty_text_and_formula_results() {
     assert_eq!(r["hiddenRows"], json!(2));
     let vals = filter_values(&s.doc().unwrap().wb, 0, 1);
     // The `=""` result joins (Blanks) instead of showing as its own empty entry.
-    assert!(!vals.iter().any(|(t, _)| t.is_empty()), "{vals:?}");
-    let blanks: Vec<_> = vals.into_iter().filter(|(t, _)| t == "(Blanks)").collect();
-    assert_eq!(blanks, vec![("(Blanks)".to_string(), true)]);
+    assert!(!vals.iter().any(|(t, _, _)| t.is_empty()), "{vals:?}");
+    let blanks: Vec<_> = vals.into_iter().filter(|(t, _, _)| t == "(Blanks)").collect();
+    assert_eq!(blanks, vec![("(Blanks)".to_string(), true, 2)]);
 }
 
 #[test]
@@ -51,6 +51,28 @@ fn subtotal_puts_summary_rows_below_their_detail() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert!(!sh.summary_below);
     assert_eq!(sh.value(CellRef::new(3, 0)).display(), "West");
+}
+
+#[test]
+fn filter_values_count_repeated_values_and_blanks_even_when_filtered() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "B2", "values": [
+            ["Payment", "Region"], ["Card", "East"], ["Cash", "East"],
+            ["Card", "West"], [null, "East"], [null, "West"], ["Card", "East"]
+        ]}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "B9", "input": "Outside"})).unwrap();
+    s.execute("data.filter", json!({"range": "B2:C8"})).unwrap();
+    let counts = |s: &Session| filter_values(&s.doc().unwrap().wb, 0, 1);
+    assert_eq!(counts(&s), vec![("Card".into(), true, 3), ("Cash".into(), true, 1), ("(Blanks)".into(), true, 2)]);
+
+    s.execute("data.filterBy", json!({"column": "C", "values": ["East"]})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["Cash"], "blanks": false})).unwrap();
+    assert_eq!(counts(&s), vec![("Card".into(), false, 3), ("Cash".into(), true, 1), ("(Blanks)".into(), false, 2)]);
 }
 
 #[test]

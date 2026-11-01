@@ -50,6 +50,7 @@ this logic, with one undo step.
 
 | Behaviour | Status |
 |---|---|
+| AutoFilter value counts | Each checkbox, including (Blanks), has a dimmed, right-aligned row count (#1409). Counts cover all data rows in the dropdown's filter range, including rows hidden by filters on this or other columns; search only narrows the displayed values. Beyond Excel (as in WPS): the hovered value shows an Only button that filters the column to that value alone in one click, through `data.filterBy`. |
 | Click/drag/Shift/Ctrl selection, multi-area selection | rectangular drag works in one direction only in some cases (#28) |
 | Cursor while dragging cells, headers, freeze handles and objects | stable for the active drag (#936); Draw tools keep their crosshair; header arrows and a custom cell cursor remain unimplemented |
 | Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
@@ -233,6 +234,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-19 | trivial | While a mouse button is held (a click or a drag selecting cells) the selection outline is drawn on its cells at once instead of gliding after the pointer, which read as lag; keyboard moves still glide |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
 | 2026-10-17 | minor | A Ctrl+Alt+letter key that types a character (a user-defined Windows hotkey such as Ctrl+Alt+A for `ä`) types it instead of running the Ctrl+letter shortcut, e.g. Select All (#1530) |
+| 2026-10-16 | minor | AutoFilter dropdown: an Only button on the hovered value filters the column to just that value (#1409) |
+| 2026-10-16 | minor | AutoFilter dropdown shows row counts beside values and (Blanks), including filtered-out rows (#1409) |
 | 2026-10-16 | minor | Right-drag on the fill handle opens the fill menu on release: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…; Esc cancels the drag or closes the menu without filling |
 | 2026-10-16 | minor | With the active cell in a Table whose header row is scrolled out of view, the column headings show the header names and their filter buttons in place of the letters (#1423) |
 | 2026-10-16 | minor | Ctrl+6 hides every object (charts, pictures, shapes, slicers) and shows them again; hidden objects are not drawn, take no clicks and drop their selection, and the setting is saved with the workbook (`workbookPr showObjects`) |

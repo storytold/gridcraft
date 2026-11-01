@@ -290,8 +290,9 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-/// Distinct display values of a filter column (for the dropdown list).
-pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+/// Distinct display values, checked state and row counts for the dropdown list.
+/// Counts include all data rows in the filter range, even rows hidden by another filter.
+pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool, u32)> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
@@ -313,7 +314,8 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
             _ => true,
         };
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        let entry = seen.entry((key, t)).or_insert((on, 0));
+        entry.1 += 1;
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    seen.into_iter().map(|((_, t), (on, count))| (t, on, count)).collect()
 }
