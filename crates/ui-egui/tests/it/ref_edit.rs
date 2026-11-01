@@ -661,3 +661,107 @@ fn f4_cycles_the_reference_between_absolute_and_relative() {
     assert_eq!(field(&h, "to"), "25");
     assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4");
 }
+
+/// `workbook()` with a second sheet whose name needs quoting (a space and an apostrophe), holding
+/// 1 in A2 and 1..6 in A1:A6, and a formula on the first sheet that reads its A2.
+fn quoted_sheet() -> Session {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "O'Brien Rates", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    for (i, v) in (1..=6).enumerate() {
+        s.execute("cell.set", json!({"cell": format!("A{}", i + 1), "input": v.to_string()})).unwrap();
+    }
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    // 3 * A2 + 4 with A2 = 2 is 10; Goal Seek to 25 wants A2 = 7.
+    s.execute("cell.set", json!({"cell": "B5", "input": "='O''Brien Rates'!A2*3+4"})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    s
+}
+
+/// Clicks the sheet tabs' "Next sheet" arrow, below the grid at the left.
+fn next_sheet(h: &mut H) {
+    let grid = h.state().grid.rect.unwrap();
+    click_at(h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+}
+
+#[test]
+fn ok_after_a_cross_sheet_pick_runs_goal_seek_with_the_quoted_sheet_name() {
+    let mut h = harness(quoted_sheet());
+    open_goal_seek(&mut h);
+    assert_eq!(field(&h, "set"), "B5");
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    assert_eq!(selection(&h).0, 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "'O''Brien Rates'!$A$2", "quoted as the command's parser reads it");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    let a2 = wb.sheets[1].value(CellRef::parse("A2").unwrap());
+    assert!((a2.as_f64().unwrap() - 7.0).abs() < 1e-6, "the changing cell on the other sheet: {a2:?}");
+    let b5 = wb.sheets[0].value(CellRef::parse("B5").unwrap());
+    assert!((b5.as_f64().unwrap() - 25.0).abs() < 1e-6, "{b5:?}");
+    assert_eq!(selection(&h), (0, "B5".into()), "back on the dialog's sheet and selection");
+}
+
+#[test]
+fn data_analysis_runs_on_a_range_picked_on_another_sheet() {
+    let mut h = harness(quoted_sheet());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    next_sheet(&mut h);
+    drag(&mut h, "A1", "A6");
+    assert_eq!(field(&h, "range"), "'O''Brien Rates'!$A$1:$A$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("outputTo".into(), json!("range"));
+    d.values.insert("output".into(), json!("$H$1"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    // The report is on the dialog's own sheet and read the other sheet's numbers: the mean of
+    // 1..6 is 21 / 6 = 3.5.
+    let wb = &h.state().session.active().unwrap().wb;
+    let report = &wb.sheets[0];
+    let mean = (0..20).find_map(|row| {
+        let label = report.value(CellRef::new(row, 7));
+        (label.as_text().map(str::trim) == Some("Mean")).then(|| report.value(CellRef::new(row, 8)))
+    });
+    assert_eq!(mean.and_then(|v| v.as_f64()), Some(3.5), "{:?}", (0..20).map(|r| report.value(CellRef::new(r, 7))).collect::<Vec<_>>());
+    assert!(wb.sheets[1].value(CellRef::parse("H1").unwrap()).is_empty(), "nothing was written on the picked sheet");
+}
+
+#[test]
+fn enter_while_collapsed_only_expands_the_dialog() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2");
+    assert!(h.query_by_label("   OK   ").is_none(), "the collapsed dialog shows no OK button");
+    let b2 = |h: &H| h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse("B2").unwrap()).as_f64();
+    let undo_steps = |h: &H| h.state().session.active().unwrap().undo.len();
+    let steps = undo_steps(&h);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None, "Enter expands the dialog");
+    assert!(h.state().dialog.is_some(), "and doesn't close it");
+    assert_eq!(b2(&h), Some(1.0), "Goal Seek did not run");
+    assert_eq!(undo_steps(&h), steps, "no undo step was added");
+    // OK is what runs it.
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!((b2(&h).unwrap() - 7.0).abs() < 1e-6);
+    assert_eq!(undo_steps(&h), steps + 1);
+}
