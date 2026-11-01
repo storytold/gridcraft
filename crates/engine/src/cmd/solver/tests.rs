@@ -848,6 +848,69 @@ fn sensitivity_applies_agrees_with_the_report() {
     }
 }
 
+/// How many cells of sheet `name` hold `text`.
+fn count_of(s: &Session, name: &str, text: &str) -> usize {
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(d.wb.sheet_index(name).unwrap()).unwrap();
+    (0..60).flat_map(|r| (0..8).map(move |c| (r, c))).filter(|(r, c)| sh.value(CellRef::new(*r, *c)) == Value::text(text)).count()
+}
+
+#[test]
+fn sensitivity_report_is_the_same_whatever_constant_the_objective_adds() {
+    // A constant in the objective changes no price: max 1E9 + x with x ≤ 10 (a row) has the
+    // same report as max x with x ≤ 10. At x = 10 the row's shadow price is 1 (one more unit
+    // of right side adds one to the objective); x is basic, with reduced cost 0 and
+    // coefficient 1, which may rise without limit and fall by 1 (to 0, where the slack ties);
+    // the right side 10 may rise without limit and fall by 10 (to x = 0). A tolerance taken
+    // from the objective's value (1E-9 · 1E9 = 1) wrote the shadow price as 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1000000000+A1"), ("C1", "=A1"), ("E1", "0"), ("F1", "=E1"), ("G1", "=E1")]);
+    let cols = ["D", "E", "F", "G", "H"];
+    let mut rows = Vec::new();
+    for (obj, var, con, v, c) in [("B1", "A1", "C1", "$A$1", "$C$1"), ("F1", "E1", "G1", "$E$1", "$G$1")] {
+        let p = json!({"objective": obj, "variables": var, "constraints": [format!("{con} <= 10")], "method": "simplex", "reports": ["sensitivity"]});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        rows.push((report_row(&s, &rep, v, &cols), report_row(&s, &rep, c, &cols)));
+    }
+    assert!(close(&rows[0].0, &[10.0, 0.0, 1.0, 1e30, 1.0], 1e-9), "{rows:?}");
+    assert!(close(&rows[0].1, &[10.0, 1.0, 10.0, 1e30, 10.0], 1e-9), "{rows:?}");
+    assert_eq!(rows[0], rows[1]);
+}
+
+#[test]
+fn nonlinear_sensitivity_report_is_the_same_whatever_constant_the_objective_adds() {
+    // min 1E6 + (x − 3)² with x ≤ 2.75 has the same report as min (x − 3)² with x ≤ 2.75. At
+    // x = 2.75 the objective's gradient is 2(2.75 − 3) = −0.5. As a bound on the variable cell
+    // (no constraint row) it is x's reduced gradient, −0.5; as a row y = x ≤ 2.75 it is the
+    // row's Lagrange multiplier, −0.5 (∇f = λ∇y with ∇y = 1), and x's reduced gradient is 0.
+    // A tolerance taken from the objective's value (1E-6 · 1E6 = 1) wrote both as 0. The
+    // difference gradients of the model with the constant lose about four digits to rounding,
+    // so the figures agree to 1E-3.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1000000+(A1-3)^2"), ("C1", "=A1"), ("E1", "0"), ("F1", "=(E1-3)^2"), ("G1", "=E1")]);
+    let mut figures = Vec::new();
+    for (obj, var, con, v, c) in [("B1", "A1", "C1", "$A$1", "$C$1"), ("F1", "E1", "G1", "$E$1", "$G$1")] {
+        let solve = |s: &mut Session, bound: String| {
+            let p = json!({"objective": obj, "goal": "min", "variables": var, "constraints": [bound], "reports": ["sensitivity"]});
+            let r = s.execute("data.solver", p).unwrap();
+            assert_eq!(r["status"], "converged", "{r}");
+            r["reports"][0].as_str().unwrap().to_string()
+        };
+        let rep = solve(&mut s, format!("{var} <= 2.75"));
+        let at_bound = report_row(&s, &rep, v, &["D", "E"]);
+        assert_eq!(count_of(&s, &rep, c), 0, "a bound has no constraint row");
+        let rep = solve(&mut s, format!("{con} <= 2.75"));
+        figures.push((at_bound, report_row(&s, &rep, v, &["D", "E"]), report_row(&s, &rep, c, &["D", "E"])));
+    }
+    let (at_bound, free, row) = &figures[0];
+    assert!(close(at_bound, &[2.75, -0.5], 1e-3), "{figures:?}");
+    assert!(close(free, &[2.75, 0.0], 1e-3), "{figures:?}");
+    assert!(close(row, &[2.75, -0.5], 1e-3), "{figures:?}");
+    assert!(close(&figures[1].0, at_bound, 1e-3) && close(&figures[1].1, free, 1e-3) && close(&figures[1].2, row, 1e-3), "{figures:?}");
+}
+
 fn formula(s: &Session, a1: &str) -> String {
     let d = s.doc().unwrap();
     d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()

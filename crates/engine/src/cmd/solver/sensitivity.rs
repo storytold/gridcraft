@@ -35,11 +35,14 @@ pub(super) fn sensitivity_refusal(m: &Model, prob: &Problem) -> Option<&'static 
     }
 }
 
-/// A sensitivity figure: tiny values (rounding noise) print as 0, unlimited ones as 1E+30.
-fn sens_num(v: f64, scale: f64) -> Value {
+/// A sensitivity figure: values within `noise` of zero (rounding) print as 0, unlimited ones
+/// as 1E+30. The noise level is relative to the coefficients or gradients the figure is made
+/// of, never to the objective's value: adding a constant to the objective changes no price,
+/// multiplier or gradient, so it must not change what the report shows.
+fn sens_num(v: f64, noise: f64) -> Value {
     if !v.is_finite() || v >= NO_LIMIT {
         Value::number(NO_LIMIT)
-    } else if v.abs() <= 1e-9 * scale.max(1.0) {
+    } else if v.abs() <= noise {
         Value::number(0.0)
     } else {
         Value::number(v)
@@ -118,7 +121,6 @@ struct At<'a> {
     sh: &'a Sheet,
     point: Point,
     finals: Vec<(f64, f64)>,
-    scale: f64,
 }
 
 impl At<'_> {
@@ -172,8 +174,7 @@ pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) ->
             (l, if r.rhs.is_some() { vals.next().unwrap_or(f64::NAN) } else { r.rhs_const })
         })
         .collect();
-    let scale = point.f.abs().max(1.0);
-    let at = At { inp, sh, point, finals, scale };
+    let at = At { inp, sh, point, finals };
     let (var_rows, con_rows, var_headers, con_headers) =
         if m.method == Method::Simplex { simplex_body(&mut ev, &at)? } else { nonlinear_body(&mut ev, &at)? };
     let mut out = Lines::new();
@@ -223,6 +224,11 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
+    // A shadow price (objective per unit of right side) and a reduced cost (objective per unit
+    // of a variable) are combinations of the objective coefficients, so a figure below 1E-9 of
+    // the largest coefficient is rounding noise. Allowable changes to a coefficient or a right
+    // side are ratios the tableau's own pivot tolerance (`EPS`) already bounds.
+    let noise = 1e-9 * cf.iter().map(|v| v.abs()).fold(0.0, f64::max).max(f64::MIN_POSITIVE);
     let shadow: Vec<f64> = (0..rows.len())
         .map(|i| {
             let col = tab.ident.get(i).copied().unwrap_or(usize::MAX);
@@ -246,7 +252,7 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
                 if pinned { (0.0, 0.0) } else { (min_ratio(dir.iter().map(|(v, d)| (*v, -d))), min_ratio(dir.iter().map(|(v, d)| (*v, *d)))) };
             let b = at.finals.get(i).map_or(f64::NAN, |f| f.1);
             let mut row = at.row_head(i, r);
-            row.extend([sens_num(shadow.get(i).copied().unwrap_or(0.0), at.scale), num(b), sens_num(increase, 1.0), sens_num(decrease, 1.0)]);
+            row.extend([sens_num(shadow.get(i).copied().unwrap_or(0.0), noise), num(b), sens_num(increase, EPS), sens_num(decrease, EPS)]);
             row
         })
         .collect();
@@ -270,7 +276,7 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             let increase = min_ratio(moves.iter().map(|(d, e)| (*d, -e)));
             let decrease = min_ratio(moves.iter().map(|(d, e)| (*d, *e)));
             let mut row = at.var_head(j, *c);
-            row.extend([sens_num(coef - used, at.scale), num(coef), sens_num(increase, 1.0), sens_num(decrease, 1.0)]);
+            row.extend([sens_num(coef - used, noise), num(coef), sens_num(increase, EPS), sens_num(decrease, EPS)]);
             row
         })
         .collect();
@@ -354,21 +360,22 @@ fn gradients(ev: &mut Evaluator, inp: &ReportInput) -> Result<(Vec<f64>, Vec<Vec
     Ok((df, dg))
 }
 
+/// The largest absolute entry of a gradient, at least the smallest positive number.
+fn gradient_size(g: &[f64]) -> f64 {
+    g.iter().map(|v| v.abs()).fold(0.0, f64::max).max(f64::MIN_POSITIVE)
+}
+
 /// Least squares on the free variables: ∇f = Σ λᵢ ∇gᵢ over the `active` rows. An inequality's
 /// multiplier has the sign that tightening it costs (λ ≥ 0 for `lhs ≤ rhs` when maximising); a
 /// row whose multiplier has the other sign isn't binding, so it leaves and the rest are solved
-/// again. The work is bounded by `budget` (see [`MULTIPLIER_WORK`]); past it the report is
-/// refused.
-fn multipliers(
-    rows: &[Row],
-    goal: Goal,
-    mut active: Vec<usize>,
-    free: &[usize],
-    (df, dg): (&[f64], &[Vec<f64>]),
-    scale: f64,
-    budget: u64,
-) -> Result<Vec<f64>> {
+/// again. A multiplier is objective per unit of its row, so its sign test compares λᵢ·|∇gᵢ|,
+/// the part of the objective's gradient the row explains, with the gradient's size; the
+/// objective's value plays no part. The work is bounded by `budget` (see
+/// [`MULTIPLIER_WORK`]); past it the report is refused.
+fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize], (df, dg): (&[f64], &[Vec<f64>]), budget: u64) -> Result<Vec<f64>> {
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+    let row_size = |i: usize| dg.get(i).map_or(f64::MIN_POSITIVE, |r| gradient_size(r));
+    let noise = 1e-6 * gradient_size(df);
     let goal_sign = if goal == Goal::Max { 1.0 } else { -1.0 };
     let mut lambda = vec![0.0; rows.len()];
     let mut work = 0u64;
@@ -394,7 +401,7 @@ fn multipliers(
                     Sense::Ge => -goal_sign,
                     Sense::Eq => return None,
                 };
-                (want * l < -1e-6 * scale).then_some((k, want * l))
+                (want * l * row_size(i) < -noise).then_some((k, want * l))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
         match wrong {
@@ -483,7 +490,7 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             v > inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY) + tol && v < inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY) - tol
         })
         .collect();
-    let lambda = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), at.scale, MULTIPLIER_WORK)?;
+    let lambda = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), MULTIPLIER_WORK)?;
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
     let reduced: Vec<f64> =
         (0..x.len()).map(|j| df.get(j).copied().unwrap_or(0.0) - lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum::<f64>()).collect();
@@ -491,13 +498,17 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     if !kkt_point(at, &ev.rows, &df, &reduced) {
         return Err(not_optimal());
     }
+    // Difference gradients are good to about 1E-6 of the objective gradient's size: a reduced
+    // gradient (a part of that gradient) below it is rounding, and so is a Lagrange multiplier
+    // (objective per unit of its row) whose λᵢ·|∇gᵢ| is.
+    let noise = 1e-6 * gradient_size(&df);
     let var_rows = m
         .vars
         .iter()
         .enumerate()
         .map(|(j, c)| {
             let mut row = at.var_head(j, *c);
-            row.push(sens_num(reduced.get(j).copied().unwrap_or(f64::NAN), at.scale * 1e3));
+            row.push(sens_num(reduced.get(j).copied().unwrap_or(f64::NAN), noise));
             row
         })
         .collect();
@@ -506,8 +517,9 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         .iter()
         .enumerate()
         .map(|(i, r)| {
+            let row_size = dg.get(i).map_or(f64::MIN_POSITIVE, |g| gradient_size(g));
             let mut row = at.row_head(i, r);
-            row.push(sens_num(lambda.get(i).copied().unwrap_or(0.0), at.scale * 1e3));
+            row.push(sens_num(lambda.get(i).copied().unwrap_or(0.0), noise / row_size));
             row
         })
         .collect();
@@ -529,12 +541,12 @@ mod tests {
         let dg: Vec<Vec<f64>> = (0..k).map(|i| (0..f).map(|j| if j == i % f { 1.0 } else { 0.0 }).collect()).collect();
         let df = vec![-1.0; f];
         let free: Vec<usize> = (0..f).collect();
-        let got = multipliers(&rows, Goal::Max, (0..k).collect(), &free, (&df, &dg), 1.0, MULTIPLIER_WORK);
+        let got = multipliers(&rows, Goal::Max, (0..k).collect(), &free, (&df, &dg), MULTIPLIER_WORK);
         assert!(got.is_err());
         // A small model within the limit still gets its multipliers: ∇f = (1, 2) on two
         // binding rows with unit gradients.
         let dg2 = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        let got = multipliers(&rows[..2], Goal::Max, vec![0, 1], &free[..2], (&[1.0, 2.0], &dg2), 1.0, MULTIPLIER_WORK).unwrap();
+        let got = multipliers(&rows[..2], Goal::Max, vec![0, 1], &free[..2], (&[1.0, 2.0], &dg2), MULTIPLIER_WORK).unwrap();
         assert_eq!(got, vec![1.0, 2.0]);
     }
 }
