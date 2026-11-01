@@ -15,6 +15,18 @@ pub struct CraftFont {
     pub bytes: &'static [u8],
 }
 
+impl CraftFont {
+    fn font_data(&self) -> FontData {
+        let mut data = FontData::from_static(self.bytes);
+        data.tweak.set_baseline_fallback(
+            self.scripts
+                .iter()
+                .any(|script| matches!(*script, "Hani" | "Hans" | "Hant" | "Jpan" | "Hira" | "Kana" | "Hrkt" | "Hang" | "Kore" | "Bopo")),
+        );
+        data
+    }
+}
+
 mod craft_fonts {
     use super::CraftFont;
     include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
@@ -191,7 +203,7 @@ pub(super) fn craft_font_faces() -> Vec<(String, &'static CraftFont)> {
 fn add_craft_fonts(fonts: &mut FontDefinitions) -> Vec<String> {
     let mut keys = Vec::new();
     for (key, font) in craft_font_faces() {
-        fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(font.bytes)));
+        fonts.font_data.insert(key.clone(), Arc::new(font.font_data()));
         keys.push(key);
     }
     keys
@@ -554,6 +566,21 @@ fn append_craft_faces(fonts: &mut FontDefinitions) {
 #[cfg(test)]
 mod font_binding_tests {
     use super::*;
+
+    #[test]
+    fn craft_cjk_scripts_opt_into_the_shared_baseline() {
+        use egui::epaint::text::FallbackAlign;
+        const CJK: &[&[&str]] = &[&["Hani", "Hans"], &["Hant", "Bopo"], &["Jpan", "Latn"], &["Hira", "Kana"], &["Hrkt", "Latn"], &["Hang", "Kore"]];
+        for scripts in CJK {
+            let font = CraftFont { family: "Synthetic", style: "Regular", scripts, bytes: epaint_default_fonts::UBUNTU_LIGHT };
+            assert_eq!(font.font_data().tweak.fallback_align, FallbackAlign::Baseline);
+        }
+        const OTHER: &[&[&str]] = &[&["Zsym", "Zsye"], &["Latn", "Arab"]];
+        for scripts in OTHER {
+            let font = CraftFont { family: "Synthetic", style: "Regular", scripts, bytes: epaint_default_fonts::UBUNTU_LIGHT };
+            assert_eq!(font.font_data().tweak.fallback_align, FallbackAlign::Center, "symbols and non-CJK keep their alignment");
+        }
+    }
 
     /// The families [`font_definitions`] always binds, whatever is installed.
     fn always_bound() -> Vec<String> {
