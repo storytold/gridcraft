@@ -845,7 +845,6 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
 mod tests {
     use super::*;
 
-
     /// Render the actual Backstage pages with the largest accepted provider list.
     fn recent_page_text(page: Page, height: f32) -> Vec<String> {
         let host = crate::file_providers::Host::default();
@@ -865,6 +864,7 @@ mod tests {
         app.ui.recent.push("Device-only.xlsx".into());
         app.backstage = Some(Backstage::new(page));
         let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
         let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, height))), ..Default::default() };
         let mut output = ctx.run_ui(input, |ui| show(&mut app, ui));
         output.textures_delta.clear(); // No renderer consumes texture uploads in this test.
