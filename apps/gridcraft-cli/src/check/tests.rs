@@ -420,6 +420,7 @@ fn json_schema_keys() {
             "condFormats",
             "validations",
             "charts",
+            "drawings",
             "comments",
             "hyperlinks",
             "pivots",
