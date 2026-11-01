@@ -911,6 +911,144 @@ fn nonlinear_sensitivity_report_is_the_same_whatever_constant_the_objective_adds
     assert!(close(&figures[1].0, at_bound, 1e-3) && close(&figures[1].1, free, 1e-3) && close(&figures[1].2, row, 1e-3), "{figures:?}");
 }
 
+#[test]
+fn simplex_sensitivity_of_a_variable_at_its_upper_bound() {
+    // max 3x + 2y with x + y ≤ 4 (a row), x ≤ 3 and y ≤ 5 (bounds on the variable cells, which
+    // have no row in the Constraints table): x = 3, y = 1, objective 11. The row's shadow price
+    // is y's coefficient 2 (y is basic in it). x, held at its upper bound, has reduced cost
+    // 3 − 1·2 = 1: one more unit of its bound adds 1. This is the convention of Frontline's
+    // "Excel Solver - Interpreting the Sensitivity Report" (solver.com): a variable's dual
+    // value is nonzero only at a bound, measures the objective's change per unit increase in
+    // the variable, and a bound on a variable cell has no row in the Constraints section, its
+    // reduced cost standing for the bound's shadow price. Its coefficient may rise without limit
+    // and fall by 1 (to 2, a tie with y): for a maximum's variable at its upper bound the
+    // Allowable Increase is 1E+30 and the Allowable Decrease the reduced cost, the mirror
+    // image of a variable at zero (`simplex_sensitivity_gives_the_dakota_furniture_report`).
+    // y's coefficient may rise by 1 (to 3, a tie with x) and fall by 2 (to 0, where the row's
+    // slack ties). The right side 4 may rise by 4 (y reaches its bound 5 at 8) and fall by 1
+    // (y reaches 0 at 3).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+2*A2"), ("C1", "=A1+A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 4", "A1 <= 3", "A2 <= 5"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[3.0, 1.0, 3.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0, 2.0, 1.0, 2.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[4.0, 2.0, 4.0, 4.0, 1.0], 1e-9), "{:?}", row("$C$1"));
+    assert_eq!((count_of(&s, &rep, "$A$1"), count_of(&s, &rep, "$A$2"), count_of(&s, &rep, "$C$1")), (1, 1, 1));
+}
+
+#[test]
+fn simplex_sensitivity_of_a_minimum_with_a_greater_row_and_a_bound() {
+    // min 2x + 3y with x + y ≥ 5 (a row) and x ≤ 2 (a bound): x = 2, y = 3, cost 13. The row's
+    // shadow price is 3: one more unit of right side costs one more y. x, at its upper bound,
+    // has reduced cost 2 − 1·3 = −1 (one more unit of its bound saves 1). Its coefficient may
+    // rise by 1 (to 3, a tie with y) and fall without limit: for a minimum's variable at its
+    // upper bound the Allowable Increase is the reduced cost's size and the Allowable Decrease
+    // 1E+30, the mirror image of a minimum's variable at zero (the reduced cost 1 with
+    // Allowable Increase 1E+30 and Allowable Decrease 1 in
+    // `sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges`). y's coefficient
+    // may rise without limit (x can take no more) and fall by 1 (to 2, a tie with x). The right
+    // side 5 may rise without limit and fall by 3 (y reaches 0 at 2).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=2*A1+3*A2"), ("C1", "=A1+A2")]);
+    let p = json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "constraints": ["C1 >= 5", "A1 <= 2"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[2.0, -1.0, 2.0, 1.0, 1e30], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[3.0, 0.0, 3.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[5.0, 3.0, 5.0, 1e30, 3.0], 1e-9), "{:?}", row("$C$1"));
+}
+
+#[test]
+fn simplex_sensitivity_gives_the_dakota_furniture_report() {
+    // Winston, Operations Research: Applications and Algorithms, the Dakota Furniture problem:
+    // max 60x₁ + 30x₂ + 20x₃ (desks, tables, chairs) with 8x₁ + 6x₂ + x₃ ≤ 48 (lumber),
+    // 4x₁ + 2x₂ + 1.5x₃ ≤ 20 (finishing) and 2x₁ + 1.5x₂ + 0.5x₃ ≤ 8 (carpentry): x = (2, 0, 8),
+    // revenue 280. For the basis {s₁, x₃, x₁} the rows of B⁻¹ are (1, 2, −8), (0, 2, −4) and
+    // (0, −0.5, 1.5), so the basic values are B⁻¹b = (24, 8, 2) and the shadow prices
+    // c_B·B⁻¹ = (0, 20, 60)·B⁻¹ = (0, 10, 10). Tables, at zero, have reduced cost
+    // 30 − (6·0 + 2·10 + 1.5·10) = −5: their price must rise by 5 before they are made, so the
+    // Allowable Increase is 5 and the Allowable Decrease 1E+30, as Excel's report shows a
+    // maximum's variable at zero. A change Δ in a basic variable's coefficient moves each
+    // nonbasic reduced cost by Δ times that variable's row of the final tableau; the tables'
+    // column there is B⁻¹(6, 2, 1.5) = (−2, −2, 1.25) and the slacks' columns are B⁻¹'s. Desks
+    // (row 3): −5 − 1.25Δ ≤ 0, −10 + 0.5Δ ≤ 0 and −10 − 1.5Δ ≤ 0 hold for −4 ≤ Δ ≤ 20. Chairs
+    // (row 2): −5 + 2Δ ≤ 0, −10 − 2Δ ≤ 0 and −10 + 4Δ ≤ 0 hold for −5 ≤ Δ ≤ 2.5. A right side
+    // moves the basic values along its column of B⁻¹: lumber (24 + Δ, 8, 2) ≥ 0 for Δ ≥ −24;
+    // finishing (24 + 2Δ, 8 + 2Δ, 2 − 0.5Δ) ≥ 0 for −4 ≤ Δ ≤ 4; carpentry
+    // (24 − 8Δ, 8 − 4Δ, 2 + 1.5Δ) ≥ 0 for −4/3 ≤ Δ ≤ 2.
+    let mut s = s();
+    set(
+        &mut s,
+        &[
+            ("A1", "0"),
+            ("A2", "0"),
+            ("A3", "0"),
+            ("B1", "=60*A1+30*A2+20*A3"),
+            ("C1", "=8*A1+6*A2+A3"),
+            ("C2", "=4*A1+2*A2+1.5*A3"),
+            ("C3", "=2*A1+1.5*A2+0.5*A3"),
+        ],
+    );
+    let p = json!({"objective": "B1", "variables": "A1:A3", "constraints": ["C1 <= 48", "C2 <= 20", "C3 <= 8"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    assert_eq!(r["objective"], 280.0, "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[2.0, 0.0, 60.0, 20.0, 4.0], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[0.0, -5.0, 30.0, 5.0, 1e30], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$A$3"), &[8.0, 0.0, 20.0, 2.5, 5.0], 1e-9), "{:?}", row("$A$3"));
+    assert!(close(&row("$C$1"), &[24.0, 0.0, 48.0, 1e30, 24.0], 1e-9), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[20.0, 10.0, 20.0, 4.0, 4.0], 1e-9), "{:?}", row("$C$2"));
+    assert!(close(&row("$C$3"), &[8.0, 10.0, 8.0, 2.0, 4.0 / 3.0], 1e-9), "{:?}", row("$C$3"));
+}
+
+#[test]
+fn nonlinear_sensitivity_signs_follow_the_goal() {
+    // A Lagrange multiplier is the derivative of the optimal objective with respect to the
+    // row's right side, and a reduced gradient that with respect to the variable's bound,
+    // whichever way the goal points. Frontline's "Excel Solver - Interpreting the Sensitivity
+    // Report" (solver.com) names a binding constraint's dual value its Lagrange multiplier and a
+    // variable's its reduced gradient, each the objective's change per unit increase in the
+    // constraint's bound or the variable, valid at the optimal point alone for a nonlinear
+    // model.
+    // min (x − 3)² + (y − 1)² with x + y ≤ b: the point of the line nearest (3, 1) is
+    // (2.5, 0.5) at b = 3, f*(b) = (4 − b)²/2 and df*/db = −(4 − b) = −1, the multiplier;
+    // maximising the negated objective reaches the same point with multiplier +1. Both
+    // variables are interior, so their reduced gradients are 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=(A1-3)^2+(A2-1)^2"), ("B2", "=0-(A1-3)^2-(A2-1)^2"), ("C1", "=A1+A2")]);
+    for (obj, goal, lambda) in [("B1", "min", -1.0), ("B2", "max", 1.0)] {
+        set(&mut s, &[("A1", "0"), ("A2", "0")]);
+        let p = json!({"objective": obj, "goal": goal, "variables": "A1:A2", "constraints": ["C1 <= 3"], "reports": ["sensitivity"]});
+        let r = s.execute("data.solver", p).unwrap();
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        assert!(close(&report_row(&s, &rep, "$A$1", &["D", "E"]), &[2.5, 0.0], 1e-3), "{goal}: {r}");
+        assert!(close(&report_row(&s, &rep, "$A$2", &["D", "E"]), &[0.5, 0.0], 1e-3), "{goal}: {r}");
+        assert!(close(&report_row(&s, &rep, "$C$1", &["D", "E"]), &[3.0, lambda], 1e-3), "{goal}: {r}");
+    }
+    // max −(x + 1)² − (y − 2)² with x + y ≤ 1 and x, y ≥ 0 mirrors the minimum in
+    // `sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers`: at (0, 1) the
+    // multiplier is +2 (−2 there) and x's reduced gradient −4 (4 there), since raising x from
+    // its bound lowers the maximum by 2(x + 1) + 2 = 4 per unit.
+    set(&mut s, &[("D1", "0.5"), ("D2", "0.5"), ("E1", "=0-(D1+1)^2-(D2-2)^2"), ("E2", "=D1+D2")]);
+    let p = json!({"objective": "E1", "goal": "max", "variables": "D1:D2", "constraints": ["E2 <= 1"], "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$D$1", &["D", "E"]), &[0.0, -4.0], 1e-3), "{r}");
+    assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, 0.0], 1e-3), "{r}");
+    assert!(close(&report_row(&s, &rep, "$E$2", &["D", "E"]), &[1.0, 2.0], 1e-3), "{r}");
+}
+
 fn formula(s: &Session, a1: &str) -> String {
     let d = s.doc().unwrap();
     d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
