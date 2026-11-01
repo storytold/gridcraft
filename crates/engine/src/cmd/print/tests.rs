@@ -1,3 +1,4 @@
+use gridcraft_model::{Sparkline, SparklineKind};
 use serde_json::json;
 
 use super::*;
@@ -14,6 +15,30 @@ fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
 }
 fn contains(hay: &[u8], needle: &str) -> bool {
     hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+#[test]
+fn right_to_left_sheets_mirror_link_rectangles_and_targets() {
+    fn numbers_after(pdf: &[u8], key: &str, n: usize) -> Vec<f32> {
+        let text = String::from_utf8_lossy(pdf);
+        let at = text.find(key).unwrap() + key.len();
+        text[at..].split([' ', ']']).filter_map(|t| t.parse().ok()).take(n).collect()
+    }
+    let mut s = s();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A2", "target": "Sheet1!B60"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B60", "input": "Destination"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    let axis = numbers_after(&ltr, "/MediaBox [", 4)[2];
+    let (l, r) = (numbers_after(&ltr, "/Rect [", 4), numbers_after(&rtl, "/Rect [", 4));
+    assert!((r[0] - (axis - l[2])).abs() < 0.01 && (r[2] - (axis - l[0])).abs() < 0.01, "{l:?} mirrors to {r:?}");
+    assert_eq!(r[1], l[1]);
+    let b_width = s.doc().unwrap().wb.active().unwrap().col_width(1);
+    let (lx, rx) = (numbers_after(&ltr, "/XYZ ", 1)[0], numbers_after(&rtl, "/XYZ ", 1)[0]);
+    let k = (l[2] - l[0]) / s.doc().unwrap().wb.active().unwrap().col_width(0);
+    assert!((rx - (axis - lx - b_width * k)).abs() < 0.01, "target {lx} mirrors to {rx}");
 }
 
 #[test]
@@ -37,6 +62,187 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let cropped = String::from_utf8_lossy(&cropped);
     assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
     assert!(!cropped.contains("/Dest ["));
+}
+
+#[test]
+fn unrenderable_arabic_does_not_overwrite_the_export_destination() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-failed-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, b"previous document").unwrap();
+    let result = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap()}));
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous document");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Text("مرحبا 😀".into()));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn wrapping_keeps_combining_marks_with_their_letters() {
+    let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+    let lines = wrap_lines(word, Font::Helvetica, 10.0, 7.0, TextDirection::Auto);
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), word);
+    assert!(lines.iter().all(|line| line.text == "a\u{301}"));
+}
+
+#[test]
+fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return; // Optional font input; required-font CI exercises this regression.
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+    s.execute("home.bold", json!({"range": "A2"})).unwrap();
+    s.execute("home.italic", json!({"range": "A3"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+    s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    // Keep the chart below the table in this synthetic workbook.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for chart in &mut wb.sheet_mut(0).unwrap().charts {
+            chart.anchor.cell = CellRef::new(8, 0);
+            chart.anchor.width = 500.0;
+            chart.anchor.height = 280.0;
+        }
+    }
+    let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/Subtype /Type3"));
+    for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+    }
+    let lines = wrap_lines("العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0, TextDirection::Auto);
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), "العَرَبِيَّةالعَرَبِيَّة");
+    assert!(lines.iter().all(|line| !line.text.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+    assert!(lines.iter().all(|line| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 20.0, &line.text, line.direction) <= 40.0));
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic PDF artifact: {}", path.display());
+}
+
+#[test]
+fn arabic_reading_order_export_artifact() {
+    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return;
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Context", "LeftToRight", "RightToLeft"], ["مرحبا ABC !", "مرحبا ABC !", "مرحبا ABC !"], ["123 مرحبا ABC", "123 مرحبا ABC", "123 مرحبا ABC"], ["(مرحبا) ABC", "(مرحبا) ABC", "(مرحبا) ABC"], ["مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا"]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:C", "chars": 24})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:5", "height": 60})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A2:C5", "size": 18})).unwrap();
+    for (range, order) in [("A2:A5", "Context"), ("B2:B5", "LeftToRight"), ("C2:C5", "RightToLeft")] {
+        s.execute("home.formatCells", json!({"range": range, "style": {"align": {"reading_order": order}}})).unwrap();
+    }
+    s.execute("home.wrapText", json!({"range": "A5:C5"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"gridlines": true, "header": "&CArabic cell reading order"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    for text in ["مرحبا ABC !", "123 مرحبا ABC", "(مرحبا) ABC"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")));
+    }
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-reading-order-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic reading-order PDF artifact: {}", path.display());
+}
+
+#[test]
+fn wrapped_lines_keep_the_paragraph_direction() {
+    let lines = wrap_lines("مرحبا ABC ! DEF ?\nLatin مرحبا !", Font::Helvetica, 10.0, 30.0, TextDirection::Auto);
+    let split = lines.iter().position(|l| l.text.starts_with("Latin")).unwrap();
+    assert!(split > 0);
+    assert!(lines[..split].iter().all(|l| l.direction == TextDirection::RightToLeft));
+    assert!(lines[split..].iter().all(|l| l.direction == TextDirection::LeftToRight));
+    let lines = wrap_lines("123 مرحبا ABC !", Font::Helvetica, 10.0, 30.0, TextDirection::Context.resolve("123 مرحبا ABC !"));
+    assert!(lines.iter().all(|l| l.direction == TextDirection::LeftToRight));
+}
+
+fn exported_text_x(pdf: &[u8], text: &str) -> f32 {
+    let pdf = String::from_utf8_lossy(pdf);
+    let marker = format!("({text}) Tj");
+    let before = &pdf[..pdf.find(&marker).unwrap()];
+    let matrix = before.lines().rev().find(|line| line.ends_with(" Tm")).unwrap();
+    matrix.split_whitespace().nth(4).unwrap().parse().unwrap()
+}
+
+#[test]
+fn cell_reading_order_and_conditional_context_reach_pdf() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "ABC !"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&rtl, "(! ABC) Tj"));
+    assert!(!contains(&rtl, "/Subtype /Type3"));
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": {"align": {"reading_order": "Context"}}}}))
+        .unwrap();
+    let (context, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&context, "(ABC !) Tj"));
+    assert!(!contains(&context, "(! ABC) Tj"));
+    assert!(exported_text_x(&rtl, "! ABC") > exported_text_x(&context, "ABC !"));
+}
+
+#[test]
+fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::Number(1.0));
+    sh.set_value(CellRef::new(1, 0), Value::Number(3.0));
+    sh.sparklines.push(Sparkline {
+        cell: CellRef::new(0, 1),
+        source: "A1:A2".into(),
+        kind: SparklineKind::Line,
+        color: Color::rgb(255, 0, 0),
+        markers: false,
+    });
+    let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
+    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+    wb.sheet_mut(0).unwrap().right_to_left = true;
+    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+    let points = |pdf: &[u8]| {
+        let pdf = String::from_utf8_lossy(pdf);
+        let after = pdf.split("1 0 0 RG\n").nth(1).unwrap();
+        let line = after.lines().nth(1).unwrap();
+        let values: Vec<_> = line.split_whitespace().collect();
+        (values[0].parse::<f32>().unwrap(), values[3].parse::<f32>().unwrap())
+    };
+    let (left0, left1) = points(&ltr);
+    let (right0, right1) = points(&rtl);
+    assert!(left0 < left1 && right0 > right1);
+    assert!((left0 + right0 - 612.0).abs() < 0.001);
+    assert!((left1 + right1 - 612.0).abs() < 0.001);
+}
+
+#[test]
+fn rtl_sheet_pdf_mirrors_cells_merges_headings_and_object_anchors() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["FIRST", "SECOND"], [null, "MERGED"]]})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "B2:C2"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:D5", "headings": true, "gridlines": true, "left": 0.8, "right": 0.4})).unwrap();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "B4", "width": 128, "height": 30, "text": "OBJECT"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    for label in ["FIRST", "SECOND", "MERGED", "A", "B", "C", "D", "1", "2", "OBJECT"] {
+        let left = exported_text_x(&ltr, label);
+        let right = exported_text_x(&rtl, label);
+        let font_size = if ["A", "B", "C", "D", "1", "2"].contains(&label) { 9.0 } else { 11.0 };
+        let width = gridcraft_pdf::text_width(Font::Helvetica, font_size, label);
+        assert!((left + right + width - 612.0).abs() < 0.01, "{label}: {left}, {right}, {width}");
+    }
+    assert!(exported_text_x(&ltr, "FIRST") < exported_text_x(&ltr, "SECOND"));
+    assert!(exported_text_x(&rtl, "FIRST") > exported_text_x(&rtl, "SECOND"));
+    for (name, pdf) in [("ltr", ltr), ("rtl", rtl)] {
+        let path = std::env::temp_dir().join(format!("gridcraft-print-direction-{name}-{}.pdf", std::process::id()));
+        std::fs::write(&path, pdf).unwrap();
+        eprintln!("Print direction PDF artifact: {}", path.display());
+    }
 }
 
 #[test]
@@ -520,11 +726,21 @@ fn bands_unit() {
     let b = bands(0, 2, |r| if r == 1 { 100.0 } else { 10.0 }, |_| 35.0, &[], 100);
     assert_eq!(b, vec![(0, 0), (1, 1), (2, 2)]);
     assert_eq!(bands(0, 1_000_000, |_| 10.0, |_| 5.0, &[], 3).len(), 3);
-    let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0);
+    let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0, TextDirection::Auto);
     assert!(w.len() >= 2);
-    assert!(w.iter().all(|l| gridcraft_pdf::text_width(Font::Helvetica, 10.0, l) <= 50.0 || !l.contains(' ')));
-    let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
+    assert!(w.iter().all(|l| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, &l.text, l.direction) <= 50.0 || !l.text.contains(' ')));
+    let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0, TextDirection::Auto);
     assert!(w.len() > 2);
+    let long = "abcdefghij".repeat(300);
+    let w = wrap_lines(&long, Font::Helvetica, 10.0, 50.0, TextDirection::Auto);
+    assert_eq!(w.iter().map(|l| l.text.as_str()).collect::<String>(), long);
+    assert!(w.iter().all(|l| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, &l.text, l.direction) <= 50.0));
+    let mut at = 0;
+    for l in &w[..w.len() - 1] {
+        let one_more = &long[at..at + l.text.len() + 1];
+        assert!(gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, one_more, l.direction) > 50.0, "each split is as long as fits");
+        at += l.text.len();
+    }
 }
 
 #[test]

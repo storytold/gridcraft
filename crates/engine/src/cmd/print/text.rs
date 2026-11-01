@@ -1,48 +1,73 @@
 use super::draw::{Block, Look, rgb_of};
-use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use super::{
+    Baseline, CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, ReadingOrder, Sheet, Style, StyleTable, TextDirection, Underline,
+    VAlign, Value,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
-/// Word-wraps `text` to `width` points.
-pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+pub(super) struct TextLine {
+    pub(super) text: String,
+    pub(super) direction: TextDirection,
+}
+
+/// Word-wraps paragraphs, keeping their base direction on every continuation line.
+pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32, direction: TextDirection) -> Vec<TextLine> {
     let mut out = Vec::new();
     for para in text.split('\n') {
+        let direction = direction.resolve(para);
+        let measured = |text: &str| gridcraft_pdf::text_width_with_direction(font, size, text, direction);
         let mut line = String::new();
         for word in para.split(' ') {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+            if line.is_empty() || measured(&cand) <= width {
                 line = cand;
             } else {
-                out.push(std::mem::take(&mut line));
+                out.push(TextLine { text: std::mem::take(&mut line), direction });
                 line = word.to_string();
             }
-            // Break a single over-long word by characters. The cut that fits is found by binary
-            // search (each try measures one candidate prefix), so an over-long word costs
-            // O(n log n) measurements instead of re-measuring the whole cut per character for
-            // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let chars: Vec<char> = line.chars().collect();
-                let (mut lo, mut hi) = (1usize, chars.len());
-                while lo < hi {
-                    let mid = lo + (hi - lo).div_ceil(2);
-                    let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
-                        lo = mid;
-                    } else {
-                        hi = mid - 1;
+            // Keep marks with their base letter. Each line's split is searched from its own start,
+            // so a long word costs about its emitted lines, each measured in its final joined form.
+            if measured(&line) > width {
+                let boundaries: Vec<usize> = line.grapheme_indices(true).map(|(i, _)| i).chain(std::iter::once(line.len())).collect();
+                let graphemes = boundaries.len().saturating_sub(1);
+                let piece =
+                    |from: usize, to: usize| boundaries.get(from).zip(boundaries.get(to)).and_then(|(&a, &b)| line.get(a..b)).unwrap_or_default();
+                let mut start = 0;
+                while graphemes - start > 1 {
+                    let left = graphemes - start;
+                    let fits = |n: usize| measured(piece(start, start + n)) <= width;
+                    let mut split = 1;
+                    while split < left && fits((split * 2).min(left)) {
+                        split = (split * 2).min(left);
+                    }
+                    if split == left {
+                        break;
+                    }
+                    let (mut low, mut high) = (split + 1, (split * 2).min(left) - 1);
+                    while low <= high {
+                        let mid = low + (high - low) / 2;
+                        if fits(mid) {
+                            split = mid;
+                            low = mid + 1;
+                        } else {
+                            high = mid - 1;
+                        }
+                    }
+                    out.push(TextLine { text: piece(start, start + split).to_string(), direction });
+                    start += split;
+                    if out.len() > 2000 {
+                        return out;
                     }
                 }
-                if lo == chars.len() {
-                    break;
-                }
-                out.push(chars[..lo].iter().collect());
-                line = chars[lo..].iter().collect();
+                line = piece(start, graphemes).to_string();
             }
             if out.len() > 2000 {
                 return out;
             }
         }
-        out.push(line);
+        out.push(TextLine { text: line, direction });
     }
     out
 }
@@ -51,11 +76,20 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
-fn text_align(align: HAlign, value: &Value) -> HAlign {
+fn text_direction(order: ReadingOrder) -> TextDirection {
+    match order {
+        ReadingOrder::Context => TextDirection::Context,
+        ReadingOrder::LeftToRight => TextDirection::LeftToRight,
+        ReadingOrder::RightToLeft => TextDirection::RightToLeft,
+    }
+}
+
+fn text_align(align: HAlign, value: &Value, right_to_left_text: bool) -> HAlign {
     match align {
         HAlign::General => match value {
             Value::Number(_) => HAlign::Right,
             Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ if right_to_left_text => HAlign::Right,
             _ => HAlign::Left,
         },
         HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
@@ -168,32 +202,46 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     if text.is_empty() {
         return;
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    let direction = text_direction(st.align.reading_order.unwrap_or_default()).resolve(&text);
+    let mut tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
         let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
-    let h_align = text_align(st.align.h, &v);
+    let h_align = text_align(st.align.h, &v, direction == TextDirection::RightToLeft && !sh.right_to_left);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
-    let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
-        (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
-        (false, _) => vec![text],
+    let lines: Vec<TextLine> = match (wrap, rotated) {
+        (true, false) => wrap_lines(&text, font, size, avail.max(size), direction),
+        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size), direction),
+        (true, true) => vec![TextLine { text: text.lines().next().unwrap_or_default().to_string(), direction }],
+        (false, _) => vec![TextLine { text, direction }],
     };
-    let line_h = size * 1.2;
+    let extents = lines
+        .iter()
+        .filter_map(|line| pg.text_vertical_extents_with_direction(font, size, &line.text, line.direction))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -207,7 +255,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
     pg.save();
-    pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
+    pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, (clip_r - clip_l).max(0.0), h);
     if rotated {
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
         // Wrapped lines stack rightward for upward text and leftward for downward text, so
@@ -218,23 +266,27 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
-            pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
+            let tw = gridcraft_pdf::text_width_with_direction(font, size, &t.text, t.direction);
+            let (sn, cs) = angle.sin_cos();
+            let (ascent, descent) = extents.unwrap_or((size * 0.8, size * 0.22));
+            let ox = if sh.right_to_left { b.mirror_axis - ox - tw * cs - (ascent - descent) * sn } else { ox };
+            pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, color, &t.text, t.direction);
         }
         pg.restore();
         return;
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
+        let stacked: String = lines.iter().map(|line| line.text.as_str()).collect();
+        let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
+        let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = gridcraft_pdf::text_width(font, size, ch);
+            pg.text_with_direction(Point::new(b.text_x(x + (w - cw) / 2.0, cw), yy), size, font, color, ch, direction);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -244,7 +296,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         return;
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = gridcraft_pdf::text_width_with_direction(font, size, &line.text, line.direction);
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -254,7 +306,8 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         if ly - size > y + h || ly < y - line_h {
             continue;
         }
-        pg.text(lx, ly, size, font, color, line);
+        let lx = b.text_x(lx, lw);
+        pg.text_with_direction(Point::new(lx, ly), size, font, color, &line.text, line.direction);
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);

@@ -32,6 +32,9 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
+        }
         if st.fill.pattern != PatternType::None {
             style.fill = st.fill;
         }
@@ -172,9 +175,20 @@ pub(super) struct Block<'a> {
     pub(super) ys: Vec<f32>,
     pub(super) k: f32,
     pub(super) scale: f32,
+    pub(super) mirror_axis: f32,
 }
 
 impl Block<'_> {
+    fn point_x(&self, x: f32) -> f32 {
+        if self.sh.right_to_left { self.mirror_axis - x } else { x }
+    }
+    pub(super) fn text_x(&self, x: f32, width: f32) -> f32 {
+        if self.sh.right_to_left { self.mirror_axis - x - width } else { x }
+    }
+    pub(super) fn drawn_rect(&self, r: RangeRef) -> (f32, f32, f32, f32) {
+        let (x, y, w, h) = self.rect(r);
+        (self.text_x(x, w), y, w, h)
+    }
     fn x(&self, col: u32) -> f32 {
         if col >= self.cols.0 && col <= self.cols.1 + 1 {
             return self.xs.get((col - self.cols.0) as usize).copied().unwrap_or(0.0);
@@ -251,15 +265,15 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         set
     };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     if gridlines {
         let grey = [0xB0, 0xB0, 0xB0];
         let lw = (0.35 * b.scale).clamp(0.1, 0.5);
         for x in &b.xs {
-            pg.stroke_line(*x, by, *x, by + bh, lw, grey);
+            pg.stroke_line(b.point_x(*x), by, b.point_x(*x), by + bh, lw, grey);
         }
         for y in &b.ys {
-            pg.stroke_line(bx, *y, bx + bw, *y, lw, grey);
+            pg.stroke_line(b.point_x(bx), *y, b.point_x(bx + bw), *y, lw, grey);
         }
     }
     // Cheap pre-filter: blank, unstyled cells outside tables and conditional formats draw nothing.
@@ -302,17 +316,17 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             continue;
         }
         if let Some(f) = l.fill {
-            pg.fill_rect(x, y, w, h, f);
+            pg.fill_rect(b.text_x(x, w), y, w, h, f);
         } else if merged && gridlines {
-            pg.fill_rect(x, y, w, h, [255, 255, 255]);
+            pg.fill_rect(b.text_x(x, w), y, w, h, [255, 255, 255]);
         }
         if merged && gridlines {
-            pg.rect_stroke(x, y, w, h, (0.35 * b.scale).clamp(0.1, 0.5), [0xB0, 0xB0, 0xB0]);
+            pg.rect_stroke(b.text_x(x, w), y, w, h, (0.35 * b.scale).clamp(0.1, 0.5), [0xB0, 0xB0, 0xB0]);
         }
         if let Some((frac, rgb, _)) = l.cf.as_ref().and_then(|cf| cf.bar) {
             let pad = 1.5 * b.k;
             let bwid = ((w - 2.0 * pad) * frac.clamp(0.0, 1.0)).max(0.0);
-            pg.fill_rect(x + pad, y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
+            pg.fill_rect(b.text_x(x + pad, bwid), y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
         }
     }
     // Borders.
@@ -329,12 +343,12 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             ),
             None => (bd.right, bd.bottom),
         };
-        draw_border(pg, &bd.top, b.wb, Point::new(x, y), Point::new(x + w, y), b.k);
-        draw_border(pg, &bottom, b.wb, Point::new(x, y + h), Point::new(x + w, y + h), b.k);
-        draw_border(pg, &bd.left, b.wb, Point::new(x, y), Point::new(x, y + h), b.k);
-        draw_border(pg, &right, b.wb, Point::new(x + w, y), Point::new(x + w, y + h), b.k);
-        draw_border(pg, &bd.diag_down, b.wb, Point::new(x, y), Point::new(x + w, y + h), b.k);
-        draw_border(pg, &bd.diag_up, b.wb, Point::new(x, y + h), Point::new(x + w, y), b.k);
+        draw_border(pg, &bd.top, b.wb, Point::new(b.point_x(x), y), Point::new(b.point_x(x + w), y), b.k);
+        draw_border(pg, &bottom, b.wb, Point::new(b.point_x(x), y + h), Point::new(b.point_x(x + w), y + h), b.k);
+        draw_border(pg, &bd.left, b.wb, Point::new(b.point_x(x), y), Point::new(b.point_x(x), y + h), b.k);
+        draw_border(pg, &right, b.wb, Point::new(b.point_x(x + w), y), Point::new(b.point_x(x + w), y + h), b.k);
+        draw_border(pg, &bd.diag_down, b.wb, Point::new(b.point_x(x), y), Point::new(b.point_x(x + w), y + h), b.k);
+        draw_border(pg, &bd.diag_up, b.wb, Point::new(b.point_x(x), y + h), Point::new(b.point_x(x + w), y), b.k);
     }
     // Text.
     for (c, l) in &looks {
@@ -343,9 +357,9 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             continue;
         }
         if let Some(picture) = sh.cell_pictures.get(c) {
-            draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
+            draw_cell_picture(pg, &picture.data, (b.text_x(x, w), y, w, h), b.k);
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
-            draw_checkbox(pg, (x, y, w, h), b.k, on);
+            draw_checkbox(pg, (b.text_x(x, w), y, w, h), b.k, on);
         } else {
             draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
         }
@@ -399,6 +413,8 @@ pub(super) struct PrintedBlock {
     pub(super) x: f32,
     pub(super) y: f32,
     pub(super) k: f32,
+    /// The page x that right-to-left sheets are mirrored about; `None` for left-to-right sheets.
+    pub(super) mirror_axis: Option<f32>,
 }
 
 /// PDF annotations are not affected by graphics clipping, so intersect each cell with its page
@@ -417,7 +433,7 @@ pub(super) fn draw_block_links(pg: &mut Page, b: &Block, page: usize, pending: &
         if x1 <= x0 || y1 <= y0 {
             continue;
         }
-        let rect = (x0, y0, x1 - x0, y1 - y0);
+        let rect = (b.text_x(x0, x1 - x0), y0, x1 - x0, y1 - y0);
         match crate::links::classify(&link.target) {
             crate::links::LinkKind::External(uri) => pg.link_uri(rect.0, rect.1, rect.2, rect.3, &uri),
             crate::links::LinkKind::Internal(target) if !link.external => {
@@ -436,6 +452,10 @@ pub(super) fn printed_target(wb: &Workbook, blocks: &[PrintedBlock], source_shee
     let sh = wb.sheet(sheet)?;
     let block = blocks.iter().find(|b| b.sheet == sheet && (b.rows.0..=b.rows.1).contains(&cell.row) && (b.cols.0..=b.cols.1).contains(&cell.col))?;
     let x = block.x + (sh.col_left(cell.col) - sh.col_left(block.cols.0)) as f32 * block.k;
+    let x = match block.mirror_axis {
+        Some(axis) => axis - x - (sh.col_left(cell.col.saturating_add(1)) - sh.col_left(cell.col)) as f32 * block.k,
+        None => x,
+    };
     let y = block.y + (sh.row_top(cell.row) - sh.row_top(block.rows.0)) as f32 * block.k;
     Some((block.page, x, y))
 }
@@ -452,11 +472,11 @@ pub(super) fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads
             if x1 - x0 <= 0.0 {
                 continue;
             }
-            pg.fill_rect(x0, y, x1 - x0, size.1, fill);
-            pg.rect_stroke(x0, y, x1 - x0, size.1, lw, line);
+            pg.fill_rect(b.text_x(x0, x1 - x0), y, x1 - x0, size.1, fill);
+            pg.rect_stroke(b.text_x(x0, x1 - x0), y, x1 - x0, size.1, lw, line);
             let t = gridcraft_core::col_to_letters(col);
             let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
-            pg.text(x0 + (x1 - x0 - tw) / 2.0, y + size.1 / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
+            pg.text(b.text_x(x0 + (x1 - x0 - tw) / 2.0, tw), y + size.1 / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
     if row_heads {
@@ -466,11 +486,11 @@ pub(super) fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads
             if y1 - y0 <= 0.0 {
                 continue;
             }
-            pg.fill_rect(x, y0, size.0, y1 - y0, fill);
-            pg.rect_stroke(x, y0, size.0, y1 - y0, lw, line);
+            pg.fill_rect(b.text_x(x, size.0), y0, size.0, y1 - y0, fill);
+            pg.rect_stroke(b.text_x(x, size.0), y0, size.0, y1 - y0, lw, line);
             let t = (row + 1).to_string();
             let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
-            pg.text(x + (size.0 - tw) / 2.0, y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
+            pg.text(b.text_x(x + (size.0 - tw) / 2.0, tw), y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
 }
@@ -501,5 +521,5 @@ pub(super) fn make_block<'a>(
         acc += sh.row_height(r) * k;
         ys.push(acc);
     }
-    Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale }
+    Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale, mirror_axis: lay.page_w }
 }
