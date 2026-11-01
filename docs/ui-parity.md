@@ -196,7 +196,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | Arrow keys, including Shift and Ctrl/Cmd combinations, keep a primary fill drag's source paired with its target; the preview and release use the original range, and ordinary arrow navigation resumes after release (#2598) |
+| 2026-11-01 | minor | Starting a fill-handle drag takes keyboard focus from ribbon text boxes; arrow keys, including Shift and Ctrl/Cmd combinations, keep a primary fill drag's source paired with its target. The preview and release use the original range, and ordinary arrow navigation resumes after release (#2598) |
 | 2026-11-01 | minor | Fill previews pause for the keyboard sheet-navigation frame, then resume using the new sheet's geometry and protection; release still commits the current sheet's predicted fill (#2598) |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |

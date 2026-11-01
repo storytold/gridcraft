@@ -123,6 +123,51 @@ fn fill_drag_previews_endpoint_without_changing_the_workbook() {
 }
 
 #[test]
+fn fill_handle_takes_focus_from_the_font_size_box() {
+    let mut failures = Vec::new();
+    for key in [egui::Key::ArrowLeft, egui::Key::ArrowRight] {
+        let mut h = harness(one_two);
+        h.key_press(egui::Key::F10);
+        h.run_steps(2);
+        for keytip in [egui::Key::H, egui::Key::F, egui::Key::S] {
+            h.input_mut().events.extend([
+                Event::Key { key: keytip, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+                Event::Text(keytip.name().to_ascii_lowercase()),
+            ]);
+            h.run_steps(2);
+        }
+        h.run_steps(3);
+        let field = egui::Id::unique("gridcraft.font_size_box");
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "the real Font Size keytip focuses its text box");
+        let undo = h.state().session.active().unwrap().undo.len();
+        let (start, end) = (corner(&h, "B2"), center(&h, "B6"));
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        h.run_steps(3);
+        let grid_focused = h.ctx.memory(|m| m.focused()).is_some_and(|id| id != field);
+        // Losing focus can itself collapse the selection; only the later arrow must leave it alone.
+        let cursor = egui::TextEdit::load_state(&h.ctx, field).unwrap().cursor.char_range();
+        h.key_press(key);
+        h.run_steps(2);
+        let cursor_after = egui::TextEdit::load_state(&h.ctx, field).unwrap().cursor.char_range();
+        let source = selection(&h);
+        let preview = h.query_by_label("6").is_some();
+        if key == egui::Key::ArrowLeft
+            && let Ok(path) = std::env::var("GRIDCRAFT_FILL_FOCUS_SCREENSHOT")
+        {
+            h.render().unwrap().save(path).unwrap();
+        }
+        release(&mut h, end, PointerButton::Primary);
+        let committed = values(&h, &["B3", "B4", "B5", "B6"]) == [n(3.0), n(4.0), n(5.0), n(6.0)];
+        let once = h.state().session.active().unwrap().undo.len() == undo + 1;
+        if !grid_focused || cursor_after != cursor || source != "B1:B2" || !preview || !committed || !once {
+            failures.push(format!("{key:?}: grid_focused={grid_focused}, cursor={cursor:?} -> {cursor_after:?}, source={source}, preview={preview}, committed={committed}, once={once}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn arrows_keep_the_fill_source_and_preview_until_release() {
     let mut failures = Vec::new();
     for key in [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::ArrowLeft, egui::Key::ArrowRight] {

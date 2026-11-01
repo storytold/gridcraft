@@ -452,6 +452,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     }
     if on_handle(p) {
         app.grid.drag = Drag::Fill { target: None, menu: resp.drag_started_by(egui::PointerButton::Secondary) };
+        resp.request_focus();
         return;
     }
     if on_cur_border(p) && resp.drag_started() {
