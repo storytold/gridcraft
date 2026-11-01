@@ -68,6 +68,139 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn whole_row_references_intersect_implicitly_in_scalar_contexts() {
+    // #3030: `=-1:30` in Excel shows one value (implicit intersection); it used to
+    // spill a used-range-sized array over the neighbours, with #SPILL!/#CIRC!.
+    let mut t = T::new();
+    t.set("B2", "5");
+    t.set("A3", "9");
+    // The formula sits inside the band, so the intersection is its own cell: blank,
+    // negated to 0. Nothing spills into the neighbours.
+    t.set("B3", "=-1:30");
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("A3"), Value::Number(9.0));
+    assert_eq!(t.get("B2"), Value::Number(5.0));
+    assert_eq!(t.get("C3"), Value::Empty);
+    assert_eq!(t.get("B4"), Value::Empty);
+
+    // A one-row band intersects at the formula's column, wherever the formula sits.
+    t.set("C1", "7");
+    t.set("C5", "=-1:1");
+    assert_eq!(t.get("C5"), Value::Number(-7.0));
+    assert_eq!(t.get("D5"), Value::Empty);
+
+    // Both sides of a binary operator, and the left side of a folded chain.
+    t.set("C6", "=1+1:1");
+    assert_eq!(t.get("C6"), Value::Number(8.0));
+    t.set("C7", "=1:1+1");
+    assert_eq!(t.get("C7"), Value::Number(8.0));
+
+    // Pin the current below-band policy, not a measured nonblank Excel result:
+    // #3030 observed only zero for empty data at B40.
+    t.set("B30", "4");
+    t.set("B40", "=-1:30");
+    assert_eq!(t.get("B40"), Value::Number(-4.0));
+
+    // The reporter's exact setup, with a bare `1:30` sitting in B2: both
+    // negations show 0 and neither is circular.
+    let mut t = T::new();
+    t.set("B2", "=1:30");
+    t.set("B3", "=-1:30");
+    t.set("B40", "=-1:30");
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("B40"), Value::Number(0.0));
+
+    // Bounded ranges still spill as arrays, exactly as before.
+    let mut t = T::new();
+    t.set("A1", "10");
+    t.set("A2", "20");
+    t.set("A3", "30");
+    t.set("B1", "=-A1:A3");
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("B3")), (-10.0, -20.0, -30.0));
+}
+
+#[test]
+fn whole_row_intersection_covers_above_inside_and_below_a_single_row() {
+    // These expectations pin GridCraft's provisional clamp policy; they do not
+    // establish which nonempty cell Excel selects outside the band (#3030).
+    for (at, expected) in [("C1", -7.0), ("C2", 0.0), ("C5", -7.0)] {
+        let mut t = T::new();
+        t.set("C2", "7");
+        t.set(at, "=-2:2");
+        assert_eq!(t.get(at), Value::Number(expected), "single row, formula at {at}");
+        assert_eq!(t.get("D1"), Value::Empty);
+        assert_eq!(t.get("D2"), Value::Empty);
+        assert_eq!(t.get("D5"), Value::Empty);
+        t.set("F1", "=-7+2");
+        assert_eq!(t.get("F1"), Value::Number(-5.0), "non-reference operands retain scalar arithmetic");
+    }
+}
+
+#[test]
+fn whole_row_operators_keep_arrays_inside_functions() {
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("B1", "3");
+    for (formula, expected) in [
+        ("=SUMPRODUCT(1:1*2)", 10.0),
+        ("=SUM(1:1*2)", 10.0),
+        ("=SUMPRODUCT(-1:1)", -5.0),
+        ("=SUMPRODUCT(IF(TRUE,1:1*2,0))", 10.0),
+        ("=LET(x,1:1,SUMPRODUCT(x*2))", 10.0),
+        ("=SUMPRODUCT(LAMBDA(x,x*2)(1:1))", 10.0),
+    ] {
+        t.set("C2", formula);
+        assert_eq!(t.get("C2"), Value::Number(expected), "{formula}");
+        assert_eq!(t.get("D2"), Value::Empty, "the aggregate does not spill");
+    }
+}
+
+#[test]
+fn a_direct_lambda_keeps_whole_row_array_evaluation() {
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("B1", "3");
+    t.set("A2", "=LAMBDA(x,x*2)(1:1)");
+    assert_eq!(t.get("A2"), Value::Number(4.0));
+    assert_eq!(t.get("B2"), Value::Number(6.0), "the lambda result remains an array");
+}
+
+#[test]
+fn whole_row_scalar_context_is_restored_after_a_function() {
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("B1", "3");
+    t.set("C1", "4");
+    t.set("C2", "=SUM(1:1*2)+1:1");
+    assert_eq!(t.get("C2"), Value::Number(22.0));
+    assert_eq!(t.get("D2"), Value::Empty);
+    t.set("C2", "=SUMPRODUCT(@1:1*2)");
+    assert_eq!(t.get("C2"), Value::Number(8.0), "explicit @ still intersects inside a function");
+}
+
+#[test]
+fn whole_row_self_intersection_does_not_reuse_cached_results() {
+    let mut t = T::new();
+    t.set("B3", "=1:30+1");
+    assert_eq!(t.get("B3"), Value::Number(1.0));
+    for _ in 0..3 {
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.get("B3"), Value::Number(1.0), "full recalculation must be stable");
+    }
+    t.wb.sheet_mut(0).unwrap().cells.get_mut(c("B3")).unwrap().value = Value::Number(777.0);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B3"), Value::Number(1.0), "a stale imported result does not feed back");
+    t.set("B4", "=B4+1");
+    assert_eq!(t.get("B4"), Value::Error(CellError::Circ), "ordinary self references remain circular");
+    t.wb.sheets.push(gridcraft_model::Sheet::new("Other").into());
+    t.wb.sheet_mut(1).unwrap().cells.set(c("A1"), Cell::value(Value::Number(9.0)));
+    t.wb.sheet_mut(1).unwrap().cells.set(c("B3"), Cell::formula(Formula::new("=A1+1")));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("A1")), (1, c("B3"))]);
+    t.set("B3", "=-Other!1:30");
+    assert_eq!(t.get("B3"), Value::Number(-10.0), "the same address on another sheet is evaluated normally");
+}
+
+#[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
     let mut t = T::new();

@@ -139,6 +139,9 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Function arguments and bodies keep their array evaluation; the whole-row
+    /// scalar-operator exception applies outside this context.
+    in_function: bool,
 }
 
 struct FnCtx<'a, 'h> {
@@ -187,6 +190,7 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            in_function: self.ev.in_function,
         };
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
         // The child's spend counts against this cell's budget.
@@ -210,12 +214,42 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, in_function: false }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
     pub fn value(&mut self, e: &Expr) -> Value {
         let ev = self.eval(e);
+        self.deref(ev)
+    }
+
+    /// Evaluates one operand of a scalar operator (a unary operator, or one side of a
+    /// binary operator). A whole-row reference (`1:30`, `2:2`) spans the sheet's full
+    /// width, so read as an array it can only spill sideways over the formula's
+    /// neighbours; Excel instead reduces it by implicit intersection in a scalar
+    /// context. The intersection takes the band's cell in the formula's own column,
+    /// on the formula's row clamped into the band. This below-band selection remains
+    /// provisional: #3030 observed zero for empty data, without measuring which
+    /// nonempty cell Excel selects. When that cell is the
+    /// formula's own cell, it reads as empty, as on its first calculation. A cached
+    /// formula result must not feed back into the next recalculation. This narrow
+    /// exception is disabled within functions and LAMBDA invocations. Every other operand goes through
+    /// [`Evaluator::deref`] unchanged, so bounded ranges and whole columns keep
+    /// their array behaviour (`=-A1:A3` and `SUMPRODUCT((A:A=1)*B:B)` still work
+    /// elementwise).
+    pub fn operand_value(&mut self, e: &Expr) -> Value {
+        let ev = self.eval(e);
+        if !self.in_function
+            && let Ev::R(areas) = &ev
+            && let [a] = areas.as_slice()
+        {
+            let r = a.range;
+            if r.start.col == 0 && r.end.col == MAX_COLS - 1 {
+                let row = self.at.row.clamp(r.start.row, r.end.row);
+                let cell = CellRef::new(row, self.at.col);
+                return if a.sheet == self.sheet && cell == self.at { Value::Empty } else { self.host.cell_value(a.sheet, cell) };
+            }
+        }
         self.deref(ev)
     }
 
@@ -342,16 +376,26 @@ impl<'h> Evaluator<'h> {
             Expr::Struct(s) => self.structured(s),
             Expr::Unary(op, x) => self.unary(*op, x),
             Expr::Binary(op, a, b) => self.binary(*op, a, b),
-            Expr::Call(name, args) => self.call(name, args),
-            Expr::Invoke(callee, args) => {
-                let f = self.eval(callee);
+            Expr::Call(name, args) => self.with_function_context(|ev| ev.call(name, args)),
+            Expr::Invoke(callee, args) => self.with_function_context(|ev| {
+                let f = ev.eval(callee);
                 match f {
-                    Ev::L(l) => self.apply_lambda(&l, args),
+                    Ev::L(l) => ev.apply_lambda(&l, args),
                     Ev::V(Value::Error(x)) => err(x),
                     _ => err(CellError::Value),
                 }
-            }
+            }),
         }
+    }
+
+    /// Keep function arguments and bodies in their existing array context, then
+    /// restore the caller's context before evaluating a neighbouring operand.
+    fn with_function_context(&mut self, f: impl FnOnce(&mut Self) -> Ev) -> Ev {
+        let previous = self.in_function;
+        self.in_function = true;
+        let result = f(self);
+        self.in_function = previous;
+        result
     }
 
     fn name(&mut self, n: &str) -> Ev {
@@ -505,7 +549,7 @@ impl<'h> Evaluator<'h> {
                 l => l,
             };
         }
-        let v = self.value(x);
+        let v = self.operand_value(x);
         let sys = self.host.workbook().date_system;
         Ev::V(map_unary(
             &v,
@@ -600,9 +644,9 @@ impl<'h> Evaluator<'h> {
                     rest.push((*o, r.as_ref()));
                     left = l.as_ref();
                 }
-                let mut acc = self.value(left);
+                let mut acc = self.operand_value(left);
                 while let Some((o, r)) = rest.pop() {
-                    let y = self.value(r);
+                    let y = self.operand_value(r);
                     acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)
