@@ -251,6 +251,60 @@ fn hyperlinks_past_the_cell_cap_are_reported() {
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
 }
 
+/// #3066: whole-column conditional formats cover a million cells each, but they are one range
+/// entry. A sheet with many of them (as real workbooks have) keeps every rule, warning-free.
+#[test]
+fn whole_column_conditional_formats_are_all_kept() {
+    let parts = [("xl/styles.xml", r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#)];
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let rule = |p: usize| format!(r#"<cfRule type="cellIs" priority="{p}" operator="greaterThan"><formula>{p}</formula></cfRule>"#);
+    let mut cf = String::new();
+    let mut p = 0;
+    for sqref in ["H1:H1048576", "L1:L2271 L2275:L1048576", "A:A", "1:1", "A1:XFD1048576"] {
+        for _ in 0..5 {
+            p += 1;
+            cf.push_str(&format!(r#"<conditionalFormatting sqref="{sqref}">{}{}</conditionalFormatting>"#, rule(p), rule(p + 100)));
+        }
+    }
+    let body = format!(r#"<sheetData><row r="5"><c r="H5"><v>50</v></c></row></sheetData>{cf}"#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &parts, rels, "")).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 50);
+    assert_eq!(s.cond_formats[0].ranges, vec![gridcraft_core::RangeRef::parse("H1:H1048576").unwrap()]);
+    assert_eq!(s.cond_formats[10].ranges.len(), 2);
+    // The ranges survive a save untouched, written as one range each, not expanded.
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    // Whole columns and rows are written in their short form.
+    for sqref in ["H:H", "L1:L2271 L2275:L1048576", "A:A", "1:1", "A1:XFD1048576"] {
+        assert_eq!(xml.matches(&format!("sqref=\"{sqref}\"")).count(), 10, "{sqref}: {xml}");
+    }
+    let (back, rep) = read_xlsx(&saved).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let ranges = |s: &gridcraft_model::Sheet| s.cond_formats.iter().map(|c| c.ranges.clone()).collect::<Vec<_>>();
+    assert_eq!(ranges(back.sheet(0).unwrap()), ranges(s));
+}
+
+/// The hostile shape the conditional-format budget guards: one element with a long range list and
+/// many rules, each rule copying the list. Rules past the budget of kept ranges are dropped, with
+/// a warning, instead of costing rules × ranges of memory.
+#[test]
+fn conditional_format_range_copies_are_capped() {
+    let parts = [("xl/styles.xml", r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#)];
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let sqref = (1..=100_000).map(|r| format!("A{r}")).collect::<Vec<_>>().join(" ");
+    let rules = (1..=50).map(|p| format!(r#"<cfRule type="containsBlanks" priority="{p}"/>"#)).collect::<String>();
+    let body = format!(r#"<sheetData/><conditionalFormatting sqref="{sqref}">{rules}</conditionalFormatting>"#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &parts, rels, "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    // 40 copies of 100,000 ranges fill the 4,000,000 budget exactly.
+    assert_eq!(s.cond_formats.len(), 40);
+    assert!(s.cond_formats.iter().all(|c| c.ranges.len() == 100_000));
+    assert!(rep.warnings.iter().any(|w| w.contains("conditional formats past 4000000 kept ranges were dropped")), "{:?}", rep.warnings);
+}
+
 /// Formula text built to overflow a recursive parser or tree walk (a million `%`, a 200,000-term
 /// sum): the cells keep their formula text and cached value, nothing overflows the stack.
 #[test]
