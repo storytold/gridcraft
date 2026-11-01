@@ -383,6 +383,14 @@ impl<'h> Evaluator<'h> {
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
         if !a.range.is_single() {
+            // Adding the block's remembered sum to anything but +0.0 would add in another order.
+            if acc.sum.to_bits() == 0
+                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
+            {
+                acc.sum = sum;
+                acc.count = acc.count.saturating_add(count);
+                return Ok(());
+            }
             let mut error = None;
             let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,
