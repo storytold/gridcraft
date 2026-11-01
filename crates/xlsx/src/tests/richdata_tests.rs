@@ -196,6 +196,18 @@ fn pictures_roundtrip_across_sheets_with_and_without_dynamic_arrays() {
 }
 
 #[test]
+fn a_picture_cells_long_fallback_text_is_not_counted() {
+    // A picture in a cell is kept as the picture; its fallback text isn't kept or saved, so a long
+    // one isn't named in the long-text warning.
+    let mut parts = independent_parts(false);
+    let long = "a".repeat(gridcraft_core::MAX_CELL_CHARS as usize + 1);
+    replace(&mut parts, "sheets/data.xml", r#"t="e" vm="2"><v>#VALUE!</v>"#, &format!(r#"t="inlineStr" vm="2"><is><t>{long}</t></is>"#));
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+    assert!(!report.warnings.iter().any(|w| w.contains("longer than Excel's")), "{:?}", report.warnings);
+}
+
+#[test]
 fn broken_picture_references_keep_the_scalar_fallback_with_warnings() {
     for (part, from, to) in [
         ("sheets/data.xml", "vm=\"2\"", "vm=\"999\""),
