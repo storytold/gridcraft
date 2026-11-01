@@ -161,15 +161,16 @@ impl EditState {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
-        let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let word: String = before.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        // Fold as formula names do: `zä` finds `ZÄHLENWENN`, `KGRÖẞ` finds `KGRÖSSTE`.
+        let fold = gridcraft_engine::formula::fold_name;
+        let key = fold(&word);
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
-        if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
+        self.autocomplete = names.iter().filter(|n| fold(n).starts_with(&key)).take(12).cloned().collect();
+        if self.autocomplete.len() == 1 && self.autocomplete.first().is_some_and(|n| fold(n) == key) {
             self.autocomplete.clear();
         }
         self.ac_index = self.ac_index.min(self.autocomplete.len().saturating_sub(1));
@@ -180,7 +181,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| is_name_char(*c)).map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -209,8 +210,7 @@ impl EditState {
             return false;
         }
         let head = before.strip_suffix('(').unwrap_or(before);
-        let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let name: String = head.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
@@ -255,18 +255,11 @@ impl EditState {
                 '{' | '[' => depth -= 1,
                 '(' => {
                     if depth == 0 {
-                        let name: String = chars[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
+                        let name: String = chars[..i].iter().rev().take_while(|c| is_name_char(**c)).collect::<String>().chars().rev().collect();
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        return Some((name.to_uppercase(), arg));
                     }
                     depth -= 1;
                 }
@@ -279,11 +272,12 @@ impl EditState {
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
-/// same colour), for colouring the editor and outlining ranges on the grid.
-pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+/// same colour), for colouring the editor and outlining ranges on the grid. `locale` is the edit
+/// syntax, so `=A1+#WERT!` in German still finds A1.
+pub fn formula_refs(text: &str, locale: gridcraft_engine::formula::FormulaLocale) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
     let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
     let offset = text.len() - body.len();
-    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
+    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize_locale(body, locale) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     let mut i = 0;
@@ -385,6 +379,11 @@ pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, ty
 
 /// The part of `full` after the `typed` prefix, counted in characters: case folding can change
 /// a character's byte length ("ß" is two bytes, "ẞ" three).
+/// A character of a function name being typed; localized names have letters such as `Ä`.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '.' || c == '_'
+}
+
 pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)
@@ -438,12 +437,43 @@ mod tests {
     }
 
     #[test]
+    fn autocomplete_takes_names_with_umlauts() {
+        let names: Vec<String> = ["ZÄHLENWENN", "ZÄHLENWENNS", "ZEILE", "KGRÖSSTE"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=KGRÖẞ".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, ["KGRÖSSTE"]);
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=1+zä".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, ["ZÄHLENWENN", "ZÄHLENWENNS"]);
+        assert!(e.accept_autocomplete());
+        assert_eq!(e.text, "=1+ZÄHLENWENN(");
+        // The argument hint names the whole function, umlaut included.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=zählenwenn(A1:A9;".into(), true, false);
+        e.locale = gridcraft_engine::formula::FormulaLocale::De;
+        assert_eq!(e.current_function(), Some(("ZÄHLENWENN".into(), 1)));
+        // Ctrl+Shift+A after it inserts COUNTIF's arguments with German separators.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=zählenwenn(".into(), true, false);
+        e.locale = gridcraft_engine::formula::FormulaLocale::De;
+        assert!(e.insert_argument_names(crate::i18n::Language::En));
+        assert_eq!(e.text, "=zählenwenn(range;criteria)");
+    }
+
+    #[test]
     fn ref_spans() {
-        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
+        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4", Default::default());
         assert_eq!(r.len(), 4);
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
         assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn ref_spans_follow_the_edit_syntax() {
+        use gridcraft_engine::formula::FormulaLocale;
+        // A German error value does not hide the references around it.
+        let r = formula_refs("=A1+#WERT!+SUMME(B2:C3;1,5)", FormulaLocale::De);
+        assert_eq!(r.iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["A1", "B2:C3"]);
+        assert!(formula_refs("=A1+#WERT!", FormulaLocale::En).is_empty());
     }
 
     #[test]
@@ -458,7 +488,7 @@ mod tests {
 
     #[test]
     fn whole_row_and_column_ref_spans() {
-        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)", Default::default());
         assert_eq!(refs.len(), 4);
         assert_eq!(refs[0].2.a1(), "C:C");
         assert_eq!(refs[1].2.a1(), "4:6");
@@ -473,7 +503,7 @@ mod tests {
         edit.insert_ref("C:C");
         edit.append_ref("E:E");
         assert_eq!(edit.text, "=SUM(C:C,E:E");
-        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(formula_refs(&edit.text, edit.locale).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
         assert_eq!(edit.point, Some((9, 12)));
         assert!(edit.can_point());
     }
