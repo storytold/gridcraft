@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::json;
 
 use super::*;
@@ -580,4 +582,170 @@ fn checkbox_cells_print_as_boxes_not_true_false() {
     assert_eq!(text.matches("(TRUE) Tj").count(), 1, "the checked box printed as TRUE");
     assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
     assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
+}
+
+/// #3016's workbook: Sheet1 holds A1:A50 with a page break every 10 rows (5 pages), sheet Two
+/// A1:A30 (3 pages), both with the footer "Page &P of &N". Each cell names its sheet, page and
+/// row (`S1P2R11`).
+fn paged_book() -> Session {
+    let mut s = s();
+    let labels =
+        |sheet: u32, rows: u32| -> Vec<Vec<Json>> { (1..=rows).map(|r| vec![json!(format!("S{sheet}P{}R{r}", (r - 1) / 10 + 1))]).collect() };
+    s.execute("range.setValues", json!({"range": "A1", "values": labels(1, 50)})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [11, 21, 31, 41], "footer": "&CPage &P of &N"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": labels(2, 30)})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [11, 21], "footer": "&CPage &P of &N"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s
+}
+
+/// Each page of a PDF as (the sheet and page its cells name, its footer): `("S1P2", "Page 2 of
+/// 5")`. Pages are the content streams in order (one per page; the workbook has no pictures).
+fn printed_pages(pdf: &[u8]) -> Vec<(String, String)> {
+    let text = String::from_utf8_lossy(pdf);
+    let chunks: Vec<&str> = text.split("endstream").collect();
+    let streams = chunks.get(..chunks.len().saturating_sub(1)).unwrap_or_default();
+    streams
+        .iter()
+        .map(|page| {
+            let shown: Vec<&str> = page.lines().filter_map(|l| l.strip_prefix('(')?.strip_suffix(") Tj")).collect();
+            let cells: BTreeSet<&str> = shown.iter().filter(|t| t.starts_with('S')).filter_map(|t| t.split_once('R').map(|(sp, _)| sp)).collect();
+            assert_eq!(cells.len(), 1, "a page shows the cells of one printed page: {shown:?}");
+            let footer = shown.iter().find(|t| t.starts_with("Page ")).copied().unwrap_or_default();
+            (cells.into_iter().next().unwrap_or_default().to_string(), footer.to_string())
+        })
+        .collect()
+}
+
+fn pages_of(s: &mut Session, cmd: &str, p: Json) -> Vec<(String, String)> {
+    let r = s.execute(cmd, p.clone()).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
+    let pdf = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let pages = printed_pages(&pdf);
+    assert_eq!(r["pages"].as_u64(), Some(pages.len() as u64), "{cmd} {p}: `pages` counts the printed pages");
+    pages
+}
+
+#[test]
+fn a_page_range_prints_its_pages_under_the_whole_jobs_numbers() {
+    // #3016: the cases measured in Excel (ExportAsFixedFormat with From and To).
+    let mut s = paged_book();
+    let page = |sp: &str, n: u32, of: u32| (sp.to_string(), format!("Page {n} of {of}"));
+    let sheet1 = |pages: &[u32]| pages.iter().map(|n| page(&format!("S1P{n}"), *n, 5)).collect::<Vec<_>>();
+    for (params, want) in [
+        (json!({}), sheet1(&[1, 2, 3, 4, 5])),
+        (json!({"from": 2, "to": 3}), sheet1(&[2, 3])),
+        (json!({"from": 5, "to": 5}), sheet1(&[5])),
+        // `to` past the last page stops at the last page.
+        (json!({"from": 4, "to": 99}), sheet1(&[4, 5])),
+        // `from` greater than `to` prints the pages between them.
+        (json!({"from": 3, "to": 2}), sheet1(&[2, 3])),
+        // Only `from`: to the last page; only `to`: from the first.
+        (json!({"from": 4}), sheet1(&[4, 5])),
+        (json!({"to": 2}), sheet1(&[1, 2])),
+        // Whole numbers as text or as 3.0, and `null` or empty text for no bound.
+        (json!({"from": "2", "to": 3.0}), sheet1(&[2, 3])),
+        (json!({"from": null, "to": ""}), sheet1(&[1, 2, 3, 4, 5])),
+        // The whole workbook counts its pages in sheet order: Two's first page is page 6 of 8.
+        (json!({"sheets": "all", "from": 5, "to": 6}), vec![page("S1P5", 5, 8), page("S2P1", 6, 8)]),
+        (json!({"sheets": "all", "from": 6, "to": 8}), vec![page("S2P1", 6, 8), page("S2P2", 7, 8), page("S2P3", 8, 8)]),
+    ] {
+        assert_eq!(pages_of(&mut s, "file.exportPdf", params.clone()), want, "file.exportPdf {params}");
+        // The printer gets the same pages.
+        assert_eq!(pages_of(&mut s, "file.print", params.clone()), want, "file.print {params}");
+    }
+    // A range that starts after the last page prints nothing: an error, not an empty PDF.
+    for cmd in ["file.exportPdf", "file.print", "file.printPreview"] {
+        for params in [json!({"from": 6, "to": 7}), json!({"from": 6}), json!({"from": 9, "to": 9, "sheets": "all"})] {
+            let e = s.execute(cmd, params.clone()).unwrap_err().to_string();
+            assert!(e.contains("nothing to print"), "{cmd} {params}: {e}");
+        }
+    }
+    // A written file holds the same pages.
+    let dir = std::env::temp_dir().join(format!("gridcraft-print-range-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("p.pdf");
+    let r = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap(), "from": 2, "to": 3})).unwrap();
+    assert_eq!(r["pages"], 2);
+    assert_eq!(printed_pages(&std::fs::read(&path).unwrap()), sheet1(&[2, 3]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn print_preview_lists_the_pages_of_a_range_under_their_numbers() {
+    let mut s = paged_book();
+    let pv = s.execute("file.printPreview", json!({"from": 2, "to": 3})).unwrap();
+    assert_eq!((pv["pages"].as_u64(), pv["total"].as_u64()), (Some(2), Some(5)));
+    let listed: Vec<(u64, &str)> =
+        pv["pageList"].as_array().unwrap().iter().map(|p| (p["page"].as_u64().unwrap(), p["rows"].as_str().unwrap())).collect();
+    assert_eq!(listed, [(2, "11:20"), (3, "21:30")]);
+    let pv = s.execute("file.printPreview", json!({"sheets": "all", "from": 5, "to": 6})).unwrap();
+    let listed: Vec<(u64, &str)> =
+        pv["pageList"].as_array().unwrap().iter().map(|p| (p["page"].as_u64().unwrap(), p["sheet"].as_str().unwrap())).collect();
+    assert_eq!(listed, [(5, "Sheet1"), (6, "Two")]);
+    assert_eq!(pv["total"], 8);
+    // `page` picks a page by its number in the job; one outside the range is an error.
+    assert_eq!(s.execute("file.printPreview", json!({"page": 3, "from": 2, "to": 3})).unwrap()["page"]["rows"], "21:30");
+    assert!(s.execute("file.printPreview", json!({"page": 1, "from": 2, "to": 3})).is_err());
+    assert!(s.execute("file.printPreview", json!({"page": 6})).is_err());
+    // Without a range nothing changes: every page, `pages` and `total` alike.
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!((pv["pages"].as_u64(), pv["total"].as_u64(), pv["pageList"].as_array().map(Vec::len)), (Some(5), Some(5), Some(5)));
+}
+
+#[test]
+fn page_range_params_that_are_not_page_numbers_are_clear_errors() {
+    let mut s = paged_book();
+    for cmd in ["file.exportPdf", "file.print", "file.printPreview"] {
+        for bad_value in [json!(0), json!(-1), json!(2.5), json!("x"), json!("-2"), json!("1.5"), json!(true), json!([2]), json!({"page": 2})] {
+            for key in ["from", "to"] {
+                let params = json!({ key: bad_value.clone() });
+                let e = s.execute(cmd, params.clone()).unwrap_err();
+                assert!(matches!(e, crate::EngineError::BadParams { .. }), "{cmd} {params}: {e:?}");
+                assert!(e.to_string().contains(&format!("`{key}` must be a page number from 1")), "{cmd} {params}: {e}");
+            }
+        }
+    }
+}
+
+#[test]
+fn hostile_page_ranges_never_panic() {
+    // `every_command_survives_empty_params` for the page range: any value, alone or paired, on
+    // every print command gives a result or a clear error, never a caught panic.
+    let mut s = paged_book();
+    let values = [
+        json!(null),
+        json!(0),
+        json!(1),
+        json!(-1),
+        json!(2.5),
+        json!(1e300),
+        json!(-1e300),
+        json!(u64::MAX),
+        json!(i64::MIN),
+        json!(MAX_PAGES + 1),
+        json!(""),
+        json!(" 3 "),
+        json!("x"),
+        json!("99999999999999999999999999"),
+        json!(true),
+        json!([]),
+        json!({}),
+    ];
+    for cmd in ["file.exportPdf", "file.print", "file.printPreview"] {
+        for from in &values {
+            for to in [json!(null), json!(2), json!(u64::MAX), json!("x")] {
+                for params in [json!({"from": from, "to": to}), json!({"to": from}), json!({"from": from, "to": to, "sheets": "all", "page": 7})] {
+                    let r = s.execute(cmd, params.clone());
+                    assert!(!matches!(r, Err(crate::EngineError::Internal(..))), "{cmd} {params}: {r:?}");
+                }
+            }
+        }
+    }
+    // Huge numbers are pages after the last one, not an overflow.
+    let e = s.execute("file.exportPdf", json!({"from": u64::MAX})).unwrap_err().to_string();
+    assert!(e.contains("nothing to print"), "{e}");
+    assert_eq!(pages_of(&mut s, "file.exportPdf", json!({"from": 5, "to": u64::MAX})).len(), 1);
+    assert_eq!(pages_of(&mut s, "file.exportPdf", json!({"from": 5, "to": 1e300})).len(), 1);
 }

@@ -397,6 +397,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "In các trang tính hiện hoạt",
         "Print Entire Workbook" => "In toàn bộ sổ làm việc",
         "Fit Sheet on One Page" => "Vừa trang tính trên một trang",
+        "Pages" => "Trang",
+        "Print pages|to" => "đến",
         "Page Setup…" => "Thiết lập trang…",
         "Page {page} of {pages}" => "Trang {page} / {pages}",
         "Nothing to print." => "Không có gì để in.",

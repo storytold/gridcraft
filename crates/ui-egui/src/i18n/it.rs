@@ -393,6 +393,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Stampa fogli attivi",
         "Print Entire Workbook" => "Stampa intera cartella di lavoro",
         "Fit Sheet on One Page" => "Adatta foglio a una pagina",
+        "Pages" => "Pagine",
+        "Print pages|to" => "a",
         "Page Setup…" => "Imposta pagina…",
         "Page {page} of {pages}" => "Pagina {page} di {pages}",
         "Nothing to print." => "Niente da stampare.",

@@ -392,6 +392,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Actieve bladen afdrukken",
         "Print Entire Workbook" => "Hele werkmap afdrukken",
         "Fit Sheet on One Page" => "Blad op één pagina passen",
+        "Pages" => "Pagina's",
+        "Print pages|to" => "tot",
         "Page Setup…" => "Pagina-instelling…",
         "Page {page} of {pages}" => "Pagina {page} van {pages}",
         "Nothing to print." => "Niets om af te drukken.",

@@ -316,6 +316,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Vytisknout aktivní listy",
         "Print Entire Workbook" => "Vytisknout celý sešit",
         "Fit Sheet on One Page" => "Přizpůsobit list na jednu stránku",
+        "Pages" => "Stránky",
+        "Print pages|to" => "až",
         "Page Setup…" => "Vzhled stránky…",
         "Page {page} of {pages}" => "Stránka {page} z {pages}",
         "Nothing to print." => "Není co tisknout.",

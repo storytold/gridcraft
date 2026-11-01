@@ -387,6 +387,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Active Sheets" => "Drukuj aktywne arkusze",
         "Print Entire Workbook" => "Drukuj cały skoroszyt",
         "Fit Sheet on One Page" => "Dopasuj arkusz do jednej strony",
+        "Pages" => "Strony",
+        "Print pages|to" => "do",
         "Page Setup…" => "Ustawienia strony…",
         "Page {page} of {pages}" => "Strona {page} z {pages}",
         "Nothing to print." => "Nie ma nic do wydrukowania.",

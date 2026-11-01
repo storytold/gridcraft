@@ -18,13 +18,14 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
+use crate::printing::PageRange;
 use crate::theme::{self, Tokens};
 
 mod options;
 mod print;
 
 use options::{options, platform};
-use print::print;
+use print::{page_range_fields, print};
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
@@ -118,15 +119,24 @@ pub struct Backstage {
     pub print_all: bool,
     /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
-    /// Print: the previewed page (0-based).
+    /// Print: the previewed page (0-based, among the pages that print).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview and what it was made for.
+    preview: Option<(PreviewKey, Json)>,
+    /// Print: the Pages … to … fields as typed.
+    print_drafts: [String; 2],
+    /// Export: the page range of Create PDF, and its fields as typed.
+    pdf_pages: PageRange,
+    pdf_drafts: [String; 2],
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
 }
+
+/// What a print preview was made for: document, revision, whole workbook, fit to page and page
+/// range.
+type PreviewKey = (u64, u64, bool, bool, PageRange);
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
@@ -142,6 +152,9 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            print_drafts: Default::default(),
+            pdf_pages: PageRange::default(),
+            pdf_drafts: Default::default(),
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }
@@ -222,7 +235,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
+                    Page::Export => export(app, ui, &mut bs, &mut out),
                     Page::Options => options(app, ui),
                     Page::Account => account(app, ui),
                 }
@@ -702,7 +715,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;
             }
-        } else if export_as(app, fmt) {
+        } else if export_as(app, fmt, json!({})) {
             out.close = true;
         }
     }
@@ -710,12 +723,23 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
-fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
-    if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked()
-        && export_as(app, "pdf")
-    {
-        out.close = true;
+    let create_pdf =
+        action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked();
+    // Create PDF's page range, in line with its description; empty fields export every page.
+    ui.horizontal(|ui| {
+        ui.add_space(52.0);
+        if let Some(range) = page_range_fields(ui, lang, "backstage_pdf_pages", &mut bs.pdf_drafts, bs.pdf_pages) {
+            bs.pdf_pages = range;
+        }
+    });
+    if create_pdf {
+        let mut params = json!({});
+        bs.pdf_pages.apply(&mut params);
+        if export_as(app, "pdf", params) {
+            out.close = true;
+        }
     }
     ui.add_space(14.0);
     section(ui, lang, "Change File Type");
@@ -723,15 +747,16 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
     ] {
-        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
+        if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt, json!({})) {
             out.close = true;
         }
     }
 }
 
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
-/// as a browser download on the web. Returns whether a file was written or handed over.
-pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
+/// as a browser download on the web. `params` go to the export command with the path (a PDF's
+/// page range). Returns whether a file was written or handed over.
+pub fn export_as(app: &mut SheetApp, fmt: &str, params: Json) -> bool {
     if !app.commit_edit(0, 0, false, false) {
         return false;
     }
@@ -741,13 +766,15 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         "html" => "file.exportHtml",
         _ => return false,
     };
+    let mut params = if params.is_object() { params } else { json!({}) };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
     let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
         let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
-        return match app.run(id, json!({"path": path})) {
+        params["path"] = json!(path);
+        return match app.run(id, params) {
             Ok(_) => true,
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
@@ -761,7 +788,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
     if fmt == "pdf" {
         // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
-        return match app.run(id, json!({})) {
+        return match app.run(id, params) {
             Ok(_) => true,
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
