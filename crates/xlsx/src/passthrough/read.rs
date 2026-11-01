@@ -444,40 +444,39 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
             Event::Start(e) if !in_root => {
                 in_root = true;
                 for a in e.attributes().with_checks(false).flatten() {
-                    if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
-                        && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
-                        && !v.contains('"')
+                    if let Some(p) = a.key.as_ref().strip_prefix("xmlns:")
+                        && !a.value.contains('"')
                     {
-                        decls.push((p.to_string(), v.to_string()));
+                        decls.push((p.to_string(), a.value.to_string()));
                     }
                 }
             }
             Event::Start(e) => {
-                let local = e.local_name().as_ref().to_vec();
-                match local.as_slice() {
-                    b"pageSetup" => out.page_setup = rel_id_attr(&e),
-                    b"legacyDrawing" => out.legacy_drawing = rel_id_attr(&e),
-                    b"legacyDrawingHF" => out.legacy_drawing_hf = rel_id_attr(&e),
+                let local = e.local_name().as_ref().to_string();
+                match local.as_str() {
+                    "pageSetup" => out.page_setup = rel_id_attr(&e),
+                    "legacyDrawing" => out.legacy_drawing = rel_id_attr(&e),
+                    "legacyDrawingHF" => out.legacy_drawing_hf = rel_id_attr(&e),
                     _ => {}
                 }
                 reader.read_to_end(e.name()).ok()?;
                 let end = usize::try_from(reader.buffer_position()).ok()?;
-                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
+                let wanted = matches!(local.as_str(), "picture" | "oleObjects" | "controls" | "AlternateContent");
                 if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
                     let frag = text.get(start..end)?;
                     push_fragment(&mut out, frag, &local, &decls);
                 }
             }
             Event::Empty(e) if in_root => {
-                let local = e.local_name().as_ref().to_vec();
-                if local == b"legacyDrawing" || local == b"legacyDrawingHF" || local == b"pageSetup" {
+                let local = e.local_name().as_ref().to_string();
+                if local == "legacyDrawing" || local == "legacyDrawingHF" || local == "pageSetup" {
                     let id = rel_id_attr(&e);
-                    match local.as_slice() {
-                        b"pageSetup" => out.page_setup = id,
-                        b"legacyDrawing" => out.legacy_drawing = id,
+                    match local.as_str() {
+                        "pageSetup" => out.page_setup = id,
+                        "legacyDrawing" => out.legacy_drawing = id,
                         _ => out.legacy_drawing_hf = id,
                     }
-                } else if local == b"picture"
+                } else if local == "picture"
                     && let Some(frag) = text.get(start..usize::try_from(reader.buffer_position()).ok()?)
                 {
                     push_fragment(&mut out, frag, &local, &decls);
@@ -492,16 +491,12 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
 
 /// The `r:id` of an element (an `id` attribute with a namespace prefix).
 fn rel_id_attr(e: &BytesStart<'_>) -> Option<String> {
-    e.attributes()
-        .with_checks(false)
-        .flatten()
-        .find(|a| a.key.local_name().as_ref() == b"id" && a.key.prefix().is_some())
-        .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
+    e.attributes().with_checks(false).flatten().find(|a| a.key.local_name().as_ref() == "id" && a.key.prefix().is_some()).map(|a| a.value.to_string())
 }
 
-fn push_fragment(out: &mut SheetScan, frag: &str, local: &[u8], decls: &[(String, String)]) {
+fn push_fragment(out: &mut SheetScan, frag: &str, local: &str, decls: &[(String, String)]) {
     let frag = with_decls(frag, decls);
-    let slot = if local == b"AlternateContent" {
+    let slot = if local == "AlternateContent" {
         // The kept element is the one the first choice holds.
         let Ok(el) = xml::parse(frag.as_bytes()) else { return };
         match el.child("Choice").and_then(|c| c.children.first()) {
@@ -509,7 +504,7 @@ fn push_fragment(out: &mut SheetScan, frag: &str, local: &[u8], decls: &[(String
             None => return,
         }
     } else {
-        String::from_utf8_lossy(local).into_owned()
+        local.to_string()
     };
     if SHEET_SLOTS.contains(&slot.as_str()) && !out.fragments.iter().any(|(s, _)| *s == slot) {
         out.fragments.push((slot, frag));
@@ -634,7 +629,7 @@ pub(super) fn merge_vml(kept: &str, ours: &str) -> String {
 pub fn map_rel_ids(x: &str, map: &mut dyn FnMut(&str) -> Option<String>) -> Option<String> {
     let mut reader = Reader::from_str(x);
     let mut writer = Writer::new(Vec::with_capacity(x.len()));
-    let mut prefixes: HashSet<Vec<u8>> = HashSet::new();
+    let mut prefixes: HashSet<String> = HashSet::new();
     let mut depth = 0usize;
     loop {
         match reader.read_event().ok()? {
@@ -661,25 +656,23 @@ pub fn map_rel_ids(x: &str, map: &mut dyn FnMut(&str) -> Option<String>) -> Opti
     String::from_utf8(writer.into_inner()).ok()
 }
 
-fn map_start(e: &BytesStart<'_>, prefixes: &mut HashSet<Vec<u8>>, map: &mut dyn FnMut(&str) -> Option<String>) -> Option<BytesStart<'static>> {
+fn map_start(e: &BytesStart<'_>, prefixes: &mut HashSet<String>, map: &mut dyn FnMut(&str) -> Option<String>) -> Option<BytesStart<'static>> {
     for a in e.attributes().with_checks(false) {
         let a = a.ok()?;
-        if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
-            && (a.value.as_ref() == NS_REL.as_bytes() || a.value.as_ref() == NS_REL_STRICT.as_bytes())
+        if let Some(p) = a.key.as_ref().strip_prefix("xmlns:")
+            && (a.value == NS_REL || a.value == NS_REL_STRICT)
         {
-            prefixes.insert(p.to_vec());
+            prefixes.insert(p.to_string());
         }
     }
-    let name = String::from_utf8(e.name().as_ref().to_vec()).ok()?;
-    let mut out = BytesStart::new(name);
+    let mut out = BytesStart::new(e.name().as_ref().to_string());
     for a in e.attributes().with_checks(false) {
         let a = a.ok()?;
         let key = a.key.as_ref();
-        let is_rel = !key.starts_with(b"xmlns") && a.key.prefix().is_some_and(|p| prefixes.contains(p.as_ref()));
+        let is_rel = !key.starts_with("xmlns") && a.key.prefix().is_some_and(|p| prefixes.contains(p.as_ref()));
         if is_rel {
-            let old = std::str::from_utf8(&a.value).ok()?;
-            let new = map(old)?;
-            out.push_attribute(Attribute { key: QName(key), value: Cow::Owned(esc_attr(&new).into_bytes()) });
+            let new = map(&a.value)?;
+            out.push_attribute(Attribute { key: QName(key), value: Cow::Owned(esc_attr(&new)) });
         } else {
             out.push_attribute(Attribute { key: QName(key), value: a.value.clone() });
         }

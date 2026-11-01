@@ -172,12 +172,8 @@ pub(crate) fn to_utf8(xml: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Borrowed(xml)
 }
 
-fn local(name: &[u8]) -> String {
-    let n = match name.iter().rposition(|&b| b == b':') {
-        Some(i) => name.get(i + 1..).unwrap_or(name),
-        None => name,
-    };
-    String::from_utf8_lossy(n).into_owned()
+fn local(name: &str) -> String {
+    name.rsplit(':').next().unwrap_or(name).to_string()
 }
 
 fn start_el(e: &BytesStart<'_>) -> El {
@@ -185,12 +181,12 @@ fn start_el(e: &BytesStart<'_>) -> El {
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
         // Namespace declarations carry no data for us.
-        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+        if key == "xmlns" || key.starts_with("xmlns:") {
             continue;
         }
         let v = match a.normalized_value(XmlVersion::Explicit1_0) {
             Ok(v) => v.into_owned(),
-            Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
+            Err(_) => a.value.to_string(),
         };
         el.attrs.push((local(key), v));
     }
@@ -281,13 +277,13 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0);
                     top.text.push_str(&s);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
+                    top.text.push_str(&t);
                 }
             }
             Event::GeneralRef(r) => {
@@ -295,7 +291,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => top.text.push(c),
                         _ => {
-                            let name = String::from_utf8_lossy(&r).into_owned();
+                            let name = r.to_string();
                             match named_entity(&name) {
                                 Some(c) => top.text.push(c),
                                 None => {
