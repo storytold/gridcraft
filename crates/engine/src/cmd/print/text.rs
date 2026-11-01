@@ -1,5 +1,5 @@
 use super::draw::{Block, Look, rgb_of};
-use super::*;
+use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
 
 const PAD_PX: f32 = 2.0;
 
@@ -51,9 +51,53 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
+fn text_align(align: HAlign, value: &Value) -> HAlign {
+    match align {
+        HAlign::General => match value {
+            Value::Number(_) => HAlign::Right,
+            Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ => HAlign::Left,
+        },
+        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
+        HAlign::Justify | HAlign::Fill => HAlign::Left,
+        other => other,
+    }
+}
+
 /// Is a cell free for text to overflow into?
 fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
+}
+
+fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+    let (mut clip_l, mut clip_r) = bounds;
+    let grow = |dir: i64, mut remaining: f32| -> f32 {
+        let mut ext = 0.0;
+        let mut col = c.col as i64 + dir;
+        while remaining > 0.0 && col >= 0 && col < MAX_COLS as i64 {
+            let nc = CellRef::new(c.row, col as u32);
+            if !empty_for_overflow(sh, nc, merges) {
+                break;
+            }
+            let width = sh.col_width(nc.col) * k;
+            ext += width;
+            remaining -= width;
+            col += dir;
+            if ext > 20_000.0 {
+                break;
+            }
+        }
+        ext
+    };
+    match align {
+        HAlign::Right => clip_l -= grow(-1, need),
+        HAlign::Center => {
+            clip_l -= grow(-1, need / 2.0);
+            clip_r += grow(1, need / 2.0);
+        }
+        _ => clip_r += grow(1, need),
+    }
+    (clip_l, clip_r)
 }
 
 /// Unscaled width of the empty Center Across Selection cells right of `c`, which its text is centred over too.
@@ -71,16 +115,17 @@ pub(super) fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, m
     ext
 }
 
-pub(super) fn draw_text(
-    pg: &mut Page,
-    b: &Block,
-    c: CellRef,
-    l: &Look,
-    rect: (f32, f32, f32, f32),
-    merged: bool,
-    merges: &[RangeRef],
-    limits: (f32, f32),
-) {
+pub(super) struct TextPlacement<'a> {
+    pub cell: CellRef,
+    pub look: &'a Look,
+    pub rect: (f32, f32, f32, f32),
+    pub merged: bool,
+    pub merges: &'a [RangeRef],
+    pub limits: (f32, f32),
+}
+
+pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+    let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
@@ -133,20 +178,7 @@ pub(super) fn draw_text(
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
-    let h_align = match st.align.h {
-        HAlign::General => {
-            if is_num {
-                HAlign::Right
-            } else if matches!(v, Value::Bool(_) | Value::Error(_)) {
-                HAlign::Center
-            } else {
-                HAlign::Left
-            }
-        }
-        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
-        HAlign::Justify | HAlign::Fill => HAlign::Left,
-        other => other,
-    };
+    let h_align = text_align(st.align.h, &v);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
@@ -170,32 +202,7 @@ pub(super) fn draw_text(
     let (mut clip_l, mut clip_r) = (x, x + w + across);
     if !wrap && !merged && !is_num && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
-        let grow = |dir: i64, mut need: f32| -> f32 {
-            let mut ext = 0.0;
-            let mut col = c.col as i64 + dir;
-            while need > 0.0 && col >= 0 && col < MAX_COLS as i64 {
-                let nc = CellRef::new(c.row, col as u32);
-                if !empty_for_overflow(sh, nc, merges) {
-                    break;
-                }
-                let cw = sh.col_width(nc.col) * b.k;
-                ext += cw;
-                need -= cw;
-                col += dir;
-                if ext > 20_000.0 {
-                    break;
-                }
-            }
-            ext
-        };
-        match h_align {
-            HAlign::Right => clip_l -= grow(-1, need),
-            HAlign::Center => {
-                clip_l -= grow(-1, need / 2.0);
-                clip_r += grow(1, need / 2.0);
-            }
-            _ => clip_r += grow(1, need),
-        }
+        (clip_l, clip_r) = extend_text_bounds(sh, c, merges, b.k, need, h_align, (clip_l, clip_r));
     }
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
@@ -215,7 +222,7 @@ pub(super) fn draw_text(
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(ox, oy, size, font, color, t, angle);
+            pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
         }
         pg.restore();
         return;

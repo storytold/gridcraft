@@ -230,8 +230,9 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
                 // With `noopener` the new browsing context can't hold a reference back to the
-                // editor window and navigate it while the user reads the linked page.
-                let _ = w.open_with_url_and_target(&url, "_blank,noopener");
+                // editor window and navigate it while the user reads the linked page. It must be a
+                // window *feature*: inside the target string it would only name the new window.
+                let _ = w.open_with_url_and_target_and_features(&url, "_blank", "noopener,noreferrer");
             }
         })),
         inbox: Some(inbox),

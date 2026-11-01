@@ -1,4 +1,4 @@
-use super::*;
+use super::{Array, BinOp, CellError, MAX_CELLS, Value, compare};
 
 /// The aggregates that can fold a reference without building an array.
 #[derive(Clone, Copy, PartialEq, Eq)]

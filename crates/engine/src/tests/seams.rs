@@ -821,6 +821,91 @@ fn a_call_that_only_opens_a_dialog_is_not_recorded() {
 }
 
 #[test]
+fn stop_action_runs_only_on_its_own_and_is_not_recorded() {
+    // A step of an action in progress may not stop the action: nested, the command is refused
+    // and the action's group stays. Nor is Stop Action a step of the person's work: a recording
+    // leaves it out, so playing the recording back never stops the run it is part of.
+    let mut s = s();
+    s.start_recording();
+    let r: crate::Result<()> = s.grouped("Outer", |s| {
+        set(s, "A1", "one");
+        let err = s.execute_nested("automate.stopAction", json!({})).unwrap_err().to_string();
+        assert!(err.contains("on its own"), "{err}");
+        set(s, "A2", "two");
+        Ok(())
+    });
+    r.unwrap();
+    assert_eq!(v(&s, "A2").display(), "two");
+    assert_eq!(undo_labels(&s), ["Outer"], "the action kept its group");
+    // On its own it stops a group left open; the recording keeps neither the stop nor the edits
+    // the stop rolled back, so playing it back makes only the edits the workbook has.
+    let _left = s.group_begin("Left open").unwrap();
+    set(&mut s, "A3", "three");
+    assert_eq!(s.execute("automate.stopAction", json!({})).unwrap(), json!({"stopped": true}));
+    assert!(v(&s, "A3").is_empty());
+    assert_eq!(recorded_ids(&s), ["cell.set", "cell.set"]);
+    // An edit recorded in another workbook while the group was open stays, as its edit does.
+    let first = s.active_index();
+    let _left = s.group_begin("Left open").unwrap();
+    set(&mut s, "A4", "four");
+    s.new_workbook();
+    set(&mut s, "B1", "other");
+    s.set_active(first);
+    assert_eq!(s.execute("automate.stopAction", json!({})).unwrap(), json!({"stopped": true}));
+    assert_eq!(recorded_ids(&s), ["cell.set", "cell.set", "cell.set"], "the other workbook's edit stays");
+    assert_eq!(s.recorder.as_ref().unwrap().steps.last().map(|st| st.params["cell"].clone()), Some(json!("B1")));
+    assert_eq!(s.stop_recording().unwrap().dropped, 0);
+}
+
+#[test]
+fn rollbacks_take_back_their_own_recorded_steps_in_any_order() {
+    // Groups open on two workbooks, each with a recorded edit: rolling back the first takes out
+    // only its edit, and the second's mark still finds its own after that.
+    let mut s = s();
+    s.start_recording();
+    let a = s.active_index();
+    let _in_a = s.group_begin("A").unwrap();
+    set(&mut s, "A1", "a");
+    s.new_workbook();
+    let b = s.active_index();
+    let _in_b = s.group_begin("B").unwrap();
+    set(&mut s, "B1", "b");
+    s.set_active(a);
+    s.execute("automate.stopAction", json!({})).unwrap();
+    let cells = |s: &Session| s.recorder.as_ref().unwrap().steps.iter().map(|st| st.params["cell"].clone()).collect::<Vec<_>>();
+    assert_eq!(cells(&s), [json!("B1")]);
+    s.set_active(b);
+    s.execute("automate.stopAction", json!({})).unwrap();
+    assert!(cells(&s).is_empty());
+    // A recording started again inside a group: every step of it came after the group began.
+    let _again = s.group_begin("Again").unwrap();
+    s.start_recording();
+    set(&mut s, "C1", "c");
+    s.execute("automate.stopAction", json!({})).unwrap();
+    assert!(cells(&s).is_empty(), "{:?}", cells(&s));
+}
+
+#[test]
+fn a_run_that_edits_and_opens_a_dialog_is_recorded() {
+    // A script with an edit before a menu-style step: the edit happened, so the run is a step of
+    // the recording (the person's confirming call is another). Only a call that opened a dialog
+    // and changed nothing is left out.
+    let mut s = s();
+    let edit_then_dialog = json!([{"command": "cell.set", "params": {"cell": "B1", "input": "1"}}, {"command": "home.formatCells", "params": {}}]);
+    let dialog_only = json!([{"command": "home.formatCells", "params": {}}]);
+    s.execute("automate.newScript", json!({"name": "Edit", "commands": edit_then_dialog})).unwrap();
+    s.execute("automate.newScript", json!({"name": "Ask", "commands": dialog_only})).unwrap();
+    s.start_recording();
+    s.execute("automate.runScript", json!({"name": "Ask"})).unwrap();
+    assert!(s.take_ui_requests().iter().any(|q| matches!(q, crate::UiRequest::Dialog(..))));
+    assert!(recorded_ids(&s).is_empty(), "{:?}", recorded_ids(&s));
+    s.execute("automate.runScript", json!({"name": "Edit"})).unwrap();
+    assert!(s.take_ui_requests().iter().any(|q| matches!(q, crate::UiRequest::Dialog(..))));
+    assert_eq!(recorded_ids(&s), ["automate.runScript"], "the edit happened, so the run is a step");
+    assert_eq!(s.stop_recording().unwrap().dropped, 0);
+}
+
+#[test]
 fn the_recorder_keeps_top_level_calls_with_where_they_ran() {
     let mut s = s();
     s.execute("home.insertSheet", json!({})).unwrap();
