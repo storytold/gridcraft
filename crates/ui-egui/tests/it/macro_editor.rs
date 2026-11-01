@@ -976,3 +976,65 @@ fn a_different_close_during_the_editors_question_is_refused_until_it_is_answered
     assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
     assert!(h.state().macros.editor.as_ref().is_some_and(|e| e.then_close.is_none()));
 }
+
+#[test]
+fn quitting_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_and_cancel_stops_it() {
+    let mut h = harness();
+    // Book1, saved, with an unsaved draft in its window; Book2 with unsaved cells in its own.
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let a = h.state().session.active_window().unwrap();
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "Z9", "input": "unsaved"})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    let title2 = h.state().session.active().unwrap().display_title();
+    let b = h.state().session.active_window().unwrap();
+    assert_ne!(a, b);
+    let both_open =
+        |h: &Harness| is_open(h, book1) && is_open(h, book2) && h.state().session.window(a).is_some() && h.state().session.window(b).is_some();
+    // Quit from Book2's window: the editor's question comes first, in its own window.
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert_eq!(h.state().session.active_window(), Some(a), "the editor's window comes forward");
+    assert!(asks_about(&h, &name));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no workbook is asked about yet");
+    // Don't Save: the draft goes, the editor closes and the quit goes on (the window asks to
+    // close again, which a test harness has to do by hand).
+    h.get_all_by_role_and_label(egui::Role::Button, "Don't Save").last().unwrap().click();
+    let sent = step_commands(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    request_window_close(&mut h);
+    // Book2 is asked about next, in its window, as the quit's question.
+    assert_eq!(h.state().session.active_window(), Some(b), "the unsaved workbook's window comes forward");
+    let d = h.state().dialog.as_ref().expect("Book2 is asked about");
+    assert_eq!(d.name(), "saveChanges");
+    assert_eq!(d.values.get("title").and_then(serde_json::Value::as_str), Some(title2.as_str()));
+    assert_eq!(d.values.get("quit"), Some(&json!(true)), "{:?}", d.values);
+    assert!(both_open(&h));
+    // Cancel: the quit stops with both windows and workbooks open and Book2's changes kept; the
+    // draft the person discarded stays discarded.
+    h.get_all_by_role_and_label(egui::Role::Button, "Cancel").last().unwrap().click();
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert!(h.state().dialog.is_none());
+    assert!(both_open(&h));
+    assert!(h.state().session.documents().iter().find(|d| d.uid == book2).unwrap().is_dirty());
+    assert!(h.state().macros.editor.is_none());
+    // A quit cancelled at the editor's question stops before any workbook is asked about.
+    h.state_mut().enter_window(a);
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close) && !h.state().allow_close, "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no Save Changes question followed");
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1), "the draft is kept");
+    assert!(both_open(&h));
+}

@@ -306,7 +306,9 @@ other macros open; a macro that was left out is not in the saved file.
   until the question is answered. A new macro that has not been edited does not ask. It keeps its
   window until it closes itself: another dialog asked for meanwhile is refused with a message, and
   closing the app (its window's close button, Quit, Cmd+Q) first asks about the editor's debug
-  run and unsaved steps, then about unsaved workbooks.
+  run and unsaved steps, in the editor's window, then about each unsaved workbook in its window;
+  Cancel at any of these questions stops the quit with every window open (a draft already
+  discarded with Don't Save stays discarded).
 - **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
   green, the cells among them that hold data red. Run runs it as one undo step. Step, Continue and
   Run to Here start the debugger when needed (`macro.debug` with the editor's breakpoints and

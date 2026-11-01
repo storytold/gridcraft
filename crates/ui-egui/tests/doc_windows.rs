@@ -18,6 +18,8 @@ thread_local! {
     static INFOS: RefCell<egui::ViewportIdMap<ViewportInfo>> = RefCell::new(egui::ViewportIdMap::default());
     /// The viewport commands the app sent this frame.
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
+    /// Input events for the root window's next frame (a key pressed in it).
+    static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
 }
 
 fn record(mut out: egui::FullOutput) {
@@ -65,6 +67,7 @@ impl Desk {
         let mut input = RawInput { viewport_id: ViewportId::ROOT, ..RawInput::default() };
         input.viewports = INFOS.with(|i| i.borrow().clone());
         input.viewports.entry(ViewportId::ROOT).or_default();
+        input.events = EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()));
         let Desk { ctx, app, windows } = self;
         let mut act = Some(act);
         let out = ctx.clone().run_ui(input, |ui| {
@@ -114,6 +117,28 @@ impl Desk {
     fn window_of(&self, doc: usize) -> u64 {
         let uid = self.app.session.documents()[doc].uid;
         self.app.session.doc_window(uid).unwrap_or_default()
+    }
+
+    /// The user presses `key` in the root window.
+    fn key(&mut self, key: egui::Key) -> Vec<(ViewportId, ViewportCommand)> {
+        EVENTS.with(|e| {
+            e.borrow_mut().push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+        });
+        let mut sent = self.frame_with(|_, _| {});
+        sent.extend(self.frames(2));
+        sent
+    }
+
+    /// Opens the step editor on a new macro in the active window and edits it, so the draft has
+    /// unsaved changes.
+    fn edited_new_macro(&mut self) {
+        self.app.open_dialog("macroEditor", json!({}));
+        self.frames(3);
+        if let Some(ed) = self.app.macros.editor.as_mut() {
+            ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+            ed.dirty = true;
+        }
+        self.frames(2);
     }
 }
 
@@ -477,4 +502,59 @@ fn quit_takes_over_a_workbook_close_waiting_on_the_macro_editor() {
     assert_eq!(d.name(), "saveChanges");
     assert_eq!(d.values.get("quit"), Some(&json!(true)), "{:?}", d.values);
     assert_eq!(desk.app.session.documents().len(), 2, "nothing closed before the answer");
+}
+
+#[test]
+fn quit_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_and_cancel_stops_it() {
+    let mut desk = Desk::new(false);
+    // Book1 (the root window), saved, with an unsaved draft; Book2 with unsaved cells.
+    let w1 = desk.window_of(0);
+    desk.edited_new_macro();
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    desk.frames(3);
+    let w2 = desk.window_of(1);
+    assert_eq!(desk.app.session.active_window(), Some(w2));
+    // Quit from Book2's window: the editor's question comes first, in Book1's window.
+    let mut sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    sent.extend(desk.frames(2));
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close) && !desk.app.allow_close, "{sent:?}");
+    assert_eq!(desk.app.session.active_window(), Some(w1), "the editor's window comes forward");
+    assert!(desk.app.macros.editor.as_ref().is_some_and(|ed| ed.ask_close && ed.quit), "the editor asks");
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no workbook is asked about yet");
+    // Don't Save (the question's answer closes the editor without saving).
+    if let Some(ed) = desk.app.macros.editor.as_mut() {
+        ed.ask_close = false;
+        ed.dirty = false;
+        ed.close_requested = true;
+    }
+    desk.frames(3);
+    assert!(desk.app.macros.editor.is_none());
+    // Book2 is asked about next, in its window, as the quit's question.
+    assert_eq!(desk.app.session.active_window(), Some(w2), "the unsaved workbook's window comes forward");
+    let d = desk.app.dialog.as_ref().expect("Book2 is asked about");
+    assert_eq!(d.name(), "saveChanges");
+    assert_eq!(d.values.get("title").and_then(serde_json::Value::as_str), Some("Book2"));
+    assert_eq!(d.values.get("quit"), Some(&json!(true)), "{:?}", d.values);
+    assert_eq!(desk.app.session.documents().len(), 2, "nothing closed before the answer");
+    // Cancel: the quit stops with both windows and workbooks open; the discarded draft stays
+    // discarded.
+    let sent = desk.answer(SaveAnswer::Cancel);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close) && !desk.app.allow_close, "{sent:?}");
+    assert_eq!(desk.app.session.documents().len(), 2);
+    assert_eq!(desk.windows.shown_windows(), [w1, w2]);
+    assert!(desk.app.dialog.is_none() && desk.app.macros.editor.is_none());
+    assert!(desk.app.session.documents()[1].is_dirty(), "Book2 keeps its changes");
+    // A quit cancelled at the editor's question (Escape) stops before any workbook is asked about.
+    desk.app.enter_window(w1);
+    desk.edited_new_macro();
+    let mut sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    sent.extend(desk.frames(2));
+    assert!(desk.app.macros.editor.as_ref().is_some_and(|ed| ed.ask_close && ed.quit), "the editor asks");
+    sent.extend(desk.key(egui::Key::Escape));
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close) && !desk.app.allow_close, "{sent:?}");
+    assert!(desk.app.macros.editor.as_ref().is_some_and(|ed| !ed.ask_close && !ed.quit && ed.draft.steps.len() == 1), "the draft is kept");
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no Save Changes question followed");
+    assert_eq!(desk.app.session.documents().len(), 2);
+    assert_eq!(desk.windows.shown_windows(), [w1, w2]);
 }
