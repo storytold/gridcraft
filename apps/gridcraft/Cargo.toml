@@ -8,6 +8,11 @@ default-run = "gridcraft"
 description = "GridCraft desktop app"
 
 [features]
+# Data › From Database drivers; a build can leave any of them out (`--no-default-features`).
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["gridcraft-datasource/postgres"]
+mysql = ["gridcraft-datasource/mysql"]
+sqlite = ["gridcraft-datasource/sqlite"]
 # ODBC data sources (needs the system ODBC driver manager to link: unixODBC on Linux).
 odbc = ["gridcraft-datasource/odbc"]
 

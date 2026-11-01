@@ -11,15 +11,15 @@ use std::sync::Arc;
 pub use gridcraft_engine::datasource::redact;
 use gridcraft_engine::datasource::{DataSource, DbOp, DbRequest, DbTable, DbValue, catalog_sql};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "mysql", not(target_arch = "wasm32")))]
 mod mysql_driver;
 #[cfg(all(feature = "odbc", not(target_arch = "wasm32")))]
 mod odbc_driver;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "postgres", not(target_arch = "wasm32")))]
 mod postgres_driver;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 mod sqlite_driver;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "postgres", not(target_arch = "wasm32")))]
 mod tls;
 
 /// The data source with every driver this build has.
@@ -35,18 +35,30 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
         return run(&DbRequest { query: sql, op: DbOp::Query, ..req.clone() });
     }
     match req.driver.as_str() {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "postgres", not(target_arch = "wasm32")))]
         "postgres" => postgres_driver::run(req),
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "mysql", not(target_arch = "wasm32")))]
         "mysql" => mysql_driver::run(req),
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
         "sqlite" => sqlite_driver::run(req),
         #[cfg(all(feature = "odbc", not(target_arch = "wasm32")))]
         "odbc" => odbc_driver::run(req),
+        #[cfg(not(all(feature = "postgres", not(target_arch = "wasm32"))))]
+        "postgres" => Err(not_built_in("PostgreSQL")),
+        #[cfg(not(all(feature = "mysql", not(target_arch = "wasm32"))))]
+        "mysql" => Err(not_built_in("MySQL")),
+        #[cfg(not(all(feature = "sqlite", not(target_arch = "wasm32"))))]
+        "sqlite" => Err(not_built_in("SQLite")),
         #[cfg(not(all(feature = "odbc", not(target_arch = "wasm32"))))]
-        "odbc" => Err("ODBC support was not compiled into this build.".into()),
+        "odbc" => Err(not_built_in("ODBC")),
         other => Err(format!("Unknown database driver `{other}`.")),
     }
+}
+
+/// The error for a driver left out of this build (see the crate's cargo features).
+#[cfg_attr(all(feature = "postgres", feature = "mysql", feature = "sqlite", feature = "odbc", not(target_arch = "wasm32")), allow(dead_code))]
+fn not_built_in(driver: &str) -> String {
+    format!("{driver} support was not compiled into this build.")
 }
 
 /// Significant digits a decimal may have to become a number: any decimal of 15 digits comes back
@@ -175,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn odbc_without_feature_and_unknown_driver_are_errors() {
+    fn drivers_left_out_and_unknown_driver_are_errors() {
         let req = DbRequest {
             driver: "nope".into(),
             connection: String::new(),
@@ -187,7 +199,15 @@ mod tests {
             op: DbOp::Query,
         };
         assert!(run(&req).is_err());
-        #[cfg(not(feature = "odbc"))]
-        assert!(run(&DbRequest { driver: "odbc".into(), ..req }).unwrap_err().contains("not compiled"));
+        for (driver, built) in [
+            ("postgres", cfg!(feature = "postgres")),
+            ("mysql", cfg!(feature = "mysql")),
+            ("sqlite", cfg!(feature = "sqlite")),
+            ("odbc", cfg!(feature = "odbc")),
+        ] {
+            if !built {
+                assert!(run(&DbRequest { driver: driver.into(), ..req.clone() }).unwrap_err().contains("not compiled"), "{driver}");
+            }
+        }
     }
 }
