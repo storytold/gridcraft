@@ -1,6 +1,6 @@
 use super::{
-    CMD, CellRef, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef, Result, Session, Workbook,
-    bad, bool_param, f64_param, json, split_sheet, str_param,
+    CMD, CellRef, DEFAULT_EVALS, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_EVALS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef,
+    Result, Session, Workbook, bad, bool_param, f64_param, json, split_sheet, str_param,
 };
 
 // ---------------------------------------------------------------- model
@@ -128,6 +128,10 @@ pub(super) struct Model {
     pub(super) non_negative: bool,
     pub(super) method: Method,
     pub(super) evo: EvoOptions,
+    /// The evaluation limit (in place of Excel's iterations and time limits).
+    pub(super) max_evals: u64,
+    /// Integer Optimality, as a fraction.
+    pub(super) gap: f64,
 }
 
 /// Cells of `"B2:B4,D1"` on one sheet (row-major per area, in order), at most `cap`.
@@ -288,7 +292,17 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
         "evolutionary" | "evo" | "genetic" => Method::Evolutionary,
         m => return Err(bad(CMD, format!("unknown method `{m}` (grg, simplex or evolutionary)"))),
     };
-    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p) })
+    let num = |k: &str| p.get(k).and_then(Json::as_f64).or_else(|| str_param(p, k).and_then(num_text)).filter(|v| v.is_finite());
+    let max_evals = num("maxEvaluations").filter(|v| *v >= 1.0).map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
+    // Integer Optimality is in percent: "5" and "5%" both mean 5 % (number parsing would read
+    // "5%" as 0.05).
+    let percent = p
+        .get("integerOptimality")
+        .and_then(Json::as_f64)
+        .or_else(|| str_param(p, "integerOptimality").and_then(|t| num_text(t.trim().trim_end_matches('%'))))
+        .filter(|v| v.is_finite());
+    let gap = percent.map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p), max_evals, gap })
 }
 
 // ---------------------------------------------------------------- saved model
@@ -313,8 +327,11 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
     abs_text(Some(sheet_name), cells)
 }
 
-/// The generations without improvement have no Excel equivalent: Excel's `solver_mni` is a time
-/// in seconds. They are saved under a GridCraft name, which Excel ignores.
+/// The evaluation limit and the generations without improvement have no Excel equivalent:
+/// Excel's `solver_itr` counts iterations (100 by default) and `solver_mni` seconds, so a
+/// workbook from Excel would cut GridCraft's search short. They are saved under GridCraft's own
+/// names, which Excel ignores.
+const EVALS_NAME: &str = "gridcraft_solver_evals";
 const STALL_NAME: &str = "gridcraft_solver_stall";
 
 /// The names of a saved model after `solver_`, as Excel's Solver writes them (GridCraft writes
@@ -328,7 +345,7 @@ const SOLVER_KEYS: [&str; 28] = [
 /// `solver_lhs1` and so on) and GridCraft's own. A user's name such as `solver_budget` is not.
 pub(super) fn is_model_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    if name == STALL_NAME {
+    if name == EVALS_NAME || name == STALL_NAME {
         return true;
     }
     let Some(key) = name.strip_prefix("solver_") else { return false };
@@ -380,14 +397,16 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
         Method::Evolutionary => "3",
     };
     put("solver_eng".into(), eng.into());
-    if m.method == Method::Evolutionary {
-        put("solver_ssz".into(), m.evo.population.to_string());
-        put("solver_mrt".into(), m.evo.mutation.to_string());
-        put("solver_rsd".into(), m.evo.seed.to_string());
-        put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
-        put("solver_cvg".into(), m.evo.convergence.to_string());
-        put(STALL_NAME.into(), m.evo.stall.to_string());
-    }
+    put(EVALS_NAME.into(), m.max_evals.to_string());
+    put("solver_tol".into(), m.gap.to_string());
+    // The Evolutionary options are kept whatever the method, as Solver Options sets them, so
+    // switching methods doesn't lose them.
+    put("solver_ssz".into(), m.evo.population.to_string());
+    put("solver_mrt".into(), m.evo.mutation.to_string());
+    put("solver_rsd".into(), m.evo.seed.to_string());
+    put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
+    put("solver_cvg".into(), m.evo.convergence.to_string());
+    put(STALL_NAME.into(), m.evo.stall.to_string());
     put("solver_ver".into(), "3".into());
 }
 
@@ -447,10 +466,14 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         ("solver_rsd", "randomSeed"),
         ("solver_cvg", "convergence"),
         (STALL_NAME, "generationsWithoutImprovement"),
+        (EVALS_NAME, "maxEvaluations"),
     ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
-            model[key] = json!(v);
+            model[key] = number(v);
         }
+    }
+    if let Some(v) = get("solver_tol").and_then(|v| num_text(&v)) {
+        model["integerOptimality"] = number(percent(v));
     }
     if let Some(v) = get("solver_rbv") {
         model["requireBounds"] = json!(v.trim() != "2");
@@ -488,16 +511,16 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         "constraints": constraints,
         "nonNegative": m.non_negative,
         "method": method,
+        "maxEvaluations": m.max_evals,
+        "integerOptimality": number(percent(m.gap)),
     });
-    if m.method == Method::Evolutionary {
-        let e = &m.evo;
-        out["populationSize"] = json!(e.population);
-        out["mutationRate"] = json!(e.mutation);
-        out["randomSeed"] = json!(e.seed);
-        out["convergence"] = json!(e.convergence);
-        out["generationsWithoutImprovement"] = json!(e.stall);
-        out["requireBounds"] = json!(e.require_bounds);
-    }
+    let e = &m.evo;
+    out["populationSize"] = json!(e.population);
+    out["mutationRate"] = json!(e.mutation);
+    out["randomSeed"] = json!(e.seed);
+    out["convergence"] = json!(e.convergence);
+    out["generationsWithoutImprovement"] = json!(e.stall);
+    out["requireBounds"] = json!(e.require_bounds);
     out
 }
 
@@ -536,14 +559,16 @@ pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
     };
     let yes = |b: bool| if b { 1 } else { 2 };
     rows.push(format!(
-        "={{{eng},{},{},{},{},{},{},{}}}",
+        "={{{eng},{},{},{},{},{},{},{},{},{}}}",
         yes(m.non_negative),
         e.population,
         n(e.mutation),
         e.seed,
         yes(e.require_bounds),
         n(e.convergence),
-        e.stall
+        e.stall,
+        m.max_evals,
+        n(percent(m.gap))
     ));
     Ok(rows)
 }
@@ -598,7 +623,15 @@ fn read_options_row(model: &mut Json, list: &str) -> Result<()> {
         _ => "grg",
     });
     model["nonNegative"] = json!(get(1) != Some(2.0));
-    for (k, key) in [(2, "populationSize"), (3, "mutationRate"), (4, "randomSeed"), (6, "convergence"), (7, "generationsWithoutImprovement")] {
+    for (k, key) in [
+        (2, "populationSize"),
+        (3, "mutationRate"),
+        (4, "randomSeed"),
+        (6, "convergence"),
+        (7, "generationsWithoutImprovement"),
+        (8, "maxEvaluations"),
+        (9, "integerOptimality"),
+    ] {
         if let Some(x) = get(k) {
             model[key] = json!(x);
         }
@@ -659,4 +692,19 @@ pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
     }
     model["constraints"] = json!(constraints);
     Ok(model)
+}
+
+/// Integer Optimality as a percent from its stored fraction. The product is rounded to 1E-10 %,
+/// so a fraction such as 0.07 reads back as 7 and not 7.000000000000001.
+fn percent(fraction: f64) -> f64 {
+    let p = fraction * 100.0;
+    let rounded = (p * 1e10).round() / 1e10;
+    if rounded.is_finite() { rounded } else { p }
+}
+
+/// A number read from a hidden name as JSON: a whole number as an integer, so the Solver dialog
+/// shows 20000 and not 20000.0.
+fn number(v: f64) -> Json {
+    // Whole numbers below 2^53 are exact as integers.
+    if v.fract() == 0.0 && v.abs() < 9_007_199_254_740_992.0 { json!(v as i64) } else { json!(v) }
 }

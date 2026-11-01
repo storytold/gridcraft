@@ -424,7 +424,7 @@ fn save_and_load_model_round_trip_through_cells() {
             "AND($A$1:$A$2=INT($A$1:$A$2))",
             "AND(($A$2=0)+($A$2=1))",
             "AND($A$1>=1)",
-            "{2,1,100,0.075,0,1,0.0001,50}",
+            "{2,1,100,0.075,0,1,0.0001,50,20000,0}",
         ]
     );
     // The constraint cells show whether each constraint holds at the solution (4, 0).
@@ -532,7 +532,7 @@ fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
     // population size doesn't leak into it.
     s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 3"], "method": "simplex"})).unwrap();
     let m = model(&s, one).unwrap();
-    assert_eq!((m["objective"].as_str(), m["populationSize"].is_null()), (Some("B1"), true), "{m}");
+    assert_eq!((m["objective"].as_str(), m["populationSize"].as_f64()), (Some("B1"), Some(100.0)), "{m}");
     assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["masked"], true);
     assert_eq!(model(&s, one), None);
 }
@@ -645,20 +645,20 @@ fn save_model_refuses_a_place_where_the_options_cannot_spill() {
     }
     let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["F4 <= 5"]});
     let save = |s: &mut Session, to: &str| s.execute("data.solverSaveModel", json!({"to": to, "model": model.clone()}));
-    // The options row (H4) spills into I4:O4: a value in its last cell is in the way.
-    set(&mut s, &[("O4", "x")]);
+    // The options row (H4) spills into I4:Q4: a value in its last cell is in the way.
+    set(&mut s, &[("Q4", "x")]);
     let e = save(&mut s, "H1").unwrap_err().to_string();
-    assert!(e.contains("I4:O4") && e.contains("O4 isn't empty"), "{e}");
+    assert!(e.contains("I4:Q4") && e.contains("Q4 isn't empty"), "{e}");
     assert_eq!((formula(&s, "H1"), formula(&s, "H4")), (String::new(), String::new()));
     assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
     // With the row clear the options spill, and saving again at the same cell replaces them.
-    set(&mut s, &[("O4", "")]);
+    set(&mut s, &[("Q4", "")]);
     for overwrite in [false, true] {
         let p = json!({"to": "H1", "model": model.clone(), "overwrite": overwrite});
         assert_eq!(s.execute("data.solverSaveModel", p).unwrap()["range"], "H1:H4");
         assert_eq!(
-            (at(&s, "Sheet1", "H4"), at(&s, "Sheet1", "I4"), at(&s, "Sheet1", "O4")),
-            (Value::number(1.0), Value::number(1.0), Value::number(50.0))
+            (at(&s, "Sheet1", "H4"), at(&s, "Sheet1", "I4"), at(&s, "Sheet1", "O4"), at(&s, "Sheet1", "Q4")),
+            (Value::number(1.0), Value::number(1.0), Value::number(50.0), Value::number(0.0))
         );
     }
     // Refused: in the options row, a formula (H24), another formula's spilled values (K31,
@@ -671,11 +671,11 @@ fn save_model_refuses_a_place_where_the_options_cannot_spill() {
         ("J28", "K31 holds the values of another formula"),
         ("E1", "F4 is a cell of the model"),
         ("R5", "merged"),
-        ("S57", "T60:Z60, but a table is in the way"),
-        ("XFA1", "need 8 cells"),
+        ("S57", "T60:AB60, but a table is in the way"),
+        ("XFA1", "need 10 cells"),
         ("I21", "cover I24, which holds the values of another formula"),
         ("M51", "cover M51, which holds the values of another formula"),
-        ("W67", "X70:AD70, but a table is in the way"),
+        ("W67", "X70:AF70, but a table is in the way"),
     ] {
         let e = save(&mut s, to).unwrap_err().to_string();
         assert!(e.contains(why), "{to}: {e}");
@@ -814,6 +814,122 @@ fn load_model_keeps_the_evolutionary_convergence_and_generations() {
     // Reset All removes the GridCraft name with the rest.
     s.execute("data.solverReset", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.names.iter().all(|n| n.scope != Some(0)));
+}
+
+#[test]
+fn solver_options_are_saved_with_the_model() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=10*A1+13*A2"), ("B2", "=5*A1+6*A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 10", "A1:A2 bin"], "method": "evolutionary", "maxEvaluations": "3000", "integerOptimality": 5, "convergence": 0.001, "generationsWithoutImprovement": 20, "mutationRate": "0.1"});
+    let r = s.execute("data.solver", p).unwrap();
+    assert!(r["evaluations"].as_u64().unwrap() <= 3001, "{r}");
+    // The solve's own result gives whole numbers as integers too.
+    for k in ["maxEvaluations", "integerOptimality", "generationsWithoutImprovement", "populationSize", "randomSeed"] {
+        assert!(r["model"][k].is_i64() || r["model"][k].is_u64(), "{k}: {r}");
+    }
+    // The options survive XLSX in the hidden names, as given or as text.
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "o.xlsx", "base64": b64})).unwrap();
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    let f = |k: &str| m[k].as_f64();
+    assert_eq!((f("maxEvaluations"), f("integerOptimality"), f("convergence")), (Some(3000.0), Some(5.0), Some(0.001)), "{m}");
+    assert_eq!((f("generationsWithoutImprovement"), f("mutationRate")), (Some(20.0), Some(0.1)));
+    // Whole numbers read back as integers, so the Solver dialog shows 3000 and not 3000.0.
+    for k in ["maxEvaluations", "integerOptimality", "generationsWithoutImprovement", "populationSize", "randomSeed"] {
+        assert!(m[k].is_i64(), "{k}: {m}");
+    }
+    assert_eq!(m["maxEvaluations"].to_string(), "3000");
+    // Out-of-range options are clamped, not refused.
+    let r = s.execute("data.solver", json!({"saved": true, "maxEvaluations": "1e300", "integerOptimality": -4})).unwrap();
+    assert_eq!((r["model"]["maxEvaluations"].as_f64(), r["model"]["integerOptimality"].as_f64()), (Some(200_000.0), Some(0.0)));
+}
+
+#[test]
+fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=ABS(A1-3)")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "evolutionary"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let names = |s: &Session| -> Vec<String> {
+        let d = s.doc().unwrap();
+        d.wb.names.iter().filter(|n| n.scope == Some(0)).map(|n| n.name.clone()).collect()
+    };
+    // GridCraft's evaluation limit and generations go under its own names, not Excel's.
+    let saved = names(&s);
+    assert!(saved.iter().all(|n| n != "solver_itr" && n != "solver_mni"), "{saved:?}");
+    assert!(saved.iter().any(|n| n == "gridcraft_solver_evals") && saved.iter().any(|n| n == "gridcraft_solver_stall"), "{saved:?}");
+    // Excel's own limits, as a workbook from Excel holds them: 100 iterations, 30 seconds.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        wb.names.retain(|n| !n.name.starts_with("gridcraft_"));
+        for (name, formula) in [("solver_itr", "100"), ("solver_mni", "30")] {
+            wb.names.push(gridcraft_model::DefinedName {
+                name: name.into(),
+                scope: Some(0),
+                formula: formula.into(),
+                comment: String::new(),
+                hidden: true,
+            });
+        }
+    }
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    assert!(m["maxEvaluations"].is_null() && m["generationsWithoutImprovement"].is_null(), "{m}");
+    set(&mut s, &[("A1", "0")]);
+    let r = s.execute("data.solver", json!({"saved": true})).unwrap();
+    assert!(r["evaluations"].as_u64().unwrap() > 100, "{r}");
+    assert!((n(&s, "A1") - 3.0).abs() < 1e-3, "{r}");
+    // Saving again replaces GridCraft's names; Reset All removes them with the rest. Simplex
+    // LP refuses the nonlinear ABS model, but the model is saved before the solve.
+    let r = s.execute(
+        "data.solver",
+        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "maxEvaluations": 700, "keep": false}),
+    );
+    let m = super::saved_model(&s.doc().unwrap().wb, 0).unwrap();
+    assert_eq!((m["method"].as_str(), m["maxEvaluations"].as_f64()), (Some("simplex"), Some(700.0)), "{m} {r:?}");
+    let saved = names(&s);
+    assert_eq!(
+        saved.iter().filter(|n| n.starts_with("gridcraft_")).collect::<Vec<_>>(),
+        ["gridcraft_solver_evals", "gridcraft_solver_stall"],
+        "{saved:?}"
+    );
+    s.execute("data.solver", model).unwrap();
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(names(&s).is_empty(), "{:?}", names(&s));
+}
+
+#[test]
+fn integer_optimality_reads_a_percent_sign_as_percent() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=3*A1")]);
+    for (given, want) in [(json!("5%"), 5.0), (json!(" 2.5 % "), 2.5), (json!("5"), 5.0), (json!(5), 5.0), (json!("150%"), 100.0)] {
+        let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4", "A1 int"], "method": "simplex", "integerOptimality": given});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(want), "{given}: {r}");
+    }
+    // Percents whose fraction is not exact in binary read back as given, from the solve's
+    // result and from the saved model.
+    for given in [7.0, 29.0, 0.1] {
+        let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4", "A1 int"], "method": "simplex", "integerOptimality": given});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(given), "{r}");
+        let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+        assert_eq!(m["integerOptimality"].as_f64(), Some(given), "{m}");
+    }
+}
+
+#[test]
+fn evolutionary_options_survive_a_solve_with_another_method() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=3*A1")]);
+    let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "grg", "populationSize": 40, "mutationRate": 0.2, "randomSeed": 7, "convergence": 0.001, "generationsWithoutImprovement": 25, "requireBounds": false});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["model"]["populationSize"].as_f64(), Some(40.0), "{r}");
+    // The saved model keeps them for the next time the method is Evolutionary.
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    let f = |k: &str| m[k].as_f64();
+    assert_eq!((f("populationSize"), f("mutationRate"), f("randomSeed")), (Some(40.0), Some(0.2), Some(7.0)), "{m}");
+    assert_eq!((f("convergence"), f("generationsWithoutImprovement"), m["requireBounds"].as_bool()), (Some(0.001), Some(25.0), Some(false)));
 }
 
 #[test]
