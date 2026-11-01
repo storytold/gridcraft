@@ -164,8 +164,9 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
                         }
                         // Excel's connection property: "Refresh data when opening the file".
                         let roo = q.get("refresh_on_open").and_then(Json::as_bool).unwrap_or(false);
-                        if ui.checkbox(&mut roo.clone(), "Refresh on open").changed() {
-                            let _ = app.run("data.webQuerySet", json!({"name": name, "refreshOnOpen": roo}));
+                        let mut set = roo;
+                        if ui.checkbox(&mut set, "Refresh on open").changed() && set != roo {
+                            let _ = app.run("data.webQuerySet", json!({"name": name, "sheet": sheet, "refreshOnOpen": set}));
                         }
                         if ui.button("Go to table").clicked() {
                             let _ = app.run("sheet.activate", json!({"sheet": sheet}));

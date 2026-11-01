@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Web Connection Property",
             [],
             None,
-            "{name, refreshOnOpen: bool} → sets a saved connection's properties (Excel's connection properties: \"Refresh data when opening the file\")",
+            "{name, sheet?: the connection (a name alone matches the first), refreshOnOpen: bool} → sets a saved connection's properties (Excel's connection properties: \"Refresh data when opening the file\")",
             has_doc,
             web_query_set
         ),
@@ -376,9 +376,13 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
 /// the file".
 fn web_query_set(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("data.webQuerySet", "missing `name`"))?;
+    let sheet = str_param(p, "sheet").map(str::trim).filter(|n| !n.is_empty());
     let on = bool_param(p, "refreshOnOpen").ok_or_else(|| bad("data.webQuerySet", "missing `refreshOnOpen`"))?;
     edit(s, |cx| {
-        let Some(q) = cx.wb.web_queries.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&name)) else { return Err(EngineError::Other(format!("No saved connection named `{name}`."))) };
+        // Connections are identified by their (sheet, name) pair everywhere else; a bare name
+        // matches the first, like the pane's selected entry when it does not say the sheet.
+        let found = cx.wb.web_queries.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&name) && sheet.as_ref().is_none_or(|sh| q.sheet.eq_ignore_ascii_case(sh)));
+        let Some(q) = found else { return Err(EngineError::Other(format!("No saved connection named `{name}`."))) };
         q.refresh_on_open = on;
         cx.structural = true;
         Ok(Json::Null)
