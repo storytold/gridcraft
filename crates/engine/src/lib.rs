@@ -505,6 +505,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Whether `link.open` may open web and e-mail addresses without the user's confirmation
+    /// (#2181). Host code sets it; no command does.
+    pub link_policy: links::LinkPolicy,
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
