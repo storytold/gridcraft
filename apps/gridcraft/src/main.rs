@@ -206,10 +206,15 @@ fn services() -> Services {
 /// Opens a URL or file with the system's default application.
 fn open_with_system(target: &str) {
     // Last line of defence behind `link.open` and the click prompt: the system only ever gets
-    // http, https and mailto addresses.
-    let gridcraft_engine::links::LinkKind::External(target) = gridcraft_engine::links::classify(target) else {
-        log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
-        return;
+    // http, https and mailto addresses, or an existing document on this computer (never a
+    // program, script or shortcut: `links::is_local_document`).
+    let target = match gridcraft_engine::links::classify(target) {
+        gridcraft_engine::links::LinkKind::External(t) => t,
+        _ if gridcraft_engine::links::is_local_document(target) && std::path::Path::new(target).is_file() => target.to_string(),
+        _ => {
+            log::warn!("refused to open {target:?}: only http, https, mailto links and local documents are opened");
+            return;
+        }
     };
     let target = target.as_str();
     let cmd = if cfg!(target_os = "macos") {

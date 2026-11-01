@@ -53,11 +53,19 @@ pub(super) fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
             h.target.clone()
         }
     };
-    match crate::links::classify(&target) {
+    let workbook_path = s.doc().ok().and_then(|d| d.path.clone());
+    match crate::links::classify_in(&target, workbook_path.as_deref()) {
         crate::links::LinkKind::Internal(r) => crate::cmd::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
+        }
+        crate::links::LinkKind::LocalFile(path) => {
+            if !std::path::Path::new(&path).is_file() {
+                return Err(EngineError::Other(format!("The file wasn't found:\n{path}")));
+            }
+            s.ui_requests.push(crate::UiRequest::OpenUrl(path.clone()));
+            Ok(json!({"opened": path}))
         }
         crate::links::LinkKind::Refused(why) => Err(EngineError::Other(why)),
     }

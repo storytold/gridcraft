@@ -508,7 +508,7 @@ impl Dialog {
                     "insert.link",
                     vec![
                         Text { key: "text", label: "Display:" },
-                        Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
+                        Text { key: "target", label: "Link to (web address, e-mail, file or Sheet!A1):" },
                         Text { key: "tooltip", label: "ScreenTip:" },
                     ],
                     json!({"target": "https://"}),
