@@ -1449,6 +1449,35 @@ fn case_sensitive_sort_puts_lowercase_first() {
 }
 
 #[test]
+fn sort_text_as_numbers_orders_numeric_text_by_value() {
+    let col = |s: &Session| -> Vec<Value> { (1..=7).map(|r| v(s, &format!("A{r}"))).collect() };
+    let mut s = s();
+    for (cell, input) in [("A1", "10"), ("A2", "'9"), ("A3", "'1"), ("A4", "2"), ("A5", "'abc"), ("A6", "'(4)"), ("A7", "'10")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    // Without the option, numeric text is text: after every real number.
+    s.execute("data.sort", json!({"range": "A1:A7", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(col(&s)[..3], [Value::from(2.0), Value::from(10.0), Value::from("(4)")]);
+    // Ties keep their order, and text that is not a number stays after the numbers.
+    s.execute("data.sort", json!({"range": "A1:A7", "header": false, "textAsNumbers": true, "keys": [{"column": "A"}]})).unwrap();
+    let expected = [Value::from("(4)"), "1".into(), 2.0.into(), "9".into(), 10.0.into(), "10".into(), "abc".into()];
+    assert_eq!(col(&s), expected);
+    // Descending puts the text that is not a number first.
+    s.execute("data.sort", json!({"range": "A1:A7", "header": false, "keys": [{"column": "A", "order": "desc", "textAsNumbers": true}]})).unwrap();
+    assert_eq!(col(&s)[0], Value::from("abc"));
+    assert_eq!(col(&s)[6], Value::from("(4)"));
+}
+
+#[test]
+fn sort_text_as_numbers_keeps_text_for_custom_lists() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["'2"], ["'10"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A2", "header": false, "textAsNumbers": true, "keys": [{"column": "A", "customList": ["10", "2"]}]}))
+        .unwrap();
+    assert_eq!([v(&s, "A1"), v(&s, "A2")], ["10", "2"].map(Value::from));
+}
+
+#[test]
 fn sort_with_a_sheet_prefix_sorts_the_named_sheet() {
     let col = |s: &Session, sheet: &str| -> Vec<Value> {
         let wb = &s.doc().unwrap().wb;
