@@ -19,6 +19,7 @@ use crate::SheetApp;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
+use gridcraft_engine::cmd::print::PrintScaling;
 
 mod options;
 mod print;
@@ -108,6 +109,16 @@ const PROPERTIES: [(&str, &str); 6] = [
     ("description", "Description"),
 ];
 
+/// Inputs that determine cached pagination, including a view-only active-sheet change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrintPreviewKey {
+    document: u64,
+    revision: u64,
+    active_sheet: usize,
+    all_sheets: bool,
+    scaling: PrintScaling,
+}
+
 /// The open Backstage view.
 #[derive(Clone, Debug)]
 pub struct Backstage {
@@ -116,12 +127,12 @@ pub struct Backstage {
     props: [String; 6],
     /// Print: the whole workbook rather than the active sheet.
     pub print_all: bool,
-    /// Print: fit each sheet on one page.
-    pub fit_to_page: bool,
+    /// Print: a job override, or each sheet's own Page Setup.
+    pub scaling: PrintScaling,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview for (document, revision, active sheet, whole workbook, scaling override).
+    preview: Option<(PrintPreviewKey, Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -134,12 +145,18 @@ pub const SAVE_TYPES: [(&str, &str); 4] =
     [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
 
 impl Backstage {
+    /// The same job options drive the preview, Print button and parameterless UI submission.
+    pub fn print_params(&self) -> Json {
+        json!({"sheets": if self.print_all { "all" } else { "active" }, "scaling": self.scaling.id()})
+    }
+
+    /// Open a fresh Backstage view with the workbook's own printing defaults.
     pub fn new(page: Page) -> Backstage {
         Backstage {
             page,
             props: Default::default(),
             print_all: false,
-            fit_to_page: false,
+            scaling: PrintScaling::PageSetup,
             preview_page: 0,
             preview: None,
             save_format: "xlsx",
