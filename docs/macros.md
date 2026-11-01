@@ -144,9 +144,9 @@ doesn't exist, a cell outside the grid), is refused before anything runs:
    do; a step that deletes one of them, or changes the size of a range a Repeat is going over,
    stops the run.
 
-`macro.check {name, inputs?, onConflict?, overwrite?, timeLimit?}` reports the bound inputs, the
-output anchor, any approval needed and the footprint, and puts back everything the dry run
-changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
+`macro.check {name, inputs?, output?, onConflict?, overwrite?, timeLimit?}` reports the bound
+inputs, the output anchor (`output` when given), any approval needed and the footprint, and puts
+back everything the dry run changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
 when it wouldn't, `errors` says why: the run would fail at a step, a Stop step rolls it back, it
 would write over data under `ask` or `fail`, shifting can't make room (the check shifts and
 checks again, then puts everything back), or the run would go past
