@@ -308,7 +308,7 @@ impl DocWindows {
             app.doc_tabs = Some(strip);
             app.ui(ui);
             if let Some(t) = app.doc_tabs.take() {
-                self.apply(app, TabTarget::Root, t);
+                self.apply(app, TabTarget::Root, t, ctx);
             }
         }
         // Undocked windows, each with its own strip.
@@ -340,7 +340,7 @@ impl DocWindows {
                 },
             );
             for (id, t) in done {
-                self.apply(app, TabTarget::Float(id), t);
+                self.apply(app, TabTarget::Float(id), t, ctx);
             }
             for event in events {
                 match event {
@@ -359,7 +359,7 @@ impl DocWindows {
     }
 
     /// Applies what the user did in one window's strip to that window.
-    fn apply(&mut self, app: &mut SheetApp, target: TabTarget, tabs: crate::doc_tabs::DocTabs) {
+    fn apply(&mut self, app: &mut SheetApp, target: TabTarget, tabs: crate::doc_tabs::DocTabs, ctx: &egui::Context) {
         use crate::doc_tabs::TabAction as A;
         if let Some((moved, at)) = tabs.reordered
             && let Some(g) = self.group_mut(target)
@@ -419,25 +419,62 @@ impl DocWindows {
                 }
             }
             A::Detach(w) => {
-                if let Some(g) = self.group_mut(target) {
-                    g.remove(w);
-                }
-                let emptied = match target {
-                    TabTarget::Float(id) => self.floats.get(id).is_some_and(|g| g.order.is_empty()),
-                    TabTarget::Root => false,
+                self.detach_tab(target, w);
+            }
+            A::DropOutside(w) => {
+                // Dropped outside its own strip: another window takes it, or it becomes one.
+                let under = self.window_under_cursor(app, ctx);
+                let same = match under {
+                    Some(None) => self.root.contains(w),
+                    Some(Some(id)) => self.floats.get(id).is_some_and(|g| g.contains(w)),
+                    None => false,
                 };
-                if emptied {
-                    if let TabTarget::Float(id) = target {
-                        if self.focused == Focus::Float(id) {
-                            self.focused = Focus::Root;
-                        }
-                        self.floats.close(id);
-                    }
+                match (under, same) {
+                    (Some(t), false) => self.move_tab(w, t),
+                    (Some(_), true) => {}
+                    (None, _) => self.detach_tab(target, w),
                 }
-                let id = self.floats.open(Group::new(w));
-                self.focused = Focus::Float(id);
             }
         }
+    }
+
+    /// Undocks a tab into a native window of its own, closing its window when it loses its last
+    /// tab.
+    fn detach_tab(&mut self, target: TabTarget, w: u64) {
+        if let Some(g) = self.group_mut(target) {
+            g.remove(w);
+        }
+        let emptied = match target {
+            TabTarget::Float(id) => self.floats.get(id).is_some_and(|g| g.order.is_empty()),
+            TabTarget::Root => false,
+        };
+        if emptied
+            && let TabTarget::Float(id) = target
+        {
+            if self.focused == Focus::Float(id) {
+                self.focused = Focus::Root;
+            }
+            self.floats.close(id);
+        }
+        let id = self.floats.open(Group::new(w));
+        self.focused = Focus::Float(id);
+    }
+
+    /// The native window under the OS cursor: `Some(None)` for the main window, `Some(Some(id))`
+    /// for an undocked one, `None` outside every window.
+    fn window_under_cursor(&self, app: &SheetApp, ctx: &egui::Context) -> Option<Option<WindowId>> {
+        let (x, y) = (app.services.cursor_px?)()?;
+        let scale = ctx.pixels_per_point().max(0.1);
+        let p = egui::pos2(x / scale, y / scale);
+        let rects: Vec<(egui::ViewportId, egui::Rect)> =
+            ctx.input(|i| i.raw.viewports.iter().filter_map(|(id, v)| v.outer_rect.map(|r| (*id, r))).collect());
+        for (viewport, rect) in rects {
+            if !rect.contains(p) {
+                continue;
+            }
+            return Some(if viewport == egui::ViewportId::ROOT { None } else { self.float_viewports.window_of(viewport) });
+        }
+        None
     }
 
     /// Moves a tab into another native window (WPS' "Move tab to"), removing it from the window it

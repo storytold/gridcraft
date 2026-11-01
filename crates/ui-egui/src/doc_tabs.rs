@@ -33,6 +33,8 @@ pub enum TabAction {
     CloseAll,
     /// Undock the tab: the workbook gets a native window of its own.
     Detach(u64),
+    /// The tab was dropped outside its window's strip: the shell decides which window takes it.
+    DropOutside(u64),
     /// Keep the tab first in the strip.
     Pin(u64),
     /// Move the tab to the start or the end of the strip.
@@ -231,7 +233,7 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
             let at = rects.iter().filter(|(id, r)| *id != w && p.x > r.center().x).count();
             reordered = Some((w, at));
         } else {
-            action = Some(TabAction::Detach(w));
+            action = Some(TabAction::DropOutside(w));
         }
     }
     tabs.action = action;
