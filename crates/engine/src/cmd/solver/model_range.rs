@@ -44,6 +44,68 @@ fn saved_model_cells(sheet: &Sheet, start: CellRef) -> Vec<CellRef> {
     }
 }
 
+/// How many cells the options row of Save Model (`={…}`, one row) spans.
+fn options_width(formula: &str) -> u32 {
+    u32::try_from(formula.split(',').count()).unwrap_or(u32::MAX)
+}
+
+/// The options row is an array constant that spills `width - 1` cells to the right of `anchor`.
+/// Refused, before anything is written, when the spill would run off the sheet or be blocked
+/// (the anchor would show `#SPILL!`): a cell there holds content or another formula's spilled
+/// values, or a merged area or a table meets the row. `ours` are the cells Save Model
+/// writes or clears (a model saved at the same place before, whose options spill may be
+/// replaced); `used` are the model's own cells, which the spill must not cover.
+fn check_options_spill(sheet: &Sheet, anchor: CellRef, width: u32, ours: &[CellRef], used: &[CellRef]) -> Result<()> {
+    if width <= 1 {
+        return Ok(());
+    }
+    let end = anchor.col.checked_add(width - 1).filter(|c| *c < gridcraft_core::MAX_COLS).ok_or_else(|| {
+        EngineError::Other(format!(
+            "The saved model's options need {width} cells to the right from {}; choose another place to save it.",
+            anchor.a1()
+        ))
+    })?;
+    let full = RangeRef::new(anchor, CellRef::new(anchor.row, end));
+    let spill = RangeRef::new(CellRef::new(anchor.row, anchor.col.saturating_add(1)), CellRef::new(anchor.row, end));
+    let blocked =
+        |why: String| EngineError::Other(format!("The saved model's options fill {}, but {why}; choose another place to save it.", spill.a1()));
+    if let Some(c) = used.iter().find(|c| spill.contains(**c)) {
+        return Err(blocked(format!("{} is a cell of the model", c.a1())));
+    }
+    for c in spill.iter() {
+        if sheet.cells.has(c) {
+            return Err(blocked(format!("{} isn't empty", c.a1())));
+        }
+        if sheet.spill.contains_key(&c) && sheet.spill_anchor(c).is_none_or(|a| !ours.contains(&a)) {
+            return Err(blocked(format!("{} holds the values of another formula", c.a1())));
+        }
+    }
+    if sheet.merges.iter().any(|m| m.intersects(&full)) {
+        return Err(blocked("merged cells are in the way".into()));
+    }
+    // A dynamic array can't spill into a table.
+    if sheet.tables.iter().any(|t| t.range.intersects(&full)) {
+        return Err(blocked("a table is in the way".into()));
+    }
+    Ok(())
+}
+
+/// Refused when a cell of the model's column holds another formula's spilled values: the
+/// formula written there would block that spill (the other formula would show `#SPILL!`).
+/// `ours` are as in [`check_options_spill`]: a model saved at the same place before may be
+/// replaced.
+fn check_column_spills(sheet: &Sheet, column: RangeRef, ours: &[CellRef]) -> Result<()> {
+    for c in column.iter() {
+        if sheet.spill.contains_key(&c) && sheet.spill_anchor(c).is_none_or(|a| !ours.contains(&a)) {
+            return Err(EngineError::Other(format!(
+                "The saved model would cover {}, which holds the values of another formula; choose another place to save it.",
+                c.a1()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `data.solverSaveModel`: writes the model on cells of its sheet, in one step. Saving over a
 /// longer model saved at the same cell clears the rest of it, so Load Model reads the new one.
 pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
@@ -78,16 +140,13 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(format!("{} overlaps the model's cells; choose another place to save it.", range.a1())));
     }
     let sheet = model.sheet;
+    let sh = s.doc()?.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     // What is left of a model saved here before; the new model's own cells stay.
-    let stale: Vec<CellRef> = s
-        .doc()?
-        .wb
-        .sheet(sheet)
-        .map(|sh| saved_model_cells(sh, to))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|c| !range.contains(*c) && !used.contains(c))
-        .collect();
+    let stale: Vec<CellRef> = saved_model_cells(sh, to).into_iter().filter(|c| !range.contains(*c) && !used.contains(c)).collect();
+    let ours: Vec<CellRef> = range.iter().chain(stale.iter().copied()).collect();
+    let width = rows.last().map_or(1, |f| options_width(f));
+    check_column_spills(sh, range, &ours)?;
+    check_options_spill(sh, CellRef::new(last, to.col), width, &ours, &used)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let cells: Vec<CellRef> = range.iter().collect();

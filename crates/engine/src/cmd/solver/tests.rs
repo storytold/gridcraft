@@ -446,9 +446,9 @@ fn save_and_load_model_round_trip_through_cells() {
     // A Value Of goal and the Evolutionary options survive too; an explicit model is saved
     // as given.
     let evo = json!({"objective": "B1", "goal": "value", "value": -2.5, "variables": "A1:A2", "constraints": ["A1:A2 <= 10"], "nonNegative": false, "method": "evolutionary", "populationSize": 40, "randomSeed": 3, "requireBounds": false});
-    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "J5", "model": evo})).unwrap()["range"], "J5:J8");
-    assert_eq!(formula(&s, "J5"), "$B$1=-2.5");
-    let m = s.execute("data.solverLoadModel", json!({"from": "J5:J8"})).unwrap()["model"].clone();
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "J10", "model": evo})).unwrap()["range"], "J10:J13");
+    assert_eq!(formula(&s, "J10"), "$B$1=-2.5");
+    let m = s.execute("data.solverLoadModel", json!({"from": "J10:J13"})).unwrap()["model"].clone();
     assert_eq!((m["goal"].as_str(), m["value"].as_f64(), m["nonNegative"].as_bool()), (Some("value"), Some(-2.5), Some(false)), "{m}");
     assert_eq!((m["method"].as_str(), m["populationSize"].as_f64(), m["randomSeed"].as_f64()), (Some("evolutionary"), Some(40.0), Some(3.0)));
     assert_eq!(m["requireBounds"], false);
@@ -603,6 +603,58 @@ fn saving_and_resetting_a_model_keep_the_users_own_solver_names() {
     assert_eq!((r["removed"].as_u64(), r["masked"].as_bool()), (Some(model_names as u64), Some(false)), "{r}");
     assert_eq!(names(&s), mine);
     assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+}
+
+#[test]
+fn save_model_refuses_a_place_where_the_options_cannot_spill() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)"), ("H24", "=SEQUENCE(1,3)"), ("K30", "=SEQUENCE(3)"), ("M50", "=SEQUENCE(3)")]);
+    // Tables whose empty data rows meet an options row: one in its way, one holding the
+    // options cell.
+    for range in ["T59:U62", "W69:W71"] {
+        s.execute("insert.table", json!({"range": range, "header": true})).unwrap();
+    }
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["F4 <= 5"]});
+    let save = |s: &mut Session, to: &str| s.execute("data.solverSaveModel", json!({"to": to, "model": model.clone()}));
+    // The options row (H4) spills into I4:O4: a value in its last cell is in the way.
+    set(&mut s, &[("O4", "x")]);
+    let e = save(&mut s, "H1").unwrap_err().to_string();
+    assert!(e.contains("I4:O4") && e.contains("O4 isn't empty"), "{e}");
+    assert_eq!((formula(&s, "H1"), formula(&s, "H4")), (String::new(), String::new()));
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    // With the row clear the options spill, and saving again at the same cell replaces them.
+    set(&mut s, &[("O4", "")]);
+    for _ in 0..2 {
+        assert_eq!(save(&mut s, "H1").unwrap()["range"], "H1:H4");
+        assert_eq!(
+            (at(&s, "Sheet1", "H4"), at(&s, "Sheet1", "I4"), at(&s, "Sheet1", "O4")),
+            (Value::number(1.0), Value::number(1.0), Value::number(50.0))
+        );
+    }
+    // Refused: in the options row, a formula (H24), another formula's spilled values (K31,
+    // from K30), a cell of the model (F4), merged cells, a table and the sheet's last columns;
+    // a column over another formula's spilled values (I24 of H24:J24, M51 of M50:M52) or with
+    // its options cell in a table.
+    s.execute("home.mergeCells", json!({"range": "S8:T9"})).unwrap();
+    for (to, why) in [
+        ("G21", "H24 isn't empty"),
+        ("J28", "K31 holds the values of another formula"),
+        ("E1", "F4 is a cell of the model"),
+        ("R5", "merged"),
+        ("S57", "T60:Z60, but a table is in the way"),
+        ("XFA1", "need 8 cells"),
+        ("I21", "cover I24, which holds the values of another formula"),
+        ("M51", "cover M51, which holds the values of another formula"),
+        ("W67", "X70:AD70, but a table is in the way"),
+    ] {
+        let e = save(&mut s, to).unwrap_err().to_string();
+        assert!(e.contains(why), "{to}: {e}");
+        assert_eq!(formula(&s, to), "", "{to}");
+    }
+    assert_eq!(
+        (at(&s, "Sheet1", "J24"), at(&s, "Sheet1", "K32"), at(&s, "Sheet1", "M52")),
+        (Value::number(3.0), Value::number(3.0), Value::number(3.0))
+    );
 }
 
 #[test]
