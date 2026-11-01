@@ -152,13 +152,17 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 act(app, "home.strikethrough", json!({}));
             }
-            let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
+            let border_color = app.grid.last_border_color.clone();
+            let border_color_accent =
+                gridcraft_engine::model::Color::from_hex(&border_color).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
+            let (b, ba) = split_button(ui, Icon::Borders, border_color_accent, "Borders");
             control_keytip(app, ui, &ba, "home.borders");
             if b {
-                act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
+                act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": border_color}));
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
-            egui::Popup::menu(&ba).show(|ui| {
+            let forced_border_color = invoke(app, "home.borderLineColor");
+            egui::Popup::menu(&ba).open_memory(popup_command(forced_border_color, ba.clicked())).show(|ui| {
                 for (label, preset) in [
                     ("Bottom Border", "bottom"),
                     ("Top Border", "top"),
@@ -177,10 +181,19 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 ] {
                     if crate::border_preview::preset_button(ui, label, preset).clicked() {
                         app.grid.last_border = preset.to_string();
-                        act(app, "home.borders", json!({"preset": preset}));
+                        act(app, "home.borders", json!({"preset": preset, "color": app.grid.last_border_color.clone()}));
                     }
                 }
                 ui.separator();
+                let line_color_label = app.ui.language.tr("Line Color");
+                ui.menu_button(line_color_label, |ui| {
+                    let colors = theme_colors(app);
+                    let automatic = app.ui.language.tr("Automatic");
+                    if let Some(color) = color_palette(ui, &colors, &automatic) {
+                        app.grid.last_border_color = if color == "none" { "auto".into() } else { color };
+                        ui.close();
+                    }
+                });
                 if ui.button("More Borders…").clicked() {
                     app.open_dialog("formatCells", json!({"tab": "Border"}));
                 }

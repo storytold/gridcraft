@@ -28,6 +28,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Desmesclar Células",
         "Fill Color" => "Cor de Preenchimento",
         "Font Color" => "Cor da Fonte",
+        "Line Color" => "Cor da Linha",
         "Borders" => "Bordas",
         "Top\nAlign" => "Alinhar\nno Topo",
         "Middle\nAlign" => "Alinhar\nno Meio",

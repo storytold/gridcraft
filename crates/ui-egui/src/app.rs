@@ -47,6 +47,7 @@ impl SheetApp {
             control_rx: None,
             grid: grid::GridState {
                 last_border: "bottom".into(),
+                last_border_color: "auto".into(),
                 last_fill: "#FFFF00".into(),
                 last_font_color: "#C00000".into(),
                 ..Default::default()

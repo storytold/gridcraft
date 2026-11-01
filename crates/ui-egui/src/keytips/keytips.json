@@ -1,2578 +1,2577 @@
 {
- "doc": [
-  "Single source of truth for Excel-style sequential access keys (Alt+H+X+X style).",
-  "The generated keytip_table/generated.rs is produced from this file: `cargo xtask keytips`.",
-  "Adding or removing a shortcut is a one-line edit here. Rules:",
-  "  - seq: the access-key sequence, letters and digits only (two-letter units like \"JI\" are one entry).",
-  "  - kind: \"tab\" (switches a ribbon tab), \"command\" (runs a command id), \"dialog\" (opens a dialog by name),",
-  "    \"continue\" (an explicit group level with no deeper sequences yet).",
-  "  - Intermediate levels need no entries: the matcher waits automatically when deeper sequences exist.",
-  "  - pending: true = the command does not exist yet; the sequence stays reserved and silent until it lands.",
-  "  - params: an optional JSON object passed to a command or dialog, for menu items that share one id (the Borders presets: HBO {\"preset\": \"bottom\"}).",
-  "  - Keep entries grouped by tab and sorted by sequence within a group; the FIRST entry for a tab is its canonical badge (legacy aliases come after it)."
- ],
- "sequences": [
-  {
-   "seq": "F",
-   "kind": "tab",
-   "target": "File",
-   "excel": "File tab (Backstage view)",
-   "note": "Opens the File view on Home; its letters below still run their commands."
-  },
-  {
-   "seq": "H",
-   "kind": "tab",
-   "target": "Home"
-  },
-  {
-   "seq": "N",
-   "kind": "tab",
-   "target": "Insert"
-  },
-  {
-   "seq": "JI",
-   "kind": "tab",
-   "target": "Draw",
-   "note": "Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors."
-  },
-  {
-   "seq": "P",
-   "kind": "tab",
-   "target": "Page Layout"
-  },
-  {
-   "seq": "M",
-   "kind": "tab",
-   "target": "Formulas"
-  },
-  {
-   "seq": "A",
-   "kind": "tab",
-   "target": "Data"
-  },
-  {
-   "seq": "R",
-   "kind": "tab",
-   "target": "Review"
-  },
-  {
-   "seq": "W",
-   "kind": "tab",
-   "target": "View"
-  },
-  {
-   "seq": "E",
-   "kind": "tab",
-   "target": "Home",
-   "note": "Legacy Edit-menu path (Excel 2003); leads to the same Home menus."
-  },
-  {
-   "seq": "O",
-   "kind": "tab",
-   "target": "Home",
-   "note": "Legacy Format-menu path (Excel 2003); leads to the same Home menus."
-  },
-  {
-   "seq": "HAR",
-   "kind": "command",
-   "target": "home.alignRight"
-  },
-  {
-   "seq": "HAT",
-   "kind": "command",
-   "target": "home.alignTop",
-   "excel": "Excel: Top Align"
-  },
-  {
-   "seq": "HAM",
-   "kind": "command",
-   "target": "home.alignMiddle",
-   "excel": "Excel: Middle Align"
-  },
-  {
-   "seq": "HAB",
-   "kind": "command",
-   "target": "home.alignBottom",
-   "excel": "Excel: Bottom Align"
-  },
-  {
-   "seq": "HAL",
-   "kind": "command",
-   "target": "home.alignLeft"
-  },
-  {
-   "seq": "HAC",
-   "kind": "command",
-   "target": "home.alignCenter"
-  },
-  {
-   "seq": "HVS",
-   "kind": "dialog",
-   "target": "pasteSpecial"
-  },
-  {
-   "seq": "ES",
-   "kind": "dialog",
-   "target": "pasteSpecial",
-   "excel": "Classic Paste Special dialog (legacy Edit route); A/F/T/V are dialog mnemonics"
-  },
-  {
-   "seq": "HOI",
-   "kind": "command",
-   "target": "home.autofitColumnWidth"
-  },
-  {
-   "seq": "OCA",
-   "kind": "command",
-   "target": "home.autofitColumnWidth",
-   "note": "Legacy Format menu."
-  },
-  {
-   "seq": "WVG",
-   "kind": "command",
-   "target": "view.gridlines"
-  },
-  {
-   "seq": "H0",
-   "kind": "command",
-   "target": "home.increaseDecimal",
-   "excel": "Increase Decimals",
-   "note": "containment(Increase Decimal)"
-  },
-  {
-   "seq": "H1",
-   "kind": "command",
-   "target": "home.bold",
-   "excel": "Bold",
-   "note": ""
-  },
-  {
-   "seq": "H2",
-   "kind": "command",
-   "target": "home.italic",
-   "excel": "Italic",
-   "note": ""
-  },
-  {
-   "seq": "H3",
-   "kind": "command",
-   "excel": "Excel: Underline; fires immediately (not a menu)",
-   "target": "home.underline"
-  },
-  {
-   "seq": "H5",
-   "kind": "command",
-   "target": "home.decreaseIndent",
-   "excel": "Decrease Indent",
-   "note": ""
-  },
-  {
-   "seq": "H6",
-   "kind": "command",
-   "target": "home.increaseIndent",
-   "excel": "Increase Indent",
-   "note": ""
-  },
-  {
-   "seq": "H9",
-   "kind": "command",
-   "target": "home.decreaseDecimal",
-   "excel": "Decrease Decimals",
-   "note": "containment(Decrease Decimal)"
-  },
-  {
-   "seq": "HAN",
-   "kind": "command",
-   "excel": "Accounting Format",
-   "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "home.accounting"
-  },
-  {
-   "seq": "HAS",
-   "kind": "command",
-   "target": "home.addIns",
-   "excel": "Add-ins",
-   "note": "containment(Add-ins)"
-  },
-  {
-   "seq": "HB",
-   "kind": "continue",
-   "excel": "Borders Menu",
-   "note": "group level:"
-  },
-  {
-   "seq": "HBA",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "all"
-   },
-   "excel": "All Borders",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBB",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "doubleBottom"
-   },
-   "excel": "Bottom Double Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBC",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "topThickBottom"
-   },
-   "excel": "Top and Thick Bottom Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBD",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "topBottom"
-   },
-   "excel": "Top and Bottom Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBE",
-   "kind": "command",
-   "target": "home.eraseBorder",
-   "pending": true,
-   "excel": "Erase Border",
-   "note": "pending: Excel arms an eraser pen; GridCraft has no border pen mode yet"
-  },
-  {
-   "seq": "HBG",
-   "kind": "command",
-   "target": "home.drawBorder",
-   "excel": "Draw Border Grid",
-   "note": "containment(Draw Border)"
-  },
-  {
-   "seq": "HBH",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "thickBottom"
-   },
-   "excel": "Thick Bottom Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBI",
-   "kind": "command",
-   "target": "home.borderLineColor",
-   "pending": true,
-   "excel": "Line Color",
-   "note": "pending: Line Color submenu"
-  },
-  {
-   "seq": "HBL",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "left"
-   },
-   "excel": "Left Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBM",
-   "kind": "dialog",
-   "target": "formatCells",
-   "params": {
-    "tab": "Border"
-   },
-   "excel": "More Borders",
-   "note": "Format Cells on its Border tab"
-  },
-  {
-   "seq": "HBN",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "none"
-   },
-   "excel": "No Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBO",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "bottom"
-   },
-   "excel": "Bottom Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBP",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "top"
-   },
-   "excel": "Top Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBR",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "right"
-   },
-   "excel": "Right Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBS",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "outside"
-   },
-   "excel": "Outside Borders",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBT",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "thickOutside"
-   },
-   "excel": "Thick Outside Borders",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBU",
-   "kind": "command",
-   "target": "home.borders",
-   "params": {
-    "preset": "topDoubleBottom"
-   },
-   "excel": "Top and Double Bottom Border",
-   "note": "Borders menu item"
-  },
-  {
-   "seq": "HBW",
-   "kind": "command",
-   "target": "home.drawBorder",
-   "excel": "Draw Border",
-   "note": ""
-  },
-  {
-   "seq": "HBY",
-   "kind": "command",
-   "target": "home.borderLineStyle",
-   "pending": true,
-   "excel": "Line Style",
-   "note": "pending: Line Style submenu"
-  },
-  {
-   "seq": "HC",
-   "kind": "command",
-   "excel": "Copy",
-   "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "edit.copy"
-  },
-  {
-   "seq": "HDC",
-   "kind": "command",
-   "target": "home.deleteColumns",
-   "excel": "Delete Columns",
-   "note": "Delete Columns"
-  },
-  {
-   "seq": "HDD",
-   "kind": "dialog",
-   "target": "deleteCells",
-   "excel": "Delete Cells",
-   "note": ""
-  },
-  {
-   "seq": "HDR",
-   "kind": "command",
-   "target": "home.deleteRows",
-   "excel": "Delete Rows",
-   "note": "Delete Rows"
-  },
-  {
-   "seq": "HDS",
-   "kind": "command",
-   "target": "home.deleteSheet",
-   "excel": "Delete Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HEA",
-   "kind": "command",
-   "target": "edit.clearAll",
-   "excel": "Clear All",
-   "note": ""
-  },
-  {
-   "seq": "HEC",
-   "kind": "command",
-   "target": "edit.clearContents",
-   "excel": "Clear Contents",
-   "note": ""
-  },
-  {
-   "seq": "HEF",
-   "kind": "command",
-   "target": "edit.clearFormats",
-   "excel": "Clear Formats",
-   "note": ""
-  },
-  {
-   "seq": "HEL",
-   "kind": "command",
-   "target": "edit.clearHyperlinks",
-   "excel": "Clear Hyperlinks",
-   "note": ""
-  },
-  {
-   "seq": "HEM",
-   "kind": "command",
-   "target": "edit.clearComments",
-   "excel": "Clear Comments and Notes",
-   "note": "containment(Clear Comments and Notes)"
-  },
-  {
-   "seq": "HFC",
-   "kind": "control",
-   "target": "home.fontColor",
-   "excel": "Font Color",
-   "note": "opens the font-color palette"
-  },
-  {
-   "seq": "HFDC",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "Find Conditional Formatting",
-   "note": "containment(Conditional Formatting)"
-  },
-  {
-   "seq": "HFDF",
-   "kind": "dialog",
-   "target": "find",
-   "excel": "Find",
-   "note": ""
-  },
-  {
-   "seq": "HFDG",
-   "kind": "dialog",
-   "target": "goTo",
-   "excel": "Go To",
-   "note": ""
-  },
-  {
-   "seq": "HFDM",
-   "kind": "command",
-   "target": "edit.find",
-   "excel": "Find Notes",
-   "note": "containment(Find)"
-  },
-  {
-   "seq": "HFDO",
-   "kind": "command",
-   "target": "home.selectObjects",
-   "pending": true,
-   "excel": "Select Objects",
-   "note": "Select Objects; reserved until the command lands"
-  },
-  {
-   "seq": "HFDP",
-   "kind": "command",
-   "target": "arrange.selectionPane",
-   "excel": "Selection Pane",
-   "note": ""
-  },
-  {
-   "seq": "HFDR",
-   "kind": "dialog",
-   "target": "find",
-   "excel": "Replace",
-   "note": "opens Find and Replace"
-  },
-  {
-   "seq": "HFDS",
-   "kind": "dialog",
-   "target": "goToSpecial",
-   "excel": "Go To Special",
-   "note": ""
-  },
-  {
-   "seq": "HFF",
-   "kind": "control",
-   "target": "home.fontName",
-   "excel": "Font Selection",
-   "note": "opens the font dropdown"
-  },
-  {
-   "seq": "HFG",
-   "kind": "command",
-   "target": "home.increaseFontSize",
-   "excel": "Increase Font Size",
-   "note": ""
-  },
-  {
-   "seq": "HFI",
-   "kind": "continue",
-   "excel": "Fill",
-   "note": "group level: containment(Fill Up)"
-  },
-  {
-   "seq": "HFIA",
-   "kind": "command",
-   "target": "home.fillAcrossWorksheets",
-   "pending": true,
-   "excel": "Fill Across Worksheets",
-   "note": "Fill Across Worksheets; reserved until the command lands"
-  },
-  {
-   "seq": "HFID",
-   "kind": "command",
-   "target": "edit.fillDown",
-   "excel": "Fill Down",
-   "note": ""
-  },
-  {
-   "seq": "HFIF",
-   "kind": "command",
-   "target": "edit.flashFill",
-   "excel": "Flash Fill",
-   "note": ""
-  },
-  {
-   "seq": "HFIJ",
-   "kind": "command",
-   "target": "home.justify",
-   "excel": "Fill Justify",
-   "note": "containment(Justify)"
-  },
-  {
-   "seq": "HFIL",
-   "kind": "command",
-   "target": "edit.fillLeft",
-   "excel": "Fill Left",
-   "note": ""
-  },
-  {
-   "seq": "HFIR",
-   "kind": "command",
-   "target": "edit.fillRight",
-   "excel": "Fill Right",
-   "note": ""
-  },
-  {
-   "seq": "HFIS",
-   "kind": "dialog",
-   "target": "series",
-   "excel": "Fill Series",
-   "note": "containment(Series)"
-  },
-  {
-   "seq": "HFIU",
-   "kind": "command",
-   "target": "edit.fillUp",
-   "excel": "Fill Up",
-   "note": ""
-  },
-  {
-   "seq": "HFK",
-   "kind": "command",
-   "target": "home.decreaseFontSize",
-   "excel": "Decrease Font Size",
-   "note": ""
-  },
-  {
-   "seq": "HFM",
-   "kind": "dialog",
-   "target": "formatCells",
-   "excel": "More Number Formats",
-   "note": "More Number Formats opens Format Cells"
-  },
-  {
-   "seq": "HFP",
-   "kind": "command",
-   "target": "edit.formatPainter",
-   "excel": "Format Painter",
-   "note": ""
-  },
-  {
-   "seq": "HFQ",
-   "kind": "control",
-   "excel": "Orientation Menu",
-   "note": "group level: containment(Orientation)",
-   "target": "home.orientation"
-  },
-  {
-   "seq": "HFS",
-   "kind": "control",
-   "target": "home.fontSize",
-   "excel": "Font Size",
-   "note": "opens the font-size dropdown"
-  },
-  {
-   "seq": "HH",
-   "kind": "control",
-   "target": "home.fillColor",
-   "excel": "Fill Color",
-   "note": "opens the fill-color palette"
-  },
-  {
-   "seq": "HIC",
-   "kind": "command",
-   "target": "home.insertColumns",
-   "excel": "Insert Columns",
-   "note": "Insert Columns"
-  },
-  {
-   "seq": "HIE",
-   "kind": "dialog",
-   "target": "insertCells",
-   "excel": "Insert Copied Cells",
-   "note": "Insert Cells (copied cells TBD)"
-  },
-  {
-   "seq": "HII",
-   "kind": "dialog",
-   "target": "insertCells",
-   "excel": "Insert Cells",
-   "note": ""
-  },
-  {
-   "seq": "HIR",
-   "kind": "command",
-   "target": "home.insertRows",
-   "excel": "Insert Rows",
-   "note": "Insert Rows"
-  },
-  {
-   "seq": "HIS",
-   "kind": "command",
-   "target": "home.insertSheet",
-   "excel": "Insert Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HJ",
-   "kind": "continue",
-   "excel": "Cell Styles",
-   "note": "group level:"
-  },
-  {
-   "seq": "HJN",
-   "kind": "command",
-   "target": "home.newCellStyle",
-   "excel": "New Cell Style",
-   "note": ""
-  },
-  {
-   "seq": "HK",
-   "kind": "command",
-   "target": "home.comma",
-   "excel": "Comma Style",
-   "note": ""
-  },
-  {
-   "seq": "HL",
-   "kind": "continue",
-   "excel": "Conditional Formatting",
-   "note": "group level: containment(Conditional Formatting)"
-  },
-  {
-   "seq": "HLC",
-   "kind": "continue",
-   "excel": "Clear Rules Menu",
-   "note": "group level: containment(Clear Rules)"
-  },
-  {
-   "seq": "HLCE",
-   "kind": "command",
-   "target": "home.clearRules",
-   "excel": "Clear Rules From Sheet",
-   "note": "containment(Clear Rules)"
-  },
-  {
-   "seq": "HLCS",
-   "kind": "command",
-   "target": "home.clearRules",
-   "excel": "Clear Rules From Cells",
-   "note": "containment(Clear Rules)"
-  },
-  {
-   "seq": "HLCT",
-   "kind": "command",
-   "target": "home.clearRules",
-   "excel": "Clear Rules From Table",
-   "note": "containment(Clear Rules)"
-  },
-  {
-   "seq": "HLD",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "Data Bars",
-   "note": "Data Bars (submenu TBD)"
-  },
-  {
-   "seq": "HLH",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "Highlight Cells",
-   "note": "Highlight Cells (submenu TBD)"
-  },
-  {
-   "seq": "HLN",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "New Rule",
-   "note": "New Rule (submenu TBD)"
-  },
-  {
-   "seq": "HLR",
-   "kind": "command",
-   "target": "home.manageRules",
-   "excel": "Manage Rules",
-   "note": "containment(Manage Rules)"
-  },
-  {
-   "seq": "HLT",
-   "kind": "command",
-   "target": "home.conditionalFormat",
-   "excel": "Top/Bottom Rules",
-   "note": "Top/Bottom (submenu TBD)"
-  },
-  {
-   "seq": "HM",
-   "kind": "continue",
-   "excel": "Merge & Center Menu",
-   "note": "group level: containment(Merge & Center)"
-  },
-  {
-   "seq": "HMA",
-   "kind": "command",
-   "target": "home.mergeAcross",
-   "excel": "Merge Across",
-   "note": ""
-  },
-  {
-   "seq": "HMC",
-   "kind": "command",
-   "target": "home.mergeCenter",
-   "excel": "Merge & Center",
-   "note": ""
-  },
-  {
-   "seq": "HMM",
-   "kind": "command",
-   "target": "home.mergeCells",
-   "excel": "Merge Cells",
-   "note": ""
-  },
-  {
-   "seq": "HMU",
-   "kind": "command",
-   "target": "home.unmergeCells",
-   "excel": "Unmerge Cells",
-   "note": ""
-  },
-  {
-   "seq": "HN",
-   "kind": "control",
-   "target": "home.numberFormat",
-   "excel": "Number Format",
-   "note": "opens the number-format dropdown"
-  },
-  {
-   "seq": "HOA",
-   "kind": "command",
-   "target": "home.autofitRowHeight",
-   "excel": "AutoFit Row Height",
-   "note": ""
-  },
-  {
-   "seq": "HOD",
-   "kind": "dialog",
-   "target": "defaultWidth",
-   "excel": "Default Column Width",
-   "note": "containment(Column Width)"
-  },
-  {
-   "seq": "HOE",
-   "kind": "command",
-   "target": "home.formatCells",
-   "excel": "Format Cells",
-   "note": ""
-  },
-  {
-   "seq": "HOH",
-   "kind": "dialog",
-   "target": "rowHeight",
-   "excel": "Row Height",
-   "note": ""
-  },
-  {
-   "seq": "HOL",
-   "kind": "command",
-   "target": "home.lockCell",
-   "excel": "Lock Cell",
-   "note": "containment(Lock Cell)"
-  },
-  {
-   "seq": "HOM",
-   "kind": "dialog",
-   "target": "moveSheet",
-   "excel": "Move or Copy Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HOP",
-   "kind": "dialog",
-   "target": "protectSheet",
-   "excel": "Protect Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HOR",
-   "kind": "dialog",
-   "target": "renameSheet",
-   "excel": "Rename Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HOT",
-   "kind": "command",
-   "target": "sheet.tabColor",
-   "excel": "Tab Color",
-   "note": ""
-  },
-  {
-   "seq": "HOUC",
-   "kind": "command",
-   "target": "home.hideColumns",
-   "excel": "Hide Columns",
-   "note": ""
-  },
-  {
-   "seq": "HOUH",
-   "kind": "command",
-   "target": "sheet.unhide",
-   "excel": "Unhide Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HOUL",
-   "kind": "command",
-   "target": "home.unhideColumns",
-   "excel": "Unhide Columns",
-   "note": ""
-  },
-  {
-   "seq": "HOUO",
-   "kind": "command",
-   "target": "home.unhideRows",
-   "excel": "Unhide Rows",
-   "note": ""
-  },
-  {
-   "seq": "HOUR",
-   "kind": "command",
-   "target": "home.hideRows",
-   "excel": "Hide Rows",
-   "note": ""
-  },
-  {
-   "seq": "HOUS",
-   "kind": "command",
-   "target": "sheet.hide",
-   "excel": "Hide Sheet",
-   "note": ""
-  },
-  {
-   "seq": "HOW",
-   "kind": "dialog",
-   "target": "columnWidth",
-   "excel": "Column Width",
-   "note": ""
-  },
-  {
-   "seq": "HP",
-   "kind": "command",
-   "target": "home.percent",
-   "excel": "Excel: Percentage Style"
-  },
-  {
-   "seq": "HSC",
-   "kind": "command",
-   "target": "data.clearFilter",
-   "excel": "Clear Filter",
-   "note": ""
-  },
-  {
-   "seq": "HSF",
-   "kind": "command",
-   "target": "data.filter",
-   "excel": "Filter",
-   "note": ""
-  },
-  {
-   "seq": "HSO",
-   "kind": "command",
-   "target": "data.sortDescending",
-   "excel": "Sort Z to A",
-   "note": ""
-  },
-  {
-   "seq": "HSS",
-   "kind": "command",
-   "target": "data.sortAscending",
-   "excel": "Sort A to Z",
-   "note": ""
-  },
-  {
-   "seq": "HSU",
-   "kind": "command",
-   "target": "data.sort",
-   "excel": "Custom Sort",
-   "note": ""
-  },
-  {
-   "seq": "HT",
-   "kind": "continue",
-   "excel": "Format as Table",
-   "note": "group level:"
-  },
-  {
-   "seq": "HTN",
-   "kind": "command",
-   "target": "table.style",
-   "excel": "New Table Style",
-   "note": ""
-  },
-  {
-   "seq": "HTP",
-   "kind": "command",
-   "target": "table.style",
-   "excel": "New Pivot Table Style",
-   "note": ""
-  },
-  {
-   "seq": "HU",
-   "kind": "continue",
-   "excel": "AutoSum",
-   "note": "group level:"
-  },
-  {
-   "seq": "HUA",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Auto Average",
-   "note": "AutoSum: Average (variant TBD)"
-  },
-  {
-   "seq": "HUC",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Auto Count Numbers",
-   "note": "AutoSum: Count (variant TBD)"
-  },
-  {
-   "seq": "HUI",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Auto Min",
-   "note": "AutoSum: Min (variant TBD)"
-  },
-  {
-   "seq": "HUM",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Auto Max",
-   "note": "AutoSum: Max (variant TBD)"
-  },
-  {
-   "seq": "HV",
-   "kind": "continue",
-   "excel": "Paste",
-   "note": "group level:"
-  },
-  {
-   "seq": "HVP",
-   "kind": "command",
-   "target": "edit.paste",
-   "excel": "Paste",
-   "note": ""
-  },
-  {
-   "seq": "HW",
-   "kind": "continue",
-   "excel": "Wrap Text Menu",
-   "note": "group level: containment(Wrap Text)"
-  },
-  {
-   "seq": "HWW",
-   "kind": "command",
-   "target": "home.wrapText",
-   "excel": "Wrap Text",
-   "note": ""
-  },
-  {
-   "seq": "HX",
-   "kind": "command",
-   "target": "edit.cut",
-   "excel": "Cut",
-   "note": ""
-  },
-  {
-   "seq": "NC1",
-   "kind": "control",
-   "target": "insert.chart.column",
-   "excel": "Column Chart",
-   "note": "Column chart (kind TBD)"
-  },
-  {
-   "seq": "NC2",
-   "kind": "command",
-   "target": "review.newComment",
-   "excel": "New Comment",
-   "note": ""
-  },
-  {
-   "seq": "NCM",
-   "kind": "dialog",
-   "target": "comment",
-   "excel": "Excel: New Comment (modern)"
-  },
-  {
-   "seq": "NCB",
-   "kind": "command",
-   "target": "insert.checkbox",
-   "excel": "Checkbox",
-   "note": ""
-  },
-  {
-   "seq": "ND",
-   "kind": "control",
-   "target": "insert.chart.scatter",
-   "excel": "Scatter Chart",
-   "note": "Scatter (kind TBD)"
-  },
-  {
-   "seq": "NE",
-   "kind": "command",
-   "target": "insert.equation",
-   "pending": true,
-   "excel": "Equations",
-   "note": "Equations; reserved until the command lands"
-  },
-  {
-   "seq": "NF",
-   "kind": "continue",
-   "excel": "Online Pictures",
-   "note": "group level: containment(Picture)"
-  },
-  {
-   "seq": "NFP",
-   "kind": "continue",
-   "excel": "From Picture Menu",
-   "note": "group level: containment(Picture)"
-  },
-  {
-   "seq": "NFPF",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Picture From File",
-   "note": "containment(Picture)"
-  },
-  {
-   "seq": "NH1",
-   "kind": "dialog",
-   "target": "headerFooter",
-   "excel": "Header & Footer",
-   "note": ""
-  },
-  {
-   "seq": "NHF",
-   "kind": "command",
-   "target": "pageLayout.headerFooter",
-   "excel": "Header & Footer",
-   "note": ""
-  },
-  {
-   "seq": "NHI",
-   "kind": "control",
-   "target": "insert.chart.hierarchy",
-   "excel": "Hierarchy Chart",
-   "note": "Hierarchy (kind TBD)"
-  },
-  {
-   "seq": "NI1",
-   "kind": "command",
-   "target": "insert.chart",
-   "excel": "Waterfall Chart",
-   "note": "Waterfall (kind TBD)"
-  },
-  {
-   "seq": "NI2",
-   "kind": "dialog",
-   "target": "insertLink",
-   "excel": "Link",
-   "note": ""
-  },
-  {
-   "seq": "NJ",
-   "kind": "command",
-   "target": "insert.object",
-   "pending": true,
-   "excel": "Object",
-   "note": "insert.object missing; reserved until the command lands"
-  },
-  {
-   "seq": "NM1T",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "SmartArt Picture",
-   "note": "containment(Picture)"
-  },
-  {
-   "seq": "NM2",
-   "kind": "command",
-   "target": "insert.chart",
-   "excel": "Map Chart",
-   "note": "Map (kind TBD)"
-  },
-  {
-   "seq": "NN1",
-   "kind": "control",
-   "target": "insert.chart.line",
-   "excel": "Line Chart",
-   "note": "Line chart (kind TBD)"
-  },
-  {
-   "seq": "NNS",
-   "kind": "command",
-   "target": "insert.icons",
-   "excel": "Icons",
-   "note": ""
-  },
-  {
-   "seq": "NP",
-   "kind": "continue",
-   "excel": "Picture",
-   "note": "group level:"
-  },
-  {
-   "seq": "NPB",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Picture from File",
-   "note": "containment(Picture)"
-  },
-  {
-   "seq": "NPF",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Place in Cell",
-   "note": "Picture in cell (source TBD)"
-  },
-  {
-   "seq": "NPI",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Place in Cell Menu",
-   "note": "Picture in cell (source TBD)"
-  },
-  {
-   "seq": "NPO",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Place over Cells Menu",
-   "note": "Picture over cells (source TBD)"
-  },
-  {
-   "seq": "NQ",
-   "kind": "control",
-   "target": "insert.chart.pie",
-   "excel": "Pie Chart",
-   "note": "Pie (kind TBD)"
-  },
-  {
-   "seq": "NR",
-   "kind": "command",
-   "target": "insert.recommendedCharts",
-   "excel": "Recommended Charts",
-   "note": ""
-  },
-  {
-   "seq": "NSA",
-   "kind": "control",
-   "target": "insert.chart.statistic",
-   "excel": "Statistical Chart",
-   "note": "Statistical chart (kind TBD)"
-  },
-  {
-   "seq": "NSC",
-   "kind": "command",
-   "target": "insert.screenshot",
-   "pending": true,
-   "excel": "Screenshot Menu",
-   "note": "Screenshot; reserved until the command lands"
-  },
-  {
-   "seq": "NSD",
-   "kind": "command",
-   "target": "insert.chart",
-   "excel": "Combo Chart",
-   "note": "Combo (kind TBD)"
-  },
-  {
-   "seq": "NSF",
-   "kind": "command",
-   "target": "insert.slicer",
-   "pending": false,
-   "excel": "Slicer",
-   "note": "insert.slicer missing (gap #8); reserved until the command lands"
-  },
-  {
-   "seq": "NSH",
-   "kind": "command",
-   "target": "insert.shape",
-   "excel": "Shapes",
-   "note": ""
-  },
-  {
-   "seq": "NSP",
-   "kind": "command",
-   "target": "insert.recommendedPivotTables",
-   "excel": "Recommended PivotTables",
-   "note": ""
-  },
-  {
-   "seq": "NST",
-   "kind": "command",
-   "target": "insert.timeline",
-   "pending": true,
-   "excel": "Timeline",
-   "note": "insert.timeline missing (gap #8); reserved until the command lands"
-  },
-  {
-   "seq": "NSZ",
-   "kind": "command",
-   "target": "insert.pivotChart",
-   "pending": false,
-   "excel": "PivotChart",
-   "note": "PivotChart; reserved until the command lands"
-  },
-  {
-   "seq": "NT",
-   "kind": "command",
-   "target": "insert.table",
-   "excel": "Table",
-   "note": ""
-  },
-  {
-   "seq": "NU",
-   "kind": "command",
-   "target": "insert.symbol",
-   "excel": "Symbols",
-   "note": "containment(Symbol)"
-  },
-  {
-   "seq": "NZS",
-   "kind": "command",
-   "target": "insert.symbol",
-   "excel": "Excel: Symbol (modern)"
-  },
-  {
-   "seq": "NV",
-   "kind": "command",
-   "target": "insert.pivotTable",
-   "excel": "PivotTable",
-   "note": ""
-  },
-  {
-   "seq": "NW",
-   "kind": "command",
-   "target": "insert.wordArt",
-   "pending": true,
-   "excel": "WordArt",
-   "note": "WordArt; reserved until the command lands"
-  },
-  {
-   "seq": "NX",
-   "kind": "command",
-   "target": "insert.textBox",
-   "excel": "Text Box",
-   "note": ""
-  },
-  {
-   "seq": "NZK",
-   "kind": "continue",
-   "excel": "Sparklines Menu",
-   "note": "group level:"
-  },
-  {
-   "seq": "NZKSL",
-   "kind": "dialog",
-   "target": "sparkline",
-   "excel": "Line Sparkline",
-   "note": ""
-  },
-  {
-   "seq": "NZKSO",
-   "kind": "dialog",
-   "target": "sparkline",
-   "excel": "Column Sparkline",
-   "note": ""
-  },
-  {
-   "seq": "NZKSW",
-   "kind": "dialog",
-   "target": "sparkline",
-   "excel": "Win/Loss Sparkline",
-   "note": ""
-  },
-  {
-   "seq": "NZTX",
-   "kind": "command",
-   "target": "insert.textBox",
-   "excel": "Text Box",
-   "note": ""
-  },
-  {
-   "seq": "NZT",
-   "kind": "command",
-   "target": "insert.textBox",
-   "excel": "Excel: Text Box (modern)"
-  },
-  {
-   "seq": "PAE",
-   "kind": "command",
-   "target": "arrange.sendBackward",
-   "excel": "Send Backward",
-   "note": ""
-  },
-  {
-   "seq": "PAF",
-   "kind": "command",
-   "target": "arrange.bringForward",
-   "excel": "Bring Forward",
-   "note": ""
-  },
-  {
-   "seq": "PB",
-   "kind": "continue",
-   "excel": "Breaks",
-   "note": "group level:"
-  },
-  {
-   "seq": "PBI",
-   "kind": "command",
-   "target": "pageLayout.breaks",
-   "excel": "Insert Page Break",
-   "note": "Insert Page Break"
-  },
-  {
-   "seq": "PBR",
-   "kind": "command",
-   "target": "pageLayout.breaks",
-   "excel": "Remove Page Break",
-   "note": "Remove Page Break"
-  },
-  {
-   "seq": "PGB",
-   "kind": "command",
-   "target": "pageLayout.background",
-   "excel": "Background",
-   "note": "Excel badge GB (Background in the Page Setup group)"
-  },
-  {
-   "seq": "PI",
-   "kind": "command",
-   "target": "pageLayout.printTitles",
-   "excel": "Print Titles",
-   "note": ""
-  },
-  {
-   "seq": "PM",
-   "kind": "continue",
-   "excel": "Margins",
-   "note": "group level:"
-  },
-  {
-   "seq": "PMA",
-   "kind": "command",
-   "target": "pageLayout.margins",
-   "excel": "Custom Margins",
-   "note": "containment(Margins)"
-  },
-  {
-   "seq": "PO",
-   "kind": "command",
-   "target": "pageLayout.orientation",
-   "excel": "Orientation",
-   "note": ""
-  },
-  {
-   "seq": "PPG",
-   "kind": "command",
-   "target": "pageLayout.printGridlines",
-   "excel": "Print Gridlines",
-   "note": ""
-  },
-  {
-   "seq": "PPH",
-   "kind": "command",
-   "target": "pageLayout.printHeadings",
-   "excel": "Print Headings",
-   "note": ""
-  },
-  {
-   "seq": "PR",
-   "kind": "continue",
-   "excel": "Print Area",
-   "note": "group level:"
-  },
-  {
-   "seq": "PRS",
-   "kind": "command",
-   "target": "pageLayout.printArea",
-   "excel": "Set Print Area",
-   "note": ""
-  },
-  {
-   "seq": "PSP",
-   "kind": "dialog",
-   "target": "pageSetup",
-   "excel": "Page Setup",
-   "note": ""
-  },
-  {
-   "seq": "PSZ",
-   "kind": "command",
-   "target": "pageLayout.size",
-   "excel": "Size",
-   "note": ""
-  },
-  {
-   "seq": "PTC",
-   "kind": "command",
-   "target": "pageLayout.themeColors",
-   "excel": "Theme Colors",
-   "note": "containment(Colors)"
-  },
-  {
-   "seq": "PTE",
-   "kind": "command",
-   "target": "pageLayout.themeEffects",
-   "excel": "Theme Effects",
-   "note": "containment(Effects)"
-  },
-  {
-   "seq": "PTF",
-   "kind": "command",
-   "target": "pageLayout.themeFonts",
-   "excel": "Theme Fonts",
-   "note": "containment(Fonts)"
-  },
-  {
-   "seq": "PTH",
-   "kind": "continue",
-   "excel": "Themes",
-   "note": "group level:"
-  },
-  {
-   "seq": "PTHB",
-   "kind": "command",
-   "target": "pageLayout.theme",
-   "excel": "Browse Themes",
-   "note": "containment(Themes)"
-  },
-  {
-   "seq": "PVG",
-   "kind": "command",
-   "target": "view.gridlines",
-   "excel": "View Gridlines",
-   "note": ""
-  },
-  {
-   "seq": "PVH",
-   "kind": "command",
-   "target": "view.headings",
-   "excel": "View Headings",
-   "note": ""
-  },
-  {
-   "seq": "MA",
-   "kind": "continue",
-   "excel": "Remove Arrows Menu",
-   "note": "group level: containment(Remove Arrows)"
-  },
-  {
-   "seq": "MAA",
-   "kind": "command",
-   "target": "formulas.removeArrows",
-   "excel": "Remove All Arrows",
-   "note": "landed in the catalog; live since T7 probe"
-  },
-  {
-   "seq": "MAP",
-   "kind": "command",
-   "target": "formulas.removePrecedentArrows",
-   "pending": true,
-   "excel": "Remove Precedent Arrows",
-   "note": "Remove Precedent Arrows; reserved until the command lands"
-  },
-  {
-   "seq": "MB",
-   "kind": "command",
-   "target": "formulas.calculateNow",
-   "excel": "Calculate Now",
-   "note": ""
-  },
-  {
-   "seq": "MC",
-   "kind": "command",
-   "target": "formulas.createFromSelection",
-   "excel": "Create From Selection",
-   "note": ""
-  },
-  {
-   "seq": "MD",
-   "kind": "command",
-   "target": "formulas.traceDependents",
-   "excel": "Trace Dependents",
-   "note": ""
-  },
-  {
-   "seq": "ME",
-   "kind": "control",
-   "excel": "Date & Time Menu",
-   "note": "group level: containment(Date & Time)",
-   "target": "formulas.dateTime"
-  },
-  {
-   "seq": "MF",
-   "kind": "dialog",
-   "target": "insertFunction",
-   "excel": "Insert Function",
-   "note": ""
-  },
-  {
-   "seq": "MG",
-   "kind": "control",
-   "excel": "Math & Trig Menu",
-   "note": "group level: containment(Math & Trig)",
-   "target": "formulas.mathTrig"
-  },
-  {
-   "seq": "MH",
-   "kind": "command",
-   "target": "formulas.showFormulas",
-   "excel": "Show Formulas",
-   "note": ""
-  },
-  {
-   "seq": "MI",
-   "kind": "continue",
-   "excel": "Financial Menu",
-   "note": "group level: containment(Financial)"
-  },
-  {
-   "seq": "MI1",
-   "kind": "control",
-   "target": "formulas.financial",
-   "excel": "Excel: Financial; first item of the dropdown"
-  },
-  {
-   "seq": "MJ",
-   "kind": "command",
-   "target": "formulas.calculateSheet",
-   "excel": "Calculate Sheet",
-   "note": ""
-  },
-  {
-   "seq": "MK",
-   "kind": "continue",
-   "excel": "Error Checking Menu",
-   "note": "group level: containment(Error Checking)"
-  },
-  {
-   "seq": "MKK",
-   "kind": "dialog",
-   "target": "errorChecking",
-   "excel": "Error Checking",
-   "note": ""
-  },
-  {
-   "seq": "ML",
-   "kind": "control",
-   "excel": "Logical Menu",
-   "note": "group level: containment(Logical)",
-   "target": "formulas.logical"
-  },
-  {
-   "seq": "MM",
-   "kind": "dialog",
-   "target": "defineName",
-   "excel": "Define Name",
-   "note": ""
-  },
-  {
-   "seq": "MN",
-   "kind": "dialog",
-   "target": "nameManager",
-   "excel": "Name Manager",
-   "note": ""
-  },
-  {
-   "seq": "MO",
-   "kind": "control",
-   "excel": "Lookup & Reference Menu",
-   "note": "group level: containment(Lookup & Reference)",
-   "target": "formulas.lookup"
-  },
-  {
-   "seq": "MP",
-   "kind": "command",
-   "target": "formulas.tracePrecedents",
-   "excel": "Trace Precedents",
-   "note": ""
-  },
-  {
-   "seq": "MQ",
-   "kind": "control",
-   "excel": "More Functions Menu",
-   "note": "group level: containment(More Functions)",
-   "target": "formulas.moreFunctions"
-  },
-  {
-   "seq": "MS",
-   "kind": "continue",
-   "excel": "Use in Formula Menu",
-   "note": "group level: containment(Use in Formula)"
-  },
-  {
-   "seq": "MSP",
-   "kind": "dialog",
-   "target": "pasteName",
-   "excel": "Paste Names",
-   "note": ""
-  },
-  {
-   "seq": "MT",
-   "kind": "control",
-   "excel": "Text Menu",
-   "note": "group level: containment(Text)",
-   "target": "formulas.text"
-  },
-  {
-   "seq": "MU",
-   "kind": "continue",
-   "excel": "AutoSum Menu",
-   "note": "group level:"
-  },
-  {
-   "seq": "MUA",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Average",
-   "note": "AutoSum: Average (variant TBD)"
-  },
-  {
-   "seq": "MUC",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Count Numbers",
-   "note": "AutoSum: Count (variant TBD)"
-  },
-  {
-   "seq": "MUF",
-   "kind": "command",
-   "target": "formulas.moreFunctions",
-   "excel": "More Functions (AutoSum)",
-   "note": "containment(More Functions)"
-  },
-  {
-   "seq": "MUI",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Min",
-   "note": "AutoSum: Min (variant TBD)"
-  },
-  {
-   "seq": "MUM",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Max",
-   "note": "AutoSum: Max (variant TBD)"
-  },
-  {
-   "seq": "MUS",
-   "kind": "command",
-   "target": "formulas.autoSum",
-   "excel": "Sum",
-   "note": ""
-  },
-  {
-   "seq": "MV",
-   "kind": "dialog",
-   "target": "evaluateFormula",
-   "excel": "Evaluate Formula",
-   "note": ""
-  },
-  {
-   "seq": "MW",
-   "kind": "command",
-   "target": "formulas.watchWindow",
-   "excel": "Watch Window",
-   "note": ""
-  },
-  {
-   "seq": "MX",
-   "kind": "continue",
-   "excel": "Calculation Options Menu",
-   "note": "group level: containment(Calculation Options)"
-  },
-  {
-   "seq": "MXA",
-   "kind": "command",
-   "target": "formulas.calculationOptions",
-   "excel": "Automatic Calculation",
-   "note": "Calculation options: Automatic"
-  },
-  {
-   "seq": "MXM",
-   "kind": "command",
-   "target": "formulas.calculationOptions",
-   "excel": "Manual Calculation",
-   "note": "Calculation options: Manual"
-  },
-  {
-   "seq": "MXP",
-   "kind": "command",
-   "target": "formulas.calculationOptions",
-   "excel": "Partial Calculation",
-   "note": "Calculation options: Partial"
-  },
-  {
-   "seq": "AB",
-   "kind": "dialog",
-   "target": "subtotal",
-   "excel": "Subtotal",
-   "note": ""
-  },
-  {
-   "seq": "AC",
-   "kind": "command",
-   "target": "data.clearFilter",
-   "excel": "Clear Filter",
-   "note": ""
-  },
-  {
-   "seq": "AD",
-   "kind": "command",
-   "target": "data.consolidate",
-   "excel": "Consolidate",
-   "note": ""
-  },
-  {
-   "seq": "AE",
-   "kind": "dialog",
-   "target": "textToColumns",
-   "excel": "Text to Columns",
-   "note": ""
-  },
-  {
-   "seq": "AF1",
-   "kind": "continue",
-   "excel": "Data from Picture Menu",
-   "note": "group level: feature gap; reserved until the command lands"
-  },
-  {
-   "seq": "AF1C",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Picture from Clipboard (source TBD)"
-  },
-  {
-   "seq": "AF1P",
-   "kind": "command",
-   "target": "insert.picture",
-   "excel": "Picture from File (source TBD)"
-  },
-  {
-   "seq": "AFA",
-   "kind": "command",
-   "target": "data.fromAccess",
-   "pending": true,
-   "excel": "Get External Data: From Access",
-   "note": "gap #12 Get & Transform; reserved until the command lands"
-  },
-  {
-   "seq": "AFC",
-   "kind": "command",
-   "target": "data.forecastSheet",
-   "pending": false,
-   "excel": "Forecast Sheet",
-   "note": "IN FLIGHT: vangel76 PR #325; reserved until the command lands"
-  },
-  {
-   "seq": "AFE",
-   "kind": "command",
-   "target": "data.analyzeData",
-   "pending": true,
-   "excel": "Analyze Data",
-   "note": "AI feature GAP; reserved until the command lands"
-  },
-  {
-   "seq": "AFF",
-   "kind": "command",
-   "target": "edit.flashFill",
-   "excel": "Flash Fill",
-   "note": ""
-  },
-  {
-   "seq": "AFO",
-   "kind": "command",
-   "target": "data.fromOtherSources",
-   "pending": true,
-   "excel": "Get External Data: From Other Sources",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "AFT",
-   "kind": "command",
-   "target": "data.fromText",
-   "pending": true,
-   "excel": "Get External Data: From Text",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "AFW",
-   "kind": "command",
-   "target": "data.fromWeb",
-   "pending": true,
-   "excel": "Get External Data: From Web",
-   "note": "reserved until the command lands"
-  },
-  {
-   "seq": "AG",
-   "kind": "continue",
-   "excel": "Group Menu",
-   "note": "group level: containment(Group)"
-  },
-  {
-   "seq": "AGA",
-   "kind": "command",
-   "target": "data.autoOutline",
-   "pending": true,
-   "excel": "Auto Outline",
-   "note": "Auto Outline; reserved until the command lands"
-  },
-  {
-   "seq": "AGG",
-   "kind": "command",
-   "target": "data.group",
-   "excel": "Group",
-   "note": ""
-  },
-  {
-   "seq": "AH",
-   "kind": "command",
-   "target": "data.hideDetail",
-   "excel": "Hide Detail",
-   "note": ""
-  },
-  {
-   "seq": "AJ",
-   "kind": "command",
-   "target": "data.showDetail",
-   "excel": "Show Detail",
-   "note": ""
-  },
-  {
-   "seq": "AK",
-   "kind": "command",
-   "target": "data.queriesConnections",
-   "excel": "Edit Links",
-   "note": "Edit Links (Queries & Connections);"
-  },
-  {
-   "seq": "AM",
-   "kind": "dialog",
-   "target": "removeDuplicates",
-   "excel": "Remove Duplicates",
-   "note": ""
-  },
-  {
-   "seq": "AO",
-   "kind": "command",
-   "target": "data.queriesConnections",
-   "excel": "Queries & Connections",
-   "note": ""
-  },
-  {
-   "seq": "AP1",
-   "kind": "command",
-   "target": "file.properties",
-   "excel": "Properties",
-   "note": ""
-  },
-  {
-   "seq": "APN",
-   "kind": "continue",
-   "excel": "Get Data (Power Query) Menu",
-   "note": "group level: Power Query variants = GAP"
-  },
-  {
-   "seq": "APND",
-   "kind": "command",
-   "target": "data.fromDatabase",
-   "pending": true,
-   "excel": "From Database (Microsoft Query)",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APNE",
-   "kind": "command",
-   "target": "data.powerQueryEditor",
-   "pending": true,
-   "excel": "Launch Power Query Editor",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APNG",
-   "kind": "command",
-   "target": "data.getData",
-   "excel": "Get Data (Power Query)",
-   "note": "containment(Get Data)"
-  },
-  {
-   "seq": "APNH",
-   "kind": "command",
-   "target": "data.fromHtml",
-   "pending": true,
-   "excel": "From HTML",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APNL",
-   "kind": "command",
-   "target": "data.fromSqlServer",
-   "pending": true,
-   "excel": "From SQL Server ODBC",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APNS",
-   "kind": "command",
-   "target": "data.dataSourceSettings",
-   "pending": true,
-   "excel": "Data Source Settings",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APNT",
-   "kind": "command",
-   "target": "data.fromTextLegacy",
-   "pending": true,
-   "excel": "From Text (Legacy)",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APR",
-   "kind": "command",
-   "target": "data.recentSources",
-   "pending": true,
-   "excel": "Recent Sources",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "APS",
-   "kind": "command",
-   "target": "data.queriesConnections",
-   "excel": "Show Queries",
-   "note": ""
-  },
-  {
-   "seq": "APT",
-   "kind": "command",
-   "target": "data.fromTable",
-   "pending": true,
-   "excel": "From Table (query)",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "AQ",
-   "kind": "dialog",
-   "target": "advancedFilter",
-   "excel": "Advanced Filter",
-   "note": ""
-  },
-  {
-   "seq": "AR",
-   "kind": "continue",
-   "note": "group: group: Queries & Connections"
-  },
-  {
-   "seq": "ARA",
-   "kind": "command",
-   "target": "data.refreshAll",
-   "excel": "Refresh All",
-   "note": ""
-  },
-  {
-   "seq": "ARC",
-   "kind": "command",
-   "target": "data.cancelRefresh",
-   "pending": true,
-   "excel": "Cancel Refresh",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "ARO",
-   "kind": "command",
-   "target": "data.connectionProperties",
-   "pending": true,
-   "excel": "Connection Properties",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "ARR",
-   "kind": "command",
-   "target": "pivot.refresh",
-   "excel": "Refresh",
-   "note": ""
-  },
-  {
-   "seq": "ARS",
-   "kind": "command",
-   "target": "data.refreshStatus",
-   "pending": true,
-   "excel": "Refresh Status",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "ASA",
-   "kind": "command",
-   "target": "data.sortAscending",
-   "excel": "Sort A to Z",
-   "note": ""
-  },
-  {
-   "seq": "ASD",
-   "kind": "command",
-   "target": "data.sortDescending",
-   "excel": "Sort Z to A",
-   "note": ""
-  },
-  {
-   "seq": "ASS",
-   "kind": "dialog",
-   "target": "sort",
-   "excel": "Sort",
-   "note": ""
-  },
-  {
-   "seq": "AT",
-   "kind": "command",
-   "target": "data.filter",
-   "excel": "Filter",
-   "note": ""
-  },
-  {
-   "seq": "AU",
-   "kind": "continue",
-   "excel": "Ungroup Menu",
-   "note": "group level: containment(Ungroup)"
-  },
-  {
-   "seq": "AUC",
-   "kind": "command",
-   "target": "data.clearOutline",
-   "pending": true,
-   "excel": "Clear Outline",
-   "note": "feature gap; reserved until the command lands"
-  },
-  {
-   "seq": "AUU",
-   "kind": "command",
-   "target": "data.ungroup",
-   "excel": "Ungroup",
-   "note": ""
-  },
-  {
-   "seq": "AV",
-   "kind": "continue",
-   "excel": "Data Validation Menu",
-   "note": "group level: containment(Data Validation)"
-  },
-  {
-   "seq": "AVI",
-   "kind": "command",
-   "target": "data.circleInvalid",
-   "excel": "Circle Invalid Data",
-   "note": ""
-  },
-  {
-   "seq": "AVR",
-   "kind": "command",
-   "target": "data.clearValidationCircles",
-   "pending": true,
-   "excel": "Clear Validation Circles",
-   "note": "reserved until the command lands"
-  },
-  {
-   "seq": "AVV",
-   "kind": "command",
-   "target": "data.validation",
-   "excel": "Data Validation",
-   "note": ""
-  },
-  {
-   "seq": "AW",
-   "kind": "continue",
-   "note": "group: group: What-If (goalSeek/scenarioManager/dataTable)"
-  },
-  {
-   "seq": "AWG",
-   "kind": "dialog",
-   "target": "goalSeek",
-   "excel": "Goal Seek",
-   "note": ""
-  },
-  {
-   "seq": "AWS",
-   "kind": "command",
-   "target": "data.scenarioManager",
-   "excel": "Scenario Manager",
-   "note": ""
-  },
-  {
-   "seq": "AWT",
-   "kind": "command",
-   "target": "data.dataTable",
-   "excel": "Data Table",
-   "note": ""
-  },
-  {
-   "seq": "AX",
-   "kind": "command",
-   "target": "data.existingConnections",
-   "pending": true,
-   "excel": "Existing Connections",
-   "note": "gap #12; reserved until the command lands"
-  },
-  {
-   "seq": "AY",
-   "kind": "command",
-   "target": "data.reapply",
-   "excel": "Reapply Filter",
-   "note": "containment(Reapply)"
-  },
-  {
-   "seq": "RA1",
-   "kind": "dialog",
-   "target": "accessibility",
-   "excel": "Check Accessibility",
-   "note": ""
-  },
-  {
-   "seq": "RA2",
-   "kind": "command",
-   "target": "review.showComments",
-   "pending": false,
-   "excel": "Show All Comments",
-   "note": "Show All Comments; reserved until the command lands"
-  },
-  {
-   "seq": "RC",
-   "kind": "dialog",
-   "target": "comment",
-   "excel": "New Comment",
-   "note": ""
-  },
-  {
-   "seq": "RD",
-   "kind": "command",
-   "target": "review.deleteComment",
-   "excel": "Delete Comment",
-   "note": ""
-  },
-  {
-   "seq": "RG",
-   "kind": "command",
-   "target": "review.showChanges",
-   "pending": true,
-   "excel": "Track Changes",
-   "note": "reserved until the command lands"
-  },
-  {
-   "seq": "RL",
-   "kind": "command",
-   "target": "review.translate",
-   "pending": true,
-   "excel": "Translate",
-   "note": "feature gap; reserved until the command lands"
-  },
-  {
-   "seq": "RN",
-   "kind": "command",
-   "target": "review.nextComment",
-   "pending": false,
-   "excel": "Next Comment",
-   "note": ""
-  },
-  {
-   "seq": "RO",
-   "kind": "command",
-   "target": "review.protectWorkbook",
-   "excel": "Protect and Share Workbook"
-  },
-  {
-   "seq": "RPS",
-   "kind": "dialog",
-   "target": "protectSheet",
-   "excel": "Protect Sheet",
-   "note": ""
-  },
-  {
-   "seq": "RPW",
-   "kind": "command",
-   "target": "review.protectWorkbook",
-   "excel": "Protect Workbook",
-   "note": ""
-  },
-  {
-   "seq": "RRS",
-   "kind": "command",
-   "target": "review.smartLookup",
-   "pending": true,
-   "excel": "Smart Lookup",
-   "note": "feature gap; reserved until the command lands"
-  },
-  {
-   "seq": "RS",
-   "kind": "dialog",
-   "target": "spelling",
-   "excel": "Spelling",
-   "note": ""
-  },
-  {
-   "seq": "RTN",
-   "kind": "command",
-   "target": "review.newNote",
-   "excel": "New Note",
-   "note": ""
-  },
-  {
-   "seq": "RV",
-   "kind": "command",
-   "target": "review.previousComment",
-   "pending": false,
-   "excel": "Previous Comment",
-   "note": ""
-  },
-  {
-   "seq": "WA",
-   "kind": "command",
-   "target": "view.arrangeAll",
-   "excel": "Arrange All",
-   "note": ""
-  },
-  {
-   "seq": "WC",
-   "kind": "command",
-   "target": "view.customViews",
-   "excel": "Custom Views",
-   "note": ""
-  },
-  {
-   "seq": "WF",
-   "kind": "continue",
-   "excel": "Freeze Panes Menu",
-   "note": "group level:"
-  },
-  {
-   "seq": "WFC",
-   "kind": "command",
-   "target": "view.freezeFirstColumn",
-   "excel": "Freeze First Column",
-   "note": ""
-  },
-  {
-   "seq": "WFF",
-   "kind": "command",
-   "target": "view.freezePanes",
-   "excel": "Freeze Panes",
-   "note": ""
-  },
-  {
-   "seq": "WFR",
-   "kind": "command",
-   "target": "view.freezeTopRow",
-   "excel": "Freeze Top Row",
-   "note": ""
-  },
-  {
-   "seq": "WG",
-   "kind": "command",
-   "target": "view.zoomToSelection",
-   "excel": "Zoom To Selection",
-   "note": ""
-  },
-  {
-   "seq": "WH",
-   "kind": "command",
-   "target": "view.hideWindow",
-   "excel": "Hide Window",
-   "note": ""
-  },
-  {
-   "seq": "WI",
-   "kind": "command",
-   "target": "view.pageBreakPreview",
-   "excel": "Page Break Preview",
-   "note": ""
-  },
-  {
-   "seq": "WJ",
-   "kind": "control",
-   "target": "view.zoom",
-   "excel": "Zoom To 100%",
-   "note": "runs the 100% zoom handler (percent param)"
-  },
-  {
-   "seq": "WL",
-   "kind": "command",
-   "target": "view.normal",
-   "excel": "Normal View",
-   "note": "containment(Normal)"
-  },
-  {
-   "seq": "WM",
-   "kind": "continue",
-   "excel": "Macros Menu",
-   "note": "group level: containment(Macros)"
-  },
-  {
-   "seq": "WMR",
-   "kind": "dialog",
-   "target": "recordMacro",
-   "excel": "Record Macro",
-   "note": "Record Macro dialog (stops recording while recording)"
-  },
-  {
-   "seq": "WMV",
-   "kind": "dialog",
-   "target": "macros",
-   "excel": "View Macros",
-   "note": "containment(Macros): the Macros dialog"
-  },
-  {
-   "seq": "WN",
-   "kind": "command",
-   "target": "view.newWindow",
-   "excel": "New Window",
-   "note": ""
-  },
-  {
-   "seq": "WP",
-   "kind": "command",
-   "target": "view.pageLayout",
-   "excel": "Page Layout View",
-   "note": ""
-  },
-  {
-   "seq": "WQ",
-   "kind": "dialog",
-   "target": "zoom",
-   "excel": "Zoom",
-   "note": "opens the Zoom dialog"
-  },
-  {
-   "seq": "WR",
-   "kind": "command",
-   "target": "view.ruler",
-   "excel": "Ruler",
-   "note": ""
-  },
-  {
-   "seq": "WS",
-   "kind": "command",
-   "target": "view.split",
-   "excel": "Split",
-   "note": ""
-  },
-  {
-   "seq": "WT",
-   "kind": "command",
-   "target": "view.resetWindowPosition",
-   "pending": true,
-   "excel": "Reset Window Position",
-   "note": "reserved until the command lands"
-  },
-  {
-   "seq": "WU",
-   "kind": "command",
-   "target": "view.unhideWindow",
-   "excel": "Unhide Window",
-   "note": ""
-  },
-  {
-   "seq": "WVC",
-   "kind": "command",
-   "target": "view.focusCell",
-   "pending": true,
-   "excel": "Focus Cell Menu",
-   "note": "Focus Cell; reserved until the command lands"
-  },
-  {
-   "seq": "WVF",
-   "kind": "control",
-   "target": "view.formulaBar",
-   "excel": "Toggle Formula Bar",
-   "note": "toggles the formula bar"
-  },
-  {
-   "seq": "WVH",
-   "kind": "command",
-   "target": "view.headings",
-   "excel": "Toggle Headings",
-   "note": "containment(Headings)"
-  },
-  {
-   "seq": "WVN",
-   "kind": "command",
-   "target": "view.navigation",
-   "pending": true,
-   "excel": "Navigation",
-   "note": "Navigation pane; reserved until the command lands"
-  },
-  {
-   "seq": "WVR",
-   "kind": "command",
-   "target": "view.ruler",
-   "excel": "Ruler",
-   "note": ""
-  },
-  {
-   "seq": "WW",
-   "kind": "control",
-   "target": "view.switchWindows",
-   "excel": "Switch Windows",
-   "note": ""
-  },
-  {
-   "seq": "JAM",
-   "kind": "command",
-   "target": "chart.formatSelection",
-   "excel": "Chart format: Format Selection pane",
-   "note": "containment(Format Selection)"
-  },
-  {
-   "seq": "JCA",
-   "kind": "command",
-   "target": "chart.addElement",
-   "excel": "Chart: Add Chart Element",
-   "note": "containment(Add Chart Element)"
-  },
-  {
-   "seq": "JCC",
-   "kind": "command",
-   "target": "chart.changeType",
-   "excel": "Chart: Change Chart Type",
-   "note": "containment(Change Chart Type)"
-  },
-  {
-   "seq": "JTS",
-   "kind": "command",
-   "target": "table.style",
-   "excel": "Table: table style",
-   "note": ""
-  },
-  {
-   "seq": "JTV",
-   "kind": "command",
-   "target": "table.summarizePivot",
-   "excel": "Table: Summarize with PivotTable",
-   "note": "containment(Summarize with PivotTable)"
-  },
-  {
-   "seq": "FA",
-   "kind": "command",
-   "excel": "Save / Save As page",
-   "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "file.saveAs"
-  },
-  {
-   "seq": "FC",
-   "kind": "command",
-   "target": "file.close",
-   "excel": "Close workbook"
-  },
-  {
-   "seq": "FEA",
-   "kind": "command",
-   "target": "file.exportPdf",
-   "excel": "Export: create PDF/XPS",
-   "note": "Export: create PDF/XPS"
-  },
-  {
-   "seq": "FEC",
-   "kind": "command",
-   "target": "file.saveAs",
-   "excel": "Export: change file type",
-   "note": "Export: change file type"
-  },
-  {
-   "seq": "FI",
-   "kind": "command",
-   "excel": "Info page",
-   "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "file.properties"
-  },
-  {
-   "seq": "FN",
-   "kind": "command",
-   "target": "file.new",
-   "excel": "New page",
-   "note": "New page"
-  },
-  {
-   "seq": "FO",
-   "kind": "command",
-   "excel": "Open page",
-   "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "file.open"
-  },
-  {
-   "seq": "FP",
-   "kind": "command",
-   "target": "file.print",
-   "excel": "Print page",
-   "note": "containment(Print)"
-  },
-  {
-   "seq": "Q",
-   "kind": "command",
-   "target": "ui.search",
-   "pending": true,
-   "excel": "Search / Tell Me",
-   "note": "Alt+Q search box does not exist yet (issue #49)"
-  }
- ]
+  "doc": [
+    "Single source of truth for Excel-style sequential access keys (Alt+H+X+X style).",
+    "The generated keytip_table/generated.rs is produced from this file: `cargo xtask keytips`.",
+    "Adding or removing a shortcut is a one-line edit here. Rules:",
+    "  - seq: the access-key sequence, letters and digits only (two-letter units like \"JI\" are one entry).",
+    "  - kind: \"tab\" (switches a ribbon tab), \"command\" (runs a command id), \"dialog\" (opens a dialog by name),",
+    "    \"continue\" (an explicit group level with no deeper sequences yet).",
+    "  - Intermediate levels need no entries: the matcher waits automatically when deeper sequences exist.",
+    "  - pending: true = the command does not exist yet; the sequence stays reserved and silent until it lands.",
+    "  - params: an optional JSON object passed to a command or dialog, for menu items that share one id (the Borders presets: HBO {\"preset\": \"bottom\"}).",
+    "  - Keep entries grouped by tab and sorted by sequence within a group; the FIRST entry for a tab is its canonical badge (legacy aliases come after it)."
+  ],
+  "sequences": [
+    {
+      "seq": "F",
+      "kind": "tab",
+      "target": "File",
+      "excel": "File tab (Backstage view)",
+      "note": "Opens the File view on Home; its letters below still run their commands."
+    },
+    {
+      "seq": "H",
+      "kind": "tab",
+      "target": "Home"
+    },
+    {
+      "seq": "N",
+      "kind": "tab",
+      "target": "Insert"
+    },
+    {
+      "seq": "JI",
+      "kind": "tab",
+      "target": "Draw",
+      "note": "Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors."
+    },
+    {
+      "seq": "P",
+      "kind": "tab",
+      "target": "Page Layout"
+    },
+    {
+      "seq": "M",
+      "kind": "tab",
+      "target": "Formulas"
+    },
+    {
+      "seq": "A",
+      "kind": "tab",
+      "target": "Data"
+    },
+    {
+      "seq": "R",
+      "kind": "tab",
+      "target": "Review"
+    },
+    {
+      "seq": "W",
+      "kind": "tab",
+      "target": "View"
+    },
+    {
+      "seq": "E",
+      "kind": "tab",
+      "target": "Home",
+      "note": "Legacy Edit-menu path (Excel 2003); leads to the same Home menus."
+    },
+    {
+      "seq": "O",
+      "kind": "tab",
+      "target": "Home",
+      "note": "Legacy Format-menu path (Excel 2003); leads to the same Home menus."
+    },
+    {
+      "seq": "HAR",
+      "kind": "command",
+      "target": "home.alignRight"
+    },
+    {
+      "seq": "HAT",
+      "kind": "command",
+      "target": "home.alignTop",
+      "excel": "Excel: Top Align"
+    },
+    {
+      "seq": "HAM",
+      "kind": "command",
+      "target": "home.alignMiddle",
+      "excel": "Excel: Middle Align"
+    },
+    {
+      "seq": "HAB",
+      "kind": "command",
+      "target": "home.alignBottom",
+      "excel": "Excel: Bottom Align"
+    },
+    {
+      "seq": "HAL",
+      "kind": "command",
+      "target": "home.alignLeft"
+    },
+    {
+      "seq": "HAC",
+      "kind": "command",
+      "target": "home.alignCenter"
+    },
+    {
+      "seq": "HVS",
+      "kind": "dialog",
+      "target": "pasteSpecial"
+    },
+    {
+      "seq": "ES",
+      "kind": "dialog",
+      "target": "pasteSpecial",
+      "excel": "Classic Paste Special dialog (legacy Edit route); A/F/T/V are dialog mnemonics"
+    },
+    {
+      "seq": "HOI",
+      "kind": "command",
+      "target": "home.autofitColumnWidth"
+    },
+    {
+      "seq": "OCA",
+      "kind": "command",
+      "target": "home.autofitColumnWidth",
+      "note": "Legacy Format menu."
+    },
+    {
+      "seq": "WVG",
+      "kind": "command",
+      "target": "view.gridlines"
+    },
+    {
+      "seq": "H0",
+      "kind": "command",
+      "target": "home.increaseDecimal",
+      "excel": "Increase Decimals",
+      "note": "containment(Increase Decimal)"
+    },
+    {
+      "seq": "H1",
+      "kind": "command",
+      "target": "home.bold",
+      "excel": "Bold",
+      "note": ""
+    },
+    {
+      "seq": "H2",
+      "kind": "command",
+      "target": "home.italic",
+      "excel": "Italic",
+      "note": ""
+    },
+    {
+      "seq": "H3",
+      "kind": "command",
+      "excel": "Excel: Underline; fires immediately (not a menu)",
+      "target": "home.underline"
+    },
+    {
+      "seq": "H5",
+      "kind": "command",
+      "target": "home.decreaseIndent",
+      "excel": "Decrease Indent",
+      "note": ""
+    },
+    {
+      "seq": "H6",
+      "kind": "command",
+      "target": "home.increaseIndent",
+      "excel": "Increase Indent",
+      "note": ""
+    },
+    {
+      "seq": "H9",
+      "kind": "command",
+      "target": "home.decreaseDecimal",
+      "excel": "Decrease Decimals",
+      "note": "containment(Decrease Decimal)"
+    },
+    {
+      "seq": "HAN",
+      "kind": "command",
+      "excel": "Accounting Format",
+      "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
+      "target": "home.accounting"
+    },
+    {
+      "seq": "HAS",
+      "kind": "command",
+      "target": "home.addIns",
+      "excel": "Add-ins",
+      "note": "containment(Add-ins)"
+    },
+    {
+      "seq": "HB",
+      "kind": "continue",
+      "excel": "Borders Menu",
+      "note": "group level:"
+    },
+    {
+      "seq": "HBA",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "all"
+      },
+      "excel": "All Borders",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBB",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "doubleBottom"
+      },
+      "excel": "Bottom Double Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBC",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "topThickBottom"
+      },
+      "excel": "Top and Thick Bottom Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBD",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "topBottom"
+      },
+      "excel": "Top and Bottom Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBE",
+      "kind": "command",
+      "target": "home.eraseBorder",
+      "pending": true,
+      "excel": "Erase Border",
+      "note": "pending: Excel arms an eraser pen; GridCraft has no border pen mode yet"
+    },
+    {
+      "seq": "HBG",
+      "kind": "command",
+      "target": "home.drawBorder",
+      "excel": "Draw Border Grid",
+      "note": "containment(Draw Border)"
+    },
+    {
+      "seq": "HBH",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "thickBottom"
+      },
+      "excel": "Thick Bottom Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBI",
+      "kind": "control",
+      "target": "home.borderLineColor",
+      "excel": "Line Color",
+      "note": "opens the border line color palette"
+    },
+    {
+      "seq": "HBL",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "left"
+      },
+      "excel": "Left Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBM",
+      "kind": "dialog",
+      "target": "formatCells",
+      "params": {
+        "tab": "Border"
+      },
+      "excel": "More Borders",
+      "note": "Format Cells on its Border tab"
+    },
+    {
+      "seq": "HBN",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "none"
+      },
+      "excel": "No Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBO",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "bottom"
+      },
+      "excel": "Bottom Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBP",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "top"
+      },
+      "excel": "Top Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBR",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "right"
+      },
+      "excel": "Right Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBS",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "outside"
+      },
+      "excel": "Outside Borders",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBT",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "thickOutside"
+      },
+      "excel": "Thick Outside Borders",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBU",
+      "kind": "command",
+      "target": "home.borders",
+      "params": {
+        "preset": "topDoubleBottom"
+      },
+      "excel": "Top and Double Bottom Border",
+      "note": "Borders menu item"
+    },
+    {
+      "seq": "HBW",
+      "kind": "command",
+      "target": "home.drawBorder",
+      "excel": "Draw Border",
+      "note": ""
+    },
+    {
+      "seq": "HBY",
+      "kind": "command",
+      "target": "home.borderLineStyle",
+      "pending": true,
+      "excel": "Line Style",
+      "note": "pending: Line Style submenu"
+    },
+    {
+      "seq": "HC",
+      "kind": "command",
+      "excel": "Copy",
+      "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
+      "target": "edit.copy"
+    },
+    {
+      "seq": "HDC",
+      "kind": "command",
+      "target": "home.deleteColumns",
+      "excel": "Delete Columns",
+      "note": "Delete Columns"
+    },
+    {
+      "seq": "HDD",
+      "kind": "dialog",
+      "target": "deleteCells",
+      "excel": "Delete Cells",
+      "note": ""
+    },
+    {
+      "seq": "HDR",
+      "kind": "command",
+      "target": "home.deleteRows",
+      "excel": "Delete Rows",
+      "note": "Delete Rows"
+    },
+    {
+      "seq": "HDS",
+      "kind": "command",
+      "target": "home.deleteSheet",
+      "excel": "Delete Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HEA",
+      "kind": "command",
+      "target": "edit.clearAll",
+      "excel": "Clear All",
+      "note": ""
+    },
+    {
+      "seq": "HEC",
+      "kind": "command",
+      "target": "edit.clearContents",
+      "excel": "Clear Contents",
+      "note": ""
+    },
+    {
+      "seq": "HEF",
+      "kind": "command",
+      "target": "edit.clearFormats",
+      "excel": "Clear Formats",
+      "note": ""
+    },
+    {
+      "seq": "HEL",
+      "kind": "command",
+      "target": "edit.clearHyperlinks",
+      "excel": "Clear Hyperlinks",
+      "note": ""
+    },
+    {
+      "seq": "HEM",
+      "kind": "command",
+      "target": "edit.clearComments",
+      "excel": "Clear Comments and Notes",
+      "note": "containment(Clear Comments and Notes)"
+    },
+    {
+      "seq": "HFC",
+      "kind": "control",
+      "target": "home.fontColor",
+      "excel": "Font Color",
+      "note": "opens the font-color palette"
+    },
+    {
+      "seq": "HFDC",
+      "kind": "command",
+      "target": "home.conditionalFormat",
+      "excel": "Find Conditional Formatting",
+      "note": "containment(Conditional Formatting)"
+    },
+    {
+      "seq": "HFDF",
+      "kind": "dialog",
+      "target": "find",
+      "excel": "Find",
+      "note": ""
+    },
+    {
+      "seq": "HFDG",
+      "kind": "dialog",
+      "target": "goTo",
+      "excel": "Go To",
+      "note": ""
+    },
+    {
+      "seq": "HFDM",
+      "kind": "command",
+      "target": "edit.find",
+      "excel": "Find Notes",
+      "note": "containment(Find)"
+    },
+    {
+      "seq": "HFDO",
+      "kind": "command",
+      "target": "home.selectObjects",
+      "pending": true,
+      "excel": "Select Objects",
+      "note": "Select Objects; reserved until the command lands"
+    },
+    {
+      "seq": "HFDP",
+      "kind": "command",
+      "target": "arrange.selectionPane",
+      "excel": "Selection Pane",
+      "note": ""
+    },
+    {
+      "seq": "HFDR",
+      "kind": "dialog",
+      "target": "find",
+      "excel": "Replace",
+      "note": "opens Find and Replace"
+    },
+    {
+      "seq": "HFDS",
+      "kind": "dialog",
+      "target": "goToSpecial",
+      "excel": "Go To Special",
+      "note": ""
+    },
+    {
+      "seq": "HFF",
+      "kind": "control",
+      "target": "home.fontName",
+      "excel": "Font Selection",
+      "note": "opens the font dropdown"
+    },
+    {
+      "seq": "HFG",
+      "kind": "command",
+      "target": "home.increaseFontSize",
+      "excel": "Increase Font Size",
+      "note": ""
+    },
+    {
+      "seq": "HFI",
+      "kind": "continue",
+      "excel": "Fill",
+      "note": "group level: containment(Fill Up)"
+    },
+    {
+      "seq": "HFIA",
+      "kind": "command",
+      "target": "home.fillAcrossWorksheets",
+      "pending": true,
+      "excel": "Fill Across Worksheets",
+      "note": "Fill Across Worksheets; reserved until the command lands"
+    },
+    {
+      "seq": "HFID",
+      "kind": "command",
+      "target": "edit.fillDown",
+      "excel": "Fill Down",
+      "note": ""
+    },
+    {
+      "seq": "HFIF",
+      "kind": "command",
+      "target": "edit.flashFill",
+      "excel": "Flash Fill",
+      "note": ""
+    },
+    {
+      "seq": "HFIJ",
+      "kind": "command",
+      "target": "home.justify",
+      "excel": "Fill Justify",
+      "note": "containment(Justify)"
+    },
+    {
+      "seq": "HFIL",
+      "kind": "command",
+      "target": "edit.fillLeft",
+      "excel": "Fill Left",
+      "note": ""
+    },
+    {
+      "seq": "HFIR",
+      "kind": "command",
+      "target": "edit.fillRight",
+      "excel": "Fill Right",
+      "note": ""
+    },
+    {
+      "seq": "HFIS",
+      "kind": "dialog",
+      "target": "series",
+      "excel": "Fill Series",
+      "note": "containment(Series)"
+    },
+    {
+      "seq": "HFIU",
+      "kind": "command",
+      "target": "edit.fillUp",
+      "excel": "Fill Up",
+      "note": ""
+    },
+    {
+      "seq": "HFK",
+      "kind": "command",
+      "target": "home.decreaseFontSize",
+      "excel": "Decrease Font Size",
+      "note": ""
+    },
+    {
+      "seq": "HFM",
+      "kind": "dialog",
+      "target": "formatCells",
+      "excel": "More Number Formats",
+      "note": "More Number Formats opens Format Cells"
+    },
+    {
+      "seq": "HFP",
+      "kind": "command",
+      "target": "edit.formatPainter",
+      "excel": "Format Painter",
+      "note": ""
+    },
+    {
+      "seq": "HFQ",
+      "kind": "control",
+      "excel": "Orientation Menu",
+      "note": "group level: containment(Orientation)",
+      "target": "home.orientation"
+    },
+    {
+      "seq": "HFS",
+      "kind": "control",
+      "target": "home.fontSize",
+      "excel": "Font Size",
+      "note": "opens the font-size dropdown"
+    },
+    {
+      "seq": "HH",
+      "kind": "control",
+      "target": "home.fillColor",
+      "excel": "Fill Color",
+      "note": "opens the fill-color palette"
+    },
+    {
+      "seq": "HIC",
+      "kind": "command",
+      "target": "home.insertColumns",
+      "excel": "Insert Columns",
+      "note": "Insert Columns"
+    },
+    {
+      "seq": "HIE",
+      "kind": "dialog",
+      "target": "insertCells",
+      "excel": "Insert Copied Cells",
+      "note": "Insert Cells (copied cells TBD)"
+    },
+    {
+      "seq": "HII",
+      "kind": "dialog",
+      "target": "insertCells",
+      "excel": "Insert Cells",
+      "note": ""
+    },
+    {
+      "seq": "HIR",
+      "kind": "command",
+      "target": "home.insertRows",
+      "excel": "Insert Rows",
+      "note": "Insert Rows"
+    },
+    {
+      "seq": "HIS",
+      "kind": "command",
+      "target": "home.insertSheet",
+      "excel": "Insert Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HJ",
+      "kind": "continue",
+      "excel": "Cell Styles",
+      "note": "group level:"
+    },
+    {
+      "seq": "HJN",
+      "kind": "command",
+      "target": "home.newCellStyle",
+      "excel": "New Cell Style",
+      "note": ""
+    },
+    {
+      "seq": "HK",
+      "kind": "command",
+      "target": "home.comma",
+      "excel": "Comma Style",
+      "note": ""
+    },
+    {
+      "seq": "HL",
+      "kind": "continue",
+      "excel": "Conditional Formatting",
+      "note": "group level: containment(Conditional Formatting)"
+    },
+    {
+      "seq": "HLC",
+      "kind": "continue",
+      "excel": "Clear Rules Menu",
+      "note": "group level: containment(Clear Rules)"
+    },
+    {
+      "seq": "HLCE",
+      "kind": "command",
+      "target": "home.clearRules",
+      "excel": "Clear Rules From Sheet",
+      "note": "containment(Clear Rules)"
+    },
+    {
+      "seq": "HLCS",
+      "kind": "command",
+      "target": "home.clearRules",
+      "excel": "Clear Rules From Cells",
+      "note": "containment(Clear Rules)"
+    },
+    {
+      "seq": "HLCT",
+      "kind": "command",
+      "target": "home.clearRules",
+      "excel": "Clear Rules From Table",
+      "note": "containment(Clear Rules)"
+    },
+    {
+      "seq": "HLD",
+      "kind": "command",
+      "target": "home.conditionalFormat",
+      "excel": "Data Bars",
+      "note": "Data Bars (submenu TBD)"
+    },
+    {
+      "seq": "HLH",
+      "kind": "command",
+      "target": "home.conditionalFormat",
+      "excel": "Highlight Cells",
+      "note": "Highlight Cells (submenu TBD)"
+    },
+    {
+      "seq": "HLN",
+      "kind": "command",
+      "target": "home.conditionalFormat",
+      "excel": "New Rule",
+      "note": "New Rule (submenu TBD)"
+    },
+    {
+      "seq": "HLR",
+      "kind": "command",
+      "target": "home.manageRules",
+      "excel": "Manage Rules",
+      "note": "containment(Manage Rules)"
+    },
+    {
+      "seq": "HLT",
+      "kind": "command",
+      "target": "home.conditionalFormat",
+      "excel": "Top/Bottom Rules",
+      "note": "Top/Bottom (submenu TBD)"
+    },
+    {
+      "seq": "HM",
+      "kind": "continue",
+      "excel": "Merge & Center Menu",
+      "note": "group level: containment(Merge & Center)"
+    },
+    {
+      "seq": "HMA",
+      "kind": "command",
+      "target": "home.mergeAcross",
+      "excel": "Merge Across",
+      "note": ""
+    },
+    {
+      "seq": "HMC",
+      "kind": "command",
+      "target": "home.mergeCenter",
+      "excel": "Merge & Center",
+      "note": ""
+    },
+    {
+      "seq": "HMM",
+      "kind": "command",
+      "target": "home.mergeCells",
+      "excel": "Merge Cells",
+      "note": ""
+    },
+    {
+      "seq": "HMU",
+      "kind": "command",
+      "target": "home.unmergeCells",
+      "excel": "Unmerge Cells",
+      "note": ""
+    },
+    {
+      "seq": "HN",
+      "kind": "control",
+      "target": "home.numberFormat",
+      "excel": "Number Format",
+      "note": "opens the number-format dropdown"
+    },
+    {
+      "seq": "HOA",
+      "kind": "command",
+      "target": "home.autofitRowHeight",
+      "excel": "AutoFit Row Height",
+      "note": ""
+    },
+    {
+      "seq": "HOD",
+      "kind": "dialog",
+      "target": "defaultWidth",
+      "excel": "Default Column Width",
+      "note": "containment(Column Width)"
+    },
+    {
+      "seq": "HOE",
+      "kind": "command",
+      "target": "home.formatCells",
+      "excel": "Format Cells",
+      "note": ""
+    },
+    {
+      "seq": "HOH",
+      "kind": "dialog",
+      "target": "rowHeight",
+      "excel": "Row Height",
+      "note": ""
+    },
+    {
+      "seq": "HOL",
+      "kind": "command",
+      "target": "home.lockCell",
+      "excel": "Lock Cell",
+      "note": "containment(Lock Cell)"
+    },
+    {
+      "seq": "HOM",
+      "kind": "dialog",
+      "target": "moveSheet",
+      "excel": "Move or Copy Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HOP",
+      "kind": "dialog",
+      "target": "protectSheet",
+      "excel": "Protect Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HOR",
+      "kind": "dialog",
+      "target": "renameSheet",
+      "excel": "Rename Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HOT",
+      "kind": "command",
+      "target": "sheet.tabColor",
+      "excel": "Tab Color",
+      "note": ""
+    },
+    {
+      "seq": "HOUC",
+      "kind": "command",
+      "target": "home.hideColumns",
+      "excel": "Hide Columns",
+      "note": ""
+    },
+    {
+      "seq": "HOUH",
+      "kind": "command",
+      "target": "sheet.unhide",
+      "excel": "Unhide Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HOUL",
+      "kind": "command",
+      "target": "home.unhideColumns",
+      "excel": "Unhide Columns",
+      "note": ""
+    },
+    {
+      "seq": "HOUO",
+      "kind": "command",
+      "target": "home.unhideRows",
+      "excel": "Unhide Rows",
+      "note": ""
+    },
+    {
+      "seq": "HOUR",
+      "kind": "command",
+      "target": "home.hideRows",
+      "excel": "Hide Rows",
+      "note": ""
+    },
+    {
+      "seq": "HOUS",
+      "kind": "command",
+      "target": "sheet.hide",
+      "excel": "Hide Sheet",
+      "note": ""
+    },
+    {
+      "seq": "HOW",
+      "kind": "dialog",
+      "target": "columnWidth",
+      "excel": "Column Width",
+      "note": ""
+    },
+    {
+      "seq": "HP",
+      "kind": "command",
+      "target": "home.percent",
+      "excel": "Excel: Percentage Style"
+    },
+    {
+      "seq": "HSC",
+      "kind": "command",
+      "target": "data.clearFilter",
+      "excel": "Clear Filter",
+      "note": ""
+    },
+    {
+      "seq": "HSF",
+      "kind": "command",
+      "target": "data.filter",
+      "excel": "Filter",
+      "note": ""
+    },
+    {
+      "seq": "HSO",
+      "kind": "command",
+      "target": "data.sortDescending",
+      "excel": "Sort Z to A",
+      "note": ""
+    },
+    {
+      "seq": "HSS",
+      "kind": "command",
+      "target": "data.sortAscending",
+      "excel": "Sort A to Z",
+      "note": ""
+    },
+    {
+      "seq": "HSU",
+      "kind": "command",
+      "target": "data.sort",
+      "excel": "Custom Sort",
+      "note": ""
+    },
+    {
+      "seq": "HT",
+      "kind": "continue",
+      "excel": "Format as Table",
+      "note": "group level:"
+    },
+    {
+      "seq": "HTN",
+      "kind": "command",
+      "target": "table.style",
+      "excel": "New Table Style",
+      "note": ""
+    },
+    {
+      "seq": "HTP",
+      "kind": "command",
+      "target": "table.style",
+      "excel": "New Pivot Table Style",
+      "note": ""
+    },
+    {
+      "seq": "HU",
+      "kind": "continue",
+      "excel": "AutoSum",
+      "note": "group level:"
+    },
+    {
+      "seq": "HUA",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Auto Average",
+      "note": "AutoSum: Average (variant TBD)"
+    },
+    {
+      "seq": "HUC",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Auto Count Numbers",
+      "note": "AutoSum: Count (variant TBD)"
+    },
+    {
+      "seq": "HUI",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Auto Min",
+      "note": "AutoSum: Min (variant TBD)"
+    },
+    {
+      "seq": "HUM",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Auto Max",
+      "note": "AutoSum: Max (variant TBD)"
+    },
+    {
+      "seq": "HV",
+      "kind": "continue",
+      "excel": "Paste",
+      "note": "group level:"
+    },
+    {
+      "seq": "HVP",
+      "kind": "command",
+      "target": "edit.paste",
+      "excel": "Paste",
+      "note": ""
+    },
+    {
+      "seq": "HW",
+      "kind": "continue",
+      "excel": "Wrap Text Menu",
+      "note": "group level: containment(Wrap Text)"
+    },
+    {
+      "seq": "HWW",
+      "kind": "command",
+      "target": "home.wrapText",
+      "excel": "Wrap Text",
+      "note": ""
+    },
+    {
+      "seq": "HX",
+      "kind": "command",
+      "target": "edit.cut",
+      "excel": "Cut",
+      "note": ""
+    },
+    {
+      "seq": "NC1",
+      "kind": "control",
+      "target": "insert.chart.column",
+      "excel": "Column Chart",
+      "note": "Column chart (kind TBD)"
+    },
+    {
+      "seq": "NC2",
+      "kind": "command",
+      "target": "review.newComment",
+      "excel": "New Comment",
+      "note": ""
+    },
+    {
+      "seq": "NCM",
+      "kind": "dialog",
+      "target": "comment",
+      "excel": "Excel: New Comment (modern)"
+    },
+    {
+      "seq": "NCB",
+      "kind": "command",
+      "target": "insert.checkbox",
+      "excel": "Checkbox",
+      "note": ""
+    },
+    {
+      "seq": "ND",
+      "kind": "control",
+      "target": "insert.chart.scatter",
+      "excel": "Scatter Chart",
+      "note": "Scatter (kind TBD)"
+    },
+    {
+      "seq": "NE",
+      "kind": "command",
+      "target": "insert.equation",
+      "pending": true,
+      "excel": "Equations",
+      "note": "Equations; reserved until the command lands"
+    },
+    {
+      "seq": "NF",
+      "kind": "continue",
+      "excel": "Online Pictures",
+      "note": "group level: containment(Picture)"
+    },
+    {
+      "seq": "NFP",
+      "kind": "continue",
+      "excel": "From Picture Menu",
+      "note": "group level: containment(Picture)"
+    },
+    {
+      "seq": "NFPF",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Picture From File",
+      "note": "containment(Picture)"
+    },
+    {
+      "seq": "NH1",
+      "kind": "dialog",
+      "target": "headerFooter",
+      "excel": "Header & Footer",
+      "note": ""
+    },
+    {
+      "seq": "NHF",
+      "kind": "command",
+      "target": "pageLayout.headerFooter",
+      "excel": "Header & Footer",
+      "note": ""
+    },
+    {
+      "seq": "NHI",
+      "kind": "control",
+      "target": "insert.chart.hierarchy",
+      "excel": "Hierarchy Chart",
+      "note": "Hierarchy (kind TBD)"
+    },
+    {
+      "seq": "NI1",
+      "kind": "command",
+      "target": "insert.chart",
+      "excel": "Waterfall Chart",
+      "note": "Waterfall (kind TBD)"
+    },
+    {
+      "seq": "NI2",
+      "kind": "dialog",
+      "target": "insertLink",
+      "excel": "Link",
+      "note": ""
+    },
+    {
+      "seq": "NJ",
+      "kind": "command",
+      "target": "insert.object",
+      "pending": true,
+      "excel": "Object",
+      "note": "insert.object missing; reserved until the command lands"
+    },
+    {
+      "seq": "NM1T",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "SmartArt Picture",
+      "note": "containment(Picture)"
+    },
+    {
+      "seq": "NM2",
+      "kind": "command",
+      "target": "insert.chart",
+      "excel": "Map Chart",
+      "note": "Map (kind TBD)"
+    },
+    {
+      "seq": "NN1",
+      "kind": "control",
+      "target": "insert.chart.line",
+      "excel": "Line Chart",
+      "note": "Line chart (kind TBD)"
+    },
+    {
+      "seq": "NNS",
+      "kind": "command",
+      "target": "insert.icons",
+      "excel": "Icons",
+      "note": ""
+    },
+    {
+      "seq": "NP",
+      "kind": "continue",
+      "excel": "Picture",
+      "note": "group level:"
+    },
+    {
+      "seq": "NPB",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Picture from File",
+      "note": "containment(Picture)"
+    },
+    {
+      "seq": "NPF",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Place in Cell",
+      "note": "Picture in cell (source TBD)"
+    },
+    {
+      "seq": "NPI",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Place in Cell Menu",
+      "note": "Picture in cell (source TBD)"
+    },
+    {
+      "seq": "NPO",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Place over Cells Menu",
+      "note": "Picture over cells (source TBD)"
+    },
+    {
+      "seq": "NQ",
+      "kind": "control",
+      "target": "insert.chart.pie",
+      "excel": "Pie Chart",
+      "note": "Pie (kind TBD)"
+    },
+    {
+      "seq": "NR",
+      "kind": "command",
+      "target": "insert.recommendedCharts",
+      "excel": "Recommended Charts",
+      "note": ""
+    },
+    {
+      "seq": "NSA",
+      "kind": "control",
+      "target": "insert.chart.statistic",
+      "excel": "Statistical Chart",
+      "note": "Statistical chart (kind TBD)"
+    },
+    {
+      "seq": "NSC",
+      "kind": "command",
+      "target": "insert.screenshot",
+      "pending": true,
+      "excel": "Screenshot Menu",
+      "note": "Screenshot; reserved until the command lands"
+    },
+    {
+      "seq": "NSD",
+      "kind": "command",
+      "target": "insert.chart",
+      "excel": "Combo Chart",
+      "note": "Combo (kind TBD)"
+    },
+    {
+      "seq": "NSF",
+      "kind": "command",
+      "target": "insert.slicer",
+      "pending": false,
+      "excel": "Slicer",
+      "note": "insert.slicer missing (gap #8); reserved until the command lands"
+    },
+    {
+      "seq": "NSH",
+      "kind": "command",
+      "target": "insert.shape",
+      "excel": "Shapes",
+      "note": ""
+    },
+    {
+      "seq": "NSP",
+      "kind": "command",
+      "target": "insert.recommendedPivotTables",
+      "excel": "Recommended PivotTables",
+      "note": ""
+    },
+    {
+      "seq": "NST",
+      "kind": "command",
+      "target": "insert.timeline",
+      "pending": true,
+      "excel": "Timeline",
+      "note": "insert.timeline missing (gap #8); reserved until the command lands"
+    },
+    {
+      "seq": "NSZ",
+      "kind": "command",
+      "target": "insert.pivotChart",
+      "pending": false,
+      "excel": "PivotChart",
+      "note": "PivotChart; reserved until the command lands"
+    },
+    {
+      "seq": "NT",
+      "kind": "command",
+      "target": "insert.table",
+      "excel": "Table",
+      "note": ""
+    },
+    {
+      "seq": "NU",
+      "kind": "command",
+      "target": "insert.symbol",
+      "excel": "Symbols",
+      "note": "containment(Symbol)"
+    },
+    {
+      "seq": "NZS",
+      "kind": "command",
+      "target": "insert.symbol",
+      "excel": "Excel: Symbol (modern)"
+    },
+    {
+      "seq": "NV",
+      "kind": "command",
+      "target": "insert.pivotTable",
+      "excel": "PivotTable",
+      "note": ""
+    },
+    {
+      "seq": "NW",
+      "kind": "command",
+      "target": "insert.wordArt",
+      "pending": true,
+      "excel": "WordArt",
+      "note": "WordArt; reserved until the command lands"
+    },
+    {
+      "seq": "NX",
+      "kind": "command",
+      "target": "insert.textBox",
+      "excel": "Text Box",
+      "note": ""
+    },
+    {
+      "seq": "NZK",
+      "kind": "continue",
+      "excel": "Sparklines Menu",
+      "note": "group level:"
+    },
+    {
+      "seq": "NZKSL",
+      "kind": "dialog",
+      "target": "sparkline",
+      "excel": "Line Sparkline",
+      "note": ""
+    },
+    {
+      "seq": "NZKSO",
+      "kind": "dialog",
+      "target": "sparkline",
+      "excel": "Column Sparkline",
+      "note": ""
+    },
+    {
+      "seq": "NZKSW",
+      "kind": "dialog",
+      "target": "sparkline",
+      "excel": "Win/Loss Sparkline",
+      "note": ""
+    },
+    {
+      "seq": "NZTX",
+      "kind": "command",
+      "target": "insert.textBox",
+      "excel": "Text Box",
+      "note": ""
+    },
+    {
+      "seq": "NZT",
+      "kind": "command",
+      "target": "insert.textBox",
+      "excel": "Excel: Text Box (modern)"
+    },
+    {
+      "seq": "PAE",
+      "kind": "command",
+      "target": "arrange.sendBackward",
+      "excel": "Send Backward",
+      "note": ""
+    },
+    {
+      "seq": "PAF",
+      "kind": "command",
+      "target": "arrange.bringForward",
+      "excel": "Bring Forward",
+      "note": ""
+    },
+    {
+      "seq": "PB",
+      "kind": "continue",
+      "excel": "Breaks",
+      "note": "group level:"
+    },
+    {
+      "seq": "PBI",
+      "kind": "command",
+      "target": "pageLayout.breaks",
+      "excel": "Insert Page Break",
+      "note": "Insert Page Break"
+    },
+    {
+      "seq": "PBR",
+      "kind": "command",
+      "target": "pageLayout.breaks",
+      "excel": "Remove Page Break",
+      "note": "Remove Page Break"
+    },
+    {
+      "seq": "PGB",
+      "kind": "command",
+      "target": "pageLayout.background",
+      "excel": "Background",
+      "note": "Excel badge GB (Background in the Page Setup group)"
+    },
+    {
+      "seq": "PI",
+      "kind": "command",
+      "target": "pageLayout.printTitles",
+      "excel": "Print Titles",
+      "note": ""
+    },
+    {
+      "seq": "PM",
+      "kind": "continue",
+      "excel": "Margins",
+      "note": "group level:"
+    },
+    {
+      "seq": "PMA",
+      "kind": "command",
+      "target": "pageLayout.margins",
+      "excel": "Custom Margins",
+      "note": "containment(Margins)"
+    },
+    {
+      "seq": "PO",
+      "kind": "command",
+      "target": "pageLayout.orientation",
+      "excel": "Orientation",
+      "note": ""
+    },
+    {
+      "seq": "PPG",
+      "kind": "command",
+      "target": "pageLayout.printGridlines",
+      "excel": "Print Gridlines",
+      "note": ""
+    },
+    {
+      "seq": "PPH",
+      "kind": "command",
+      "target": "pageLayout.printHeadings",
+      "excel": "Print Headings",
+      "note": ""
+    },
+    {
+      "seq": "PR",
+      "kind": "continue",
+      "excel": "Print Area",
+      "note": "group level:"
+    },
+    {
+      "seq": "PRS",
+      "kind": "command",
+      "target": "pageLayout.printArea",
+      "excel": "Set Print Area",
+      "note": ""
+    },
+    {
+      "seq": "PSP",
+      "kind": "dialog",
+      "target": "pageSetup",
+      "excel": "Page Setup",
+      "note": ""
+    },
+    {
+      "seq": "PSZ",
+      "kind": "command",
+      "target": "pageLayout.size",
+      "excel": "Size",
+      "note": ""
+    },
+    {
+      "seq": "PTC",
+      "kind": "command",
+      "target": "pageLayout.themeColors",
+      "excel": "Theme Colors",
+      "note": "containment(Colors)"
+    },
+    {
+      "seq": "PTE",
+      "kind": "command",
+      "target": "pageLayout.themeEffects",
+      "excel": "Theme Effects",
+      "note": "containment(Effects)"
+    },
+    {
+      "seq": "PTF",
+      "kind": "command",
+      "target": "pageLayout.themeFonts",
+      "excel": "Theme Fonts",
+      "note": "containment(Fonts)"
+    },
+    {
+      "seq": "PTH",
+      "kind": "continue",
+      "excel": "Themes",
+      "note": "group level:"
+    },
+    {
+      "seq": "PTHB",
+      "kind": "command",
+      "target": "pageLayout.theme",
+      "excel": "Browse Themes",
+      "note": "containment(Themes)"
+    },
+    {
+      "seq": "PVG",
+      "kind": "command",
+      "target": "view.gridlines",
+      "excel": "View Gridlines",
+      "note": ""
+    },
+    {
+      "seq": "PVH",
+      "kind": "command",
+      "target": "view.headings",
+      "excel": "View Headings",
+      "note": ""
+    },
+    {
+      "seq": "MA",
+      "kind": "continue",
+      "excel": "Remove Arrows Menu",
+      "note": "group level: containment(Remove Arrows)"
+    },
+    {
+      "seq": "MAA",
+      "kind": "command",
+      "target": "formulas.removeArrows",
+      "excel": "Remove All Arrows",
+      "note": "landed in the catalog; live since T7 probe"
+    },
+    {
+      "seq": "MAP",
+      "kind": "command",
+      "target": "formulas.removePrecedentArrows",
+      "pending": true,
+      "excel": "Remove Precedent Arrows",
+      "note": "Remove Precedent Arrows; reserved until the command lands"
+    },
+    {
+      "seq": "MB",
+      "kind": "command",
+      "target": "formulas.calculateNow",
+      "excel": "Calculate Now",
+      "note": ""
+    },
+    {
+      "seq": "MC",
+      "kind": "command",
+      "target": "formulas.createFromSelection",
+      "excel": "Create From Selection",
+      "note": ""
+    },
+    {
+      "seq": "MD",
+      "kind": "command",
+      "target": "formulas.traceDependents",
+      "excel": "Trace Dependents",
+      "note": ""
+    },
+    {
+      "seq": "ME",
+      "kind": "control",
+      "excel": "Date & Time Menu",
+      "note": "group level: containment(Date & Time)",
+      "target": "formulas.dateTime"
+    },
+    {
+      "seq": "MF",
+      "kind": "dialog",
+      "target": "insertFunction",
+      "excel": "Insert Function",
+      "note": ""
+    },
+    {
+      "seq": "MG",
+      "kind": "control",
+      "excel": "Math & Trig Menu",
+      "note": "group level: containment(Math & Trig)",
+      "target": "formulas.mathTrig"
+    },
+    {
+      "seq": "MH",
+      "kind": "command",
+      "target": "formulas.showFormulas",
+      "excel": "Show Formulas",
+      "note": ""
+    },
+    {
+      "seq": "MI",
+      "kind": "continue",
+      "excel": "Financial Menu",
+      "note": "group level: containment(Financial)"
+    },
+    {
+      "seq": "MI1",
+      "kind": "control",
+      "target": "formulas.financial",
+      "excel": "Excel: Financial; first item of the dropdown"
+    },
+    {
+      "seq": "MJ",
+      "kind": "command",
+      "target": "formulas.calculateSheet",
+      "excel": "Calculate Sheet",
+      "note": ""
+    },
+    {
+      "seq": "MK",
+      "kind": "continue",
+      "excel": "Error Checking Menu",
+      "note": "group level: containment(Error Checking)"
+    },
+    {
+      "seq": "MKK",
+      "kind": "dialog",
+      "target": "errorChecking",
+      "excel": "Error Checking",
+      "note": ""
+    },
+    {
+      "seq": "ML",
+      "kind": "control",
+      "excel": "Logical Menu",
+      "note": "group level: containment(Logical)",
+      "target": "formulas.logical"
+    },
+    {
+      "seq": "MM",
+      "kind": "dialog",
+      "target": "defineName",
+      "excel": "Define Name",
+      "note": ""
+    },
+    {
+      "seq": "MN",
+      "kind": "dialog",
+      "target": "nameManager",
+      "excel": "Name Manager",
+      "note": ""
+    },
+    {
+      "seq": "MO",
+      "kind": "control",
+      "excel": "Lookup & Reference Menu",
+      "note": "group level: containment(Lookup & Reference)",
+      "target": "formulas.lookup"
+    },
+    {
+      "seq": "MP",
+      "kind": "command",
+      "target": "formulas.tracePrecedents",
+      "excel": "Trace Precedents",
+      "note": ""
+    },
+    {
+      "seq": "MQ",
+      "kind": "control",
+      "excel": "More Functions Menu",
+      "note": "group level: containment(More Functions)",
+      "target": "formulas.moreFunctions"
+    },
+    {
+      "seq": "MS",
+      "kind": "continue",
+      "excel": "Use in Formula Menu",
+      "note": "group level: containment(Use in Formula)"
+    },
+    {
+      "seq": "MSP",
+      "kind": "dialog",
+      "target": "pasteName",
+      "excel": "Paste Names",
+      "note": ""
+    },
+    {
+      "seq": "MT",
+      "kind": "control",
+      "excel": "Text Menu",
+      "note": "group level: containment(Text)",
+      "target": "formulas.text"
+    },
+    {
+      "seq": "MU",
+      "kind": "continue",
+      "excel": "AutoSum Menu",
+      "note": "group level:"
+    },
+    {
+      "seq": "MUA",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Average",
+      "note": "AutoSum: Average (variant TBD)"
+    },
+    {
+      "seq": "MUC",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Count Numbers",
+      "note": "AutoSum: Count (variant TBD)"
+    },
+    {
+      "seq": "MUF",
+      "kind": "command",
+      "target": "formulas.moreFunctions",
+      "excel": "More Functions (AutoSum)",
+      "note": "containment(More Functions)"
+    },
+    {
+      "seq": "MUI",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Min",
+      "note": "AutoSum: Min (variant TBD)"
+    },
+    {
+      "seq": "MUM",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Max",
+      "note": "AutoSum: Max (variant TBD)"
+    },
+    {
+      "seq": "MUS",
+      "kind": "command",
+      "target": "formulas.autoSum",
+      "excel": "Sum",
+      "note": ""
+    },
+    {
+      "seq": "MV",
+      "kind": "dialog",
+      "target": "evaluateFormula",
+      "excel": "Evaluate Formula",
+      "note": ""
+    },
+    {
+      "seq": "MW",
+      "kind": "command",
+      "target": "formulas.watchWindow",
+      "excel": "Watch Window",
+      "note": ""
+    },
+    {
+      "seq": "MX",
+      "kind": "continue",
+      "excel": "Calculation Options Menu",
+      "note": "group level: containment(Calculation Options)"
+    },
+    {
+      "seq": "MXA",
+      "kind": "command",
+      "target": "formulas.calculationOptions",
+      "excel": "Automatic Calculation",
+      "note": "Calculation options: Automatic"
+    },
+    {
+      "seq": "MXM",
+      "kind": "command",
+      "target": "formulas.calculationOptions",
+      "excel": "Manual Calculation",
+      "note": "Calculation options: Manual"
+    },
+    {
+      "seq": "MXP",
+      "kind": "command",
+      "target": "formulas.calculationOptions",
+      "excel": "Partial Calculation",
+      "note": "Calculation options: Partial"
+    },
+    {
+      "seq": "AB",
+      "kind": "dialog",
+      "target": "subtotal",
+      "excel": "Subtotal",
+      "note": ""
+    },
+    {
+      "seq": "AC",
+      "kind": "command",
+      "target": "data.clearFilter",
+      "excel": "Clear Filter",
+      "note": ""
+    },
+    {
+      "seq": "AD",
+      "kind": "command",
+      "target": "data.consolidate",
+      "excel": "Consolidate",
+      "note": ""
+    },
+    {
+      "seq": "AE",
+      "kind": "dialog",
+      "target": "textToColumns",
+      "excel": "Text to Columns",
+      "note": ""
+    },
+    {
+      "seq": "AF1",
+      "kind": "continue",
+      "excel": "Data from Picture Menu",
+      "note": "group level: feature gap; reserved until the command lands"
+    },
+    {
+      "seq": "AF1C",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Picture from Clipboard (source TBD)"
+    },
+    {
+      "seq": "AF1P",
+      "kind": "command",
+      "target": "insert.picture",
+      "excel": "Picture from File (source TBD)"
+    },
+    {
+      "seq": "AFA",
+      "kind": "command",
+      "target": "data.fromAccess",
+      "pending": true,
+      "excel": "Get External Data: From Access",
+      "note": "gap #12 Get & Transform; reserved until the command lands"
+    },
+    {
+      "seq": "AFC",
+      "kind": "command",
+      "target": "data.forecastSheet",
+      "pending": false,
+      "excel": "Forecast Sheet",
+      "note": "IN FLIGHT: vangel76 PR #325; reserved until the command lands"
+    },
+    {
+      "seq": "AFE",
+      "kind": "command",
+      "target": "data.analyzeData",
+      "pending": true,
+      "excel": "Analyze Data",
+      "note": "AI feature GAP; reserved until the command lands"
+    },
+    {
+      "seq": "AFF",
+      "kind": "command",
+      "target": "edit.flashFill",
+      "excel": "Flash Fill",
+      "note": ""
+    },
+    {
+      "seq": "AFO",
+      "kind": "command",
+      "target": "data.fromOtherSources",
+      "pending": true,
+      "excel": "Get External Data: From Other Sources",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "AFT",
+      "kind": "command",
+      "target": "data.fromText",
+      "pending": true,
+      "excel": "Get External Data: From Text",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "AFW",
+      "kind": "command",
+      "target": "data.fromWeb",
+      "pending": true,
+      "excel": "Get External Data: From Web",
+      "note": "reserved until the command lands"
+    },
+    {
+      "seq": "AG",
+      "kind": "continue",
+      "excel": "Group Menu",
+      "note": "group level: containment(Group)"
+    },
+    {
+      "seq": "AGA",
+      "kind": "command",
+      "target": "data.autoOutline",
+      "pending": true,
+      "excel": "Auto Outline",
+      "note": "Auto Outline; reserved until the command lands"
+    },
+    {
+      "seq": "AGG",
+      "kind": "command",
+      "target": "data.group",
+      "excel": "Group",
+      "note": ""
+    },
+    {
+      "seq": "AH",
+      "kind": "command",
+      "target": "data.hideDetail",
+      "excel": "Hide Detail",
+      "note": ""
+    },
+    {
+      "seq": "AJ",
+      "kind": "command",
+      "target": "data.showDetail",
+      "excel": "Show Detail",
+      "note": ""
+    },
+    {
+      "seq": "AK",
+      "kind": "command",
+      "target": "data.queriesConnections",
+      "excel": "Edit Links",
+      "note": "Edit Links (Queries & Connections);"
+    },
+    {
+      "seq": "AM",
+      "kind": "dialog",
+      "target": "removeDuplicates",
+      "excel": "Remove Duplicates",
+      "note": ""
+    },
+    {
+      "seq": "AO",
+      "kind": "command",
+      "target": "data.queriesConnections",
+      "excel": "Queries & Connections",
+      "note": ""
+    },
+    {
+      "seq": "AP1",
+      "kind": "command",
+      "target": "file.properties",
+      "excel": "Properties",
+      "note": ""
+    },
+    {
+      "seq": "APN",
+      "kind": "continue",
+      "excel": "Get Data (Power Query) Menu",
+      "note": "group level: Power Query variants = GAP"
+    },
+    {
+      "seq": "APND",
+      "kind": "command",
+      "target": "data.fromDatabase",
+      "pending": true,
+      "excel": "From Database (Microsoft Query)",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APNE",
+      "kind": "command",
+      "target": "data.powerQueryEditor",
+      "pending": true,
+      "excel": "Launch Power Query Editor",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APNG",
+      "kind": "command",
+      "target": "data.getData",
+      "excel": "Get Data (Power Query)",
+      "note": "containment(Get Data)"
+    },
+    {
+      "seq": "APNH",
+      "kind": "command",
+      "target": "data.fromHtml",
+      "pending": true,
+      "excel": "From HTML",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APNL",
+      "kind": "command",
+      "target": "data.fromSqlServer",
+      "pending": true,
+      "excel": "From SQL Server ODBC",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APNS",
+      "kind": "command",
+      "target": "data.dataSourceSettings",
+      "pending": true,
+      "excel": "Data Source Settings",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APNT",
+      "kind": "command",
+      "target": "data.fromTextLegacy",
+      "pending": true,
+      "excel": "From Text (Legacy)",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APR",
+      "kind": "command",
+      "target": "data.recentSources",
+      "pending": true,
+      "excel": "Recent Sources",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "APS",
+      "kind": "command",
+      "target": "data.queriesConnections",
+      "excel": "Show Queries",
+      "note": ""
+    },
+    {
+      "seq": "APT",
+      "kind": "command",
+      "target": "data.fromTable",
+      "pending": true,
+      "excel": "From Table (query)",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "AQ",
+      "kind": "dialog",
+      "target": "advancedFilter",
+      "excel": "Advanced Filter",
+      "note": ""
+    },
+    {
+      "seq": "AR",
+      "kind": "continue",
+      "note": "group: group: Queries & Connections"
+    },
+    {
+      "seq": "ARA",
+      "kind": "command",
+      "target": "data.refreshAll",
+      "excel": "Refresh All",
+      "note": ""
+    },
+    {
+      "seq": "ARC",
+      "kind": "command",
+      "target": "data.cancelRefresh",
+      "pending": true,
+      "excel": "Cancel Refresh",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "ARO",
+      "kind": "command",
+      "target": "data.connectionProperties",
+      "pending": true,
+      "excel": "Connection Properties",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "ARR",
+      "kind": "command",
+      "target": "pivot.refresh",
+      "excel": "Refresh",
+      "note": ""
+    },
+    {
+      "seq": "ARS",
+      "kind": "command",
+      "target": "data.refreshStatus",
+      "pending": true,
+      "excel": "Refresh Status",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "ASA",
+      "kind": "command",
+      "target": "data.sortAscending",
+      "excel": "Sort A to Z",
+      "note": ""
+    },
+    {
+      "seq": "ASD",
+      "kind": "command",
+      "target": "data.sortDescending",
+      "excel": "Sort Z to A",
+      "note": ""
+    },
+    {
+      "seq": "ASS",
+      "kind": "dialog",
+      "target": "sort",
+      "excel": "Sort",
+      "note": ""
+    },
+    {
+      "seq": "AT",
+      "kind": "command",
+      "target": "data.filter",
+      "excel": "Filter",
+      "note": ""
+    },
+    {
+      "seq": "AU",
+      "kind": "continue",
+      "excel": "Ungroup Menu",
+      "note": "group level: containment(Ungroup)"
+    },
+    {
+      "seq": "AUC",
+      "kind": "command",
+      "target": "data.clearOutline",
+      "pending": true,
+      "excel": "Clear Outline",
+      "note": "feature gap; reserved until the command lands"
+    },
+    {
+      "seq": "AUU",
+      "kind": "command",
+      "target": "data.ungroup",
+      "excel": "Ungroup",
+      "note": ""
+    },
+    {
+      "seq": "AV",
+      "kind": "continue",
+      "excel": "Data Validation Menu",
+      "note": "group level: containment(Data Validation)"
+    },
+    {
+      "seq": "AVI",
+      "kind": "command",
+      "target": "data.circleInvalid",
+      "excel": "Circle Invalid Data",
+      "note": ""
+    },
+    {
+      "seq": "AVR",
+      "kind": "command",
+      "target": "data.clearValidationCircles",
+      "pending": true,
+      "excel": "Clear Validation Circles",
+      "note": "reserved until the command lands"
+    },
+    {
+      "seq": "AVV",
+      "kind": "command",
+      "target": "data.validation",
+      "excel": "Data Validation",
+      "note": ""
+    },
+    {
+      "seq": "AW",
+      "kind": "continue",
+      "note": "group: group: What-If (goalSeek/scenarioManager/dataTable)"
+    },
+    {
+      "seq": "AWG",
+      "kind": "dialog",
+      "target": "goalSeek",
+      "excel": "Goal Seek",
+      "note": ""
+    },
+    {
+      "seq": "AWS",
+      "kind": "command",
+      "target": "data.scenarioManager",
+      "excel": "Scenario Manager",
+      "note": ""
+    },
+    {
+      "seq": "AWT",
+      "kind": "command",
+      "target": "data.dataTable",
+      "excel": "Data Table",
+      "note": ""
+    },
+    {
+      "seq": "AX",
+      "kind": "command",
+      "target": "data.existingConnections",
+      "pending": true,
+      "excel": "Existing Connections",
+      "note": "gap #12; reserved until the command lands"
+    },
+    {
+      "seq": "AY",
+      "kind": "command",
+      "target": "data.reapply",
+      "excel": "Reapply Filter",
+      "note": "containment(Reapply)"
+    },
+    {
+      "seq": "RA1",
+      "kind": "dialog",
+      "target": "accessibility",
+      "excel": "Check Accessibility",
+      "note": ""
+    },
+    {
+      "seq": "RA2",
+      "kind": "command",
+      "target": "review.showComments",
+      "pending": false,
+      "excel": "Show All Comments",
+      "note": "Show All Comments; reserved until the command lands"
+    },
+    {
+      "seq": "RC",
+      "kind": "dialog",
+      "target": "comment",
+      "excel": "New Comment",
+      "note": ""
+    },
+    {
+      "seq": "RD",
+      "kind": "command",
+      "target": "review.deleteComment",
+      "excel": "Delete Comment",
+      "note": ""
+    },
+    {
+      "seq": "RG",
+      "kind": "command",
+      "target": "review.showChanges",
+      "pending": true,
+      "excel": "Track Changes",
+      "note": "reserved until the command lands"
+    },
+    {
+      "seq": "RL",
+      "kind": "command",
+      "target": "review.translate",
+      "pending": true,
+      "excel": "Translate",
+      "note": "feature gap; reserved until the command lands"
+    },
+    {
+      "seq": "RN",
+      "kind": "command",
+      "target": "review.nextComment",
+      "pending": false,
+      "excel": "Next Comment",
+      "note": ""
+    },
+    {
+      "seq": "RO",
+      "kind": "command",
+      "target": "review.protectWorkbook",
+      "excel": "Protect and Share Workbook"
+    },
+    {
+      "seq": "RPS",
+      "kind": "dialog",
+      "target": "protectSheet",
+      "excel": "Protect Sheet",
+      "note": ""
+    },
+    {
+      "seq": "RPW",
+      "kind": "command",
+      "target": "review.protectWorkbook",
+      "excel": "Protect Workbook",
+      "note": ""
+    },
+    {
+      "seq": "RRS",
+      "kind": "command",
+      "target": "review.smartLookup",
+      "pending": true,
+      "excel": "Smart Lookup",
+      "note": "feature gap; reserved until the command lands"
+    },
+    {
+      "seq": "RS",
+      "kind": "dialog",
+      "target": "spelling",
+      "excel": "Spelling",
+      "note": ""
+    },
+    {
+      "seq": "RTN",
+      "kind": "command",
+      "target": "review.newNote",
+      "excel": "New Note",
+      "note": ""
+    },
+    {
+      "seq": "RV",
+      "kind": "command",
+      "target": "review.previousComment",
+      "pending": false,
+      "excel": "Previous Comment",
+      "note": ""
+    },
+    {
+      "seq": "WA",
+      "kind": "command",
+      "target": "view.arrangeAll",
+      "excel": "Arrange All",
+      "note": ""
+    },
+    {
+      "seq": "WC",
+      "kind": "command",
+      "target": "view.customViews",
+      "excel": "Custom Views",
+      "note": ""
+    },
+    {
+      "seq": "WF",
+      "kind": "continue",
+      "excel": "Freeze Panes Menu",
+      "note": "group level:"
+    },
+    {
+      "seq": "WFC",
+      "kind": "command",
+      "target": "view.freezeFirstColumn",
+      "excel": "Freeze First Column",
+      "note": ""
+    },
+    {
+      "seq": "WFF",
+      "kind": "command",
+      "target": "view.freezePanes",
+      "excel": "Freeze Panes",
+      "note": ""
+    },
+    {
+      "seq": "WFR",
+      "kind": "command",
+      "target": "view.freezeTopRow",
+      "excel": "Freeze Top Row",
+      "note": ""
+    },
+    {
+      "seq": "WG",
+      "kind": "command",
+      "target": "view.zoomToSelection",
+      "excel": "Zoom To Selection",
+      "note": ""
+    },
+    {
+      "seq": "WH",
+      "kind": "command",
+      "target": "view.hideWindow",
+      "excel": "Hide Window",
+      "note": ""
+    },
+    {
+      "seq": "WI",
+      "kind": "command",
+      "target": "view.pageBreakPreview",
+      "excel": "Page Break Preview",
+      "note": ""
+    },
+    {
+      "seq": "WJ",
+      "kind": "control",
+      "target": "view.zoom",
+      "excel": "Zoom To 100%",
+      "note": "runs the 100% zoom handler (percent param)"
+    },
+    {
+      "seq": "WL",
+      "kind": "command",
+      "target": "view.normal",
+      "excel": "Normal View",
+      "note": "containment(Normal)"
+    },
+    {
+      "seq": "WM",
+      "kind": "continue",
+      "excel": "Macros Menu",
+      "note": "group level: containment(Macros)"
+    },
+    {
+      "seq": "WMR",
+      "kind": "dialog",
+      "target": "recordMacro",
+      "excel": "Record Macro",
+      "note": "Record Macro dialog (stops recording while recording)"
+    },
+    {
+      "seq": "WMV",
+      "kind": "dialog",
+      "target": "macros",
+      "excel": "View Macros",
+      "note": "containment(Macros): the Macros dialog"
+    },
+    {
+      "seq": "WN",
+      "kind": "command",
+      "target": "view.newWindow",
+      "excel": "New Window",
+      "note": ""
+    },
+    {
+      "seq": "WP",
+      "kind": "command",
+      "target": "view.pageLayout",
+      "excel": "Page Layout View",
+      "note": ""
+    },
+    {
+      "seq": "WQ",
+      "kind": "dialog",
+      "target": "zoom",
+      "excel": "Zoom",
+      "note": "opens the Zoom dialog"
+    },
+    {
+      "seq": "WR",
+      "kind": "command",
+      "target": "view.ruler",
+      "excel": "Ruler",
+      "note": ""
+    },
+    {
+      "seq": "WS",
+      "kind": "command",
+      "target": "view.split",
+      "excel": "Split",
+      "note": ""
+    },
+    {
+      "seq": "WT",
+      "kind": "command",
+      "target": "view.resetWindowPosition",
+      "pending": true,
+      "excel": "Reset Window Position",
+      "note": "reserved until the command lands"
+    },
+    {
+      "seq": "WU",
+      "kind": "command",
+      "target": "view.unhideWindow",
+      "excel": "Unhide Window",
+      "note": ""
+    },
+    {
+      "seq": "WVC",
+      "kind": "command",
+      "target": "view.focusCell",
+      "pending": true,
+      "excel": "Focus Cell Menu",
+      "note": "Focus Cell; reserved until the command lands"
+    },
+    {
+      "seq": "WVF",
+      "kind": "control",
+      "target": "view.formulaBar",
+      "excel": "Toggle Formula Bar",
+      "note": "toggles the formula bar"
+    },
+    {
+      "seq": "WVH",
+      "kind": "command",
+      "target": "view.headings",
+      "excel": "Toggle Headings",
+      "note": "containment(Headings)"
+    },
+    {
+      "seq": "WVN",
+      "kind": "command",
+      "target": "view.navigation",
+      "pending": true,
+      "excel": "Navigation",
+      "note": "Navigation pane; reserved until the command lands"
+    },
+    {
+      "seq": "WVR",
+      "kind": "command",
+      "target": "view.ruler",
+      "excel": "Ruler",
+      "note": ""
+    },
+    {
+      "seq": "WW",
+      "kind": "control",
+      "target": "view.switchWindows",
+      "excel": "Switch Windows",
+      "note": ""
+    },
+    {
+      "seq": "JAM",
+      "kind": "command",
+      "target": "chart.formatSelection",
+      "excel": "Chart format: Format Selection pane",
+      "note": "containment(Format Selection)"
+    },
+    {
+      "seq": "JCA",
+      "kind": "command",
+      "target": "chart.addElement",
+      "excel": "Chart: Add Chart Element",
+      "note": "containment(Add Chart Element)"
+    },
+    {
+      "seq": "JCC",
+      "kind": "command",
+      "target": "chart.changeType",
+      "excel": "Chart: Change Chart Type",
+      "note": "containment(Change Chart Type)"
+    },
+    {
+      "seq": "JTS",
+      "kind": "command",
+      "target": "table.style",
+      "excel": "Table: table style",
+      "note": ""
+    },
+    {
+      "seq": "JTV",
+      "kind": "command",
+      "target": "table.summarizePivot",
+      "excel": "Table: Summarize with PivotTable",
+      "note": "containment(Summarize with PivotTable)"
+    },
+    {
+      "seq": "FA",
+      "kind": "command",
+      "excel": "Save / Save As page",
+      "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
+      "target": "file.saveAs"
+    },
+    {
+      "seq": "FC",
+      "kind": "command",
+      "target": "file.close",
+      "excel": "Close workbook"
+    },
+    {
+      "seq": "FEA",
+      "kind": "command",
+      "target": "file.exportPdf",
+      "excel": "Export: create PDF/XPS",
+      "note": "Export: create PDF/XPS"
+    },
+    {
+      "seq": "FEC",
+      "kind": "command",
+      "target": "file.saveAs",
+      "excel": "Export: change file type",
+      "note": "Export: change file type"
+    },
+    {
+      "seq": "FI",
+      "kind": "command",
+      "excel": "Info page",
+      "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
+      "target": "file.properties"
+    },
+    {
+      "seq": "FN",
+      "kind": "command",
+      "target": "file.new",
+      "excel": "New page",
+      "note": "New page"
+    },
+    {
+      "seq": "FO",
+      "kind": "command",
+      "excel": "Open page",
+      "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
+      "target": "file.open"
+    },
+    {
+      "seq": "FP",
+      "kind": "command",
+      "target": "file.print",
+      "excel": "Print page",
+      "note": "containment(Print)"
+    },
+    {
+      "seq": "Q",
+      "kind": "command",
+      "target": "ui.search",
+      "pending": true,
+      "excel": "Search / Tell Me",
+      "note": "Alt+Q search box does not exist yet (issue #49)"
+    }
+  ]
 }

@@ -37,13 +37,16 @@ impl SheetApp {
                 keytips::Action::Command("edit.paste") => self.paste_from_clipboard(),
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
                 keytips::Action::CommandWith(id, params) => {
-                    let params: Json = serde_json::from_str(params).unwrap_or_else(|_| json!({}));
+                    let mut params: Json = serde_json::from_str(params).unwrap_or_else(|_| json!({}));
                     // A Borders preset picked by key tip becomes the split button's face, as a
                     // click on the same menu item does.
-                    if id == "home.borders"
-                        && let Some(preset) = params.get("preset").and_then(Json::as_str)
-                    {
-                        self.grid.last_border = preset.to_string();
+                    if id == "home.borders" {
+                        if let Some(preset) = params.get("preset").and_then(Json::as_str) {
+                            self.grid.last_border = preset.to_string();
+                        }
+                        if let Some(object) = params.as_object_mut() {
+                            object.entry("color").or_insert_with(|| json!(self.grid.last_border_color));
+                        }
                     }
                     self.run_or_alert(id, params);
                 }

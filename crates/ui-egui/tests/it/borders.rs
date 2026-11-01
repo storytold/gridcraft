@@ -73,6 +73,31 @@ fn diagram_menu_applies_left_right_inside_and_outside_then_undoes() {
     }
 }
 
+#[test]
+fn border_line_color_palette_sets_the_color_for_the_next_preset() {
+    let mut h = harness();
+    h.get_by_label("Border presets").click();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Theme Colors").count(), 0, "the color palette starts hidden in its submenu");
+    h.get_by_label("Line Color").click();
+    h.run_steps(3);
+    for _ in 0..7 {
+        h.key_press(egui::Key::ArrowDown);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().grid.last_border_color, "#C00000");
+
+    h.get_by_label("Border presets").click();
+    h.run_steps(3);
+    h.get_by_label("All Borders").click();
+    h.run_steps(3);
+    let all = borders(&h, "A1");
+    for line in [all.top, all.bottom, all.left, all.right] {
+        assert_eq!(line.color, Color::Rgb(0xC00000));
+    }
+}
+
 fn colored_borders() -> Borders {
     let line = |color| BorderLine { style: BorderStyle::Thin, color: Color::Rgb(color) };
     Borders {
