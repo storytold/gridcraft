@@ -9,6 +9,15 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_with(|app| app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"})))
+}
+
+/// Home › Conditional Formatting › New Rule…, with Use a formula picked.
+fn new_rule() -> Harness {
+    harness_with(|app| app.open_dialog("newFormattingRule", json!({"rule": {"type": "expression"}})))
+}
+
+fn harness_with(open: impl FnOnce(&mut SheetApp)) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.insertSheet", json!({})).unwrap();
@@ -22,13 +31,23 @@ fn harness() -> Harness {
         crate::common::app(session),
     );
     h.run_steps(4);
-    h.state_mut().open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+    open(h.state_mut());
     h.run_steps(6);
     h
 }
 
+/// The formula box's text: a value of its own in the quick dialog, the rule's in New Formatting Rule.
 fn formula(h: &Harness) -> String {
-    h.state().dialog.as_ref().and_then(|d| d.values.get("formula")).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    let d = h.state().dialog.as_ref();
+    let v = d.and_then(|d| d.values.get("formula").or_else(|| d.values.get("rule").and_then(|r| r.get("formula"))));
+    v.and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+/// The ranges of the rule added last on the sheet named `name`.
+fn rule_ranges(h: &Harness, name: &str) -> Vec<String> {
+    let wb = &h.state().session.active().unwrap().wb;
+    let sheet = wb.sheets.iter().find(|s| s.name == name).unwrap();
+    sheet.cond_formats.first().map(|cf| cf.ranges.iter().map(|r| r.a1()).collect()).unwrap_or_default()
 }
 
 fn selection(h: &Harness) -> String {
@@ -194,4 +213,64 @@ fn the_rule_follows_its_sheet_when_sheets_move_while_the_dialog_is_open() {
     assert!(sheet2.cond_formats.is_empty(), "nothing lands on the sheet that took index 0");
     let cf = sheet1.cond_formats.last().expect("the rule stays on Sheet1");
     assert_eq!(cf.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), ["F8:G9"]);
+}
+
+#[test]
+fn new_rule_takes_references_clicked_on_the_grid() {
+    let mut h = new_rule();
+    click(&mut h, "C3");
+    assert_eq!(formula(&h), "=$C$3");
+    assert_eq!(selection(&h), "F8:G9", "the range the rule applies to is still selected");
+    click(&mut h, "B2");
+    assert_eq!(formula(&h), "=$B$2", "a second click replaces the reference");
+    type_text(&mut h, ">0");
+    assert_eq!(formula(&h), "=$B$2>0", "the box has the keyboard back");
+}
+
+#[test]
+fn new_rule_applies_to_the_selection_it_opened_with() {
+    let mut h = new_rule();
+    click(&mut h, "B2");
+    type_text(&mut h, ">0");
+    // The selection changes while the dialog is open; the rule keeps the cells it opened for.
+    h.state_mut().session.execute("selection.set", json!({"range": "A1"})).unwrap();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "OK confirmed the rule");
+    assert_eq!(rule_ranges(&h, "Sheet1"), ["F8:G9"]);
+}
+
+#[test]
+fn new_rule_pointing_on_another_sheet_keeps_the_rule_on_its_own_sheet() {
+    let mut h = new_rule();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    click(&mut h, "A1");
+    assert_eq!(formula(&h), "=Sheet2!$A$1");
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter confirmed the rule");
+    assert!(rule_ranges(&h, "Sheet2").is_empty(), "nothing lands on the sheet pointed at");
+    assert_eq!(rule_ranges(&h, "Sheet1"), ["F8:G9"]);
+}
+
+#[test]
+fn new_rule_follows_its_sheet_when_sheets_move_while_it_is_open() {
+    let mut h = new_rule();
+    click(&mut h, "B2");
+    h.state_mut().session.execute("sheet.move", json!({"sheet": 0, "to": 1})).unwrap();
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter confirmed the rule");
+    assert!(rule_ranges(&h, "Sheet2").is_empty(), "nothing lands on the sheet that took index 0");
+    assert_eq!(rule_ranges(&h, "Sheet1"), ["F8:G9"]);
+}
+
+#[test]
+fn new_rule_without_a_formula_box_leaves_grid_clicks_alone() {
+    let mut h = harness_with(|app| app.open_dialog("newFormattingRule", json!({})));
+    click(&mut h, "B2");
+    assert_eq!(selection(&h), "B2", "Cell Value rules don't take references from the grid");
 }
