@@ -1,6 +1,6 @@
 use super::{
-    AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, Hyperlink, MAX_COLS, MAX_HYPERLINK_BYTES, MAX_HYPERLINK_CELLS, MAX_ROWS,
-    NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr, from_file, xml,
+    AutoFilter, CellRef, Comment, Ctx, DateGroupItem, DateGrouping, El, FilterCriterion, HashMap, Hyperlink, MAX_COLS, MAX_HYPERLINK_BYTES,
+    MAX_HYPERLINK_CELLS, MAX_ROWS, NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr, from_file, xml,
 };
 
 pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet) {
@@ -50,16 +50,53 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
+/// `<dateGroupItem year="2026" month="3" dateTimeGrouping="month"/>`; fields below the grouping
+/// are ignored.
+fn read_date_group_item(e: &El) -> Option<DateGroupItem> {
+    let grouping = DateGrouping::from_xml(e.attr("dateTimeGrouping")?)?;
+    // Months and days start at 1; hours, minutes and seconds at 0. An omitted field takes its
+    // lowest value, as Excel reads it (MS-OI29500 §18.3.2.4); a present one out of range drops the item.
+    let field = |name: &str, g: DateGrouping, min: u32, max: u32| -> Option<u32> {
+        if grouping < g {
+            return Some(0);
+        }
+        match e.attr(name) {
+            None => Some(min),
+            Some(_) => e.attr_u32(name).filter(|v| (min..=max).contains(v)),
+        }
+    };
+    let year = e.attr_u32("year").filter(|y| *y <= 9999)? as i32;
+    Some(DateGroupItem {
+        grouping,
+        year,
+        month: field("month", DateGrouping::Month, 1, 12)?,
+        day: field("day", DateGrouping::Day, 1, 31)?,
+        hour: field("hour", DateGrouping::Hour, 0, 23)?,
+        minute: field("minute", DateGrouping::Minute, 0, 59)?,
+        second: field("second", DateGrouping::Second, 0, 59)?,
+    })
+}
+
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
         let crit = if let Some(f) = fc.child("filters") {
-            FilterCriterion::Values {
-                values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
-                blanks: f.flag("blank", false),
+            // `calendarType` is ignored, as Excel ignores it (MS-OI29500 §18.3.2.8): the items are
+            // Gregorian years, months and days.
+            let items: Vec<&El> = f.kids("dateGroupItem").collect();
+            let dates: Vec<DateGroupItem> = items.iter().filter_map(|x| read_date_group_item(x)).collect();
+            let values: Vec<String> = f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect();
+            let blanks = f.flag("blank", false);
+            if dates.len() < items.len() {
+                cx.warn("AutoFilter date groups out of range were dropped");
+                // With nothing left the filter would hide every row instead of the dates it named.
+                if dates.is_empty() && values.is_empty() && !blanks {
+                    continue;
+                }
             }
+            FilterCriterion::Values { values, blanks, dates }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));
             let Some(a) = it.next() else { continue };
