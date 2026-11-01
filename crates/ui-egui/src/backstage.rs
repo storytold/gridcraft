@@ -711,9 +711,14 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             .labelled_by(label.id);
     });
     ui.add_space(14.0);
-    // Desktop: the system Save dialog. Web: the file downloads.
+    // Provider workbooks choose a destination; other actions use the local picker or download.
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
-    let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
+    let provider_save = fmt == "xlsx" && app.services.file_providers.as_ref().is_some_and(|host| host.enabled());
+    let label = match (provider_save, web) {
+        (true, _) => lang.tr("Save").to_string(),
+        (false, true) => format!("{} (.{fmt})", lang.tr("Download")),
+        (false, false) => lang.tr("Browse…").to_string(),
+    };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
             save_as_workbook(app, out);
