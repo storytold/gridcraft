@@ -654,6 +654,29 @@ fn execute_command_preserves_two_named_pdf_families() {
     assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 2);
     assert!(bytes.windows(4).any(|w| w == b"/U5 "));
     assert!(bytes.windows(4).any(|w| w == b"/U9 "));
+    // Both cells contain A: bind each text run's resource to its horizontal position so
+    // swapping the two families cannot pass just because both faces were embedded.
+    let pdf = String::from_utf8_lossy(&bytes);
+    let mut cell_runs: Vec<_> = pdf
+        .split("BT\n")
+        .filter_map(|block| {
+            let text = block.split_once("ET\n")?.0;
+            if !text.lines().any(|line| line == "<0001> Tj") {
+                return None;
+            }
+            let font = text.lines().find(|line| line.ends_with(" Tf")).unwrap().split_whitespace().next().unwrap();
+            let mut matrix = text.lines().find(|line| line.ends_with(" Tm")).unwrap().split_whitespace();
+            let x: f32 = matrix.nth(4).unwrap().parse().unwrap();
+            let y: f32 = matrix.next().unwrap().parse().unwrap();
+            Some((x, y, font))
+        })
+        .collect();
+    assert_eq!(cell_runs.len(), 2, "each cell must produce its A glyph run");
+    cell_runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(cell_runs[0].0 < cell_runs[1].0, "A1 must be left of B1");
+    assert_eq!(cell_runs[0].1, cell_runs[1].1, "both cells are in row 1");
+    assert_eq!(cell_runs[0].2, "/U5", "A1 must use Body");
+    assert_eq!(cell_runs[1].2, "/U9", "B1 must use Heading");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

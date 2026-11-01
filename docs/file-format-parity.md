@@ -146,7 +146,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
-| 2026-11-01 | minor | Share bounded native font loading from the PDF crate without a CLI UI dependency; document MCP path authority and embedding licence checks |
+| 2026-11-01 | minor | Share bounded native font loading from the PDF crate without a CLI UI dependency; document MCP path authority and embedding licence checks; MCP regression verifies each cell uses its mapped PDF font resource |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
 | 2026-10-31 | minor | Classify explicit PDF fonts as local file reads in macro approval, with or without an output path; preserve sandbox denial without permission |
