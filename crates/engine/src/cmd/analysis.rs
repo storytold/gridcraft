@@ -1366,10 +1366,25 @@ fn fourier_analysis(s: &Session, p: &Json) -> Result<Grid> {
             _ => return Err(EngineError::Other("Input range must hold numbers or complex numbers such as 3+4i.".into())),
         }
     }
-    fft(&mut a, flag(p, "inverse"));
-    // Parts far below the largest value are rounding noise of the transform; they are written as 0.
-    let scale = a.iter().fold(0.0f64, |m, (re, im)| m.max(re.abs()).max(im.abs()));
-    let clean = |x: f64| if x.abs() <= scale * 1e-13 { 0.0 } else { x };
+    let total: f64 = a.iter().map(|(re, im)| re.abs() + im.abs()).sum();
+    let inverse = flag(p, "inverse");
+    fft(&mut a, inverse);
+    // Parts that can only be rounding noise of the transform are written as 0. Each of the
+    // log2(N) butterfly stages adds at most a few units of f64::EPSILON times the magnitude of
+    // the values it combines, so the computed transform differs from the exact one by at most
+    // about log2(N) · ε · Σ|x_n| times a small constant (Higham, Accuracy and Stability of
+    // Numerical Algorithms, 2nd ed., chapter 24, The Fast Fourier Transform). The bound comes
+    // from the input and N, never from the largest output, so a small part beside a large one
+    // (an imaginary part of 1 beside a real part of 1e14, a harmonic of 4e-7 beside a DC term of
+    // 8e6) is kept. With N = 1 the transform is the identity and log2(N) = 0: nothing is zeroed.
+    // The inverse divides its outputs by N, so its noise is divided by N as well. An input sum
+    // that overflows gives no finite bound; then nothing is cleaned up.
+    let mut noise = 8.0 * f64::EPSILON * f64::from(n.trailing_zeros()) * total;
+    if inverse {
+        noise /= n as f64;
+    }
+    let noise = if noise.is_finite() { noise } else { 0.0 };
+    let clean = |x: f64| if x.abs() <= noise { 0.0 } else { x };
     let mut g = Grid::default();
     let first = u32::from(flag(p, "labels"));
     if first == 1 {
@@ -2141,6 +2156,54 @@ mod tests {
         assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A2:A4", "output": "N1"})).is_err());
         assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A4", "output": "N1"})).is_err());
         assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A8192", "output": "N1"})).is_err());
+    }
+
+    #[test]
+    fn fourier_analysis_keeps_a_small_imaginary_part_beside_a_large_real_one() {
+        let mut s = s();
+        // With one value the transform is the identity and performs no arithmetic, so no part of
+        // the output is rounding noise: 1e14 + 1i comes back as 1e14 + 1i, forward and inverse.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["100000000000000+1i"]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1", "output": "C1"})).unwrap();
+        assert_eq!(eval(&mut s, "=IMREAL(C1)"), 1e14);
+        assert_eq!(eval(&mut s, "=IMAGINARY(C1)"), 1.0);
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C1", "inverse": true, "output": "E1"})).unwrap();
+        assert_eq!(eval(&mut s, "=IMREAL(E1)"), 1e14);
+        assert_eq!(eval(&mut s, "=IMAGINARY(E1)"), 1.0);
+    }
+
+    #[test]
+    fn fourier_analysis_round_trip_recovers_small_components_beside_a_large_dc() {
+        let mut s = s();
+        // x_n = 1e6 + 1e-7·cos(2πn/8) for n = 0 … 7. The transform of a constant c over N points is
+        // N·c at k = 0 and 0 elsewhere; the transform of a·cos(2πn/N) is a·N/2 at k = 1 and
+        // k = N − 1. So X_0 = 8·1e6 = 8e6, X_1 = X_7 = 1e-7·8/2 = 4e-7 and X_2 … X_6 = 0. The inputs
+        // are stored to within ulp(1e6)/2 ≈ 6e-11 and the first butterfly stage subtracts nearby
+        // numbers exactly, so the harmonics carry at most about 5e-10 of noise. The cleanup bound
+        // 8·ε·log2(8)·Σ|x_n| ≈ 8 · 2.2e-16 · 3 · 8e6 ≈ 4.3e-8 zeroes noise of that size and keeps
+        // 4e-7; a cutoff relative to the largest output (8e6 · 1e-13 = 8e-7) would zero the
+        // harmonics.
+        let x = |k: usize| 1e6 + 1e-7 * (std::f64::consts::PI * k as f64 / 4.0).cos();
+        let wave: Vec<Json> = (0..8).map(|k| json!([x(k)])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": wave})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A8", "output": "C1"})).unwrap();
+        assert!(close(eval(&mut s, "=IMREAL(C1)"), 8e6, 1e-6));
+        assert_eq!(eval(&mut s, "=IMAGINARY(C1)"), 0.0);
+        for cell in ["C2", "C8"] {
+            assert!(close(eval(&mut s, &format!("=IMREAL({cell})")), 4e-7, 5e-9), "{cell}");
+            assert_eq!(eval(&mut s, &format!("=IMAGINARY({cell})")), 0.0, "{cell}");
+        }
+        for r in 3..=7 {
+            assert_eq!(v(&s, &format!("C{r}")), Value::text("0"), "C{r}");
+        }
+        // The inverse of that output returns each x_n to within 2e-9 (2e-15 relative); without the
+        // harmonics every value would come back as 1e6, off by up to 1e-7.
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C1:C8", "inverse": true, "output": "E1"})).unwrap();
+        for k in 0..8 {
+            let cell = format!("E{}", k + 1);
+            assert!(close(eval(&mut s, &format!("=IMREAL({cell})")), x(k), 2e-9), "{cell}");
+            assert_eq!(eval(&mut s, &format!("=IMAGINARY({cell})")), 0.0, "{cell}");
+        }
     }
 
     /// Column `col` of sheet `sheet`, rows 1 to `rows`, as numbers.
