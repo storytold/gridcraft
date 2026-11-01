@@ -135,7 +135,7 @@ impl SheetApp {
         }
     }
     fn provider_open(&mut self, host: &Host, command: Command) {
-        let Command::Open { request, resource: _, name, bytes } = command else { return };
+        let Command::Open { request, name, bytes } = command else { return };
         let data = gridcraft_engine::io::base64_encode(&bytes);
         match self.run("file.open", json!({"name":name,"base64":data})) {
             Ok(result) => {
