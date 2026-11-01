@@ -879,12 +879,14 @@ fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
     let r = s.execute("data.solver", json!({"saved": true})).unwrap();
     assert!(r["evaluations"].as_u64().unwrap() > 100, "{r}");
     assert!((n(&s, "A1") - 3.0).abs() < 1e-3, "{r}");
-    // Saving again replaces GridCraft's names; Reset All removes them with the rest.
-    s.execute(
+    // Saving again replaces GridCraft's names; Reset All removes them with the rest. Simplex
+    // LP refuses the nonlinear ABS model, but the model is saved before the solve.
+    let r = s.execute(
         "data.solver",
-        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "keep": false}),
-    )
-    .ok();
+        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "maxEvaluations": 700, "keep": false}),
+    );
+    let m = super::saved_model(&s.doc().unwrap().wb, 0).unwrap();
+    assert_eq!((m["method"].as_str(), m["maxEvaluations"].as_f64()), (Some("simplex"), Some(700.0)), "{m} {r:?}");
     let saved = names(&s);
     assert_eq!(
         saved.iter().filter(|n| n.starts_with("gridcraft_")).collect::<Vec<_>>(),
