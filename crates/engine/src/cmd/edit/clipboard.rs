@@ -177,8 +177,15 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
                 let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let hc = html.get(ri).and_then(|r| r.get(ci));
                 if let Some(cl) = cell.as_mut() {
-                    numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
+                    numeric_from_html(cl, v, hc, &mut cx.wb);
+                }
+                // Only HTML that shows the same text as the field belongs to this copy.
+                if let Some(hc) = hc
+                    && crate::clip_html::normalized(&hc.text) == crate::clip_html::normalized(v)
+                {
+                    cell = sheets_cell(cell, hc, sheet, c, &mut cx.wb);
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -206,18 +213,89 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
 fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
     let Some(hc) = html else { return };
     let Some(n) = hc.num else { return };
-    if cell.formula.is_some() || !matches!(cell.value, Value::Text(_)) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
+    // A typed Google Sheets number replaces what the text parsed to ("01/02/2026" is 1 February
+    // there, which en-US input reads as 2 January); a plain hint only fills in cells that stayed text.
+    let replaces = hc.typed && matches!(cell.value, Value::Text(_) | Value::Number(_));
+    if cell.formula.is_some() || !(replaces || matches!(cell.value, Value::Text(_))) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
         return;
     }
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
         return;
     }
     cell.value = Value::number(n);
-    if wb.styles.get(cell.style).num_fmt.as_str() == "General"
+    // Sheets states the format of a typed number (a date, a currency); it wins over the format the
+    // text happened to parse into. Otherwise a format is inferred for a cell that has none.
+    let source_fmt = hc.num_fmt.as_deref().filter(|code| hc.typed && renders(code, n));
+    if let Some(code) = source_fmt {
+        cell.style = wb.styles.derive(cell.style, |s| s.num_fmt = gridcraft_model::NumFmt::new(code));
+    } else if wb.styles.get(cell.style).num_fmt.as_str() == "General"
         && let Some(code) = crate::clip_html::format_for(field, n)
     {
         cell.style = wb.styles.derive(cell.style, |s| s.num_fmt = gridcraft_model::NumFmt::new(&code));
     }
+}
+
+/// Whether `code` is a number format that can format `n`.
+fn renders(code: &str, n: f64) -> bool {
+    gridcraft_numfmt::text_function(&Value::number(n), code, gridcraft_core::date::DateSystem::D1900).is_ok()
+}
+
+/// Whether every function `expr` calls is one GridCraft has (or a LAMBDA the workbook defines).
+/// Formula entry accepts any name, but an unknown one (Sheets' `QUERY`, `IMPORTRANGE`,
+/// `ARRAYFORMULA`) would evaluate to `#NAME?` and replace the value Sheets showed.
+fn calls_known_functions(expr: &gridcraft_formula::Expr, wb: &gridcraft_model::Workbook, sheet: usize) -> bool {
+    let mut known = true;
+    expr.walk(&mut |e| {
+        if let gridcraft_formula::Expr::Call(name, _) = e {
+            known &= gridcraft_calc::is_known_function(name) || wb.name(name, sheet).is_some();
+        }
+    });
+    known
+}
+
+/// A pasted Google Sheets cell with what Sheets recorded for it: the formula (read from its R1C1
+/// notation, relative to where the cell lands) and the formatting. A formula that can't be read, or
+/// that calls a function GridCraft doesn't have, leaves the pasted value in place. Cells of other sources carry none of this and come back as
+/// they were.
+fn sheets_cell(
+    mut cell: Option<Cell>,
+    hc: &crate::clip_html::HtmlCell,
+    sheet: usize,
+    at: gridcraft_core::CellRef,
+    wb: &mut gridcraft_model::Workbook,
+) -> Option<Cell> {
+    if let Some(f) = hc.formula.as_deref()
+        && let Some(a1) = crate::clip_html::r1c1_to_a1(f, at)
+        && let Ok(Some(with_formula)) = input_to_cell(&a1, sheet, at, wb)
+        && with_formula.formula.as_ref().and_then(|f| f.expr.as_ref()).is_some_and(|e| calls_known_functions(e, wb, sheet))
+    {
+        // The formula keeps the number format the pasted value was given (a date, a currency).
+        let style = cell.as_ref().map_or(with_formula.style, |c| c.style);
+        cell = Some(Cell { style, ..with_formula });
+    }
+    if !hc.style.is_empty() {
+        let st = &hc.style;
+        let mut cl = cell.unwrap_or_default();
+        cl.style = wb.styles.derive(cl.style, |s| {
+            if let Some(rgb) = st.fill {
+                s.fill = gridcraft_model::Fill::solid(gridcraft_model::Color::Rgb(rgb));
+            }
+            if let Some(rgb) = st.color {
+                s.font.color = gridcraft_model::Color::Rgb(rgb);
+            }
+            s.font.bold |= st.bold;
+            s.font.italic |= st.italic;
+            s.font.strike |= st.strike;
+            if st.underline {
+                s.font.underline = gridcraft_model::Underline::Single;
+            }
+            if let Some(h) = st.align {
+                s.align.h = h;
+            }
+        });
+        cell = Some(cl);
+    }
+    cell
 }
 
 /// Tab-separated text with Excel-style quoting.
