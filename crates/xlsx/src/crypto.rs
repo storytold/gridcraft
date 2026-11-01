@@ -169,6 +169,16 @@ impl Hash {
         }
     }
 
+    /// The digest's length in bytes.
+    fn digest_len(self) -> usize {
+        match self {
+            Hash::Sha1 => 20,
+            Hash::Sha256 => 32,
+            Hash::Sha384 => 48,
+            Hash::Sha512 => 64,
+        }
+    }
+
     /// The bytes the algorithm's compression function takes: 128 for SHA-384/512, else 64.
     fn block_size(self) -> usize {
         match self {
@@ -444,6 +454,8 @@ fn agile_descriptor(xml: &[u8]) -> Result<AgileDescriptor, DecryptError> {
     })
 }
 
+/// Decrypts an Agile package ([MS-OFFCRYPTO] 2.3.4.10): checks the password against the
+/// verifier, unwraps the package key, verifies the dataIntegrity HMAC, then decrypts the segments.
 fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptError> {
     let descriptor = agile_descriptor(xml)?;
     let AgileDescriptor { key_data, key, spin, verifier_input, verifier_hash, key_value, hmac_key, hmac_value } = descriptor;
@@ -464,15 +476,20 @@ fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptE
     let secret = field(&key_value, &BLOCK_KEY)?;
     let aes = Aes::new(secret.get(..key_data.key_len).ok_or_else(|| malformed("a short encryptedKeyValue"))?)?;
     // Package integrity, [MS-OFFCRYPTO] 2.3.4.14: both HMAC fields are encrypted with the
-    // package key (the verifier above only authenticates the password), keyed by a random
-    // salt-size array, computed over the whole EncryptedPackage stream, StreamSize field included.
+    // package key (the verifier above only authenticates the password), computed over the whole
+    // EncryptedPackage stream, StreamSize field included. The specification keys the HMAC with a
+    // random salt-size array, but Excel's key is as long as the hash (64 bytes for SHA-512), so
+    // both lengths are tried.
     let mut mac_field = hmac_key;
     aes.decrypt_cbc(&key_data.iv(Some(&BLOCK_HMAC_KEY)), &mut mac_field)?;
-    mac_field.truncate(key_data.salt.len());
     let mut declared = hmac_value;
     aes.decrypt_cbc(&key_data.iv(Some(&BLOCK_HMAC_VALUE)), &mut declared)?;
-    let mac = hmac(key_data.hash, &mac_field, package);
-    if declared.get(..mac.len()) != Some(mac.as_slice()) {
+    let verified = [key_data.hash.digest_len(), key_data.salt.len()].into_iter().any(|len| {
+        let Some(key) = mac_field.get(..len) else { return false };
+        let mac = hmac(key_data.hash, key, package);
+        declared.get(..mac.len()) == Some(mac.as_slice())
+    });
+    if !verified {
         return Err(malformed("the decrypted data failed its integrity check"));
     }
     let (size, data) = package_parts(package)?;

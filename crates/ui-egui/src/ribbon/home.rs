@@ -5,7 +5,7 @@ use super::controls::{
 use super::galleries::{cell_style_gallery, table_gallery};
 use super::{
     HAlign, Icon, Key, Modifiers, Rect, SheetApp, Style, Tokens, Ui, VAlign, big_button, color_palette, icon_button, json, keytip_table,
-    small_button, split_button, theme, toggle_button, vec2,
+    small_button, small_split_button, split_button, theme, toggle_button, vec2,
 };
 
 /// The Accounting Number Format dropdown: label and the code Excel applies for that symbol.
@@ -292,12 +292,11 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 act(app, "home.increaseIndent", json!({}));
             }
-            let (m, ma) = split_button(ui, Icon::Merge, None, "Merge & Center");
+            let (m, ma) = small_split_button(ui, Icon::Merge, "Merge & Center", "Merge & Center");
             control_keytip(app, ui, &ma, "home.mergeCenter");
-            if m {
+            if m.clicked() {
                 act(app, "home.mergeCenter", json!({}));
             }
-            ui.label(egui::RichText::new(app.ui.language.tr("Merge & Center")).font(theme::ui_font(12.5)));
             egui::Popup::menu(&ma).show(|ui| {
                 menu_items(
                     app,

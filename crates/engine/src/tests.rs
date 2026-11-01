@@ -2008,6 +2008,15 @@ fn a_whole_column_table_without_headers_stays_on_the_sheet() {
 }
 
 #[test]
+fn inserting_a_column_next_to_far_right_data_names_gridcraft_in_the_refusal() {
+    let mut sess = s();
+    sess.execute("cell.set", json!({"cell": "XFD1", "input": "2"})).unwrap();
+    let e = sess.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap_err();
+    assert!(e.to_string().contains("GridCraft cannot shift nonblank cells"), "{e}");
+    assert!(!e.to_string().contains("Excel"), "{e}");
+}
+
+#[test]
 fn inserting_cells_refuses_to_push_values_off_the_sheet() {
     for (shift, edge, last_fit, last_ok) in [("right", "XFD1", "XFC1", "XFD1"), ("down", "A1048576", "A1048575", "A1048576")] {
         let mut sess = s();
@@ -2015,6 +2024,7 @@ fn inserting_cells_refuses_to_push_values_off_the_sheet() {
         sess.execute("cell.set", json!({"cell": edge, "input": "2"})).unwrap();
         let e = sess.execute("home.insertCells", json!({"range": "A1", "shift": shift})).unwrap_err();
         assert!(e.to_string().contains("loss of data"), "{e}");
+        assert!(e.to_string().contains("GridCraft") && !e.to_string().contains("Excel"), "{e}");
         assert_eq!(v(&sess, "A1"), Value::Number(1.0));
         assert_eq!(v(&sess, edge), Value::Number(2.0));
         // A value that still fits moves to the last valid cell.
@@ -2497,6 +2507,53 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
     assert!(bytes.starts_with(b"1;511;184;"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `file.exportCsv` writes displayed text by default (Excel's Save As CSV); `values: true` writes the
+/// raw values for automation: full precision, ISO dates and times.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_csv_values_writes_raw_values_and_the_default_stays_displayed_text() {
+    let mut s = s();
+    for (cell, input, code) in [
+        ("A1", "1234.5", "$#,##0.00"),
+        ("B1", "0.123456789", "0.00"),
+        ("C1", "46023", "d-mmm-yy"),
+        ("D1", "46023.5", "yyyy-mm-dd hh:mm"),
+        ("E1", "0.75", "h:mm"),
+        ("F1", "TRUE", "General"),
+        ("G1", "a,b", "General"),
+        ("H1", "=1/0", "General"),
+        ("I1", "1", "h:mm"),
+        ("J1", "1.5", "h:mm"),
+        ("K1", "46023", "yyyy-mm-dd hh:mm"),
+        ("L1", "1.5", "[h]:mm"),
+        ("M1", "2.5", "[>=3]yyyy-mm-dd;[<3]hh:mm"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
+    }
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-values-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let displayed = dir.join("displayed.csv");
+    s.execute("file.exportCsv", json!({"path": displayed})).unwrap();
+    s.execute("file.exportCsv", json!({"path": dir.join("off.csv"), "values": false})).unwrap();
+    let raw = dir.join("raw.csv");
+    s.execute("file.exportCsv", json!({"path": raw, "values": true})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
+    let default = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    // The default export is byte for byte what Save As CSV writes, and `values: false` is the default.
+    assert_eq!(std::fs::read(&displayed).unwrap(), default);
+    assert_eq!(std::fs::read(dir.join("off.csv")).unwrap(), default);
+    let default = String::from_utf8(default).unwrap();
+    assert!(default.starts_with("\"$1,234.50\",0.12,1-Jan-26,"), "{default}");
+    assert_eq!(
+        std::fs::read_to_string(&raw).unwrap(),
+        "1234.5,0.123456789,2026-01-01,2026-01-01T12:00:00,18:00:00,TRUE,\"a,b\",#DIV/0!,00:00:00,12:00:00,2026-01-01T00:00:00,1.5,12:00:00\r\n"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
