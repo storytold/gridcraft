@@ -83,6 +83,7 @@ mod protect_password;
 mod ribbon_layout;
 mod right_to_left;
 mod scroll_position;
+mod scroll_to_sheet_end;
 mod scrollbar_column_fill;
 mod selection;
 mod selection_fill;
