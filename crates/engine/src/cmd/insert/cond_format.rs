@@ -104,8 +104,14 @@ fn check_cf_formula(cmd: &str, what: &str, formula: &str) -> Result<()> {
 }
 
 fn check_cf_value(what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
-    if let gridcraft_model::features::CfValueKind::Formula(f) = v {
-        check_cf_formula("home.conditionalFormat", what, f)?;
+    use gridcraft_model::features::CfValueKind;
+    // A Number, Percent or Percentile stop may hold a formula too (#1848): what the writer puts in
+    // `cfvo val="…"` has to parse, or Excel refuses the saved file (#1999).
+    match v {
+        CfValueKind::Formula(f) | CfValueKind::FormulaNumber(f) | CfValueKind::FormulaPercent(f) | CfValueKind::FormulaPercentile(f) => {
+            check_cf_formula("home.conditionalFormat", what, f)?;
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -151,22 +157,37 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
     let kind = g("type").unwrap_or_else(|| "cellIs".into());
-    let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
-        match v {
+    let value_kind = |v: Option<&Json>, default: CfValueKind| -> Result<CfValueKind> {
+        Ok(match v {
             Some(Json::Object(o)) => {
                 let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
                 let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
+                // A string value is the stop's own formula; the stop keeps its kind (#1848). A
+                // `min`, `max` or `formula` stop reads its value elsewhere, so only the typed
+                // stops normalize the string here — and one that empties out is refused instead
+                // of falling back to the zero `as_f64` makes of any string, which is not a value
+                // the stop was given (#1885 review).
+                let formula = match o.get("value").and_then(Json::as_str).filter(|_| !matches!(t, "min" | "max" | "formula")) {
+                    Some(s) => {
+                        let f = s.trim().trim_start_matches('=').to_string();
+                        if f.is_empty() {
+                            return Err(bad("home.conditionalFormat", format!("the `{t}` stop's formula is empty")));
+                        }
+                        Some(f)
+                    }
+                    None => None,
+                };
                 match t {
                     "min" => CfValueKind::Min,
                     "max" => CfValueKind::Max,
-                    "percent" => CfValueKind::Percent(val),
-                    "percentile" => CfValueKind::Percentile(val),
+                    "percent" => formula.map_or(CfValueKind::Percent(val), CfValueKind::FormulaPercent),
+                    "percentile" => formula.map_or(CfValueKind::Percentile(val), CfValueKind::FormulaPercentile),
                     "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
-                    _ => CfValueKind::Number(val),
+                    _ => formula.map_or(CfValueKind::Number(val), CfValueKind::FormulaNumber),
                 }
             }
             _ => default,
-        }
+        })
     };
     let rule = match kind.as_str() {
         "cellIs" => {
@@ -233,8 +254,8 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             CfRule::ColorScale { stops }
         }
         "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
+            min: value_kind(rule.get("min"), CfValueKind::Min)?,
+            max: value_kind(rule.get("max"), CfValueKind::Max)?,
             color: crate::cmd::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,

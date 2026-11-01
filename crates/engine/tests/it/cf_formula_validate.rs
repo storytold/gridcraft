@@ -24,6 +24,16 @@ fn invalid_cf_formulas_are_rejected() {
         // the rest must still parse (#1999 review)
         json!({"type": "dataBar", "min": {"type": "formula", "value": "===A1"}}),
         json!({"type": "dataBar", "max": {"type": "formula", "value": "==1+"}}),
+        // a Number, Percent or Percentile stop holding a formula (#1848, #1999): it is written as
+        // `cfvo type="num|percent|percentile" val="…"`, which Excel refuses to open
+        json!({"type": "dataBar", "min": {"type": "num", "value": "1+"}}),
+        json!({"type": "dataBar", "max": {"type": "percent", "value": "=1+"}}),
+        json!({"type": "dataBar", "min": {"type": "percentile", "value": "A1>"}}),
+        // a string that normalizes to no formula at all (#1885 review): it used to fall through to
+        // a zero threshold, which is what `as_f64` makes of any string
+        json!({"type": "dataBar", "min": {"type": "num", "value": "="}}),
+        json!({"type": "dataBar", "max": {"type": "percent", "value": "  "}}),
+        json!({"type": "dataBar", "min": {"type": "percentile", "value": "=="}}),
     ] {
         let err = session()
             .execute("home.conditionalFormat", json!({"range": "A1:A5", "rule": rule.clone()}))
@@ -56,6 +66,24 @@ fn valid_cf_formulas_still_work() {
     // dataBar formula thresholds that parse
     s.execute("home.conditionalFormat", json!({"range": "E1:E5", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(E1:E5)"}, "max": {"type": "formula", "value": "MAX(E1:E5)"}}}))
         .unwrap();
+    // a typed stop's formula that parses is kept with its kind (#1848)
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "G1:G5", "rule": {"type": "dataBar", "min": {"type": "percent", "value": "=$Z$1*10"}, "max": {"type": "num", "value": "=MAX(G1:G5)"}}}),
+    )
+    .unwrap();
+    // a number written as a string is the formula that reads as that number, and it still passes
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "H1:H5", "rule": {"type": "dataBar", "min": {"type": "num", "value": "5"}, "max": {"type": "max"}}}),
+    )
+    .unwrap();
+    // `min` and `max` carry no value of their own: a string beside them is ignored, not refused
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "I1:I5", "rule": {"type": "dataBar", "min": {"type": "min", "value": ""}, "max": {"type": "max"}}}),
+    )
+    .unwrap();
     // non-formula rule types are untouched
     s.execute("home.conditionalFormat", json!({"range": "F1:F5", "rule": {"type": "duplicate", "preset": "lightRedFill"}})).unwrap();
 }
