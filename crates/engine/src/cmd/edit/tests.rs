@@ -303,3 +303,77 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
 }
+
+#[test]
+fn paste_special_pastes_text_from_another_app() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    // Nothing copied anywhere: nothing to paste (and no panic).
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "values"})).is_err());
+
+    // Values, transposed, over a bold destination cell that keeps its formatting.
+    s.execute("home.bold", json!({"range": "D4"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "transpose": true, "at": "D4", "text": "x\t1\ny\t2\n"})).unwrap();
+    assert_eq!(get(&mut s, "D4")["value"], "x");
+    assert_eq!(get(&mut s, "E4")["value"], "y");
+    assert_eq!(get(&mut s, "D5")["value"], json!(1.0));
+    assert_eq!(get(&mut s, "E5")["value"], json!(2.0));
+    s.execute("edit.pasteSpecial", json!({"what": "all", "at": "D4", "text": "z"})).unwrap();
+    assert_eq!(get(&mut s, "D4")["value"], "z");
+    assert_eq!(get(&mut s, "D4")["style"]["font"]["bold"], json!(true));
+
+    // An operation adds the copied numbers to what's there; blanks are skipped.
+    s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "add", "skipBlanks": true, "at": "D5", "text": "10\t\n"})).unwrap();
+    assert_eq!(get(&mut s, "D5")["value"], json!(11.0));
+    assert_eq!(get(&mut s, "E5")["value"], json!(2.0));
+
+    // GridCraft's own copy wins over the same text; Paste Link can't link to text.
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formulas", "at": "B1", "text": copied["text"]})).unwrap();
+    assert_eq!(get(&mut s, "B1")["formula"], "=1+1");
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "C1", "text": "other"})).is_err());
+}
+
+#[test]
+fn paste_special_text_reads_each_field_where_it_lands_and_calculates_formulas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    // Transposed, "007" lands in Text-formatted D5 (not E4) and stays text.
+    s.execute("home.numberFormat", json!({"range": "D5", "code": "@"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "D4", "text": "1\t007\n"})).unwrap();
+    assert_eq!(get(&mut s, "D4")["value"], json!(1.0));
+    assert_eq!(get(&mut s, "D5")["value"], "007");
+    assert!(get(&mut s, "E4")["value"].is_null());
+
+    // Values gives what the formulas would show at the destination.
+    s.execute("cell.set", json!({"cell": "A1", "input": "21"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "B1", "text": "=1+1\t=A1*2\n"})).unwrap();
+    assert_eq!(get(&mut s, "B1")["value"], json!(2.0));
+    assert!(get(&mut s, "B1")["formula"].is_null());
+    assert_eq!(get(&mut s, "C1")["value"], json!(42.0));
+
+    // Pasting All over a cell with a rule keeps the rule (text has none); the destination's own
+    // notes don't travel when the text has formulas.
+    s.execute("data.validation", json!({"range": "F1", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "G1", "text": "mine"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "F1", "text": "=1\t5\n"})).unwrap();
+    assert_eq!(get(&mut s, "F1")["value"], json!(1.0));
+    assert_eq!(get(&mut s, "F2")["value"], json!(5.0));
+    assert!(s.active().unwrap().wb.sheet(0).unwrap().validations.iter().any(|v| v.ranges.iter().any(|r| r.contains(CellRef::parse("F1").unwrap()))));
+    assert!(!s.active().unwrap().wb.sheet(0).unwrap().comments.contains_key(&CellRef::parse("F2").unwrap()));
+}
+
+#[test]
+fn paste_special_text_gives_up_on_oversized_text_while_reading_it() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let text = "\t".repeat(4_000_001);
+    let e = s.execute("edit.pasteSpecial", json!({"what": "values", "at": "A1", "text": text})).unwrap_err();
+    assert!(e.to_string().contains("too large"), "{e}");
+    assert_eq!(super::clipboard::parse_tsv_bounded("a\tb\nc", 3).map(|r| r.len()), Some(2));
+    assert_eq!(super::clipboard::parse_tsv_bounded("a\tb\nc", 2), None);
+    assert_eq!(super::clipboard::parse_tsv_bounded("a\tb\n", 2).map(|r| r.len()), Some(1));
+}

@@ -384,6 +384,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
+        let params = if cmd == "edit.pasteSpecial" { app.with_clipboard_text(params) } else { params };
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;
