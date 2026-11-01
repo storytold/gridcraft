@@ -562,7 +562,13 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
 }
 
 fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(app, ui, d);
+    if d.name == "dbTrust" {
+        // A file can hold many connections and long statements: they scroll, OK and Cancel stay
+        // in view.
+        egui::ScrollArea::vertical().id_salt("dbTrustFields").max_height(360.0).show(ui, |ui| form_fields(app, ui, d));
+    } else {
+        form_fields(app, ui, d);
+    }
     ok_cancel(ui, confirm, open);
 }
 
