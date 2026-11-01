@@ -275,13 +275,11 @@ impl DocWindows {
         let action = strip.as_ref().and_then(|t| t.action);
         let reordered = strip.as_ref().and_then(|t| t.reordered);
         let tabbed: Vec<u64> = strip.map(|t| t.tabs.iter().map(|w| w.window).collect()).unwrap_or_default();
-        if let Some((moved, before)) = reordered {
+        if let Some((moved, at)) = reordered {
             let order = &mut self.tab_order;
-            if let Some(from) = order.iter().position(|w| *w == moved) {
-                let moving = order.remove(from);
-                let at = order.iter().position(|w| *w == before).unwrap_or(order.len());
-                order.insert(at, moving);
-            }
+            order.retain(|w| *w != moved);
+            let at = at.min(order.len());
+            order.insert(at, moved);
         }
         match action {
             Some(crate::doc_tabs::TabAction::Pick(w)) => self.pick_tab(app, w),

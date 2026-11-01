@@ -61,8 +61,8 @@ pub struct DocTabs {
     pub pinned: Vec<u64>,
     /// The tab the user acted on this frame.
     pub action: Option<TabAction>,
-    /// A tab dropped before another one: `(moved window, window it was dropped on)`.
-    pub reordered: Option<(u64, u64)>,
+    /// A tab dragged to a new position: `(window, index in the strip without the dragged tab)`.
+    pub reordered: Option<(u64, usize)>,
 }
 
 impl DocTabs {
@@ -101,26 +101,27 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
     let mut reordered = None;
     let all: Vec<u64> = tabs.tabs.iter().map(|t| t.window).collect();
     let pinned = tabs.pinned.clone();
-    ScrollArea::horizontal().max_width(max_w).auto_shrink([false, true]).show(ui, |ui| {
+    let mut rects: Vec<(u64, egui::Rect)> = Vec::new();
+    let mut stopped: Option<u64> = None;
+    let area = ScrollArea::horizontal().max_width(max_w).auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             for (index, tab) in tabs.tabs.iter().enumerate() {
                 let is_pinned = pinned.contains(&tab.window);
                 let color = if tab.active { t.accent } else { t.text_dim };
-                // The label is a drag source, so a tab can be dropped onto another to reorder.
-                let id = ui.make_persistent_id(("doc_tab", tab.window));
-                let label = ui.dnd_drag_source(id, tab.window, |ui| {
-                    let text = if is_pinned { format!("• {}", tab.label()) } else { tab.label() };
-                    ui.add(Button::new(RichText::new(text).size(12.5).color(color)).frame(false).min_size(vec2(0.0, 24.0)))
-                });
-                let resp = label.response;
-                if resp.dnd_hover_payload::<u64>().is_some() {
+                // A plain clickable widget, drag-and-drop handled below: a drag source swallows the
+                // secondary click the tab menu needs.
+                let text = if is_pinned { format!("• {}", tab.label()) } else { tab.label() };
+                let resp = ui
+                    .add(Button::new(RichText::new(text).size(12.5).color(color)).frame(false).min_size(vec2(0.0, 24.0)))
+                    .interact(egui::Sense::click_and_drag());
+                rects.push((tab.window, resp.rect));
+                if resp.dragged() {
+                    // Highlight the tab being dragged.
                     ui.painter().rect_stroke(resp.rect, 2.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                 }
-                if let Some(payload) = resp.dnd_release_payload::<u64>()
-                    && *payload != tab.window
-                {
-                    reordered = Some((*payload, tab.window));
+                if resp.drag_stopped() {
+                    stopped = Some(tab.window);
                 }
                 if tab.active {
                     let r = resp.rect;
@@ -185,6 +186,20 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
             }
         });
     });
+    // A drag that ends on another tab reorders; one that ends outside the strip undocks the tab
+    // into a window of its own, as WPS and Excel do.
+    let strip = area.inner_rect.expand2(vec2(0.0, 32.0));
+    if let Some(w) = stopped
+        && let Some(p) = ui.ctx().pointer_latest_pos()
+    {
+        if strip.contains(p) {
+            // Insertion point: how many other tabs' centres are left of the pointer.
+            let at = rects.iter().filter(|(id, r)| *id != w && p.x > r.center().x).count();
+            reordered = Some((w, at));
+        } else {
+            action = Some(TabAction::Detach(w));
+        }
+    }
     tabs.action = action;
     tabs.reordered = reordered;
 }
