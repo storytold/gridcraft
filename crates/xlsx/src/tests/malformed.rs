@@ -273,8 +273,15 @@ fn whole_column_conditional_formats_are_all_kept() {
     assert_eq!(s.cond_formats.len(), 50);
     assert_eq!(s.cond_formats[0].ranges, vec![gridcraft_core::RangeRef::parse("H1:H1048576").unwrap()]);
     assert_eq!(s.cond_formats[10].ranges.len(), 2);
-    // The ranges survive a save untouched.
-    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    // The ranges survive a save untouched, written as one range each, not expanded.
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    // Whole columns and rows are written in their short form.
+    for sqref in ["H:H", "L1:L2271 L2275:L1048576", "A:A", "1:1", "A1:XFD1048576"] {
+        assert_eq!(xml.matches(&format!("sqref=\"{sqref}\"")).count(), 10, "{sqref}: {xml}");
+    }
+    let (back, rep) = read_xlsx(&saved).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let ranges = |s: &gridcraft_model::Sheet| s.cond_formats.iter().map(|c| c.ranges.clone()).collect::<Vec<_>>();
     assert_eq!(ranges(back.sheet(0).unwrap()), ranges(s));

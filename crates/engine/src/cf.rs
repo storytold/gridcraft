@@ -653,6 +653,28 @@ mod tests {
         assert_eq!(SCANNED.with(|n| n.get()), 2);
     }
 
+    /// #3066 review: whole-row and whole-sheet rules evaluate like whole-column ones, reading
+    /// only the cells that hold values.
+    #[test]
+    fn whole_row_and_whole_sheet_rules_read_only_stored_cells() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        for (cell, v) in [("A1", "5"), ("XFD1", "9"), ("C3", "7")] {
+            s.execute("cell.set", json!({"cell": cell, "input": v})).unwrap();
+        }
+        let top = json!({"type": "top10", "rank": 1, "preset": "lightRedFill"});
+        s.execute("home.conditionalFormat", json!({"range": "1:1", "rule": top})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A1:XFD1048576", "rule": top})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        SCANNED.with(|n| n.set(0));
+        let mut filled = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
+        // XFD1 is the top of row 1 and of the sheet; C3 is neither, and A1 is in neither top.
+        assert_eq!([filled("XFD1"), filled("A1"), filled("C3"), filled("B500000")], [true, false, false, false]);
+        // Two values in row 1, three in the sheet.
+        assert_eq!(SCANNED.with(|n| n.get()), 5);
+    }
+
     /// Range entries count against the statistics budget even when they hold no cells, and the
     /// budget stops the scan: a long list of empty ranges can't run past it.
     #[test]
