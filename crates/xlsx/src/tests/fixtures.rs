@@ -765,3 +765,28 @@ fn every_skipped_drawing_object_is_reported() {
         assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
     }
 }
+
+/// Other Normal fonts measure in their own digits: Arial 10 has Calibri 11's 7 px digit and Arial
+/// 12 a 9 px one, and a stored width reads back unchanged after a save at either.
+#[test]
+fn column_widths_round_trip_with_an_arial_normal_font() {
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<cols><col min="3" max="3" width="20.7109375" customWidth="1"/></cols><sheetData/>"#;
+    for (size, dw) in [(10, 7.0), (12, 9.0)] {
+        let styles = format!(
+            r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="{size}"/><name val="Arial"/></font></fonts>
+      <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+    </styleSheet>"#
+        );
+        let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", &styles)], rels, "")).unwrap();
+        assert_eq!(wb.digit_width(), dw, "Arial {size}");
+        let read = wb.sheet(0).unwrap().col_width(2);
+        assert_eq!(read, crate::tables::col_width_to_px(20.7109375, dw), "Arial {size}");
+        let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.digit_width(), dw, "Arial {size} after a save");
+        assert_eq!(back.sheet(0).unwrap().col_width(2), read, "Arial {size} after a save");
+    }
+}
