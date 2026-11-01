@@ -1,5 +1,5 @@
 use super::formatting_rule::{CF_OPERATORS, CF_PERIODS, cf_combo, cf_preview, hex_color};
-use super::*;
+use super::{Color32, Dialog, Json, Key, Map, Sense, SheetApp, json, vec2};
 
 /// The Rule column of Manage Rules.
 fn cf_describe(p: &Json, lang: crate::i18n::Language) -> String {
