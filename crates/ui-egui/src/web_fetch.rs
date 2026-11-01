@@ -10,6 +10,10 @@ use crate::SheetApp;
 /// One in-flight fetch: the URLs to download and the command its results feed.
 pub struct PendingFetch {
     urls: Vec<String>,
+    /// The window the fetch was started in: only that window's pass polls or discards the
+    /// finished fetch (another window drawing first must not consume a result the owning
+    /// window's dialog still expects).
+    pub(crate) window: Option<u64>,
     /// The document the fetch was started for: if the user switches workbooks while the page
     /// downloads, the result must not run its command against the newly active one.
     document_uid: Option<u64>,
@@ -71,7 +75,7 @@ impl SheetApp {
             }
             Json::Object(map)
         });
-        self.fetch = Some(PendingFetch { urls, document_uid: self.session.active().map(|d| d.uid), command: (command.0.to_string(), command.1), handle: Some(handle) });
+        self.fetch = Some(PendingFetch { urls, window: self.ui_window(), document_uid: self.session.active().map(|d| d.uid), command: (command.0.to_string(), command.1), handle: Some(handle) });
     }
 
     /// True while a fetch is still downloading, for a spinner and repaints.

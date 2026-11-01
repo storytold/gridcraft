@@ -15,6 +15,11 @@ pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 pub const XML_DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 
+/// GridCraft's private extension namespace and the ext uri its From Web connection data
+/// travels under (Excel ignores an ext whose uri it does not know, and keeps the part).
+pub const GC_NS: &str = "https://gridcraft.app/ns/webquery";
+pub const GC_URI: &str = "{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}";
+
 pub const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 pub const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
@@ -337,6 +342,37 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // Workbook-level parts.
     let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
+    // Saved From Web connections (Excel's connections.xml, a type-5 web-query connection per
+    // imported table; `refreshOnLoad` is the per-connection "refresh on open"). The parts
+    // Excel's own attributes cannot hold — the page table name, its occurrence, the target
+    // sheet, the table's stable id, the last sync — ride in a GridCraft extension element,
+    // the same way chartex stows its private names. A workbook with none stays exactly as it
+    // was: no part, no relationship.
+    // The input file's own connections part (a foreign database query) keeps its place: a
+    // kept part already holds the name, and a zip entry cannot repeat, so the model's
+    // connections wait for a save that has the part to itself. (The round trip reads them
+    // back from the part the next open, whichever wrote it.)
+    if !wb.web_queries.is_empty() && !out.kept.used_contains("xl/connections.xml") {
+        let mut c = format!("{XML_DECL}<connections xmlns=\"{NS_MAIN}\" xmlns:gc=\"{GC_NS}\">");
+        for (i, q) in wb.web_queries.iter().enumerate() {
+            let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
+            let id = q.table_id.unwrap_or(0);
+            let synced = q.last_synced.unwrap_or(0);
+            let _ = write!(c,
+                "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{GC_URI}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+                i + 1,
+                crate::xml::esc_attr(&q.name),
+                crate::xml::esc_attr(&q.url),
+                crate::xml::esc_attr(&q.table),
+                q.occurrence,
+                crate::xml::esc_attr(&q.sheet),
+                id,
+                synced);
+        }
+        c.push_str("</connections>");
+        out.part("xl/connections.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"), c.into_bytes());
+        wb_rels.add("connections", "connections.xml");
+    }
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
     if wb.styles.iter().any(|(_, st)| st.num_fmt.as_str() == "checkbox") {

@@ -15,6 +15,12 @@ pub struct KeptOut {
 }
 
 impl KeptOut {
+    /// True when a kept (pass-through) part already holds this exact name: the writer must
+    /// not put its own part there (a zip entry cannot repeat).
+    pub fn used_contains(&self, name: &str) -> bool {
+        self.used.contains(&name.to_ascii_lowercase())
+    }
+
     /// Reserves the VML shape blocks the kept header and footer drawings of `wb` use, so that the
     /// notes drawings GridCraft writes don't reuse their shape ids.
     pub fn reserve_vml_blocks(&mut self, wb: &Workbook) {

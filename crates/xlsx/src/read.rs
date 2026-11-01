@@ -281,6 +281,38 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     }
 
     read_workbook_properties(&mut cx, &mut wb, &wb_xml);
+
+    // Saved From Web connections (Excel's connections.xml): a type-5 web-query connection
+    // per imported table, with GridCraft's extension element holding the parts Excel's own
+    // attributes cannot (the page table, its occurrence, the target sheet, the table's stable
+    // id, the last sync). Only connections carrying the extension are read back — a
+    // foreign connections part (a database query, say) stays where it was: passthrough keeps
+    // it on save, and nothing here claims it.
+    if let Some(r) = find_rel(&wb_rels, "connections").cloned()
+        && let Ok(Some(x)) = cx.pkg.read_xml(&r.target)
+    {
+        for c in x.kids("connection") {
+            let gc = c
+                .kids("extLst")
+                .next()
+                .and_then(|e| e.kids("ext").next())
+                .and_then(|e| e.kids("webQuery").next());
+            let (Some(gc), Some(url)) = (gc, c.kids("webPr").next().and_then(|w| w.attr("url"))) else { continue };
+            let Some(table) = gc.attr("table") else { continue };
+            let sheet = gc.attr("sheet").unwrap_or_default();
+            let Some(name) = c.attr("name") else { continue };
+            wb.web_queries.push(gridcraft_model::WebQuery {
+                name: name.to_string(),
+                table_id: gc.attr_u32("tableId").filter(|v| *v > 0),
+                url: url.to_string(),
+                table: table.to_string(),
+                occurrence: gc.attr_u32("occurrence").unwrap_or(0) as usize,
+                sheet: sheet.to_string(),
+                last_synced: gc.attr_i64("lastSynced").map(|v| v.max(0) as u64).filter(|v| *v > 0),
+                refresh_on_open: c.attr_u32("refreshOnLoad").is_some_and(|v| v != 0),
+            });
+        }
+    }
     let view_el = selected_workbook_view(&wb_xml);
     let active_tab = view_el.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
     if let Some(v) = view_el {

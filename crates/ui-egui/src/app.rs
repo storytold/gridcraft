@@ -244,8 +244,24 @@ impl SheetApp {
         // preview or import whose dialog is gone is dropped — its result has nowhere to land.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.fetching() {
+            // This block runs in every window's pass; a fetch belongs to the window that
+            // started it, so only that window polls or discards it \u{2014} another window drawing
+            // first must not consume a result the owning window's dialog still expects. The
+            // owning window gone (closed while its fetch ran), the result has nowhere to
+            // land: join the worker to free it, then drop it.
+            let fetch_window = self.fetch.as_ref().map(|f| f.window);
+            let owner_alive = fetch_window.is_some_and(|w| self.session.window(w.unwrap_or_default()).is_some());
+            let mine = fetch_window.is_none_or(|w| w == self.ui_window());
+            if !mine {
+                // Another window owns it; nothing here touches it, except freeing it when
+                // that window closed while its fetch ran.
+                if !owner_alive {
+                    self.discard_fetch();
+                }
+            } else if self.fetching() {
                 ctx.request_repaint();
+            } else if !owner_alive {
+                self.discard_fetch();
             } else if self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh") {
                 if let Some((_, r)) = self.poll_fetch() {
                     match r {
