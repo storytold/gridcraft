@@ -27,6 +27,25 @@ fn click_filter(h: &mut common::Harness, cell: &str) {
 }
 
 #[test]
+fn a_header_only_tables_popup_has_no_value_choices() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "B3", "values": [["Company", "Job"]]})).unwrap();
+    session.execute("insert.table", json!({"range": "B3:C3", "header": true})).unwrap();
+    session.execute("selection.set", json!({"cell": "B3"})).unwrap();
+    let mut h = common::os_harness(session, egui::os::OperatingSystem::Windows);
+    click_filter(&mut h, "B3");
+    assert_eq!(h.state().grid.filter_menu.map(|(col, row, _)| (col, row)), Some((1, 2)));
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.height(), 1);
+    assert_eq!(sh.autofilter.as_ref().unwrap().range.a1(), "B3:C3");
+    assert_eq!(h.ctx.data(|d| d.get_temp::<Vec<(String, bool)>>(egui::Id::unique(("filter_sel", 1u32)))), Some(vec![]));
+    assert!(h.query_by_label("(Blanks)").is_none());
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().grid.filter_menu.is_none());
+}
+
+#[test]
 fn switching_filter_columns_discards_old_edits_and_recomputes_eligible_choices() {
     let mut session = Session::new();
     session.new_workbook();

@@ -135,9 +135,26 @@ fn choices_match_other_columns_but_keep_the_current_columns_unchecked_values() {
     assert_eq!(choices(&s), vec![("Alpha".into(), true), ("Beta".into(), true), ("(Blanks)".into(), true)]);
     // Manual visibility is not a filter criterion, even when every eligible row is hidden.
     s.execute("home.hideRows", json!({"rows": "4:10"})).unwrap();
-    assert_eq!(choices(&s).len(), 3);
+    assert_eq!(choices(&s), vec![("Alpha".into(), true), ("Beta".into(), true), ("(Blanks)".into(), true)]);
     assert!(filter_values(&s.doc().unwrap().wb, 0, 0).is_empty());
     assert!(filter_values(&s.doc().unwrap().wb, 0, 4).is_empty());
+}
+
+#[test]
+fn a_header_only_table_has_no_data_values_or_blank_choice() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B3", "values": [["Company", "Job"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "B3:C3", "header": true})).unwrap();
+    s.execute("data.filter", json!({"range": "B3:C3"})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(sh.tables[0].header_row);
+    assert_eq!(sh.tables[0].range.height(), 1);
+    assert_eq!(sh.autofilter.as_ref().unwrap().range.a1(), "B3:C3");
+    for col in [1, 2] {
+        assert!(filter_values(&d.wb, 0, col).is_empty(), "headers are not values or blank data rows");
+    }
 }
 
 #[test]
