@@ -212,6 +212,47 @@ fn dates_on_the_first_day_of_the_1904_system_are_grouped() {
 }
 
 #[test]
+fn leap_days_and_the_same_month_in_two_years_are_kept_apart() {
+    let mut s = Session::new();
+    s.new_workbook();
+    // Serials 59 to 61 are 28 February, Excel's fictitious 29 February and 1 March 1900; then a real
+    // leap day, and March in two years.
+    for (cell, input) in [("A1", "When"), ("A2", "59"), ("A3", "60"), ("A4", "61"), ("A5", "2024-02-29"), ("A6", "2025-03-10"), ("A7", "2026-03-10")]
+    {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    s.execute("home.numberFormat", json!({"range": "A2:A4", "code": "yyyy-mm-dd"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A7"})).unwrap();
+    let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+    assert_eq!(tree(&list.dates), ["1900[February[28 29] March[01]]", "2024[February[29]]", "2025[March[10]]", "2026[March[10]]"]);
+    // The fictitious day filters like any other, and March 2026 leaves March 2025 out.
+    s.execute("data.filterBy", json!({"column": "A", "dates": [{"year": 1900, "month": 2, "day": 29}, {"year": 2026, "month": 3}]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let hidden: Vec<u32> = (1..7).filter(|r| sh.is_row_hidden(*r)).collect();
+    assert_eq!(hidden, [1, 3, 4, 5]);
+}
+
+#[test]
+fn the_list_stops_at_excels_limit_of_distinct_items() {
+    let mut s = Session::new();
+    s.new_workbook();
+    // Five more distinct dates than the dropdown lists, then a repeat of the first.
+    let n = FILTER_LIST_LIMIT + 5;
+    let mut rows = vec![vec![json!("When")]];
+    rows.extend((0..n).map(|i| vec![json!(40_000 + i)]));
+    rows.push(vec![json!(40_000)]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("home.numberFormat", json!({"range": format!("A2:A{}", n + 2), "code": "yyyy-mm-dd"})).unwrap();
+    s.execute("data.filter", json!({"range": format!("A1:A{}", n + 2)})).unwrap();
+    let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+    assert!(list.truncated);
+    assert_eq!(list.dates.iter().map(|d| d.leaves).sum::<usize>(), FILTER_LIST_LIMIT);
+    // Under the limit nothing is left out.
+    let list = filter_list(&dated_session().doc().unwrap().wb, 0, 0);
+    assert!(!list.truncated);
+}
+
+#[test]
 fn every_text_of_a_date_stays_searchable() {
     // One day shown in nine formats: the dropdown's search must find the ninth text too.
     let codes = ["yyyy-mm-dd", "d/m/yyyy", "m/d/yyyy", "dd.mm.yyyy", "d mmm yyyy", "mmm d, yyyy", "dddd d", "yyyy/mm/dd", "d mmmm yyyy"];

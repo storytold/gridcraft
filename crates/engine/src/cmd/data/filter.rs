@@ -476,11 +476,19 @@ impl DateNode {
     }
 }
 
+/// The most distinct items the filter dropdown lists, Excel's limit ("Items displayed in filter
+/// drop-down lists: 10,000", Excel specifications and limits). It also bounds the list's cost: a
+/// column of a million distinct times would take seconds to list.
+pub const FILTER_LIST_LIMIT: usize = 10_000;
+
 /// What the filter dropdown lists: the date tree for date cells, and the other values flat.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FilterList {
     pub dates: Vec<DateNode>,
     pub values: Vec<(String, bool)>,
+    /// More than [`FILTER_LIST_LIMIT`] distinct items: the rest are left out, as Excel does ("Not
+    /// all items showing").
+    pub truncated: bool,
 }
 
 impl FilterList {
@@ -571,23 +579,42 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
     // Every distinct text of a date stays searchable; a set keeps the inserts cheap however many there are.
     let mut dates: std::collections::BTreeMap<DateGroupItem, (BTreeSet<String>, bool)> = std::collections::BTreeMap::new();
     let mut timed = false;
+    let mut truncated = false;
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
         let date = cell_date(wb, sh, c);
         let blank = filter_blank(&v);
+        let full = dates.len() + seen.len() >= FILTER_LIST_LIMIT;
+        // A date the full list leaves out needs no text: skip the formatting, the costly part.
+        if full && date.is_some_and(|d| !dates.contains_key(&DateGroupItem::of(&d, DateGrouping::Second))) {
+            truncated = true;
+            continue;
+        }
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = filter.as_ref().is_none_or(|f| f.pass(&v, &t, || date));
         match date {
             Some(d) => {
-                timed |= d.hour != 0 || d.minute != 0 || d.second != 0;
-                let e = dates.entry(DateGroupItem::of(&d, DateGrouping::Second)).or_insert_with(|| (BTreeSet::new(), false));
-                e.0.insert(t);
-                e.1 |= on;
+                let item = DateGroupItem::of(&d, DateGrouping::Second);
+                if let Some(e) = dates.get_mut(&item) {
+                    e.0.insert(t);
+                    e.1 |= on;
+                } else if full {
+                    truncated = true;
+                } else {
+                    timed |= d.hour != 0 || d.minute != 0 || d.second != 0;
+                    dates.insert(item, (BTreeSet::from([t]), on));
+                }
             }
             None => {
                 let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-                seen.entry((key, t)).or_insert(on);
+                match seen.entry((key, t)) {
+                    std::collections::btree_map::Entry::Occupied(_) => {}
+                    std::collections::btree_map::Entry::Vacant(_) if full => truncated = true,
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(on);
+                    }
+                }
             }
         }
     }
@@ -605,7 +632,7 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
             _ => leaves.push((key, texts, on)),
         }
     }
-    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: seen.into_iter().map(|((_, t), on)| (t, on)).collect() }
+    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: seen.into_iter().map(|((_, t), on)| (t, on)).collect(), truncated }
 }
 
 /// The fewest `dates` that select the checked leaves the search shows (counts from

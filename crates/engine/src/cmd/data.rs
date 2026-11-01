@@ -25,7 +25,7 @@ mod validation;
 
 #[cfg(test)]
 use filter::DateSet;
-pub use filter::{DateNode, FilterList, cell_date, checked_date_items, filter_list};
+pub use filter::{DateNode, FILTER_LIST_LIMIT, FilterList, cell_date, checked_date_items, filter_list};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 #[cfg(test)]
