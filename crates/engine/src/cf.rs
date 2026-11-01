@@ -84,12 +84,20 @@ thread_local! {
 
 /// The numbers (or text counts) in `ranges`, read from the cells that hold a value or formula and
 /// from spilled results, not from every position: a whole-column range costs what it holds.
-/// Visits at most `budget` cells, counting it down.
+/// Visits at most `budget` cells and range entries, counting it down.
 fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed, budget: &mut usize) -> (Vec<f64>, HashMap<String, usize>) {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
+    // `used_range` walks every stored row: once per build, not once per range.
+    let used = sh.used_range();
     for r in ranges {
-        let r = match sh.used_range().and_then(|u| r.intersection(&u)) {
+        // Each range entry costs one from the budget too, so a list of ranges that hold no cells
+        // (or miss the used range) can't run past it.
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        let r = match used.and_then(|u| r.intersection(&u)) {
             Some(x) => x,
             None => continue,
         };
@@ -643,6 +651,26 @@ mod tests {
         assert!(filled(cache.look(&d.wb, 0, CellRef::parse("A1048576").unwrap())), "the top value");
         assert!(!filled(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap())), "not the top value");
         assert_eq!(SCANNED.with(|n| n.get()), 2);
+    }
+
+    /// Range entries count against the statistics budget even when they hold no cells, and the
+    /// budget stops the scan: a long list of empty ranges can't run past it.
+    #[test]
+    fn statistics_budget_counts_range_entries() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        let empty: Vec<RangeRef> = (10..1_010).map(|r| RangeRef::parse(&format!("C{r}")).unwrap()).collect();
+        let mut budget = 5_000;
+        numbers_in(sh, &empty, StatsNeed::Numbers, &mut budget);
+        assert_eq!(budget, 4_000, "one per range entry");
+        let mut ranges = empty.clone();
+        ranges.push(RangeRef::parse("A1:A3").unwrap());
+        let mut budget = 500;
+        let (nums, _) = numbers_in(sh, &ranges, StatsNeed::Numbers, &mut budget);
+        assert_eq!((budget, nums.len()), (0, 0), "the budget runs out before the range that holds values");
     }
 
     /// Spilled results count towards a rule's statistics, as their cells show them.
