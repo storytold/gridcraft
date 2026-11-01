@@ -355,4 +355,13 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             n.formula = gridcraft_formula::print(&new);
         }
     }
+    for si in 0..wb.sheets.len() {
+        let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
+        let Some(sheet) = wb.sheet_mut(si) else { continue };
+        for shape in &mut sheet.shapes {
+            let Some(link) = shape.text_link.as_deref() else { continue };
+            let Ok(expr) = gridcraft_formula::parse_name(link) else { continue };
+            shape.text_link = Some(gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e)));
+        }
+    }
 }

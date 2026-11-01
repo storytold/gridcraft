@@ -352,6 +352,8 @@ fn sample() -> Workbook {
     });
     s.shapes.push(Shape {
         id: 11,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Ellipse,
         anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
         fill: Color::Rgb(0x4472C4),
@@ -361,6 +363,8 @@ fn sample() -> Workbook {
     });
     s.shapes.push(Shape {
         id: 12,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Arrow,
         anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
         fill: Color::Auto,
@@ -370,6 +374,8 @@ fn sample() -> Workbook {
     });
     s.shapes.push(Shape {
         id: 13,
+        name: None,
+        text_link: None,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },
         fill: Color::Auto,
@@ -603,6 +609,33 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
         }
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
     }
+}
+
+#[test]
+fn linked_text_box_survives_an_unrelated_edit_and_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.set_value(at("A1"), Value::text("hello"));
+    sheet.shapes.push(Shape {
+        id: 1,
+        name: Some("TextBox 1".into()),
+        text_link: Some("$A$1".into()),
+        kind: ShapeKind::TextBox,
+        anchor: Anchor { cell: at("C3"), width: 120.0, height: 60.0, ..Default::default() },
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: String::new(),
+        format: ShapeFormat { bold: true, font_size: Some(14.0), ..ShapeFormat::default() },
+    });
+    let (mut loaded, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    loaded.sheet_mut(0).unwrap().set_value(at("B2"), Value::text("unrelated edit"));
+    let (saved, _) = read_xlsx(&write_xlsx(&loaded).unwrap()).unwrap();
+    let shape = saved.sheet(0).unwrap().shapes.first().unwrap();
+    assert_eq!(shape.name.as_deref(), Some("TextBox 1"));
+    assert_eq!(shape.text_link.as_deref(), Some("$A$1"));
+    assert_eq!(shape.text, "");
+    assert!(shape.format.bold);
+    assert_eq!(shape.format.font_size, Some(14.0));
 }
 
 #[test]

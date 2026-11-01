@@ -594,6 +594,12 @@ pub enum ShapeKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: u32,
+    /// DrawingML non-visual shape name (`xdr:cNvPr name`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Cell reference attached to a linked text box (`xdr:sp textlink`).
+    #[serde(default)]
+    pub text_link: Option<String>,
     pub kind: ShapeKind,
     pub anchor: Anchor,
     pub fill: Color,
