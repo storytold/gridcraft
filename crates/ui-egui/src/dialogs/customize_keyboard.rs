@@ -113,10 +113,27 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
             if r.has_focus() {
                 ui.input(|i| {
                     for e in &i.events {
-                        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
-                            && let Some(combo) = crate::keymap::canonical_combo(*key, *modifiers, mac)
-                        {
-                            d.values.insert("pressed".into(), json!(combo));
+                        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                            let is_fn = matches!(
+                                key,
+                                egui::Key::F1
+                                    | egui::Key::F2
+                                    | egui::Key::F3
+                                    | egui::Key::F4
+                                    | egui::Key::F5
+                                    | egui::Key::F6
+                                    | egui::Key::F7
+                                    | egui::Key::F8
+                                    | egui::Key::F9
+                                    | egui::Key::F10
+                                    | egui::Key::F11
+                                    | egui::Key::F12
+                            );
+                            if (modifiers.ctrl || modifiers.command || modifiers.alt || is_fn)
+                                && let Some(combo) = crate::keymap::canonical_combo(*key, *modifiers, mac)
+                            {
+                                d.values.insert("pressed".into(), json!(combo));
+                            }
                         }
                     }
                 });
