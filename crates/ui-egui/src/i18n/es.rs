@@ -194,6 +194,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Cuadro de nombre",
         "Cell Editor" => "Editor de celda",
         "Font Size" => "Tamaño de fuente",
+        "Furigana" => "Furigana",
         "Gridlines" => "Líneas de cuadrícula",
         "Headings" => "Encabezados",
         "Zoom" => "Zoom",

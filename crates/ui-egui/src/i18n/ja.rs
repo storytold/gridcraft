@@ -215,6 +215,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Font Size", "フォント サイズ"),
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
+    ("Furigana", "ふりがな表示"),
     ("Zoom", "ズーム"),
     ("100%", "100%"),
     ("Zoom to\nSelection", "選択範囲を拡大"),

@@ -191,6 +191,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Pole názvu",
         "Cell Editor" => "Editor buňky",
         "Font Size" => "Velikost písma",
+        "Furigana" => "Furigana",
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
         "Zoom" => "Lupa",

@@ -140,6 +140,55 @@ pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
     }
 }
 
+/// The workbook's phonetic readings by the text they belong to, built once for a painting or
+/// export pass so that looking up any number of cells does not scan `wb.phonetics` per cell
+/// (View › Show › Furigana). The first entry for a text wins, as the single-cell scan does.
+#[derive(Default)]
+pub struct PhoneticIndex<'a> {
+    readings: HashMap<&'a str, String>,
+}
+
+impl<'a> PhoneticIndex<'a> {
+    pub fn new(wb: &'a Workbook) -> Self {
+        let mut readings: HashMap<&'a str, String> = HashMap::with_capacity(wb.phonetics.len());
+        for p in &wb.phonetics {
+            // A text may have several entries; the first with runs is the one a per-cell scan finds.
+            if p.runs.is_empty() {
+                continue;
+            }
+            let reading = || p.runs.iter().map(|run| run.text.as_str()).collect();
+            readings.entry(p.text.as_str()).or_insert_with(reading);
+        }
+        Self { readings }
+    }
+
+    /// [`phonetic_text`] for one cell from the index: the reading of the cell's string, if the
+    /// workbook carries one. `None` for a cell without a string, a formula, or one whose string
+    /// has no readings.
+    pub fn reading(&self, sheet: &Sheet, c: CellRef) -> Option<&str> {
+        if sheet.cell(c).is_some_and(|cell| cell.formula.is_some()) {
+            return None;
+        }
+        let text = sheet.input_text(c);
+        if text.is_empty() {
+            return None;
+        }
+        self.readings.get(text.as_str()).filter(|r| !r.trim().is_empty()).map(String::as_str)
+    }
+}
+
+/// The phonetic (furigana) reading of a cell's string, when the workbook carries one for its text:
+/// the `<rPh>` runs joined in document order (XLSX keeps them per shared string, so the reading is
+/// found by the cell's text). `None` for a cell without a string, a formula, or one whose string
+/// has no readings.
+///
+/// This is what View › Show › Furigana draws above the cell text on screen and in PDF export; the
+/// readings are never used to change the cell's value, formula or layout. A pass over many cells
+/// builds [`PhoneticIndex`] once instead of calling this for each cell.
+pub fn phonetic_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> Option<String> {
+    PhoneticIndex::new(wb).reading(sheet, c).map(str::to_owned)
+}
+
 /// Tab-separated text of a range, as the system clipboard gets it.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
@@ -225,4 +274,69 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_model::{PhoneticRun, PhoneticString};
+
+    use super::*;
+
+    fn string_book(text: &str, reading: Option<&[(&str, &str)]>) -> Workbook {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).expect("one sheet").set_value(CellRef::new(0, 0), Value::text(text));
+        if let Some(runs) = reading {
+            let mut start = 0u32;
+            let runs = runs
+                .iter()
+                .map(|(base, reading)| {
+                    let end = start + base.encode_utf16().count() as u32;
+                    let run = PhoneticRun { start, end, text: (*reading).into() };
+                    start = end;
+                    run
+                })
+                .collect();
+            wb.phonetics.push(PhoneticString { text: text.into(), runs, props: None });
+        }
+        wb
+    }
+
+    #[test]
+    fn phonetic_text_joins_the_runs_of_the_cells_string() {
+        let wb = string_book("東京都", Some(&[("東京", "トウキョウ"), ("都", "ト")]));
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(phonetic_text(&wb, sh, CellRef::new(0, 0)).as_deref(), Some("トウキョウト"));
+        // A cell without readings, a string without phonetic data and an empty cell have none.
+        let plain = string_book("abc", None);
+        assert_eq!(phonetic_text(&plain, plain.sheet(0).expect("one sheet"), CellRef::new(0, 0)), None);
+        assert_eq!(phonetic_text(&plain, plain.sheet(0).expect("one sheet"), CellRef::new(1, 1)), None);
+        // A formula cell's value is not a shared string, so it has no readings even when its text matches.
+        let mut formula = string_book("東京都", Some(&[("東京", "トウキョウ")]));
+        let f = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=A1"));
+        formula.sheet_mut(0).expect("one sheet").set_cell(CellRef::new(0, 1), f);
+        assert_eq!(phonetic_text(&formula, formula.sheet(0).expect("one sheet"), CellRef::new(0, 1)), None);
+    }
+
+    #[test]
+    fn phonetic_index_keeps_the_first_entry_and_agrees_with_the_single_lookup() {
+        let mut wb = string_book("東京都", Some(&[("東京", "トウキョウ")]));
+        // A later entry for the same text must not replace the first, as the single-cell scan keeps it.
+        wb.phonetics
+            .push(PhoneticString { text: "東京都".into(), runs: vec![PhoneticRun { start: 0, end: 3, text: "ベツ".into() }], props: None });
+        let index = PhoneticIndex::new(&wb);
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(index.reading(sh, CellRef::new(0, 0)), Some("トウキョウ"));
+        assert_eq!(phonetic_text(&wb, sh, CellRef::new(0, 0)).as_deref(), Some("トウキョウ"));
+        // A first entry whose runs are blank still wins over a later readable one: both lookups
+        // then report no reading, as the scan rejects the joined text.
+        let mut blank = string_book("x", None);
+        blank.phonetics.push(PhoneticString { text: "x".into(), runs: vec![PhoneticRun { start: 0, end: 1, text: " ".into() }], props: None });
+        blank
+            .phonetics
+            .push(PhoneticString { text: "x".into(), runs: vec![PhoneticRun { start: 0, end: 1, text: "エックス".into() }], props: None });
+        let index = PhoneticIndex::new(&blank);
+        let sh = blank.sheet(0).expect("one sheet");
+        assert_eq!(index.reading(sh, CellRef::new(0, 0)), None);
+        assert_eq!(phonetic_text(&blank, sh, CellRef::new(0, 0)), None);
+    }
 }

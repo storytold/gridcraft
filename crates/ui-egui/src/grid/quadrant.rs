@@ -1,6 +1,6 @@
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
-    rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, cell_text_y, cell_text_y_below_reading, center_across_end, col32, display_text, furigana_is_shown, layout_cell_furigana, look,
+    merged_edges, paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -101,6 +101,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) rows: (u32, u32),
     pub(crate) cols: (u32, u32),
     pub(crate) cf: &'a mut CfCache,
+    /// Phonetic (ふりがな) readings for the sheet, when the display is on.
+    pub(crate) phonetics: Option<&'a gridcraft_engine::display::PhoneticIndex<'a>>,
     pub(crate) tokens: &'a Tokens,
 }
 
@@ -380,6 +382,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let indent = st.align.indent as f32 * 9.0 * z;
     let pad = 2.5 * z;
     let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+    // ふりがな表示: the phonetic reading XLSX keeps for the cell's string, drawn above its
+    // text. Rotated and vertical (255) cells are out of scope (the reading would need to
+    // follow the rotation), so only horizontal cells show it.
+    let reading = if furigana_is_shown(st.align.rotation) { q.phonetics.and_then(|index| index.reading(sh, c)) } else { None };
+    let cell_furigana = reading.and_then(|r| layout_cell_furigana(p, *rect, size, z, &font, color, halign, r));
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
@@ -395,9 +402,15 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             HAlign::Right => rect.right() - pad,
             _ => text_left + pad + indent,
         };
-        let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+        let y = match &cell_furigana {
+            Some(f) => cell_text_y_below_reading(st.align.v, *rect, galley.size().y, z, f.bottom, true),
+            None => wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z),
+        };
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
         p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        if let Some(f) = &cell_furigana {
+            f.paint(p, *rect);
+        }
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -491,7 +504,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         _ => text_left + pad + indent,
     };
     let gh = galley.size().y;
-    let y = cell_text_y(st.align.v, *rect, gh, z);
+    let y = match &cell_furigana {
+        Some(f) => cell_text_y_below_reading(st.align.v, *rect, gh, z, f.bottom, false),
+        None => cell_text_y(st.align.v, *rect, gh, z),
+    };
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
@@ -510,6 +526,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         cp.galley(pos2(x, y), galley.clone(), color);
     }
     paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+    if let Some(f) = &cell_furigana {
+        f.paint(p, *rect);
+    }
 }
 
 struct TextDecoration {

@@ -207,6 +207,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Polje imena",
         "Cell Editor" => "Uređivač ćelije",
         "Font Size" => "Veličina fonta",
+        "Furigana" => "Furigana",
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
         "Zoom" => "Uvećanje",
