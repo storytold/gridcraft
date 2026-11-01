@@ -117,7 +117,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
                     let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = child.painter().layout(text, font.clone(), color, inner.width());
+                    let order = app.session.active().and_then(|doc| cell_reading_order(app, doc.wb.active_sheet(), doc.selection.active));
+                    let direction = crate::text_direction::cell_direction(order, &text);
+                    let galley = child
+                        .painter()
+                        .layout_job(egui::text::LayoutJob { direction, ..egui::text::LayoutJob::simple(text, font.clone(), color, inner.width()) });
                     let lines = galley.rows.len();
                     // Each cell's view starts at its top: the offset is kept per cell, not per bar.
                     let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));
@@ -154,6 +158,25 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     let sh = d.wb.active()?;
     let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     sh.spill_anchor(at)
+}
+
+fn cell_reading_order(app: &SheetApp, sheet_index: usize, cell: gridcraft_engine::core::CellRef) -> Option<gridcraft_engine::model::ReadingOrder> {
+    let doc = app.session.active()?;
+    let sheet = doc.wb.sheet(sheet_index)?;
+    let cell = sheet.merge_at(cell).map_or(cell, |range| range.start);
+    let base = doc.wb.styles.get(sheet.style_id(cell)).align.reading_order;
+    let a_rule_sets_reading_order = sheet
+        .cond_formats
+        .iter()
+        .any(|cf| cf.ranges.iter().any(|r| r.contains(cell)) && cf.rule.style().is_some_and(|style| style.align.reading_order.is_some()));
+    if !a_rule_sets_reading_order {
+        return base;
+    }
+    gridcraft_engine::cf::CfCache::default()
+        .look(&doc.wb, sheet_index, cell)
+        .and_then(|look| look.style)
+        .and_then(|style| style.align.reading_order)
+        .or(base)
 }
 
 fn active_input(app: &SheetApp) -> String {
@@ -303,9 +326,14 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
     let cell_text_color = if on_sheet { t.cell_text } else { t.text };
     let font2 = font.clone();
+    let reading_order = cell_reading_order(app, ed.sheet, ed.cell);
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
-        let mut job = egui::text::LayoutJob::default();
+        let mut job = egui::text::LayoutJob {
+            direction: crate::text_direction::cell_direction(reading_order, s),
+            keep_trailing_whitespace: true,
+            ..Default::default()
+        };
         let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();
