@@ -121,6 +121,47 @@ fn hidden_wrapped_columns_without_a_stored_width_use_the_sheet_default() {
 }
 
 #[test]
+fn a_hidden_wrapped_column_beside_a_visible_one_fits_the_taller_of_the_two() {
+    let alone = |width: f32| {
+        let mut s = wrapped_column_session(false, Some(width));
+        s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+        row_height(&mut s, 0)
+    };
+    let (wide, narrow) = (alone(120.0), alone(56.0));
+    assert!(narrow > wide, "the narrower column needs more lines");
+    for (visible, hidden, expected) in [(120.0, 56.0, narrow), (56.0, 120.0, narrow), (120.0, 120.0, wide)] {
+        let mut wb = wrapped_column_workbook(false, Some(visible));
+        let wrapped = wb.styles.derive(StyleId::DEFAULT, |s| s.align.wrap = true);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 2), Value::text("Wrapped text spans lines"));
+        sh.set_style(CellRef::new(0, 2), wrapped);
+        let col = sh.cols.entry(2).or_default();
+        col.size = Some(hidden);
+        col.hidden = true;
+        let mut s = Session::new();
+        s.add_document(DocState::new(wb, None, "Two wrapped columns".into(), Trust::Local));
+        s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+        assert_eq!(row_height(&mut s, 0), expected, "visible {visible}px beside hidden {hidden}px");
+    }
+}
+
+#[test]
+fn hiding_a_column_after_fitting_keeps_its_wrapped_height() {
+    for width in [56.0, 120.0] {
+        let mut s = wrapped_column_session(false, Some(width));
+        s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+        let fitted = row_height(&mut s, 0);
+        s.execute("home.hideColumns", json!({"cols": "B:B"})).unwrap();
+        assert_eq!(row_height(&mut s, 0), fitted, "hiding must not resize the row at width {width}");
+        s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+        assert_eq!(row_height(&mut s, 0), fitted, "refitting after hiding must remember width {width}");
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.cols.get(&1).unwrap().hidden);
+        assert_eq!(sh.cols.get(&1).unwrap().size, Some(width));
+    }
+}
+
+#[test]
 fn explicit_zero_width_retains_the_minimum_wrap_width_whether_hidden_or_visible() {
     // An explicitly stored zero is not an absent width: retain the existing clamp,
     // including the row-height cap, consistently with a visible zero-width column.
