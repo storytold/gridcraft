@@ -165,13 +165,15 @@ pub(super) fn place_window<'a>(
 }
 
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
-/// into a reference box when another text field of the dialog takes the keyboard.
+/// into a reference box when another text field of the dialog takes the keyboard. A collapsed
+/// dialog shows no other field, so its box keeps picking whatever else is clicked (the Name Box,
+/// the formula bar, the ribbon): only Escape, Enter or the expand button end that state.
 pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
     if !collapsed {
         d.refs.rect = rect;
     }
     d.refs.was_collapsed = collapsed;
-    if ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
+    if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
         d.refs.target = None;
     }
 }

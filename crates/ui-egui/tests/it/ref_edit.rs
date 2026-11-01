@@ -551,3 +551,31 @@ fn solver_model_range_is_a_reference_box_until_its_area_is_hidden() {
     drag(&mut h, "C3", "C3");
     assert_eq!(field(&h, "modelRange"), "$H$1:$H$3");
 }
+
+#[test]
+fn a_click_elsewhere_keeps_the_collapsed_box_picking() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The Name Box takes the keyboard: the collapsed box still picks (expanded, another text
+    // field ends picking, since the person moved on to it).
+    let name_box = h.get_by_label("Name Box").rect();
+    click_at(&mut h, name_box.center());
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"), "a click elsewhere doesn't expand the dialog");
+    drag(&mut h, "C3", "D6");
+    assert_eq!(field(&h, "changing"), "$C$3:$D$6", "the box still takes the selection");
+    // The title bar and ribbon stay usable: Undo takes back the last edit (B5's formula) and
+    // puts the selection back where it was before that edit (A1, where `workbook()` entered it),
+    // which the box follows like any other selection; the dialog stays collapsed.
+    let undo = h.get_by_label("Undo").rect();
+    click_at(&mut h, undo.center());
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"));
+    assert!(h.state().dialog.is_some());
+    assert_eq!(selection(&h), (0, "A1".into()));
+    assert_eq!(field(&h, "changing"), "$A$1");
+    drag(&mut h, "D2", "D2");
+    assert_eq!(field(&h, "changing"), "$D$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None, "Escape expands it");
+    assert!(h.state().dialog.is_some());
+}
