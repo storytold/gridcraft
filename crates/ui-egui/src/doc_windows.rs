@@ -85,8 +85,17 @@ pub struct DocWindows {
     float_viewports: Viewports,
     /// The window that last had the user's input.
     focused: Focus,
+    /// The tab's Properties dialog, when open.
+    props: Option<Props>,
     /// The root viewport is hidden because no window is open.
     root_hidden: bool,
+}
+
+/// What the tab's Properties dialog shows: the workbook's file, read from disk each frame.
+#[derive(Clone)]
+struct Props {
+    title: String,
+    path: Option<String>,
 }
 
 impl DocWindows {
@@ -104,6 +113,7 @@ impl DocWindows {
             floats: WindowList::new(),
             float_viewports: Viewports::new(Frame::Desktop),
             focused: Focus::Root,
+            props: None,
             root_hidden: false,
         }
     }
@@ -356,6 +366,48 @@ impl DocWindows {
         if let Some(w) = app.session.active_window() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(app, w)));
         }
+        // The tab's Properties dialog, above every window.
+        if let Some(p) = self.props.take() {
+            self.props = Self::properties_window(ctx, &p);
+        }
+    }
+
+    /// The tab's Properties dialog: what the file says about itself, as WPS shows it.
+    fn properties_window(ctx: &egui::Context, p: &Props) -> Option<Props> {
+        let mut open = true;
+        let mut keep = true;
+        let md = p.path.as_deref().and_then(|path| std::fs::metadata(path).ok());
+        egui::Window::new(format!("Properties of {}", p.title))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                row(ui, "Type:", &file_type(p.path.as_deref()));
+                row(ui, "Location:", &parent_of(p.path.as_deref()));
+                row(ui, "Size:", &md.as_ref().map(|m| size_text(m.len())).unwrap_or_else(|| "—".into()));
+                ui.separator();
+                ui.label("MS-DOS name:");
+                row(ui, "Created:", &time_text(md.as_ref().and_then(|m| m.created().ok())));
+                row(ui, "Modified:", &time_text(md.as_ref().and_then(|m| m.modified().ok())));
+                row(ui, "Accessed:", &time_text(md.as_ref().and_then(|m| m.accessed().ok())));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Attributes:");
+                    let mut ro = md.as_ref().map(|m| m.permissions().readonly()).unwrap_or(false);
+                    ui.add_enabled(false, egui::Checkbox::new(&mut ro, "Read-only"));
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        keep = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        (open && keep).then(|| p.clone())
     }
 
     /// Applies what the user did in one window's strip to that window.
@@ -425,6 +477,17 @@ impl DocWindows {
                 // `file.new` creates the engine window; sync_tabs puts it in the window that has
                 // focus, which is the one whose `+` was clicked.
                 let _ = app.run_or_alert("file.new", json!({}));
+            }
+            A::OpenLocation(w) => {
+                if let Some(path) = self.path_of(app, w) {
+                    reveal(&path);
+                }
+            }
+            A::Properties(w) => {
+                self.props = Some(Props {
+                    title: app.session.window_title(w).unwrap_or_default(),
+                    path: self.path_of(app, w),
+                });
             }
             A::DropOutside(w) => {
                 // Dropped outside its own strip: another window takes it, or it becomes one.
@@ -508,6 +571,12 @@ impl DocWindows {
                 }
             }
         }
+    }
+
+    /// The file behind engine window `w`, when its workbook has one.
+    fn path_of(&self, app: &SheetApp, w: u64) -> Option<String> {
+        let doc = app.session.window(w)?.doc_uid;
+        app.session.documents().iter().find(|d| d.uid == doc).and_then(|d| d.path.clone())
     }
 
     /// The other native windows, for the strip's "Move tab to" list.
@@ -641,6 +710,55 @@ impl DocWindows {
         app.enter_window(window);
         app.run_or_alert("window.close", json!({"window": window}));
         app.session.active_window()
+    }
+}
+
+/// A label/value line in the Properties dialog.
+fn row(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.label(egui::RichText::new(value).strong());
+    });
+}
+
+fn file_type(path: Option<&str>) -> String {
+    match path.and_then(|p| std::path::Path::new(p).extension()).and_then(|e| e.to_str()) {
+        Some(ext) => format!("{} workbook", ext.to_uppercase()),
+        None => "—".to_string(),
+    }
+}
+
+fn parent_of(path: Option<&str>) -> String {
+    path.and_then(|p| std::path::Path::new(p).parent()).map(|p| p.display().to_string()).unwrap_or_else(|| "—".to_string())
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
+}
+
+fn time_text(t: Option<std::time::SystemTime>) -> String {
+    t.map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%d/%m/%Y %H:%M").to_string()).unwrap_or_else(|| "—".to_string())
+}
+
+/// Shows the file in the system file manager.
+#[cfg(windows)]
+fn reveal(path: &str) {
+    let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
+}
+
+#[cfg(target_os = "macos")]
+fn reveal(path: &str) {
+    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal(path: &str) {
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
 

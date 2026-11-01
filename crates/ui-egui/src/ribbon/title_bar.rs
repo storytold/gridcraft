@@ -135,6 +135,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     new_tab: lang.tr("New spreadsheet").to_string(),
                     unsaved: lang.tr("Not saved to a file yet").to_string(),
                     edited: lang.tr("Unsaved changes").to_string(),
+                    open_location: lang.tr("Open file location").to_string(),
+                    properties: lang.tr("Properties").to_string(),
                 };
                 // Tabs take at most 45% of the bar, so the centred title and the right-hand
                 // controls keep their room; the rest scrolls.

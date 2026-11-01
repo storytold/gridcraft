@@ -37,6 +37,10 @@ pub enum TabAction {
     DropOutside(u64),
     /// Open a new workbook in this window.
     New,
+    /// Show the file in the system file manager.
+    OpenLocation(u64),
+    /// The file's Properties dialog.
+    Properties(u64),
     /// Keep the tab first in the strip.
     Pin(u64),
     /// Move the tab to the start or the end of the strip.
@@ -62,6 +66,8 @@ pub struct Labels {
     pub unsaved: String,
     /// The hover card's line for a workbook with unsaved changes.
     pub edited: String,
+    pub open_location: String,
+    pub properties: String,
 }
 
 /// One frame of the strip: what to draw, and what the user did with it.
@@ -241,6 +247,15 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
                             }
                         }
                     });
+                    ui.separator();
+                    if ui.button(&labels.open_location).clicked() {
+                        action = Some(TabAction::OpenLocation(w));
+                        ui.close();
+                    }
+                    if ui.button(&labels.properties).clicked() {
+                        action = Some(TabAction::Properties(w));
+                        ui.close();
+                    }
                     ui.separator();
                     let to_the_right: Vec<u64> = all.iter().copied().skip(index + 1).collect();
                     if ui.add_enabled(!to_the_right.is_empty(), Button::new(&labels.right)).clicked() {
