@@ -136,8 +136,8 @@ pub const MAX_ADOPTED_RESULT_CELLS: u64 = 4_000_000;
 /// Python cells from a file: a cell whose formula is `PY("…",0|1)` (a format that kept it as a
 /// formula) becomes a Python cell, and a Python cell whose spilled values the file cached gets
 /// them back as its result, so it shows them until it runs again. Results are rebuilt for at most
-/// [`MAX_ADOPTED_RESULT_CELLS`] cells in all; the rest keep only their own cached value. Returns
-/// the warnings.
+/// [`MAX_ADOPTED_RESULT_CELLS`] cells in all; the rest keep only their own cached value, and the
+/// values they spilled stay as plain values. Returns the warnings.
 pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
     let mut budget = MAX_ADOPTED_RESULT_CELLS;
     let mut skipped = 0usize;
@@ -168,11 +168,9 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
         for (anchor, range) in spills {
             let Some(left) = budget.checked_sub(range.count()) else {
                 skipped += 1;
-                // The cell keeps only its own value, so its cached spill goes too: the sheet would
-                // otherwise show spilled values that no result holds.
-                if let Some(r) = sh.spill_ranges.remove(&anchor) {
-                    sh.clear_spill(r);
-                }
+                // The cell keeps only its own value; the values it spilled stay as plain values, so
+                // nothing shows as a spill that no result holds, and nothing the file showed is lost.
+                sh.settle_spill(anchor);
                 continue;
             };
             budget = left;
@@ -189,14 +187,15 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
         return Vec::new();
     }
     vec![format!(
-        "The file's Python results are larger than {MAX_ADOPTED_RESULT_CELLS} cells in all, so {skipped} Python cell(s) show only their first value until they run again."
+        "The file's Python results are larger than {MAX_ADOPTED_RESULT_CELLS} cells in all, so {skipped} Python cell(s) have no result until they run again; the values they spilled were kept as plain values."
     )]
 }
 
 /// A file is somebody else's work: a Python cell whose code doesn't fit in Excel's
 /// 8,192-character formula keeps only its cached value, and a kept result that is not a
 /// well-formed array of at most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells is dropped
-/// (the cell keeps its value). Returns the warnings.
+/// (the cell keeps its value). Either way the values the cell spilled stay as plain values
+/// ([`gridcraft_model::Sheet::settle_spill`]). Returns the warnings.
 pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
     let mut long = Vec::new();
     for si in 0..wb.sheets.len() {
@@ -227,12 +226,10 @@ pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
                 std::sync::Arc::make_mut(py).output = None;
             }
         }
-        // The spill of a dropped result (or of code dropped to its value) goes with it, so the
-        // sheet and a save no longer show the old spilled values.
+        // A dropped result (or code dropped to its value) leaves the values it spilled as plain
+        // values, as the file showed them, with no live spill.
         for c in dropped {
-            if let Some(r) = sh.spill_ranges.remove(&c) {
-                sh.clear_spill(r);
-            }
+            sh.settle_spill(c);
         }
     }
     let Some(first) = long.first() else { return vec![] };

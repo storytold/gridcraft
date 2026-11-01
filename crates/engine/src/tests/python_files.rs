@@ -353,38 +353,93 @@ fn many_cells_naming_one_long_script_take_from_one_budget() {
     assert_eq!(sh.value(CellRef::parse("A20000").unwrap()), Value::Number(1.0), "the others keep their values");
 }
 
+/// Plants a cached spill over `range` (anchored at its start) with `value` at `at`, as a file
+/// read leaves it.
+fn cached_spill(sh: &mut gridcraft_model::Sheet, range: RangeRef, spilled: &[(CellRef, Value)]) {
+    sh.spill_ranges.insert(range.start, range);
+    for (c, v) in spilled {
+        sh.spill.insert(*c, v.clone());
+    }
+}
+
+/// The value stored in the cell itself (not a spilled one), with whether it holds code or a
+/// formula.
+fn stored(sh: &gridcraft_model::Sheet, c: CellRef) -> (Value, bool) {
+    sh.cell(c).map(|x| (x.value.clone(), x.py.is_some() || x.formula.is_some())).unwrap_or((Value::Empty, false))
+}
+
 #[test]
-fn a_result_cut_by_the_budget_takes_its_cached_spill_with_it() {
+fn a_result_cut_by_the_budget_keeps_its_cached_spill_as_values() {
     // Five Python cells each with a cached 1,000 x 1,000 spill: the budget rebuilds four results;
-    // the fifth cell keeps only its own value, and its spilled values no longer show.
+    // the fifth cell keeps only its own value, and the values it spilled stay as plain values.
     let mut wb = Workbook::new();
+    let bold = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.bold = true);
     let sh = wb.sheet_mut(0).unwrap();
     for i in 0..5u32 {
-        let anchor = CellRef::new(0, i * 1_000);
+        let col = i * 1_000;
+        let anchor = CellRef::new(0, col);
         sh.set_cell(anchor, Cell { py: Some(Arc::new(PyCode::new("x"))), ..Cell::value(Value::Number(1.0)) });
-        sh.spill_ranges.insert(anchor, RangeRef::new(anchor, CellRef::new(999, i * 1_000 + 999)));
-        sh.spill.insert(CellRef::new(1, i * 1_000), Value::Number(7.0));
-        sh.spill.insert(CellRef::new(999, i * 1_000 + 999), Value::Number(8.0));
+        // A cell with its own content, and a formatted empty one, inside the spill.
+        sh.set_cell(CellRef::new(2, col), Cell::value(Value::text("own")));
+        sh.set_cell(CellRef::new(3, col), Cell::styled(Value::Empty, bold));
+        let spilled = [
+            (CellRef::new(1, col), Value::Number(7.0)),
+            (CellRef::new(2, col), Value::Number(9.0)),
+            (CellRef::new(3, col), Value::Number(6.0)),
+            (CellRef::new(999, col + 999), Value::Number(8.0)),
+        ];
+        cached_spill(sh, RangeRef::new(anchor, CellRef::new(999, col + 999)), &spilled);
     }
     let warnings = crate::io::adopt_python(&mut wb);
     assert!(warnings.iter().any(|w| w.contains("Python")), "{warnings:?}");
     let sh = wb.sheet(0).unwrap();
     let mut cut = 0;
     for i in 0..5u32 {
-        let anchor = CellRef::new(0, i * 1_000);
-        let rebuilt = sh.cell(anchor).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_some());
-        let (below, corner) = (sh.value(CellRef::new(1, i * 1_000)), sh.value(CellRef::new(999, i * 1_000 + 999)));
-        if rebuilt {
-            assert_eq!((below, corner), (Value::Number(7.0), Value::Number(8.0)), "a result within the budget keeps its spill");
-            assert!(sh.spill_ranges.contains_key(&anchor));
-        } else {
-            cut += 1;
-            assert_eq!((below, corner), (Value::Empty, Value::Empty), "no stale spilled values beyond the anchor");
-            assert!(!sh.spill_ranges.contains_key(&anchor));
-            assert_eq!(sh.value(anchor), Value::Number(1.0), "the cell keeps its own cached value");
+        let col = i * 1_000;
+        let anchor = CellRef::new(0, col);
+        let py = sh.cell(anchor).and_then(|c| c.py.clone()).expect("the code is kept");
+        let shown =
+            [sh.value(CellRef::new(1, col)), sh.value(CellRef::new(2, col)), sh.value(CellRef::new(3, col)), sh.value(CellRef::new(999, col + 999))];
+        assert_eq!(shown, [Value::Number(7.0), Value::text("own"), Value::Number(6.0), Value::Number(8.0)], "every result shows the same values");
+        if py.output.is_some() {
+            assert!(sh.spill_ranges.contains_key(&anchor), "a result within the budget keeps its spill");
+            continue;
         }
+        cut += 1;
+        assert!(!sh.spill_ranges.contains_key(&anchor), "no live spill");
+        assert!(sh.spill.range(anchor..=CellRef::new(999, col + 999)).all(|(c, _)| c.col < col || c.col > col + 999), "no spilled values left");
+        assert_eq!(stored(sh, anchor), (Value::Number(1.0), true), "the anchor keeps its value and its code");
+        assert_eq!(stored(sh, CellRef::new(1, col)), (Value::Number(7.0), false), "a spilled value is a plain value now");
+        assert_eq!(stored(sh, CellRef::new(999, col + 999)), (Value::Number(8.0), false));
+        assert_eq!(stored(sh, CellRef::new(2, col)), (Value::text("own"), false), "content is never overwritten");
+        assert_eq!(sh.style_id(CellRef::new(3, col)), bold, "nor a format");
     }
     assert_eq!(cut, 1);
+}
+
+#[test]
+fn code_too_long_for_a_cell_keeps_its_whole_cached_result_as_values() {
+    let long = PyCode::new(&"x".repeat(gridcraft_model::python::MAX_FORMULA_CHARS));
+    assert!(!long.fits());
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    // A1 spills over A1:B2; D1's own value is empty.
+    sh.set_cell(CellRef::new(0, 0), Cell { py: Some(Arc::new(long.clone())), ..Cell::value(Value::Number(1.0)) });
+    sh.set_cell(CellRef::new(1, 1), Cell::value(Value::text("own")));
+    let spilled = [(CellRef::new(0, 1), Value::Number(2.0)), (CellRef::new(1, 0), Value::Number(3.0)), (CellRef::new(1, 1), Value::Number(4.0))];
+    cached_spill(sh, RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 1)), &spilled);
+    sh.set_cell(CellRef::new(0, 3), Cell { py: Some(Arc::new(long)), ..Cell::default() });
+    cached_spill(sh, RangeRef::new(CellRef::new(0, 3), CellRef::new(1, 3)), &[(CellRef::new(1, 3), Value::Number(5.0))]);
+    let warnings = crate::io::enforce_python_limits(&mut wb);
+    assert!(warnings.iter().any(|w| w.contains("A1")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert!(sh.spill_ranges.is_empty() && sh.spill.is_empty(), "no live spill: {:?}", sh.spill_ranges);
+    assert_eq!(stored(sh, CellRef::new(0, 0)), (Value::Number(1.0), false), "the anchor keeps only its value");
+    assert_eq!(stored(sh, CellRef::new(0, 1)), (Value::Number(2.0), false));
+    assert_eq!(stored(sh, CellRef::new(1, 0)), (Value::Number(3.0), false));
+    assert_eq!(stored(sh, CellRef::new(1, 1)), (Value::text("own"), false), "content is never overwritten");
+    assert_eq!(stored(sh, CellRef::new(0, 3)), (Value::Empty, false), "an empty anchor stays empty, without code");
+    assert_eq!(stored(sh, CellRef::new(1, 3)), (Value::Number(5.0), false));
 }
 
 #[test]
@@ -513,7 +568,7 @@ fn py_formulas_over_the_size_limit_keep_only_their_value() {
 }
 
 #[test]
-fn a_dropped_python_result_takes_its_spill_with_it() {
+fn a_dropped_python_result_keeps_its_spill_as_values() {
     // A1's code is over the limit and B1's result is malformed; each had spilled down to row 3,
     // and C1's well-formed result keeps its spill.
     let mut wb = Workbook::new();
@@ -536,13 +591,14 @@ fn a_dropped_python_result_takes_its_spill_with_it() {
     let sh = wb.sheet(0).unwrap();
     for (anchor, below) in [("A1", "A2"), ("B1", "B3")] {
         assert!(!sh.spill_ranges.contains_key(&CellRef::parse(anchor).unwrap()), "{anchor}'s spill range stays");
-        assert_eq!(sh.value(CellRef::parse(below).unwrap()), Value::Empty, "{below} still shows {anchor}'s old spill");
+        let cell = sh.cell(CellRef::parse(below).unwrap()).unwrap_or_else(|| panic!("{below} is a plain value"));
+        assert_eq!((&cell.value, cell.py.is_none() && cell.formula.is_none()), (&Value::Number(8.0), true), "{below} keeps {anchor}'s value");
         assert_eq!(sh.value(CellRef::parse(anchor).unwrap()), Value::Number(7.0), "{anchor} keeps its value");
     }
     assert_eq!(sh.value(CellRef::parse("C2").unwrap()), Value::Number(8.0), "a sound result keeps its spill");
-    // A save writes no value for the dropped spills.
+    // A save writes the kept values as plain values, and the sound spill as a spill.
     let xml = sheet_xml(&gridcraft_xlsx::write_xlsx(&wb).unwrap());
-    assert!(!xml.contains("r=\"A2\"") && !xml.contains("r=\"B3\""), "{xml}");
+    assert!(xml.contains("<c r=\"A2\"><v>8</v></c>") && xml.contains("<c r=\"B3\"><v>8</v></c>"), "{xml}");
     assert!(xml.contains("r=\"C2\""), "{xml}");
 }
 

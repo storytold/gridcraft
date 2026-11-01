@@ -215,6 +215,29 @@ impl Sheet {
         }
     }
 
+    /// Turns the spill anchored at `anchor` into plain values, for a Python cell that keeps only
+    /// its value: the range is forgotten, and each spilled value in it becomes its cell's value,
+    /// unless the cell holds content of its own (its format is kept either way). The work is
+    /// bounded by the spilled values stored, not by the size of the range.
+    pub fn settle_spill(&mut self, anchor: CellRef) {
+        let Some(r) = self.spill_ranges.remove(&anchor) else { return };
+        let inside: Vec<CellRef> = self.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c)).collect();
+        for c in inside {
+            let Some(v) = self.spill.remove(&c) else { continue };
+            if v.is_empty() || c == anchor {
+                continue;
+            }
+            match self.cells.get_mut(c) {
+                Some(cell) if cell.has_content() => {}
+                Some(cell) => cell.value = v,
+                None => {
+                    let style = self.style_id(c);
+                    self.cells.set(c, Cell::styled(v, style));
+                }
+            }
+        }
+    }
+
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {
