@@ -106,15 +106,19 @@ pub enum Drag {
         source: RangeRef,
         before: Option<u32>,
     },
+    /// `to`: the previewed size once the pointer moved. Only the dragged line changes while the
+    /// button is held; the release applies the size to every selected line (Excel).
     ResizeCol {
         col: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     ResizeRow {
         row: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
@@ -176,6 +180,10 @@ impl Trace {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// A header-boundary resize drag: the workbook as it was when the drag began. The drag's own
+    /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
+    /// same label are not the drag's to merge or cancel.
+    pub resize_base: Option<Arc<Workbook>>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
