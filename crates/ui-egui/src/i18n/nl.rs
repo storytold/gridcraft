@@ -528,6 +528,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom In" => "Inzoomen",
         "Zoom Out" => "Uitzoomen",
         "Dismiss" => "Negeren",
+        "Record Macro" => "Macro opnemen",
+        "Stop Recording" => "Opname stoppen",
+        "Use Relative References" => "Relatieve verwijzingen gebruiken",
+        "Run\nMacro" => "Macro uitvoeren",
+        "Macros…" => "Macro's…",
+        "Recording" => "Opnemen",
+        "Stop" => "Stoppen",
+        "New Macro" => "Nieuwe macro",
+        "Show" => "Weergeven",
         _ => return None,
     })
 }

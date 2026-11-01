@@ -982,6 +982,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Report Layout",
         "Compact" => "Compact",
         "Tabular" => "Tabular",
+        "Record Macro" => "Записати макрос",
+        "Stop Recording" => "Зупинити запис",
+        "Use Relative References" => "Використовувати відносні посилання",
+        "Run\nMacro" => "Запустити макрос",
+        "Macros…" => "Макроси…",
+        "Recording" => "Запис",
+        "New Macro" => "Новий макрос",
+        "Show" => "Показати",
         _ => return None,
     })
 }

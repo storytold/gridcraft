@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, COL_HEADER_H, CellRef, DISPLAY_SCALE, LineIndex, MAX_COLS, MAX_ROWS, Pos2, RangeRef, Rect, Sheet, heading_zoom, pos2, sheet_zoom};
 
 /// Geometry of the grid for one frame (handles zoom and frozen panes).
 #[derive(Clone)]

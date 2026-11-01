@@ -439,6 +439,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "所有工作表",
         "New sheet (⇧F11)" => "新建工作表 (⇧F11)",
         "Text Box" => "文本框",
+        "Macros" => "宏",
+        "Record Macro" => "录制宏",
+        "Stop Recording" => "停止录制",
+        "Use Relative References" => "使用相对引用",
+        "Run\nMacro" => "运行宏",
+        "Macros…" => "宏…",
+        "Recording" => "正在录制",
+        "Stop" => "停止",
+        "New Macro" => "新建宏",
+        "Show" => "显示",
         _ => return None,
     })
 }

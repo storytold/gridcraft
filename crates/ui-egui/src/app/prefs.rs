@@ -1,4 +1,6 @@
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::updates_ui;
+use super::{SheetApp, desktop_theme};
 
 impl SheetApp {
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
@@ -44,7 +46,7 @@ impl SheetApp {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
-        grid::set_grid_scale(self.ui.grid_factor());
+        crate::grid::set_grid_scale(self.ui.grid_factor());
     }
 
     /// Look for a newer release once, in the background, as the desktop app starts (a no-op on the
