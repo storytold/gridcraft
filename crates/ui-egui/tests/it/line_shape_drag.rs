@@ -349,3 +349,24 @@ fn the_shapes_keytip_opens_the_gallery_and_the_pick_arms_the_pointer() {
     h.run_steps(4);
     assert_eq!(h.state().grid.shape_tool.as_deref(), Some("line"), "the picked shape arms the pointer");
 }
+
+/// Opened by Alt, N, S, H, the gallery has the keyboard: Down moves to the next shape and Enter
+/// picks it, with no mouse (PR #3078 review).
+#[test]
+fn the_shapes_gallery_opened_by_its_keytip_is_reachable_by_keyboard() {
+    let mut h = harness();
+    let press = |h: &mut Harness, k: egui::Key| {
+        let ev = |pressed| Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([ev(true), ev(false)]);
+        h.run_steps(2);
+    };
+    for k in [egui::Key::F10, egui::Key::N, egui::Key::S, egui::Key::H] {
+        press(&mut h, k);
+    }
+    h.run_steps(2);
+    press(&mut h, egui::Key::ArrowDown);
+    press(&mut h, egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.shape_tool.as_deref(), Some("roundedRectangle"), "Down then Enter picks the second shape");
+    assert_eq!(h.state().session.doc().unwrap().selection.active, CellRef::new(0, 0), "the grid didn't take the arrow");
+}

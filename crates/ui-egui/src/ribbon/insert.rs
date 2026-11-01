@@ -40,7 +40,13 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Text Box", "textBox"),
         ] {
             // As in Excel the pick arms the pointer: the shape is drawn by dragging on the sheet.
-            if ui.button(label).clicked() {
+            let item = ui.button(label);
+            // Opened by its key tip, the gallery takes the keyboard (the grid would keep the
+            // arrows and Tab): the first shape has focus, the arrows move it, Enter picks.
+            if forced && kind == "rectangle" {
+                item.request_focus();
+            }
+            if item.clicked() {
                 act(app, "ui.shapeTool", json!({"kind": kind}));
             }
         }
