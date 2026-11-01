@@ -17,6 +17,10 @@ use super::{
 };
 use crate::selection::current_region;
 
+mod cond_format;
+
+pub use cond_format::preset_style;
+use cond_format::{add_cf, clear_cf, insert_icon, manage_cf};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -197,7 +201,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, stopIfTrue?, rule: {type: cellIs|expression|containsText|notContainsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, equal?, stdDev?, period?, colors?: [..], min?|mid?|max?: {type: min|max|num|percent|percentile|formula, value?}, color?, gradient?, showValue?, set?, reverse?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…, fill?, fontColor?, border?: hex|none, bold?, italic?, underline?, strike?}}",
             has_doc,
             add_cf
         ),
@@ -207,7 +211,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{show?: sheet|selection, selection?: \"A1:B9,D2\"} lists the rules (index, appliesTo, stopIfTrue, params); {set?: [{rule|params, appliesTo, stopIfTrue?}] replaces them all, {update?: index, rule?: {..as home.conditionalFormat}, appliesTo?: \"=$A$1:$B$9\", stopIfTrue?, duplicate?: index, delete?: index, moveUp?: index, moveDown?: index} changes them",
             has_doc,
             manage_cf
         ),
@@ -1406,344 +1410,6 @@ fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
     s.execute("cell.set", json!({"cell": at.a1(), "input": format!("{cur}{ch}")}))
 }
 
-// ---------------------------------------------------------------- conditional formatting
-
-fn preset_style(name: &str) -> Style {
-    let mut s = Style::default();
-    match name {
-        "redText" => s.font.color = Color::rgb(0x9C, 0x00, 0x06),
-        "yellowFill" | "yellowFillDarkYellowText" => {
-            s.fill = Fill::solid(Color::rgb(0xFF, 0xEB, 0x9C));
-            s.font.color = Color::rgb(0x9C, 0x57, 0x00);
-        }
-        "greenFill" | "greenFillDarkGreenText" => {
-            s.fill = Fill::solid(Color::rgb(0xC6, 0xEF, 0xCE));
-            s.font.color = Color::rgb(0x00, 0x61, 0x00);
-        }
-        "lightRedFill" => s.fill = Fill::solid(Color::rgb(0xFF, 0xC7, 0xCE)),
-        "redBorder" => {
-            let l = BorderLine { style: BorderStyle::Thin, color: Color::rgb(0xC0, 0x00, 0x00) };
-            s.borders = Borders { left: l, right: l, top: l, bottom: l, ..Default::default() };
-        }
-        _ => {
-            s.fill = Fill::solid(Color::rgb(0xFF, 0xC7, 0xCE));
-            s.font.color = Color::rgb(0x9C, 0x00, 0x06);
-        }
-    }
-    s
-}
-
-/// Whether `v` is one formula string literal: `"…"` with every inner quote doubled.
-fn is_string_literal(v: &str) -> bool {
-    v.len() >= 2 && v.starts_with('"') && v.ends_with('"') && v.get(1..v.len() - 1).is_some_and(|inner| !inner.replace("\"\"", "").contains('"'))
-}
-
-/// A conditional format's `style` as the model's `Style` JSON (`font`, `fill`, `borders`, `align`,
-/// `num_fmt`, `protection`, merged over the default by the caller), where a colour may also be
-/// written as `format_range` takes it (`"#RRGGBB"`, `{theme, tint}`, `"auto"`) and `fill` may be a
-/// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
-/// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
-fn cf_style_json(st: &Json) -> Result<Json> {
-    const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
-    let err = |m: String| bad("home.conditionalFormat", m);
-    let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
-    let mut st = obj.clone();
-    if let Some(k) = st.keys().find(|k| !KEYS.contains(&k.as_str())) {
-        let hint = if k == "preset" { "; a preset goes in `rule.preset`" } else { "" };
-        return Err(err(format!("unknown key `{k}` in `style` (known: {}){hint}", KEYS.join(", "))));
-    }
-    // A colour written the way the other formatting commands take it, as the model stores it.
-    let color = |v: &mut Json, what: &str| -> Result<()> {
-        if v.is_string() || v.get("theme").is_some() {
-            let c = super::format::color_param(Some(v)).ok_or_else(|| err(format!("invalid colour {v} for `{what}`")))?;
-            *v = serde_json::to_value(c).map_err(|e| EngineError::Other(e.to_string()))?;
-        }
-        Ok(())
-    };
-    if let Some(f) = st.get_mut("font").and_then(Json::as_object_mut)
-        && let Some(c) = f.get_mut("color")
-    {
-        color(c, "font.color")?;
-    }
-    if let Some(fill) = st.get_mut("fill") {
-        // `"none"` (or `"auto"`) is no fill, as `home.fillColor` reads it, not a solid automatic one.
-        if fill.is_string() && super::format::color_param(Some(fill)) == Some(Color::Auto) {
-            *fill = serde_json::to_value(Fill::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-        } else if fill.is_string() || fill.get("theme").is_some() {
-            *fill = json!({"pattern": "Solid", "fg": fill.clone()});
-        }
-        if let Some(f) = fill.as_object_mut() {
-            for k in ["fg", "bg"] {
-                if let Some(c) = f.get_mut(k) {
-                    color(c, &format!("fill.{k}"))?;
-                }
-            }
-            // A colour with no pattern is a solid fill, not an invisible one.
-            if f.contains_key("fg") && !f.contains_key("pattern") {
-                f.insert("pattern".into(), json!("Solid"));
-            }
-        }
-    }
-    if let Some(b) = st.get_mut("borders").and_then(Json::as_object_mut) {
-        for (side, line) in b.iter_mut() {
-            if let Some(c) = line.get_mut("color") {
-                color(c, &format!("borders.{side}.color"))?;
-            }
-        }
-    }
-    Ok(Json::Object(st))
-}
-
-/// #1999: a formula that doesn't parse must never reach the workbook — Excel refuses to open
-/// files carrying it, even in repair mode. Validated here so the API and the New Rule dialog
-/// (which dispatches this command) share one gate, the way Excel's object model refuses.
-fn check_cf_formula(cmd: &str, what: &str, formula: &str) -> Result<()> {
-    // Strip exactly one leading '=', the way the XLSX writer does: a value like '===A1'
-    // only parses after several strips and would still be saved unparseable. (#1999 review)
-    if gridcraft_formula::parse(formula.strip_prefix('=').unwrap_or(formula)).is_err() {
-        return Err(bad(cmd, format!("invalid {what} formula `{formula}` — it does not parse; Excel would reject the saved file")));
-    }
-    Ok(())
-}
-
-fn check_cf_value(what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
-    if let gridcraft_model::features::CfValueKind::Formula(f) = v {
-        check_cf_formula("home.conditionalFormat", what, f)?;
-    }
-    Ok(())
-}
-
-fn check_cf_rule(rule: &CfRule) -> Result<()> {
-    const CMD: &str = "home.conditionalFormat";
-    match rule {
-        CfRule::CellIs { a, b, .. } => {
-            check_cf_formula(CMD, "comparison value", a)?;
-            if let Some(b) = b {
-                check_cf_formula(CMD, "second comparison value", b)?;
-            }
-        }
-        CfRule::Expression { formula, .. } => check_cf_formula(CMD, "rule", formula)?,
-        CfRule::DataBar { min, max, .. } => {
-            check_cf_value("data bar minimum", min)?;
-            check_cf_value("data bar maximum", max)?;
-        }
-        CfRule::ColorScale { stops } => {
-            for (kind, _) in stops {
-                check_cf_value("color scale threshold", kind)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
-    let ranges = target_ranges(s, p)?;
-    let sheet = target_sheet(s, p)?;
-    let Some(rule) = p.get("rule") else {
-        s.ui_requests.push(crate::UiRequest::Dialog("newFormattingRule".into(), json!({})));
-        return ok();
-    };
-    let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
-    let style = Box::new(match rule.get("style") {
-        Some(st) if !st.is_null() => {
-            let st = cf_style_json(st)?;
-            let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(super::format::merge_json(base, &st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
-        }
-        _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
-    });
-    let kind = g("type").unwrap_or_else(|| "cellIs".into());
-    let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
-        match v {
-            Some(Json::Object(o)) => {
-                let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
-                let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
-                match t {
-                    "min" => CfValueKind::Min,
-                    "max" => CfValueKind::Max,
-                    "percent" => CfValueKind::Percent(val),
-                    "percentile" => CfValueKind::Percentile(val),
-                    "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
-                    _ => CfValueKind::Number(val),
-                }
-            }
-            _ => default,
-        }
-    };
-    let rule = match kind.as_str() {
-        "cellIs" => {
-            // Excel's file and VBA names (`lessThan`, …) are accepted too.
-            let op = match g("operator").as_deref().unwrap_or("greater") {
-                "between" => CfOperator::Between,
-                "notBetween" => CfOperator::NotBetween,
-                "equal" => CfOperator::Equal,
-                "notEqual" => CfOperator::NotEqual,
-                "less" | "lessThan" => CfOperator::Less,
-                "greaterOrEqual" | "greaterThanOrEqual" => CfOperator::GreaterOrEqual,
-                "lessOrEqual" | "lessThanOrEqual" => CfOperator::LessOrEqual,
-                "greater" | "greaterThan" => CfOperator::Greater,
-                other => return Err(bad("home.conditionalFormat", format!("unknown operator `{other}`"))),
-            };
-            let a = rule.get("value").map(super::edit::json_to_input).unwrap_or_default();
-            let b = rule.get("value2").map(super::edit::json_to_input);
-            let quote = |v: String| {
-                // A number, a formula, or text already written as a string literal (`"Closed"`, as
-                // in the file and in openpyxl's `CellIsRule`) is kept; other text is quoted.
-                if gridcraft_core::parse::parse_number_text(&v).is_some() || v.starts_with('=') {
-                    v.trim_start_matches('=').to_string()
-                } else if is_string_literal(&v) {
-                    v
-                } else {
-                    format!("\"{}\"", v.replace('"', "\"\""))
-                }
-            };
-            CfRule::CellIs { op, a: quote(a), b: b.map(quote), style }
-        }
-        "expression" => CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style },
-        "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
-        "notContainsText" => CfRule::NotContainsText { text: g("text").unwrap_or_default(), style },
-        "beginsWith" => CfRule::BeginsWith { text: g("text").unwrap_or_default(), style },
-        "endsWith" => CfRule::EndsWith { text: g("text").unwrap_or_default(), style },
-        "blanks" => CfRule::Blanks { style },
-        "noBlanks" => CfRule::NoBlanks { style },
-        "errors" => CfRule::Errors { style },
-        "noErrors" => CfRule::NoErrors { style },
-        "duplicate" => CfRule::Duplicate { style },
-        "unique" => CfRule::Unique { style },
-        "top10" => CfRule::Top10 {
-            bottom: rule.get("bottom").and_then(Json::as_bool).unwrap_or(false),
-            percent: rule.get("percent").and_then(Json::as_bool).unwrap_or(false),
-            rank: rule.get("rank").and_then(Json::as_u64).unwrap_or(10) as u32,
-            style,
-        },
-        "aboveAverage" => CfRule::AboveAverage { below: rule.get("below").and_then(Json::as_bool).unwrap_or(false), equal: false, std_dev: 0, style },
-        "timePeriod" => CfRule::TimePeriod { period: g("period").unwrap_or_else(|| "today".into()), style },
-        "colorScale" => {
-            let cols: Vec<Color> = rule
-                .get("colors")
-                .and_then(Json::as_array)
-                .map(|a| a.iter().filter_map(|c| super::format::color_param(Some(c))).collect())
-                .unwrap_or_else(|| vec![Color::rgb(0xF8, 0x69, 0x6B), Color::rgb(0xFF, 0xEB, 0x84), Color::rgb(0x63, 0xBE, 0x7B)]);
-            let stops = match cols.len() {
-                2 => vec![(CfValueKind::Min, cols[0]), (CfValueKind::Max, cols[1])],
-                _ => vec![
-                    (CfValueKind::Min, cols.first().copied().unwrap_or_default()),
-                    (CfValueKind::Percentile(50.0), cols.get(1).copied().unwrap_or_default()),
-                    (CfValueKind::Max, cols.get(2).copied().unwrap_or_default()),
-                ],
-            };
-            CfRule::ColorScale { stops }
-        }
-        "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
-            color: super::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
-            gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
-            show_value: true,
-        },
-        "iconSet" => CfRule::IconSet {
-            set: g("set").unwrap_or_else(|| "3TrafficLights1".into()),
-            thresholds: vec![],
-            reverse: rule.get("reverse").and_then(Json::as_bool).unwrap_or(false),
-            show_value: true,
-        },
-        other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
-    };
-    check_cf_rule(&rule)?;
-    edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        let priority = sh.cond_formats.iter().map(|c| c.priority).max().unwrap_or(0) + 1;
-        // New rules take precedence over older ones.
-        for cf in sh.cond_formats.iter_mut() {
-            cf.priority += 1;
-        }
-        sh.cond_formats.insert(0, CondFormat { ranges: ranges.clone(), rule, priority: 1, stop_if_true: false });
-        let _ = priority;
-        Ok(json!({"rules": sh.cond_formats.len()}))
-    })
-}
-
-fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = target_sheet(s, p)?;
-    let whole = bool_param(p, "sheet").unwrap_or(false);
-    let ranges = target_ranges(s, p)?;
-    edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        if whole {
-            sh.cond_formats.clear();
-        } else {
-            for cf in sh.cond_formats.iter_mut() {
-                cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
-            }
-            sh.cond_formats.retain(|c| !c.ranges.is_empty());
-        }
-        Ok(Json::Null)
-    })
-}
-
-fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = target_sheet(s, p)?;
-    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
-        let list: Vec<Json> = s
-            .doc()?
-            .wb
-            .sheet(sheet)
-            .map(|sh| {
-                sh.cond_formats.iter().map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule})).collect()
-            })
-            .unwrap_or_default();
-        return Ok(json!({"rules": list}));
-    }
-    edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        // The count is taken again after each step: a delete shortens the list.
-        if let Some(i) = u32_param(p, "delete").map(|v| v as usize)
-            && i < sh.cond_formats.len()
-        {
-            sh.cond_formats.remove(i);
-        }
-        if let Some(i) = u32_param(p, "moveUp").map(|v| v as usize)
-            && i > 0
-            && i < sh.cond_formats.len()
-        {
-            sh.cond_formats.swap(i, i - 1);
-        }
-        if let Some(i) = u32_param(p, "moveDown").map(|v| v as usize)
-            && i + 1 < sh.cond_formats.len()
-        {
-            sh.cond_formats.swap(i, i + 1);
-        }
-        for (k, cf) in sh.cond_formats.iter_mut().enumerate() {
-            cf.priority = k as u32 + 1;
-        }
-        Ok(Json::Null)
-    })
-}
-
-fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").unwrap_or("check").to_string();
-    let size = f64_param(p, "size").unwrap_or(48.0).clamp(8.0, 1000.0) as f32;
-    let d = s.doc()?;
-    let id = d.wb.next_object_id();
-    let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
-    let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
-    let shape = Shape {
-        id,
-        kind: ShapeKind::Icon,
-        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
-        fill: color,
-        line: Color::Auto,
-        text: name,
-        format: Default::default(),
-    };
-    let sheet = d.wb.active_sheet();
-    edit(s, |cx| {
-        cx.sheet_mut(sheet)?.shapes.push(shape);
-        Ok(json!({"shape": id}))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1807,5 +1473,186 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn manage_rules_lists_params_that_recreate_the_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rules = [
+            json!({"type": "cellIs", "operator": "between", "value": "1", "value2": "say \"hi\"", "fill": "#FFEB9C", "bold": true}),
+            json!({"type": "expression", "formula": "=MOD(ROW(),2)=0", "preset": "redBorder"}),
+            json!({"type": "aboveAverage", "below": true, "equal": true, "stdDev": 1}),
+            json!({"type": "colorScale", "colors": ["#F8696B", "#63BE7B"], "min": {"type": "num", "value": 5}}),
+            json!({"type": "dataBar", "showValue": false, "max": {"type": "formula", "value": "=$Z$1"}}),
+        ];
+        for r in &rules {
+            s.execute("home.conditionalFormat", json!({"range": "A1:A9", "rule": r})).unwrap();
+        }
+        let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"].as_array().cloned().unwrap();
+        let before: Vec<Json> = listed.iter().map(|r| r["rule"].clone()).collect();
+        // Each rule's params replace it with itself.
+        for (i, r) in listed.iter().enumerate() {
+            s.execute("home.manageRules", json!({"update": i, "rule": r["params"]})).unwrap();
+        }
+        let after = s.execute("home.manageRules", json!({})).unwrap();
+        let after: Vec<Json> = after["rules"].as_array().unwrap().iter().map(|r| r["rule"].clone()).collect();
+        assert_eq!(before, after);
+        assert_eq!(listed[0]["appliesTo"], "=$A$1:$A$9");
+        assert_eq!(listed[4]["params"]["value2"], "say \"hi\"");
+        assert_eq!(listed[4]["params"]["fill"], "#FFEB9C");
+    }
+
+    #[test]
+    fn listed_cell_values_read_back_as_the_same_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // Text that looks like a number or a formula, and a formula that starts and ends with a quote.
+        for value in [json!("\"5\""), json!("\"=x\""), json!("=\"a\"&A1&\"b\""), json!("plain text"), json!(7)] {
+            s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "cellIs", "operator": "equal", "value": value}})).unwrap();
+            let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+            s.execute("home.manageRules", json!({"update": 0, "rule": listed["params"]})).unwrap();
+            let again = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+            assert_eq!(again, listed["rule"], "{value}");
+        }
+        assert_eq!(s.execute("home.manageRules", json!({})).unwrap()["total"], 5);
+    }
+
+    #[test]
+    fn edit_and_restore_keep_format_details_the_plain_overrides_cant_show() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // A bottom-only medium border, a pattern fill and a double underline, as a file can hold.
+        let style = json!({
+            "borders": {"bottom": {"style": "Medium", "color": {"Rgb": 0x0000FF}}},
+            "fill": {"pattern": "Gray125", "fg": {"Rgb": 0xFF0000}, "bg": "Auto"},
+            "font": {"underline": "Double"},
+        });
+        s.execute("home.conditionalFormat", json!({"range": "A1:A9", "rule": {"type": "blanks", "style": style}})).unwrap();
+        let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+        let original = listed["rule"].clone();
+        // Edit Rule… with the format untouched.
+        s.execute("home.manageRules", json!({"update": 0, "rule": listed["params"]})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after, original);
+        // The same colours written another way (lower case) are no change either.
+        let mut lower = listed["params"].clone();
+        for k in ["fill", "fontColor", "border"] {
+            if let Some(c) = lower[k].as_str().map(str::to_ascii_lowercase) {
+                lower[k] = json!(c);
+            }
+        }
+        s.execute("home.manageRules", json!({"update": 0, "rule": lower})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after, original);
+        // Edit Rule… changing only bold keeps the rest.
+        let mut bold = listed["params"].clone();
+        bold["bold"] = json!(true);
+        s.execute("home.manageRules", json!({"update": 0, "rule": bold})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after["Blanks"]["style"]["font"]["bold"], true);
+        assert_eq!(after["Blanks"]["style"]["font"]["underline"], "Double");
+        assert_eq!(after["Blanks"]["style"]["fill"], original["Blanks"]["style"]["fill"]);
+        assert_eq!(after["Blanks"]["style"]["borders"], original["Blanks"]["style"]["borders"]);
+        // Cancel puts back the listed rule exactly.
+        let saved = json!([{"rule": original, "appliesTo": listed["appliesTo"], "stopIfTrue": false}]);
+        s.execute("home.manageRules", json!({"set": saved})).unwrap();
+        let back = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(back, original);
+        // A serialized rule whose formula doesn't parse is refused like a new one (#1999).
+        let bad_rule = json!({"Expression": {"formula": "A1>", "style": Style::default()}});
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": bad_rule, "appliesTo": "=$A$1"}]})).is_err());
+        let icons = json!({"type": "iconSet", "set": "3Arrows", "thresholds": [{"Formula": "=1+"}]});
+        assert!(s.execute("home.conditionalFormat", json!({"range": "B1:B3", "rule": icons})).is_err());
+        // A malformed serialized rule is refused, not read as a default rule.
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": {"Blanks": {}}, "appliesTo": "=$A$1"}]})).is_err());
+        // Icon thresholds: one per icon or one fewer, nothing else.
+        let three = |n: usize| json!({"type": "iconSet", "set": "3Arrows", "thresholds": vec![json!({"Percent": 50.0}); n]});
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(2)})).is_ok());
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(3)})).is_ok());
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(5)})).is_err());
+        // An entry with neither `rule` nor `params` is refused.
+        assert!(s.execute("home.manageRules", json!({"set": [{"appliesTo": "=$A$1"}]})).is_err());
+    }
+
+    #[test]
+    fn manage_rules_work_on_a_sheet_that_is_not_active() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        // The manager opened on Sheet1 with A1:A3 selected; Two is active now.
+        let rule = json!({"type": "blanks", "fill": "#FFC7CE"});
+        s.execute("home.conditionalFormat", json!({"sheet": 0, "range": "A1:A3", "rule": rule})).unwrap();
+        s.execute("home.conditionalFormat", json!({"sheet": 0, "range": "D1:D3", "rule": rule})).unwrap();
+        let listed = s.execute("home.manageRules", json!({"sheet": 0, "show": "selection", "selection": "A1:A3"})).unwrap();
+        let ranges: Vec<Json> = listed["rules"].as_array().unwrap().iter().map(|r| r["appliesTo"].clone()).collect();
+        assert_eq!(ranges, vec![json!("=$A$1:$A$3")]);
+        let two = s.execute("home.manageRules", json!({"sheet": 1})).unwrap();
+        assert_eq!(two["rules"].as_array().map(Vec::len), Some(0));
+        assert!(s.execute("home.manageRules", json!({"sheet": 0, "show": "selection", "selection": "nope"})).is_err());
+        // Applies to may name the rule's own sheet, never another one.
+        s.execute("home.manageRules", json!({"sheet": 0, "update": 0, "appliesTo": "=Sheet1!$A$1:$A$5"})).unwrap();
+        let first = s.execute("home.manageRules", json!({"sheet": 0})).unwrap();
+        assert_eq!(first["rules"][0]["appliesTo"], "=$A$1:$A$5");
+        assert!(s.execute("home.manageRules", json!({"sheet": 0, "update": 0, "appliesTo": "=Two!$B$2"})).is_err());
+    }
+
+    #[test]
+    fn malformed_overrides_and_thresholds_are_refused() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let add = |s: &mut Session, rule: Json| s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule}));
+        // A colour that doesn't parse, or a flag that isn't a boolean, is an error, not no change.
+        for (k, v) in [("fill", json!("#nothex")), ("fontColor", json!(12)), ("border", json!({"x": 1})), ("bold", json!("yes"))] {
+            let mut rule = json!({"type": "blanks"});
+            rule[k] = v;
+            assert!(add(&mut s, rule).is_err(), "{k}");
+        }
+        // Null still means no override.
+        assert!(add(&mut s, json!({"type": "blanks", "fill": null, "bold": null})).is_ok());
+        // A serialized icon set with the wrong threshold count is refused like params are.
+        let icons = json!({"IconSet": {"set": "3Arrows", "thresholds": vec![json!({"Percent": 10.0}); 5], "reverse": false, "show_value": true}});
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": icons, "appliesTo": "=$A$1"}]})).is_err());
+        // A threshold that parses to infinity reads as the default 0 and lists as a number.
+        add(&mut s, json!({"type": "dataBar", "min": {"type": "num", "value": "inf"}})).unwrap();
+        let listed = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(listed["rules"][0]["params"]["min"], json!({"type": "num", "value": 0.0}));
+    }
+
+    #[test]
+    fn manage_rules_edits_duplicates_and_filters() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rule = json!({"type": "blanks", "fontColor": "#FF0000"});
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": {"type": "errors"}, "stopIfTrue": true})).unwrap();
+        s.execute("home.manageRules", json!({"update": 1, "appliesTo": "=$A$1:$A$5,$E$1", "stopIfTrue": true})).unwrap();
+        s.execute("home.manageRules", json!({"duplicate": 0})).unwrap();
+        let all = s.execute("home.manageRules", json!({})).unwrap();
+        let all = all["rules"].as_array().unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0]["params"]["type"], "errors");
+        assert_eq!(all[0]["stopIfTrue"], true);
+        assert_eq!(all[1]["params"]["type"], "errors");
+        assert_eq!(all[2]["appliesTo"], "=$A$1:$A$5,$E$1");
+        assert_eq!(all[2]["params"]["fontColor"], "#FF0000");
+        // Plain overrides alone don't bring the default preset's fill.
+        assert_eq!(all[2]["params"]["fill"], "none");
+        s.execute("selection.set", json!({"range": "E1"})).unwrap();
+        let sel = s.execute("home.manageRules", json!({"show": "selection"})).unwrap();
+        let idx: Vec<u64> = sel["rules"].as_array().unwrap().iter().filter_map(|r| r["index"].as_u64()).collect();
+        assert_eq!(idx, vec![2]);
+        assert!(s.execute("home.manageRules", json!({"update": 0, "appliesTo": "=nope"})).is_err());
+        assert!(s.execute("home.manageRules", json!({"update": 9, "stopIfTrue": true})).is_ok());
+        // `set` puts back a listing taken earlier.
+        let saved: Vec<Json> =
+            all.iter().map(|r| json!({"params": r["params"], "appliesTo": r["appliesTo"], "stopIfTrue": r["stopIfTrue"]})).collect();
+        s.execute("home.manageRules", json!({"delete": 0})).unwrap();
+        s.execute("home.manageRules", json!({"set": saved})).unwrap();
+        let back = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(back["rules"].as_array().map(Vec::len), Some(3));
+        assert_eq!(back["rules"][0]["stopIfTrue"], true);
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": {"type": "blanks"}}]})).is_err());
     }
 }
