@@ -28,6 +28,8 @@ use print::print;
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
+/// Tallest the Open Recent submenu grows before it scrolls.
+const RECENT_MENU_H: f32 = 190.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
 
@@ -303,15 +305,19 @@ fn open_recent_menu(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
     if !(bs.recent_menu && any) {
         return;
     }
-    for path in app.ui.recent.iter().take(20).cloned().collect::<Vec<_>>() {
-        let (name, _) = split_path(&path);
-        let resp = nav_item(ui, Icon::Book, &name, false, text, sel).on_hover_text(&path);
-        if resp.clicked() {
-            app.open_path(&path);
-            if app.session.active().and_then(|d| d.path.as_deref()) == Some(path.as_str()) {
-                out.close = true;
+    let mut picked = None;
+    egui::ScrollArea::vertical().id_salt("backstage_recent_menu").max_height(RECENT_MENU_H).auto_shrink([false, true]).show(ui, |ui| {
+        for path in app.ui.recent.iter().take(20) {
+            let (name, _) = split_path(path);
+            if nav_item(ui, Icon::Book, &name, false, text, sel).on_hover_text(path).clicked() {
+                picked = Some(path.clone());
             }
         }
+    });
+    if let Some(path) = picked
+        && app.open_path(&path)
+    {
+        out.close = true;
     }
 }
 
@@ -450,11 +456,8 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
             p.text(pos2(rect.right() - modified_w, rect.center().y), Align2::LEFT_CENTER, words, theme::ui_font(12.0), color);
         }
         let resp = resp.on_hover_text(&path);
-        if resp.clicked() {
-            app.open_path(&path);
-            if app.session.active().and_then(|d| d.path.as_deref()) == Some(path.as_str()) {
-                out.close = true;
-            }
+        if resp.clicked() && app.open_path(&path) {
+            out.close = true;
         }
     }
 }
