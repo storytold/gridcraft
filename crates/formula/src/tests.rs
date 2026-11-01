@@ -558,3 +558,12 @@ fn reference_shapes_print_unchanged() -> Result<(), Box<dyn std::error::Error>> 
     }
     Ok(())
 }
+
+#[test]
+fn column_starting_with_at_round_trips() {
+    for name in ["@a", "a@b"] {
+        let s = StructRef { table: "T".into(), specifiers: vec![], col_start: Some(name.into()), col_end: None };
+        let text = format!("={}", printer::struct_ref(&s));
+        assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
+    }
+}
