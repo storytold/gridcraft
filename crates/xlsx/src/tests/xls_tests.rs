@@ -569,12 +569,14 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
 
 #[test]
 fn formulas_calling_a_vba_function_keep_their_saved_results() {
-    // Lbl "DIAGONALWERT" is a VBA function (fFunc | fProc, no formula); "Doubled" =
+    // Lbl "DIAGONALWERT" is a VBA function (fOB | fProc, no formula); "Doubled" =
     // DIAGONALWERT(Sheet1!$A$1)*2 calls it. Cells call it as PtgName + PtgFuncVar 255 (#2139).
+    // "XLMFUNC" is an Excel 4.0 (XLM) macro function (fFunc | fProc), called the same way.
     let lbl = |flags: u16, name: &str, rgce: &[u8]| {
         rec(0x0018, &cat(&[&u16s(&[flags]), &[0, name.len() as u8], &u16s(&[rgce.len() as u16, 0, 0]), &[0; 4], &[0], name.as_bytes(), rgce]))
     };
-    let udf = |arg: &[u8]| cat(&[&[0x23], &1u32.to_le_bytes(), arg, &[0x42, 2], &0x00FFu16.to_le_bytes()]);
+    let call = |name: u32, arg: &[u8]| cat(&[&[0x23], &name.to_le_bytes(), arg, &[0x42, 2], &0x00FFu16.to_le_bytes()]);
+    let udf = |arg: &[u8]| call(1, arg);
     let a1_3d = cat(&[&[0x3A], &0u16.to_le_bytes(), &u16s(&[0, 0])]);
     let doubled = cat(&[&udf(&a1_3d), &ptg_int(2), &[0x05]]);
     let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"]));
@@ -584,8 +586,9 @@ fn formulas_calling_a_vba_function_keep_their_saved_results() {
             &boundsheet(pos),
             &rec(0x01AE, &u16s(&[1, 0x0401])),
             &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
-            &lbl(0x000A, "DIAGONALWERT", &[]),
+            &lbl(0x000C, "DIAGONALWERT", &[]),
             &lbl(0, "Doubled", &doubled),
+            &lbl(0x000A, "XLMFUNC", &[]),
             &eof(),
         ])
     };
@@ -602,12 +605,14 @@ fn formulas_calling_a_vba_function_keep_their_saved_results() {
         &formula(2, 1, num(2.0), &sum),
         &formula(3, 1, num(20.0), &b1_x10),
         &formula(4, 1, num(4.0), &[0x43, 2, 0, 0, 0]),
+        // B6 = XLMFUNC(A1) saved as 5.
+        &formula(5, 1, num(5.0), &call(3, &ptg_ref(0, 0))),
         &eof(),
     ]);
     let pos = globals(0).len() as u32;
     let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(pos), &sheet]))).unwrap();
     assert!(wb.names.is_empty(), "{:?}", wb.names);
-    for (a1, saved) in [("B1", Value::Number(2.0)), ("B2", Value::from("eins")), ("B5", Value::Number(4.0))] {
+    for (a1, saved) in [("B1", Value::Number(2.0)), ("B2", Value::from("eins")), ("B5", Value::Number(4.0)), ("B6", Value::Number(5.0))] {
         assert_eq!(ftext(&wb, a1), None, "{a1}");
         assert_eq!(v(&wb, 0, a1), saved, "{a1}");
     }
