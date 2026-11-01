@@ -44,7 +44,7 @@ pub fn parse_input_with_order(s: &str, sys: DateSystem, order: DateOrder) -> Par
     // Day-first fallback is a convenience for typed cell entry, not arithmetic coercion.
     if order == DateOrder::Mdy
         && let Some((n, f)) = parse_numeric(t, sys, DateOrder::Dmy)
-        && f.is_some_and(|f| matches!(f, "dd/mm/yyyy" | "dd-mm-yyyy" | "dd.mm.yyyy"))
+        && f.is_some_and(|f| matches!(f, "dd/mm/yyyy" | "dd-mm-yyyy" | "dd.mm.yyyy" | "dd/mm/yyyy h:mm" | "dd-mm-yyyy h:mm" | "dd.mm.yyyy h:mm"))
     {
         return Parsed { value: Value::number(n), format: f };
     }
@@ -424,6 +424,15 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
         {
             return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
         }
+        if order == DateOrder::Ymd
+            && a.len() <= 2
+            && let (Some(y), Some(m), Some(d)) = (num(a), num(b), num(c))
+        {
+            let y = expand_year(a, y);
+            if (1..=12).contains(&m) && (1..=31).contains(&d) {
+                return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
+            }
+        }
         // 4-Mar-2026
         if let (Some(d), Some(m), Some(y)) = (num(a), month_from_name(b), num(c)) {
             let y = expand_year(c, y);
@@ -444,6 +453,10 @@ fn parse_date(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, &'stat
                     _ => "dd/mm/yyyy",
                 };
                 return valid_ymd(sys, y, y_val, x).map(|serial| (serial, fmt));
+            }
+            if order == DateOrder::Ymd {
+                let year = if a.len() <= 2 { expand_year(a, x) } else { x };
+                return valid_ymd(sys, year, y_val, y).map(|serial| (serial, "yyyy-mm-dd"));
             }
             let has_dot = t.contains('.');
             let has_dash = t.contains('-');
@@ -590,8 +603,7 @@ fn parse_datetime(t: &str, sys: DateSystem, order: DateOrder) -> Option<(f64, Op
             continue;
         }
         let parsed_date = t.get(..i).and_then(|a| parse_date(a, sys, order));
-        let parsed_dmy_date = if order == DateOrder::Mdy { t.get(..i).and_then(|a| parse_date(a, sys, DateOrder::Dmy)) } else { None };
-        if let (Some((d, date_fmt)), Some((tf, _, _))) = (parsed_date.or(parsed_dmy_date), parse_time(b)) {
+        if let (Some((d, date_fmt)), Some((tf, _, _))) = (parsed_date, parse_time(b)) {
             let fmt = match date_fmt {
                 "dd/mm/yyyy" => "dd/mm/yyyy h:mm",
                 "dd-mm-yyyy" => "dd-mm-yyyy h:mm",
@@ -875,10 +887,15 @@ mod tests {
         assert_eq!(p_mdy_25.format, Some("dd/mm/yyyy"));
         assert_eq!(parse_number_text_in("25/09/2026", DateSystem::D1900), None);
         assert_eq!(parse_number_text_in("05/04/2026", DateSystem::D1900), Some(46146.0));
+        assert_eq!(parse_number_text_in("25/09/2026 18:30", DateSystem::D1900), None);
 
         let dmy_datetime = parse_input_with_order("25.09.2026 18:30", DateSystem::D1900, DateOrder::Mdy);
         assert_eq!(dmy_datetime.value, Value::Number(46290.0 + 18.5 / 24.0));
         assert_eq!(dmy_datetime.format, Some("dd.mm.yyyy h:mm"));
+
+        let ymd = parse_input_with_order("26/04/05", DateSystem::D1900, DateOrder::Ymd);
+        assert_eq!(ymd.value, Value::Number(46117.0));
+        assert_eq!(ymd.format, Some("yyyy-mm-dd"));
 
         // Dashed and dotted forms
         assert_eq!(parse_input_with_order("25-09-2026", DateSystem::D1900, DateOrder::Dmy).value, Value::Number(46290.0));
