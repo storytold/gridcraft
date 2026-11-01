@@ -58,45 +58,72 @@ fn caret_contrasts_with_the_cell_fill() {
     assert_eq!(caret(None, false), Color32::BLACK, "no fill, light theme");
 }
 
-/// The colours of the text the in-cell editor paints while editing A1 (white text on a black
-/// fill when `styled`).
-fn editor_text_colors(styled: bool) -> Vec<Color32> {
+/// What the in-cell editor paints while editing A1 with `text`, after `setup`: the colours of
+/// its text, and whether a backdrop of `fill` was painted.
+fn editor_paint(setup: &dyn Fn(&mut SheetApp), text: &str, fill: Color32) -> (Vec<Color32>, bool) {
     let ctx = Context::default();
     theme::apply(&ctx, false);
     let mut session = Session::new();
     session.new_workbook();
     let mut app = crate::common::app(session);
-    if styled {
-        app.run("home.fillColor", json!({"range": "A1", "color": "#000000"})).unwrap();
-        app.run("home.fontColor", json!({"range": "A1", "color": "#FFFFFF"})).unwrap();
-    }
+    setup(&mut app);
     for _ in 0..4 {
         frame(&ctx, &mut app);
     }
-    app.begin_edit(Some("typed".into()), false);
+    app.begin_edit(Some(text.into()), false);
     for _ in 0..4 {
         frame(&ctx, &mut app);
     }
     let output = frame(&ctx, &mut app);
     // The formula bar shows the same text above the grid; the in-cell editor's is the lowest.
-    output
+    let Some((at, shown)) = output
         .shapes
         .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Text(t) if t.galley.text() == "typed" => Some(t),
+        .enumerate()
+        .filter_map(|(i, s)| match &s.shape {
+            Shape::Text(t) if t.galley.text() == text => Some((i, t)),
             _ => None,
         })
-        .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
-        .map(|t| t.galley.job.sections.iter().map(|s| s.format.color).collect())
-        .unwrap_or_default()
+        .max_by(|a, b| a.1.pos.y.total_cmp(&b.1.pos.y))
+    else {
+        return (Vec::new(), false);
+    };
+    let colors = shown.galley.job.sections.iter().map(|s| s.format.color).collect();
+    // The editor's backdrop is the last filled rectangle painted before its text (the grid's own
+    // cell, painted earlier, would match whatever the editor did).
+    let backdrop = output.shapes.get(..at).unwrap_or_default().iter().rev().find_map(|s| match &s.shape {
+        Shape::Rect(r) if r.fill != Color32::TRANSPARENT && r.rect.width() > 20.0 => Some(r.fill),
+        _ => None,
+    });
+    (colors, backdrop == Some(fill))
+}
+
+fn white_on_black(app: &mut SheetApp) {
+    app.run("home.fillColor", json!({"range": "A1", "color": "#000000"})).unwrap();
+    app.run("home.fontColor", json!({"range": "A1", "color": "#FFFFFF"})).unwrap();
 }
 
 #[test]
 fn typed_text_takes_the_cell_font_colour_before_it_is_entered() {
     // #3011: white text on a black fill was drawn black (invisible) until Enter.
-    let styled = editor_text_colors(true);
-    assert!(!styled.is_empty(), "the editor painted its text");
-    assert!(styled.iter().all(|&c| c == Color32::WHITE), "the cell's white font colour: {styled:?}");
-    let plain = editor_text_colors(false);
+    let (styled, _) = editor_paint(&white_on_black, "typed", Color32::BLACK);
+    assert!(!styled.is_empty() && styled.iter().all(|&c| c == Color32::WHITE), "the cell's white font colour: {styled:?}");
+    let (plain, _) = editor_paint(&|_| {}, "typed", Color32::WHITE);
     assert!(!plain.is_empty() && plain.iter().all(|&c| c == Color32::BLACK), "automatic stays black: {plain:?}");
+    // Text that reads like a reference is not a formula: no reference colour.
+    let (reference, _) = editor_paint(&white_on_black, "A1", Color32::BLACK);
+    assert!(!reference.is_empty() && reference.iter().all(|&c| c == Color32::WHITE), "plain `A1` keeps the font colour: {reference:?}");
+}
+
+#[test]
+fn the_editor_backdrop_is_the_fill_the_cell_shows() {
+    // A conditional format's fill, as the grid paints it, so white text stays readable.
+    let cf_fill = |app: &mut SheetApp| {
+        app.run("home.fontColor", json!({"range": "A1", "color": "#FFFFFF"})).unwrap();
+        let rule = json!({"type": "expression", "formula": "=TRUE", "style": {"fill": "#000000"}});
+        app.run("home.conditionalFormat", json!({"range": "A1", "rule": rule})).unwrap();
+    };
+    let (colors, backdrop) = editor_paint(&cf_fill, "typed", Color32::BLACK);
+    assert!(backdrop, "the editor paints the conditional fill behind the text");
+    assert!(!colors.is_empty() && colors.iter().all(|&c| c == Color32::WHITE), "{colors:?}");
 }
