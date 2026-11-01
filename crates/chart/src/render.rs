@@ -1,11 +1,12 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
+use std::borrow::Cow;
 use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
-use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
+use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, points_per_series, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
@@ -43,6 +44,8 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Columns and bars narrower than this (in pixels) are merged per pixel column into one rectangle.
+const MIN_BAR_PX: f32 = 0.25;
 
 struct Ctx<'a> {
     out: Vec<Prim>,
@@ -95,7 +98,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
 
-fn sanitize(d: &ChartData) -> ChartData {
+pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
@@ -120,12 +123,60 @@ fn sanitize(d: &ChartData) -> ChartData {
     }
 }
 
+/// Whether `v` survives `sanitize_vals` unchanged.
+fn is_clean(v: &Option<f64>) -> bool {
+    v.is_none_or(|n| n.is_finite() && clean(n) == n)
+}
+
+/// Whether [`sanitize`] and [`apply_budget`] would change `d`.
+fn needs_sanitizing(d: &ChartData) -> bool {
+    let cap = points_per_series(d.series.len());
+    let long = |n: usize| n > cap;
+    let mut trendlines = 0usize;
+    d.palette.len() > MAX_POINTS
+        || long(d.categories.len())
+        || d.series.len() > MAX_SERIES
+        || d.series.iter().any(|s| {
+            trendlines += s.trendlines.len();
+            long(s.values.len())
+                || !s.values.iter().all(is_clean)
+                || s.x.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.sizes.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.trendlines.len() > MAX_TRENDLINES
+        })
+        || trendlines > MAX_TRENDLINES
+}
+
+/// Enforces the chart's budget of points (`MAX_TOTAL_POINTS` = series x points: every series and
+/// the category list keep their first `MAX_TOTAL_POINTS / series` points) and of trendlines
+/// (`MAX_TRENDLINES` per chart, in series order).
+fn apply_budget(mut d: ChartData) -> ChartData {
+    let cap = points_per_series(d.series.len());
+    d.categories.truncate(cap);
+    let mut trendlines = MAX_TRENDLINES;
+    for s in &mut d.series {
+        s.values.truncate(cap);
+        for v in [&mut s.x, &mut s.sizes].into_iter().flatten() {
+            v.truncate(cap);
+        }
+        s.trendlines.truncate(trendlines);
+        trendlines = trendlines.saturating_sub(s.trendlines.len());
+    }
+    d
+}
+
+/// The data `render` draws: `d` itself when it is already clean and within budget (the usual
+/// case: no copy), else a cleaned, truncated copy.
+pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
+    if needs_sanitizing(d) { Cow::Owned(apply_budget(sanitize(d))) } else { Cow::Borrowed(d) }
+}
+
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
-    let data = sanitize(data);
+    let data = sanitized(data);
     let mut ctx = Ctx { out: Vec::new(), m };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);

@@ -3,8 +3,8 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, fixed_scale, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
+    SeriesData, TEXT, VAlign, WHITE, clean, fixed_scale, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -49,6 +49,106 @@ fn is_col(f: Fam) -> bool {
 
 fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack)
+}
+
+/// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
+/// bars' start positions) and along the value axis (`lo..hi`).
+struct BarRun {
+    bucket: f32,
+    a0: f32,
+    a1: f32,
+    lo: f32,
+    hi: f32,
+    /// More than one bar was merged.
+    merged: bool,
+}
+
+impl BarRun {
+    fn new(pos: f32, lo: f32, hi: f32) -> Self {
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi, merged: false }
+    }
+    fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.merged = true;
+        self.a0 = self.a0.min(pos);
+        self.a1 = self.a1.max(pos);
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+    /// `band` is the part of the pixel column reserved for this series (`start`, `len`): in a
+    /// clustered chart a merged run stays inside it, so the other series keep a visible strip.
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba, band: Option<(f32, f32)>) {
+        let (a0, along) = match band {
+            Some((start, len)) if self.merged => (self.bucket + start, len),
+            _ => (self.a0, self.a1 - self.a0 + bw),
+        };
+        if horizontal {
+            ctx.rect(self.lo, a0, self.hi - self.lo, along, color, None);
+        } else {
+            ctx.rect(a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
+/// Whether bars of width `bw` are merged per pixel column (never when they carry data labels).
+fn merge_hairlines(bw: f32, labels_on: bool) -> bool {
+    bw < MIN_BAR_PX && !labels_on
+}
+
+/// Draws the bars of one series: a rectangle each, or, for hairline bars, one merged [`BarRun`]
+/// per pixel column.
+struct BarSink {
+    run: Option<BarRun>,
+    bw: f32,
+    horizontal: bool,
+    color: Rgba,
+    nslots: f32,
+    k: f32,
+}
+
+impl BarSink {
+    fn new(bw: f32, horizontal: bool, color: Rgba, nslots: f32, k: f32) -> Self {
+        BarSink { run: None, bw, horizontal, color, nslots, k }
+    }
+    /// Start of this series' slot along the category axis, for the category centered at `c`.
+    fn pos(&self, c: f32) -> f32 {
+        if self.horizontal { c + self.nslots * self.bw / 2.0 - (self.k + 1.0) * self.bw } else { c - self.nslots * self.bw / 2.0 + self.k * self.bw }
+    }
+    /// This series' strip of a pixel column (offset, length) when the columns hold several
+    /// clustered series, in the direction the slots run.
+    fn band(&self) -> Option<(f32, f32)> {
+        (self.nslots > 1.0).then(|| {
+            let idx = if self.horizontal { self.nslots - 1.0 - self.k } else { self.k };
+            (idx / self.nslots, 1.0 / self.nslots)
+        })
+    }
+    /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when
+    /// `merge` is set, adds it to the current run.
+    fn bar(&mut self, ctx: &mut Ctx, merge: bool, c: f32, lo: f32, len: f32) {
+        let pos = self.pos(c);
+        let band = self.band();
+        if !merge {
+            if self.horizontal {
+                ctx.rect(lo, pos, len, self.bw, self.color, None);
+            } else {
+                ctx.rect(pos, lo, self.bw, len, self.color, None);
+            }
+            return;
+        }
+        match &mut self.run {
+            Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
+            run => {
+                if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                    m.draw(ctx, self.bw, self.horizontal, self.color, band);
+                }
+            }
+        }
+    }
+    fn finish(self, ctx: &mut Ctx) {
+        let band = self.band();
+        if let Some(m) = self.run {
+            m.draw(ctx, self.bw, self.horizontal, self.color, band);
+        }
+    }
 }
 
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
@@ -276,19 +376,16 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    // Hairline bars are merged per pixel column (their envelope is what shows).
+                    let cull = merge_hairlines(bw, labels_on);
+                    let mut sink = BarSink::new(bw, horizontal, s.color, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
-                        if horizontal {
-                            let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
-                        } else {
-                            let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
-                        }
+                        sink.bar(ctx, cull, c, lo, len);
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;
@@ -314,6 +411,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             }
                         }
                     }
+                    sink.finish(ctx);
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
