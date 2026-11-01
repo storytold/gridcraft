@@ -231,8 +231,17 @@ fn fill_preview_follows_direction_format_and_copy_modifier() {
         ("B1:B3", json!([[1], [2], [3]]), "B3", "B5", "2", true, false),
         ("B1", json!([[5]]), "B1", "B4", "8", true, false),
         ("B1", json!([["1/31/2026"]]), "B1", "B4", "2/3/2026", false, false),
+        ("B4", json!([["1/31/2026"]]), "B4", "B1", "1/28/2026", false, false),
+        ("B2", json!([["1/31/2026"]]), "B2", "E2", "2/3/2026", false, false),
+        ("E2", json!([["1/31/2026"]]), "E2", "B2", "1/28/2026", false, false),
         ("B1", json!([["Item 007"]]), "B1", "B4", "Item 010", false, false),
+        ("B4", json!([["Item 007"]]), "B4", "B1", "Item 004", false, false),
+        ("B2", json!([["Item 007"]]), "B2", "E2", "Item 010", false, false),
+        ("E2", json!([["Item 007"]]), "E2", "B2", "Item 004", false, false),
         ("B1", json!([["=A1+1"]]), "B1", "B4", "=A4+1", false, false),
+        ("B4", json!([["=A4+1"]]), "B4", "B1", "=A1+1", false, false),
+        ("B2", json!([["=A2+1"]]), "B2", "E2", "=D2+1", false, false),
+        ("E2", json!([["=D2+1"]]), "E2", "B2", "=A2+1", false, false),
         ("B1:B3", json!([[1], [2], [3]]), "B3", "B6", "6", false, true),
     ] {
         let mut h = harness(|s| {

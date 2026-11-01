@@ -18,11 +18,20 @@ fn preview_matches_committed_fill_in_both_directions_and_modes() {
         (serde_json::json!([[5]]), "B1", "B1:B4", "B4", "series", "5"),
         (serde_json::json!([[5]]), "B1", "B1:B4", "B4", "alternate", "8"),
         (serde_json::json!([["Item 007"]]), "B1", "B1:B4", "B4", "series", "Item 010"),
+        (serde_json::json!([["Item 007"]]), "B4", "B1:B4", "B1", "series", "Item 004"),
+        (serde_json::json!([["Item 007"]]), "B2", "B2:E2", "E2", "series", "Item 010"),
+        (serde_json::json!([["Item 007"]]), "E2", "B2:E2", "B2", "series", "Item 004"),
         (serde_json::json!([["Monday"]]), "B1", "B1:B4", "B4", "series", "Thursday"),
         (serde_json::json!([["Product 1"], ["On backorder"]]), "B1:B2", "B1:B5", "B5", "series", "Product 3"),
         (serde_json::json!([["1/31/2026"]]), "B1", "B1:B4", "B4", "series", "2/3/2026"),
+        (serde_json::json!([["1/31/2026"]]), "B4", "B1:B4", "B1", "series", "1/28/2026"),
+        (serde_json::json!([["1/31/2026"]]), "B2", "B2:E2", "E2", "series", "2/3/2026"),
+        (serde_json::json!([["1/31/2026"]]), "E2", "B2:E2", "B2", "series", "1/28/2026"),
         (serde_json::json!([["1/31/2026"], ["3/31/2026"]]), "B1:B2", "B1:B4", "B4", "series", "7/31/2026"),
         (serde_json::json!([["=A1+$A$1"]]), "B1", "B1:B4", "B4", "series", "=A4+$A$1"),
+        (serde_json::json!([["=A4+$A$1"]]), "B4", "B1:B4", "B1", "series", "=A1+$A$1"),
+        (serde_json::json!([["=A2+$A$1"]]), "B2", "B2:E2", "E2", "series", "=D2+$A$1"),
+        (serde_json::json!([["=D2+$A$1"]]), "E2", "B2:E2", "B2", "series", "=A2+$A$1"),
     ] {
         let mut s = Session::new();
         s.new_workbook();
