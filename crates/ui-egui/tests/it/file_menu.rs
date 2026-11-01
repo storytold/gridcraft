@@ -715,3 +715,18 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+#[test]
+fn open_recent_under_open_lists_recent_workbooks_newest_first() {
+    let mut h = crate::support::blank_harness(3);
+    h.get_by_label("File").click();
+    h.run_steps(3);
+    // Nothing recent yet: the entry is there but disabled.
+    assert!(h.get_by_label("Open Recent").accesskit_node().is_disabled());
+    h.state_mut().ui.recent = vec!["/tmp/a/budget.xlsx".into(), "/tmp/b/sales.xlsx".into()];
+    h.run_steps(2);
+    h.get_by_label("Open Recent").click();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("budget.xlsx").count(), 2);
+    assert_eq!(h.query_all_by_label("sales.xlsx").count(), 2);
+}
