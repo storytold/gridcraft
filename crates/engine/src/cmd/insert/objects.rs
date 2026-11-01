@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, CellPicture, CellRef, Color, EngineError, Image, Json, PROTECTED, Result, Session, Shape, ShapeKind, Sparkline, SparklineKind,
+    anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, locked_cell_error, ok, str_param, u32_param,
+};
 
 pub(super) fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
     let src = str_param(p, "range").ok_or_else(|| bad("insert.sparkline", "missing `range`"))?.to_string();

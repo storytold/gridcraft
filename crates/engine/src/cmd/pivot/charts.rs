@@ -1,5 +1,8 @@
 use super::create::{insert_pivot, source_param};
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, PivotDateGroup, Result, Session, Workbook, anchor_mode_param, bad, cell_param,
+    edit, f64_param, find_pivot, json, other, pv, str_param,
+};
 
 // ---------------------------------------------------------------- PivotChart
 

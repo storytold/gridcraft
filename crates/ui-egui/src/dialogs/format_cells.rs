@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Dialog, SheetApp, json, theme};
 
 /// Draws the six-tab Format Cells editor (number, alignment, font, border, fill, protection); the Number tab shows a sample preview, and the style draft updates.
 pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
