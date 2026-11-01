@@ -475,3 +475,116 @@ fn every_kind_and_action_survives_xlsx() {
     s.execute("cell.set", json!({"cell": "B1", "input": "120"})).unwrap();
     assert_eq!(s.execute("control.list", json!({})).unwrap()[0]["value"], json!(120));
 }
+
+/// A button's command goes through the macro policy when it is assigned and again when it is
+/// pressed, so a file whose hidden name carries a denied command (written by another application,
+/// or edited by hand) can't use a button as a way around the policy.
+#[test]
+fn a_denied_command_is_refused_when_assigned_and_when_a_file_brings_it_in() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-control-deny-{}", std::process::id()));
+    let leak = dir.join("leak.xlsx").to_string_lossy().to_string();
+    let denied = [
+        ("file.saveAs", json!({"path": leak})),
+        ("file.save", json!({})),
+        ("file.open", json!({"path": leak})),
+        ("app.commands", json!({})),
+        ("macro.run", json!({"name": "Mark"})),
+        ("automate.runScript", json!({"name": "Leak", "trusted": true})),
+        ("control.press", json!({"id": 1})),
+    ];
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "m"}}]})).unwrap();
+    // Neither Insert › Button nor Assign Action takes one.
+    let b = id(&s.execute("insert.button", json!({"at": "B2", "text": "Run"})).unwrap());
+    for (cmd, params) in &denied {
+        let want = format!("can't run {cmd}");
+        assert!(err(s.execute("insert.button", json!({"at": "B9", "command": cmd, "params": params}))).contains(&want), "{cmd}");
+        assert!(err(s.execute("control.assign", json!({"id": b, "command": cmd, "params": params}))).contains(&want), "{cmd}");
+        assert_eq!(control(&s, b).action, None, "{cmd}");
+    }
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().controls.len(), 1, "no button was placed");
+    // A file can still carry them: one button per command, given its action as a file would.
+    for i in 1..denied.len() {
+        s.execute("insert.button", json!({"at": format!("B{}", 2 + 3 * i), "text": format!("Run {i}")})).unwrap();
+    }
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for (c, (cmd, params)) in sh.controls.iter_mut().zip(&denied) {
+        c.action = Some(ControlAction::Command { id: (*cmd).to_string(), params: params.clone() });
+    }
+    reopen(&mut s);
+    assert_eq!(s.doc().unwrap().trust, Trust::FromFile);
+    let list = s.execute("control.list", json!({})).unwrap();
+    for (i, (cmd, params)) in denied.iter().enumerate() {
+        // The action came back through the hidden name, so the check at press time is what holds.
+        assert_eq!(list[i]["action"], json!({"type": "command", "id": cmd, "params": params}), "{cmd}");
+        let pressed = list[i]["id"].as_u64().unwrap();
+        let before = undo_len(&s);
+        assert!(err(s.execute("control.press", json!({"id": pressed, "approve": true}))).contains(&format!("can't run {cmd}")), "{cmd}");
+        assert_eq!(undo_len(&s), before, "{cmd}: nothing ran");
+    }
+    assert!(!std::path::Path::new(&leak).exists());
+    assert_eq!(v(&s, "A1"), Value::Empty, "the macro never ran");
+}
+
+/// Using a slider or spin button writes its linked cell through `cell.set`, so the cell's
+/// protection governs it: a locked cell on a protected sheet refuses the change, and the control
+/// keeps its value (the control's change and the cell write are one group, rolled back together).
+/// A control's own Locked flag keeps it from being moved or edited, not from being used, as in
+/// Excel, so an unlocked linked cell takes the value on a protected sheet.
+#[test]
+fn a_locked_linked_cell_on_a_protected_sheet_refuses_the_change_and_the_control_keeps_its_value() {
+    let mut s = s();
+    let c = id(&s.execute("insert.slider", json!({"at": "D2", "link": "B1", "value": 40})).unwrap());
+    s.execute("control.format", json!({"id": c, "locked": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = undo_len(&s);
+    assert!(err(s.execute("control.setValue", json!({"id": c, "value": 60}))).contains("protected"));
+    assert_eq!((control(&s, c).value, v(&s, "B1")), (40, Value::Number(40.0)), "nothing is half-applied");
+    assert_eq!(undo_len(&s), before, "no undo step is left behind");
+    // Format Control: a new maximum that would pull the value into the cell is refused whole.
+    assert!(err(s.execute("control.format", json!({"id": c, "max": 30}))).contains("protected"));
+    assert_eq!((control(&s, c).max, control(&s, c).value), (100, 40));
+    // Inserting a control with a value for a locked cell is refused and leaves no control behind.
+    assert!(err(s.execute("insert.spinButton", json!({"at": "D8", "link": "B2", "value": 5}))).contains("protected"));
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().controls.len(), 1);
+    // The value the cell already holds writes nothing, so nothing is refused.
+    s.execute("control.setValue", json!({"id": c, "value": 40})).unwrap();
+    assert_eq!(undo_len(&s), before);
+    // An unlocked linked cell takes the value on the protected sheet.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("home.lockCell", json!({"range": "B1", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("control.setValue", json!({"id": c, "value": 60})).unwrap();
+    assert_eq!((control(&s, c).value, v(&s, "B1")), (60, Value::Number(60.0)));
+}
+
+/// A link to a cell on another sheet obeys that sheet's protection, not the control's sheet's.
+#[test]
+fn a_link_to_another_sheet_obeys_that_sheets_protection() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let c = id(&s.execute("insert.slider", json!({"at": "D2", "link": "Data!B1", "value": 10})).unwrap());
+    assert_eq!(control(&s, c).link.as_deref(), Some("Data!$B$1"));
+    let data = |s: &Session| {
+        let wb = &s.doc().unwrap().wb;
+        wb.sheet(wb.sheet_index("Data").unwrap()).unwrap().value(gridcraft_core::CellRef::new(0, 1))
+    };
+    assert_eq!(data(&s), Value::Number(10.0));
+    s.execute("review.protectSheet", json!({"sheet": "Data"})).unwrap();
+    let before = undo_len(&s);
+    assert!(err(s.execute("control.setValue", json!({"id": c, "value": 20}))).contains("protected"));
+    assert_eq!((control(&s, c).value, data(&s)), (10, Value::Number(10.0)));
+    assert_eq!(undo_len(&s), before);
+    assert!(err(s.execute("insert.spinButton", json!({"at": "D8", "link": "Data!B2", "value": 5}))).contains("protected"));
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().controls.len(), 1);
+    // Protecting the control's own sheet instead leaves the write to the other sheet alone.
+    s.execute("review.unprotectSheet", json!({"sheet": "Data"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("control.setValue", json!({"id": c, "value": 20})).unwrap();
+    assert_eq!((control(&s, c).value, data(&s)), (20, Value::Number(20.0)));
+    // A link to a sheet the workbook doesn't have is refused with a clear message.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert!(err(s.execute("control.format", json!({"id": c, "link": "Nowhere!B1"}))).contains("isn't a cell of this workbook"));
+    assert_eq!(control(&s, c).link.as_deref(), Some("Data!$B$1"));
+}
