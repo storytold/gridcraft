@@ -40,7 +40,11 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
 /// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
     for dv in validations.iter_mut() {
+        // Many sparse cuts: only rebuild the ranges for a cut that touches one.
         for cut in cuts {
+            if !dv.ranges.iter().any(|r| r.intersection(cut).is_some()) {
+                continue;
+            }
             dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
         }
     }
