@@ -27,6 +27,8 @@ pub struct OpenWindow {
     /// Its workbook's `DocState::uid`.
     pub doc: u64,
     pub title: String,
+    /// The workbook's file, when it has been saved.
+    pub path: Option<String>,
     pub dirty: bool,
     pub active: bool,
 }

@@ -70,7 +70,7 @@ impl SheetApp {
             .filter_map(|w| {
                 let d = self.session.documents().iter().find(|d| d.uid == w.doc_uid)?;
                 let title = self.session.window_title(w.id)?;
-                Some(OpenWindow { window: w.id, doc: d.uid, title, dirty: d.is_dirty(), active: active == Some(w.id) })
+                Some(OpenWindow { window: w.id, doc: d.uid, title, path: d.path.clone(), dirty: d.is_dirty(), active: active == Some(w.id) })
             })
             .collect()
     }

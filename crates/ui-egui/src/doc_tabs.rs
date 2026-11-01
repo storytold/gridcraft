@@ -35,6 +35,8 @@ pub enum TabAction {
     Detach(u64),
     /// The tab was dropped outside its window's strip: the shell decides which window takes it.
     DropOutside(u64),
+    /// Open a new workbook in this window.
+    New,
     /// Keep the tab first in the strip.
     Pin(u64),
     /// Move the tab to the start or the end of the strip.
@@ -54,6 +56,12 @@ pub struct Labels {
     pub others: String,
     pub right: String,
     pub all: String,
+    /// Tooltip of the `+` button.
+    pub new_tab: String,
+    /// The hover card's line for a workbook that has no file yet.
+    pub unsaved: String,
+    /// The hover card's line for a workbook with unsaved changes.
+    pub edited: String,
 }
 
 /// One frame of the strip: what to draw, and what the user did with it.
@@ -142,10 +150,45 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
                 let resp = ui
                     .add(Button::new(RichText::new(text).size(12.5).color(color)).frame(false).min_size(vec2(0.0, 24.0)))
                     .interact(egui::Sense::click_and_drag());
+                // Hover card: the workbook's file and where it lives, as WPS shows it.
+                let card = |ui: &mut egui::Ui| {
+                    ui.label(RichText::new(tab.label()).strong());
+                    match &tab.path {
+                        Some(path) => {
+                            ui.label(RichText::new(path.replace('\\', " › ").replace('/', " › ")).size(11.5).color(t.text_dim));
+                        }
+                        None => {
+                            ui.label(RichText::new(&labels.unsaved).size(11.5).color(t.text_dim));
+                        }
+                    }
+                    if tab.dirty {
+                        ui.label(RichText::new(&labels.edited).size(11.5).color(t.text_dim));
+                    }
+                };
+                let resp = resp.on_hover_ui(card);
                 rects.push((tab.window, resp.rect));
                 if resp.dragged() {
                     // Highlight the tab being dragged.
                     ui.painter().rect_stroke(resp.rect, 2.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                }
+                if resp.is_pointer_button_down_on() && !resp.dragged() {
+                    // Pressed but not yet dragging: show it as picked.
+                    ui.painter().rect_filled(resp.rect, 3.0, t.accent.gamma_multiply(0.14));
+                }
+                if resp.dragged()
+                    && let Some(p) = ui.ctx().pointer_latest_pos()
+                {
+                    // The tab being dragged, drawn at the cursor above every panel (WPS shows the
+                    // title held under the pointer).
+                    let painter = ui
+                        .ctx()
+                        .layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.make_persistent_id(("doc_tab_ghost", tab.window))));
+                    let galley = painter.layout_no_wrap(tab.label(), egui::FontId::proportional(12.5), t.text);
+                    let rect = egui::Rect::from_min_size(p + vec2(14.0, 10.0), galley.size() + vec2(18.0, 9.0));
+                    painter.rect_filled(rect, 4.0, t.window);
+                    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                    painter.galley(rect.min + vec2(9.0, 4.5), galley, t.text);
+                    ui.ctx().request_repaint();
                 }
                 if resp.drag_stopped() {
                     stopped = Some(tab.window);
@@ -219,6 +262,12 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
                     action = Some(TabAction::Close(tab.window));
                 }
                 ui.add_space(TAB_PAD);
+            }
+            // New spreadsheet, the `+` WPS puts after the last tab.
+            ui.add_space(6.0);
+            let plus = ui.add(Button::new(RichText::new("+").size(15.0).color(t.text_dim)).frame(false).min_size(vec2(22.0, 22.0)));
+            if plus.on_hover_text(&labels.new_tab).clicked() {
+                action = Some(TabAction::New);
             }
         });
     });

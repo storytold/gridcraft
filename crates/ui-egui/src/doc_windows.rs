@@ -421,6 +421,11 @@ impl DocWindows {
             A::Detach(w) => {
                 self.detach_tab(target, w);
             }
+            A::New => {
+                // `file.new` creates the engine window; sync_tabs puts it in the window that has
+                // focus, which is the one whose `+` was clicked.
+                let _ = app.run_or_alert("file.new", json!({}));
+            }
             A::DropOutside(w) => {
                 // Dropped outside its own strip: another window takes it, or it becomes one.
                 let under = self.window_under_cursor(app, ctx);
