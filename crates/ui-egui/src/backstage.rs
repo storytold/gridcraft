@@ -634,7 +634,6 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
         }
         ui.add_space(12.0);
         ui.vertical(|ui| {
-            ui.add_space(14.0);
             ui.label(RichText::new(lang.tr("Protect Workbook")).font(theme::ui_bold(13.5)).color(t.text));
             let text = if protected {
                 "Sheet structure is locked: sheets can't be added, moved, renamed or deleted."

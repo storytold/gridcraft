@@ -196,6 +196,21 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
 }
 
 #[test]
+/// The Protect Workbook text remains above the centerline of its tall action button.
+fn protect_workbook_info_text_is_aligned_with_its_button() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("ui.backstage", serde_json::json!({"page": "info"})).unwrap();
+    h.run_steps(3);
+
+    let button = h.get_by_role_and_label(egui::accesskit::Role::Button, "Protect Workbook").rect();
+    let description = h.get_by_label("Lock the sheet structure so sheets can't be added, moved, renamed or deleted.").rect();
+    assert!(
+        description.center().y <= button.center().y - 10.0,
+        "Protect Workbook description should no longer sit low beside its button: button={button:?}, description={description:?}"
+    );
+}
+
+#[test]
 fn translated_options_headings_show_no_context_prefix() {
     for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro] {
         let mut h = harness(Services::default());
