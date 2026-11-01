@@ -181,6 +181,10 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The CSV or text file this workbook was read from writes numbers with a decimal comma
+    /// (`1,5`, `1.234,5`), so saving it as CSV or text writes them that way again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub csv_decimal_comma: bool,
     /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
     /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
     #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
@@ -292,6 +296,7 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            csv_decimal_comma: false,
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
