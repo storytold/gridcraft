@@ -711,6 +711,38 @@ fn load_model_refuses_a_range_with_a_cell_without_a_formula() {
 }
 
 #[test]
+fn load_model_refuses_a_model_cut_short_and_keeps_the_old_one() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3"], "method": "simplex"});
+    s.execute("data.solver", model).unwrap();
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap()["range"], "H1:H6");
+    let kept = |s: &mut Session| {
+        let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+        assert_eq!((m["constraints"].clone(), m["method"].clone()), (json!(["B2 <= 24", "B3 <= 6", "A1 <= 3"]), json!("simplex")), "{m}");
+    };
+    // A constraint cleared (H4), the options row cleared (H6) or replaced by a constant: from
+    // the first cell or as a range, the rows above the gap are not loaded as the whole model.
+    for (cell, input) in [("H4", ""), ("H6", ""), ("H6", "7")] {
+        let before = formula(&s, cell);
+        set(&mut s, &[(cell, input)]);
+        for from in ["H1", "H1:H6", "H1:H9"] {
+            let e = s.execute("data.solverLoadModel", json!({"from": from})).unwrap_err().to_string();
+            assert!(e.contains("complete model") || e.contains(cell), "{cell} {from}: {e}");
+            kept(&mut s);
+        }
+        set(&mut s, &[(cell, &format!("={before}"))]);
+    }
+    // The gap is named when reading down from one cell.
+    set(&mut s, &[("H4", "")]);
+    let e = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_err().to_string();
+    assert!(e.contains("H4 holds no formula"), "{e}");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1"})).is_ok());
+    kept(&mut s);
+}
+
+#[test]
 fn load_model_reads_a_bounded_column_and_refuses_malformed_cells() {
     let mut s = s();
     set(&mut s, &[("B1", "=ABS(A1-3)")]);

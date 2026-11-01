@@ -201,6 +201,30 @@ fn cells_with_formulas(r: RangeRef, formula: impl Fn(CellRef) -> Option<String>)
     Ok(rows)
 }
 
+/// A model read down from `start` must end with its options row, which Save Model always
+/// writes last: a cell without a formula before it (a constraint cleared, say) would otherwise
+/// end the read early and load the rows above it as the whole model, with default options.
+fn complete_from_cell(start: CellRef, down: &[(CellRef, String)]) -> Result<()> {
+    match down.last() {
+        Some((_, f)) if is_options_row(f) => Ok(()),
+        _ if down.len() >= MAX_MODEL_ROWS => Err(EngineError::Other(format!(
+            "No options row ends the model within {MAX_MODEL_ROWS} cells of {}, so it isn't a model saved with Save Model.",
+            start.a1()
+        ))),
+        last => {
+            let gap = last.map_or(Some(start), |(c, _)| c.row.checked_add(1).map(|row| CellRef::new(row, c.col)));
+            Err(EngineError::Other(match gap {
+                Some(gap) => format!(
+                    "{} holds no formula before the model's options row, so {} doesn't start a complete model saved with Save Model.",
+                    gap.a1(),
+                    start.a1()
+                ),
+                None => format!("{} doesn't start a complete model saved with Save Model.", start.a1()),
+            }))
+        }
+    }
+}
+
 /// `data.solverLoadModel`: makes a model written by Save Model the active sheet's model.
 pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
@@ -215,12 +239,21 @@ pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = d.wb.sheet(active).ok_or(EngineError::NoDocument)?;
     let formula = |c: CellRef| sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
     let rows: Vec<String> = if r.is_single() {
-        formulas_down(sheet, r.start).into_iter().map(|(_, f)| f).collect()
+        let down = formulas_down(sheet, r.start);
+        complete_from_cell(r.start, &down)?;
+        down.into_iter().map(|(_, f)| f).collect()
     } else {
         if r.count() > cap as u64 {
             return Err(EngineError::Other(format!("The range is too large for a saved model (at most {cap} cells).")));
         }
-        cells_with_formulas(r, formula)?
+        let rows = cells_with_formulas(r, formula)?;
+        if !rows.last().is_some_and(|f| is_options_row(f)) {
+            return Err(EngineError::Other(format!(
+                "{} doesn't end with the model's options row, so it isn't a complete model saved with Save Model.",
+                r.a1()
+            )));
+        }
+        rows
     };
     let params = parse_model_formulas(&rows)?;
     let model = parse_model(s, &params)?;
