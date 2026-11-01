@@ -144,6 +144,13 @@ characters (the function's syntax, which some files hold), the `_xlfn._xlws.` pr
 8,192-character limit measured on that formula (`PyCode::fits`), and the `xl("…")` literals in
 code, which structural edits rewrite like formula references.
 
+Only those edits rewrite them: inserting or deleting cells, rows and columns, a cut and paste, and
+renaming or deleting a sheet. Copying, filling and sorting carry the code unchanged, so an `xl()`
+reference acts as an absolute reference. A sort that moves a Python cell to another row leaves its
+code reading the cells it named before (a formula moved by the same sort has its relative references
+shifted), and references to the sorted cells from other cells, formulas and Python code alike, keep
+naming the same positions.
+
 Calc treats a Python cell as a graph node that reads nothing: a pass takes its kept result instead
 of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
 through the same code as a formula's. The xlsx reader and writer map Python cells to and from
@@ -178,7 +185,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
+| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
