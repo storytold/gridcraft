@@ -121,11 +121,11 @@ fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
         keys(HanOrder::Japanese),
-        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-georgian", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(
         keys(HanOrder::Chinese),
-        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-georgian", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
     for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -184,7 +184,7 @@ fn fallback_covers_its_script() {
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
     type Case = (&'static str, Vec<(String, u32)>, &'static str);
-    let cases: [Case; 10] = [
+    let cases: [Case; 11] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.
@@ -193,6 +193,7 @@ fn fallback_covers_its_script() {
         ("sys-thai", thai(), "ทดสอบ"),
         ("sys-lao", lao(), "ພາສາລາວ"),
         ("sys-hebrew", hebrew(), "עברית"),
+        ("sys-georgian", georgian(), "ქართული"),
         ("craft-noto-sans-arabic", Vec::new(), "مرحبا"),
         ("craft-noto-sans-georgian", Vec::new(), "ქართული"),
         ("ui", candidates(UI), "Русский"),
@@ -328,7 +329,7 @@ fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
     // after the existing Linux folders for the same font, so wherever one of those matched,
     // nothing changes.
     let paths = |cands: Vec<(String, u32)>| cands.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
-    let cases: [(&str, Vec<String>, &str, &str); 9] = [
+    let cases: [(&str, Vec<String>, &str, &str); 10] = [
         (CELL, paths(candidates(CELL)), "google-carlito-fonts/Carlito-Regular.ttf", "/carlito/Carlito-Regular.ttf"),
         (CELL_BOLD, paths(candidates(CELL_BOLD)), "google-carlito-fonts/Carlito-Bold.ttf", "/carlito/Carlito-Bold.ttf"),
         (CELL_ITALIC, paths(candidates(CELL_ITALIC)), "google-carlito-fonts/Carlito-Italic.ttf", "/carlito/Carlito-Italic.ttf"),
@@ -338,6 +339,7 @@ fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
         (MONO, paths(candidates(MONO)), "liberation-mono-fonts/LiberationMono-Regular.ttf", "/dejavu/DejaVuSansMono.ttf"),
         ("thai", paths(thai()), "google-noto-vf/NotoSansThai[wght].ttf", "/NotoSansThai-Regular.ttf"),
         ("hebrew", paths(hebrew()), "google-noto-vf/NotoSansHebrew[wght].ttf", "/NotoSansHebrew-Regular.ttf"),
+        ("georgian", paths(georgian()), "google-noto-vf/NotoSansGeorgian[wght].ttf", "/NotoSansGeorgian-Regular.ttf"),
     ];
     for (role, list, fedora_file, earlier) in &cases {
         let at = list.iter().position(|p| *p == format!("/usr/share/fonts/{fedora_file}"));
