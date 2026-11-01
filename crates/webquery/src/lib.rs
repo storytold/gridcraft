@@ -77,6 +77,11 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     let agent = ureq::Agent::with_parts(
         ureq::config::Config::builder()
             .max_redirects(0)
+            // No proxy, however the environment is set: a proxy resolves the URL's hostname
+            // itself, and in that path the resolver (the validated addresses) is not used, so
+            // the destination could be an address that never passed the check. The page import
+            // always connects directly, or not at all.
+            .proxy(None)
             .timeout_global(Some(std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS)))
             .build(),
         ureq::unversioned::transport::DefaultConnector::default(),
@@ -160,8 +165,8 @@ fn meta_charset(bytes: &[u8]) -> Option<String> {
 
 /// The URL's host and port, as `to_socket_addrs` takes the pair: the authority without
 /// userinfo, an explicit port kept and https's 443 when the URL has none (the `&str` form
-/// requires a port, so a bare hostname would fail to resolve). Bracketed IPv6 keeps its
-/// brackets, which the pair form accepts.
+/// requires a port, so a bare hostname would fail to resolve). Bracketed IPv6 loses its
+/// brackets here, as the pair form wants the bare address; ureq gets the original URL.
 fn host_and_port(url: &str) -> Result<(String, u16), String> {
     let authority = url.trim_start().trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
@@ -173,7 +178,10 @@ fn host_and_port(url: &str) -> Result<(String, u16), String> {
             None if after.is_empty() => 443,
             _ => return Err("The address is not a valid URL.".into()),
         };
-        return Ok((format!("[{v6}]"), port));
+        // Bare, without the brackets: `to_socket_addrs` takes the pair form's host as a bare
+        // IPv6 address and does not parse a bracketed one. ureq still gets the original URL,
+        // brackets and all; this is only for the resolution here.
+        return Ok((v6.to_string(), port));
     }
     // host, or host:port. A colon that is not a port separator is a bad address, not a pair.
     match host.split_once(':') {
@@ -307,22 +315,26 @@ mod tests {
         assert_eq!(host_and_port("https://example.com/table.html").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 443)));
         assert_eq!(host_and_port("https://example.com:8443/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 8443)));
         assert_eq!(host_and_port("https://user:pass@example.com/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 443)));
-        assert_eq!(host_and_port("https://[2001:db8::1]/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("[2001:db8::1]", 443)));
-        assert_eq!(host_and_port("https://[2001:db8::1]:9443/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("[2001:db8::1]", 9443)));
+        assert_eq!(host_and_port("https://[2001:db8::1]/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("2001:db8::1", 443)));
+        assert_eq!(host_and_port("https://[2001:db8::1]:9443/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("2001:db8::1", 9443)));
         assert!(host_and_port("https://2001:db8::1/x").is_err(), "a bare IPv6 with colons is not a host:port pair");
     }
 
     #[test]
-    /// An ordinary URL resolves through the host-and-port path: the pair is accepted by
-    /// `to_socket_addrs`, and (sandbox aside) every resolved address is a real one.
-    fn an_ordinary_url_resolves_through_the_pair() {
-        let (host, port) = host_and_port("https://example.com/table.html").expect("a valid URL parses");
-        assert_eq!(port, 443);
-        // The pair form is what `to_socket_addrs` needs; an empty result would mean the
-        // `&str`-form bug (a bare hostname, no port) had come back.
+    /// The pair form resolves a literal address with no DNS in play: a bare IPv6 from a
+    /// bracketed URL and a hostname:port pair both parse into socket addresses. Hostname
+    /// parsing itself is covered by `the_host_and_port_resolve_a_bare_hostname`, without
+    /// a lookup; this test stays offline so CI without DNS still runs it.
+    fn the_pair_form_resolves_without_dns() {
+        let (v6, port) = host_and_port("https://[2001:db8::1]/x").expect("a bracketed URL parses");
+        assert_eq!(v6, "2001:db8::1", "the brackets are gone for the resolution");
+        let addrs: Vec<_> = std::net::ToSocketAddrs::to_socket_addrs(&(v6.as_str(), port)).expect("the bare pair resolves").collect();
+        assert_eq!(addrs, vec!["[2001:db8::1]:443".parse().expect("a valid socket address")]);
+
+        let (host, port) = host_and_port("https://192.0.2.1:8443/x").expect("an IPv4 URL parses");
+        assert_eq!((host.as_str(), port), ("192.0.2.1", 8443));
         let addrs: Vec<_> = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)).expect("the pair resolves").collect();
-        assert!(!addrs.is_empty(), "an ordinary hostname resolves to at least one address");
-        assert!(addrs.iter().all(|a| a.port() == 443));
+        assert_eq!(addrs, vec!["192.0.2.1:8443".parse().expect("a valid socket address")]);
     }
 
     #[test]
