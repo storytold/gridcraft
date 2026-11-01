@@ -560,6 +560,32 @@ mod tests {
         assert_eq!(SCANNED.with(|n| n.get()), 10_000);
     }
 
+    /// #3066: a sheet with many whole-column rules keeps them all through `.xlsx`, and they
+    /// evaluate on the cells that hold values, gathering statistics only over the used range.
+    #[test]
+    fn whole_column_rules_survive_xlsx_and_evaluate() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let rows: Vec<serde_json::Value> = (1..=10).map(|i| json!([i])).collect();
+        s.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
+        for k in 0..30 {
+            let rule = json!({"type": "cellIs", "operator": "greaterThan", "value": format!("{}", 100 + k), "preset": "redBorder"});
+            s.execute("home.conditionalFormat", json!({"range": "H1:H1048576", "rule": rule})).unwrap();
+        }
+        s.execute("home.conditionalFormat", json!({"range": "H1:H1048576", "rule": {"type": "top10", "rank": 1, "preset": "lightRedFill"}})).unwrap();
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        let (wb, rep) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        assert_eq!(wb.sheets[0].cond_formats.len(), 31);
+        let mut cache = CfCache::new();
+        SCANNED.with(|n| n.set(0));
+        let fill = |l: Option<CfLook>| l.and_then(|l| l.style).map(|st| st.fill.pattern);
+        assert_eq!(fill(cache.look(&wb, 0, CellRef::parse("H10").unwrap())), Some(PatternType::Solid));
+        assert_eq!(fill(cache.look(&wb, 0, CellRef::parse("H9").unwrap())), None);
+        assert_eq!(fill(cache.look(&wb, 0, CellRef::parse("H500000").unwrap())), None);
+        assert_eq!(SCANNED.with(|n| n.get()), 10);
+    }
+
     #[test]
     fn cell_value_operator_names() {
         let mut s = crate::Session::new();

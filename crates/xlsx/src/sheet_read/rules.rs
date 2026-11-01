@@ -1,6 +1,6 @@
 use super::{
-    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_CELLS, RangeRef, Sheet, Validation, ValidationKind, from_file,
-    parse_sqref, read_color,
+    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_RANGES, Sheet, Validation, ValidationKind, from_file, parse_sqref,
+    read_color,
 };
 
 fn cf_op(s: Option<&str>) -> CfOperator {
@@ -45,7 +45,9 @@ fn cfvos(e: &El) -> Vec<CfValueKind> {
         .collect()
 }
 
-pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
+/// One `conditionalFormatting` element. `ranges_left` is the sheet's remaining budget of kept
+/// range entries ([`MAX_COND_RANGES`]); every kept rule spends its own copy of the range list.
+pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, ranges_left: &mut u64) {
     let ranges = parse_sqref(e.attr("sqref"));
     if ranges.is_empty() {
         return;
@@ -111,14 +113,15 @@ pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 continue;
             }
         };
+        let cost = ranges.len() as u64;
+        if cost > *ranges_left {
+            cx.warn(format!("conditional formats past {MAX_COND_RANGES} kept ranges were dropped"));
+            break;
+        }
+        *ranges_left -= cost;
+        // Only a kept rule may claim its x14 id: a dropped one would point at the next kept rule.
         if let Some(id) = ext_id {
             cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
-        }
-        let rules = sheet.cond_formats.len();
-        let area = ranges.iter().map(RangeRef::count).sum::<u64>().saturating_mul(1 + rules as u64);
-        if area > MAX_COND_CELLS {
-            cx.warn(format!("conditional formats past {MAX_COND_CELLS} kept range cells were dropped"));
-            break;
         }
         sheet.cond_formats.push(CondFormat {
             ranges: ranges.clone(),
