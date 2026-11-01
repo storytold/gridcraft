@@ -289,6 +289,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Short Date" => "Data in cifre",
         "Long Date" => "Data estesa",
         "More Number Formats…" => "Altri formati numero…",
+        "Recently Used" => "Usate di recente",
         "Financial" => "Finanze",
         "Logical" => "Logica",
         "More Functions" => "Altre funzioni",
