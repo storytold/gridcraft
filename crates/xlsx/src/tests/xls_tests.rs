@@ -533,6 +533,8 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     // Two names share the text "Dup": the workbook-level one (6) = Sheet1!$A$1 stays, the
     // Sheet1-scoped one (7) = ExtRange is skipped; "UsesDup" = Dup(6)*2 stays, as it uses the
     // one that stays. "Empty" (9) has no formula, so "UsesEmpty" = Empty(9) is skipped too.
+    // "Mac" (11, a command macro) and the built-in Print_Area (13) have valid formulas but are
+    // not imported as names either, so "UsesMac" and "UsesArea" are skipped as well.
     let ext = cat(&[&[0x3B], &1u16.to_le_bytes(), &u16s(&[0, 2, 0, 0])]);
     let local = cat(&[&[0x3A], &0u16.to_le_bytes(), &u16s(&[0, 0])]);
     let twice = cat(&[&[0x23], &1u32.to_le_bytes(), &ptg_int(2), &[0x05]]);
@@ -540,9 +542,12 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     let later = cat(&[&[0x23], &1u32.to_le_bytes()]);
     let uses_dup = cat(&[&[0x23], &6u32.to_le_bytes(), &ptg_int(2), &[0x05]]);
     let uses_empty = cat(&[&[0x23], &9u32.to_le_bytes()]);
-    let lbl_in = |name: &str, rgce: &[u8], itab: u16| {
-        rec(0x0018, &cat(&[&u16s(&[0]), &[0, name.len() as u8], &u16s(&[rgce.len() as u16, 0, itab]), &[0; 4], &[0], name.as_bytes(), rgce]))
+    let uses_mac = cat(&[&[0x23], &11u32.to_le_bytes()]);
+    let uses_area = cat(&[&[0x23], &13u32.to_le_bytes()]);
+    let lbl_with = |flags: u16, name: &str, rgce: &[u8], itab: u16| {
+        rec(0x0018, &cat(&[&u16s(&[flags]), &[0, name.len() as u8], &u16s(&[rgce.len() as u16, 0, itab]), &[0; 4], &[0], name.as_bytes(), rgce]))
     };
+    let lbl_in = |name: &str, rgce: &[u8], itab: u16| lbl_with(0, name, rgce, itab);
     let lbl = |name: &str, rgce: &[u8]| lbl_in(name, rgce, 0);
     let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"]));
     let globals = |pos: u32| {
@@ -562,6 +567,10 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
             &lbl("UsesDup", &uses_dup),
             &lbl("Empty", &[]),
             &lbl("UsesEmpty", &uses_empty),
+            &lbl_with(0x0008, "Mac", &local, 0),
+            &lbl("UsesMac", &uses_mac),
+            &lbl_with(0x0020, "\u{6}", &local, 1),
+            &lbl("UsesArea", &uses_area),
             &eof(),
         ])
     };
@@ -571,6 +580,8 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     let early_x1 = cat(&[&[0x43], &4u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let uses_dup_x1 = cat(&[&[0x43], &8u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let uses_empty_x1 = cat(&[&[0x43], &10u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let uses_mac_x1 = cat(&[&[0x43], &12u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let uses_area_x1 = cat(&[&[0x43], &14u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let sheet = cat(&[
         &bof(0x0010),
         &rec(0x0203, &cat(&[&cell(0, 0, 0), &10.0f64.to_le_bytes()])),
@@ -580,6 +591,8 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
         &formula(8, 1, num(120.0), &early_x1),
         &formula(9, 1, num(20.0), &uses_dup_x1),
         &formula(10, 1, num(7.0), &uses_empty_x1),
+        &formula(11, 1, num(30.0), &uses_mac_x1),
+        &formula(12, 1, num(40.0), &uses_area_x1),
         &eof(),
     ]);
     let pos = globals(0).len() as u32;
@@ -589,7 +602,7 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     assert_eq!(ftext(&wb, "B6"), None);
     assert_eq!(v(&wb, 0, "B6"), Value::Number(60.0));
     assert_eq!(ftext(&wb, "B7").as_deref(), Some("Local*2"));
-    for (cell, saved) in [("B8", 240.0), ("B9", 120.0), ("B11", 7.0)] {
+    for (cell, saved) in [("B8", 240.0), ("B9", 120.0), ("B11", 7.0), ("B12", 30.0), ("B13", 40.0)] {
         assert_eq!(ftext(&wb, cell), None, "{cell} uses a name that uses a skipped name");
         assert_eq!(v(&wb, 0, cell), Value::Number(saved));
     }

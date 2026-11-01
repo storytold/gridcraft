@@ -126,6 +126,14 @@ struct Lbl {
     rgcb: Vec<u8>,
 }
 
+impl Lbl {
+    /// Whether `defined_names` can make this label a workbook name: built-in names become
+    /// sheet settings or are dropped, macro names are dropped.
+    fn imported_as_name(&self) -> bool {
+        self.builtin.is_none() && !self.macro_name
+    }
+}
+
 #[derive(Default)]
 struct Globals {
     sheets: Vec<BoundSheet>,
@@ -331,8 +339,9 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
     // names with the same text are told apart)
     let mut users: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (i, l) in g.names.iter().enumerate() {
-        // A name without a formula is not imported either, so neither are its users.
-        if l.rgce.is_empty() {
+        // A name without a formula is not imported either, nor is a macro or built-in name
+        // (`defined_names` drops those whatever their formula), so neither are their users.
+        if l.rgce.is_empty() || !l.imported_as_name() {
             skipped[i] = true;
             continue;
         }
