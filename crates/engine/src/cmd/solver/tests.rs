@@ -733,6 +733,29 @@ fn load_model_refuses_a_model_cut_short_and_keeps_the_old_one() {
         }
         set(&mut s, &[(cell, &format!("={before}"))]);
     }
+    // An options row cut short or edited by hand: fewer than the eight values Save Model
+    // writes, or a value that isn't a number (among the eight, after them or after the sixteenth).
+    let options = formula(&s, "H6");
+    for row in [
+        "={1}",
+        "={2,1,100,0.075,0,1,0.0001}",
+        "={2,1,100,0.075,0,1,\"x\",50}",
+        "={2,TRUE,100,0.075,0,1,0.0001,50}",
+        "={2,1,100,0.075,0,1,0.0001,50,\"x\"}",
+        "={2,1,100,0.075,0,1,0.0001,50,9,10,11,12,13,14,15,16,\"x\"}",
+    ] {
+        set(&mut s, &[("H6", row)]);
+        for from in ["H1", "H1:H6"] {
+            let e = s.execute("data.solverLoadModel", json!({"from": from})).unwrap_err().to_string();
+            assert!(e.contains("complete model"), "{row} {from}: {e}");
+            kept(&mut s);
+        }
+    }
+    // More values than eight (as a later version may write) still load.
+    set(&mut s, &[("H6", &format!("={}", options.trim_end_matches('}').to_string() + ",7,8}"))]);
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1"})).is_ok());
+    kept(&mut s);
+    set(&mut s, &[("H6", &format!("={options}"))]);
     // The gap is named when reading down from one cell.
     set(&mut s, &[("H4", "")]);
     let e = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_err().to_string();

@@ -563,10 +563,35 @@ fn not_a_model() -> EngineError {
     EngineError::Other("The range doesn't hold a Solver model saved with Save Model.".into())
 }
 
-/// The options row of Save Model, `{method, non-negative, …}`, into `model`.
-fn read_options_row(model: &mut Json, list: &str) {
-    let v: Vec<Option<f64>> = list.split([',', ';']).take(16).map(num_text).collect();
-    let get = |k: usize| v.get(k).copied().flatten();
+/// How many values the options row of Save Model holds at least: method, non-negative,
+/// population size, mutation rate, random seed, require bounds, convergence and generations
+/// without improvement.
+const OPTIONS_FIELDS: usize = 8;
+
+/// The options row of Save Model, `{method, non-negative, …}`, into `model`. Refused when it
+/// holds fewer than [`OPTIONS_FIELDS`] values or a value that isn't a number: a row cut short
+/// or edited by hand would otherwise load with default options in place of the saved ones.
+fn read_options_row(model: &mut Json, list: &str) -> Result<()> {
+    let incomplete = || {
+        EngineError::Other(format!(
+            "The model's options row doesn't hold the {OPTIONS_FIELDS} or more numbers Save Model writes, so the range isn't a complete model saved with Save Model."
+        ))
+    };
+    // Every value is checked; only the first ones are kept (the row is one formula, so its
+    // length is bounded by the formula's).
+    let mut v: Vec<f64> = Vec::with_capacity(16);
+    let mut count = 0usize;
+    for t in list.split([',', ';']) {
+        let x = num_text(t).ok_or_else(incomplete)?;
+        count = count.saturating_add(1);
+        if v.len() < 16 {
+            v.push(x);
+        }
+    }
+    if count < OPTIONS_FIELDS {
+        return Err(incomplete());
+    }
+    let get = |k: usize| v.get(k).copied();
     model["method"] = json!(match get(0).map(|x| x as i64) {
         Some(2) => "simplex",
         Some(3) => "evolutionary",
@@ -579,6 +604,7 @@ fn read_options_row(model: &mut Json, list: &str) {
         }
     }
     model["requireBounds"] = json!(get(5) != Some(2.0));
+    Ok(())
 }
 
 /// One constraint row of Save Model (`AND(relation)`) as a `data.solver` constraint.
@@ -626,7 +652,7 @@ pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
             if i + 1 != rest.len() {
                 return Err(not_a_model());
             }
-            read_options_row(&mut model, list);
+            read_options_row(&mut model, list)?;
             break;
         }
         constraints.push(json!(read_constraint_row(t)?));
