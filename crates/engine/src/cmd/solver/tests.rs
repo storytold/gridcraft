@@ -557,6 +557,50 @@ fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
     assert!(close(&report_row(&s, &rep, "$C$2", &["D", "E"]), &[1.0, 0.0], 1e-4));
     assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
 }
+
+#[test]
+fn nonlinear_sensitivity_report_needs_an_optimal_point() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=A1^2")]);
+    set(&mut s, &[("C1", "0"), ("D1", "=(C1-2)^2")]);
+    set(&mut s, &[("E1", "1"), ("E2", "1"), ("F1", "=E1*E2"), ("F2", "=2*E1+2*E2")]);
+    set(&mut s, &[("G1", "0"), ("G2", "1"), ("H1", "=(G1+1)^2+(G2-2)^2"), ("H2", "=G1+G2")]);
+    let square = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"]});
+    let shifted = json!({"objective": "D1", "goal": "min", "variables": "C1", "constraints": ["C1 <= 5"]});
+    let rectangle = json!({"objective": "F1", "variables": "E1:E2", "constraints": ["F2 <= 20"]});
+    let bounded = json!({"objective": "H1", "goal": "min", "variables": "G1:G2", "constraints": ["H2 <= 1"]});
+    let report = |model: &serde_json::Value, values: serde_json::Value| json!({"reports": ["sensitivity"], "model": model, "values": values});
+    for (model, values, why) in [
+        // min A1² at A1 = 1: the free variable's reduced gradient is 2, not 0.
+        (&square, json!({"A1": 1}), "free gradient"),
+        // The rectangle at 6 × 6 has a larger area than the optimum but a perimeter of 24 > 20.
+        (&rectangle, json!({"E1": 6, "E2": 6}), "infeasible"),
+        // At 4 × 6 the perimeter binds, but its multiplier can't explain the gradient (6, 4).
+        (&rectangle, json!({"E1": 4, "E2": 6}), "unexplained gradient"),
+        // min (C1 − 2)² at the bound C1 = 0: raising C1 lowers the objective.
+        (&shifted, json!({"C1": 0}), "wrong-way bound"),
+        // (1, 0) in the bounded model: the binding row's multiplier would be +4, the wrong sign
+        // for a `<=` row when minimising, so the row is dropped and the gradient is unexplained.
+        (&bounded, json!({"G1": 1, "G2": 0}), "wrong-sign multiplier"),
+    ] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", report(model, values)).unwrap_err();
+        assert!(err.to_string().contains("not optimal"), "{why}: {err}");
+        let d = s.doc().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb), "{why}");
+        assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()), "{why}");
+    }
+    // The optima are still reported.
+    for (k, (model, values)) in
+        [(&square, json!({"A1": 0})), (&shifted, json!({"C1": 2})), (&rectangle, json!({"E1": 5, "E2": 5})), (&bounded, json!({"G1": 0, "G2": 1}))]
+            .into_iter()
+            .enumerate()
+    {
+        let r = s.execute("data.solverReport", report(model, values)).unwrap();
+        assert_eq!(r["sheets"], json!([format!("Sensitivity Report {}", k + 1)]), "{r}");
+    }
+}
+
 #[test]
 fn nonlinear_sensitivity_with_too_many_binding_constraints_is_refused_without_change() {
     // 80 binding rows on two free variables pass the work limit (lowered in tests); 40 don't.

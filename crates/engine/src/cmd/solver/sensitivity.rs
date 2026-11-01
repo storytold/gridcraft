@@ -107,6 +107,10 @@ fn out_of_evaluations() -> EngineError {
     EngineError::Other("Solver ran out of evaluations.".into())
 }
 
+fn not_optimal() -> EngineError {
+    EngineError::Other("The Sensitivity report needs an optimal solution: these values are not optimal for the model. Solve it first.".into())
+}
+
 /// What both report bodies share: the model, the solution, its objective value and the rows'
 /// final values and right sides.
 struct At<'a> {
@@ -198,9 +202,7 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     };
     // The report describes the optimum, so the values it shows must be one.
     if !optimal_point(&c, &rows, (&inp.prob.lo, &inp.prob.hi), &inp.solution, best) {
-        return Err(EngineError::Other(
-            "The Sensitivity report needs an optimal solution: these values are not optimal for the model. Solve it first.".into(),
-        ));
+        return Err(not_optimal());
     }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
@@ -391,6 +393,51 @@ fn multipliers(
     Ok(lambda)
 }
 
+/// Whether the solution is a Karush-Kuhn-Tucker point of the model, from the gradients the
+/// report computed: every row and bound holds, and each reduced gradient (the objective's
+/// gradient less what the binding rows' multipliers explain) is near zero, or, for a variable at
+/// a bound, points only out of that bound in the objective's direction. A binding row whose
+/// multiplier had the wrong sign was dropped by [`multipliers`], so the part of the gradient it
+/// would have explained remains in the reduced gradients and the point is refused here.
+fn kkt_point(at: &At, rows: &[Row], df: &[f64], reduced: &[f64]) -> bool {
+    let (inp, x) = (at.inp, &at.inp.solution);
+    // Feasibility with the tolerance the nonlinear method accepts a solution within (ten times
+    // the constraint precision, relative to the largest constant right side).
+    let rhs_scale = rows.iter().map(|r| r.rhs_const.abs()).fold(1.0, f64::max);
+    let rows_hold = rows.iter().enumerate().all(|(i, r)| {
+        let (g, b) = (at.point.g.get(i).copied().unwrap_or(f64::NAN), at.finals.get(i).map_or(f64::NAN, |f| f.1));
+        let over = match r.sense {
+            Sense::Le => g,
+            Sense::Ge => -g,
+            Sense::Eq => g.abs(),
+        };
+        over <= 10.0 * super::PRECISION * rhs_scale.max(1.0 + b.abs())
+    });
+    if !rows_hold || !at.point.f.is_finite() {
+        return false;
+    }
+    // Stationarity, relative to the size of the objective's gradient (at least 1). At optima the
+    // nonlinear method solves, the reduced gradients are below about 1E-6 of that size; 1E-3
+    // leaves a wide margin for the method's stopping test and for rounding in the difference
+    // gradients of badly scaled models, and still refuses a point whose objective improves
+    // visibly along a direction the constraints allow.
+    let tol = 1e-3 * df.iter().map(|v| v.abs()).fold(1.0, f64::max);
+    // Moving up a variable improves a maximum by +r and a minimum by −r per unit.
+    let sign = if inp.model.goal == Goal::Max { 1.0 } else { -1.0 };
+    x.iter().enumerate().all(|(j, &v)| {
+        let (l, h) = (inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY), inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY));
+        let near = super::PRECISION * (1.0 + v.abs());
+        if !v.is_finite() || v < l - near || v > h + near {
+            return false;
+        }
+        // The same test for "at a bound" as the choice of free variables above.
+        let edge = 1e-6 * v.abs().max(1.0);
+        let (at_lo, at_hi) = (v <= l + edge, v >= h - edge);
+        let gain = reduced.get(j).map_or(f64::NAN, |r| sign * r);
+        gain.is_finite() && (at_hi || gain <= tol) && (at_lo || gain >= -tol)
+    })
+}
+
 /// GRG Nonlinear: reduced gradients and the binding rows' Lagrange multipliers.
 fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     let (inp, m) = (at.inp, at.inp.model);
@@ -417,14 +464,19 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         .collect();
     let lambda = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), at.scale, MULTIPLIER_WORK)?;
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+    let reduced: Vec<f64> =
+        (0..x.len()).map(|j| df.get(j).copied().unwrap_or(0.0) - lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum::<f64>()).collect();
+    // The report describes the optimum, so the values it shows must be one.
+    if !kkt_point(at, &ev.rows, &df, &reduced) {
+        return Err(not_optimal());
+    }
     let var_rows = m
         .vars
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            let used: f64 = lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum();
             let mut row = at.var_head(j, *c);
-            row.push(sens_num(df.get(j).copied().unwrap_or(0.0) - used, at.scale * 1e3));
+            row.push(sens_num(reduced.get(j).copied().unwrap_or(f64::NAN), at.scale * 1e3));
             row
         })
         .collect();
