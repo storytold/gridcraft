@@ -330,7 +330,8 @@ impl KeptReader {
             }
         }
         // Header and footer pictures (`&G`): a VML drawing of their own and the images it shows,
-        // kept byte for byte (GridCraft writes the header text, not the pictures).
+        // kept byte for byte (GridCraft writes the header text, not the pictures). Printing reads
+        // them from what is kept (`hf_pictures`).
         if let Some(id) = scan.legacy_drawing_hf.as_deref()
             && scan.legacy_drawing.as_deref() != Some(id)
             && let Some(r) = rels.iter().find(|r| r.id == id && is_kind(r, &["vmlDrawing"]))
@@ -339,7 +340,7 @@ impl KeptReader {
                 Ok(()) => {
                     let xml = format!("<legacyDrawingHF xmlns:r=\"{NS_REL}\" r:id=\"{}\"/>", esc_attr(&r.id));
                     p.elements.push(PreservedXml { slot: "legacyDrawingHF".into(), xml });
-                    cx.warn(format!("sheet \"{name}\": pictures in the header and footer are not shown; they are kept for saving"));
+                    cx.warn(format!("sheet \"{name}\": pictures in the header and footer are printed and kept for saving, but not shown in Page Layout view and can't be edited"));
                 }
                 Err(why) => cx.warn(format!("sheet \"{name}\": header and footer pictures were dropped: {why}")),
             }
@@ -532,7 +533,7 @@ fn with_decls(frag: &str, decls: &[(String, String)]) -> String {
 }
 
 /// Byte ranges of the `<v:shape …>…</v:shape>` (or self-closed) elements in VML text.
-fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
+pub(super) fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
     let mut spans = vec![];
     let mut from = 0;
     while let Some(i) = vml.get(from..).and_then(|s| s.find("<v:shape")).map(|i| i + from) {

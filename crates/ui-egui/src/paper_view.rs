@@ -226,6 +226,8 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
     });
     let needs_text = sh.print.has_header_footer();
     let (date, time) = if needs_text { print::hf_date_time(wb) } else { Default::default() };
+    // Pictures (`&G`) the sheet keeps from its file, drawn as on paper (#1257).
+    let pictures = if needs_text { print::hf_pictures(sh) } else { vec![] };
     for (i, j) in pages_iter(geo, &pg) {
         let page = screen_rect(geo, pg.page_rect(i, j));
         if !page.intersects(geo.cells) {
@@ -264,6 +266,12 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             let (_, py, _, h) = pg.page_rect(i, j);
             let [_, _, _, _, hm, fm] = pg.margins;
             for (k, sec) in secs.iter().enumerate() {
+                let picture = sec.picture.and_then(|_| pictures.iter().find(|q| q.page == kind && q.footer == footer && q.section == k));
+                if let Some(pic) = picture {
+                    let edge = if footer { screen(geo, 0.0, py + h - fm).y } else { screen(geo, 0.0, py + hm).y };
+                    paint_picture_section(&p, geo, &pg, d.uid, (rects[k], k, footer, edge), sec, pic);
+                    continue;
+                }
                 if sec.text.trim().is_empty() {
                     continue;
                 }
@@ -283,6 +291,57 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 }
             }
         }
+    }
+}
+
+/// Draws a header or footer section that holds a picture, laid out as printing lays it out
+/// (`print::section_lines`): the picture inline where its `&G` is, the text of its line on its
+/// bottom, a header growing down from the header margin and a footer up from the footer margin.
+/// A picture that can't be decoded takes no room, as on paper.
+fn paint_picture_section(
+    p: &Painter,
+    geo: &Geo,
+    pg: &PageGrid,
+    doc: u64,
+    (r, k, footer, edge): (Rect, usize, bool, f32),
+    sec: &print::HfSection,
+    pic: &print::HfPicture,
+) {
+    let font = hf_font(geo, pg, sec.size, sec.bold);
+    let line_h = font.size * 1.2;
+    // Points → layout units (sheet pixels at the print scale) → screen.
+    let to_screen = |pt: f32| pt * 96.0 / 72.0 * pg.hf_text_k * geo.z;
+    let size = vec2(to_screen(pic.width), to_screen(pic.height));
+    let texture = (size.x.is_finite() && size.y.is_finite() && size.x >= 0.5 && size.y >= 0.5)
+        .then(|| crate::floating_pictures::header_footer_texture(p.ctx(), doc, &pic.data, Rect::from_min_size(Pos2::ZERO, size)))
+        .flatten();
+    let lines = print::section_lines(sec, texture.is_some());
+    let height = |ln: &print::HfLine| if ln.picture { line_h.max(size.y) } else { line_h };
+    let total: f32 = lines.iter().map(height).sum();
+    let mut top = if footer { edge - total } else { edge };
+    for ln in &lines {
+        let lh = height(ln);
+        let before = p.layout_no_wrap(ln.before.clone(), font.clone(), Color32::BLACK);
+        let after = p.layout_no_wrap(ln.after.clone(), font.clone(), Color32::BLACK);
+        let pic_w = if ln.picture { size.x } else { 0.0 };
+        let width = before.size().x + pic_w + after.size().x;
+        let x = match k {
+            0 => r.left(),
+            1 => r.center().x - width / 2.0,
+            _ => r.right() - width,
+        };
+        // Text sits on the bottom of a picture's line, and at the top of a line of its own.
+        let text_y = if ln.picture { top + lh - before.size().y.max(after.size().y) } else { top };
+        let after_x = x + before.size().x + pic_w;
+        if ln.picture
+            && let Some(tex) = &texture
+        {
+            let at = Rect::from_min_size(pos2(x + before.size().x, top + lh - size.y), size);
+            p.image(tex.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        p.galley(pos2(x, text_y), before, Color32::BLACK);
+        p.galley(pos2(after_x, text_y), after, Color32::BLACK);
+        top += lh;
     }
 }
 
