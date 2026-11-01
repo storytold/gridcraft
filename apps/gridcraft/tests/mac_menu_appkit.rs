@@ -19,12 +19,23 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let _menu = native_menu::NativeMenu::install(&ctx);
+    let mut menu = native_menu::NativeMenu::install(&ctx);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
     assert_eq!(tops, ["GridCraft", "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
-    assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Window"), "AppKit knows the Window menu");
+    let windows_menu = nsapp.windowsMenu().expect("AppKit knows the Window menu");
+    assert_eq!(windows_menu.title().to_string(), "Window");
+
+    // A poll lists the open workbook windows at the end of the Window menu (#716).
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = gridcraft_ui_egui::SheetApp::new(session, Default::default());
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+    let open = app.open_windows();
+    assert_eq!(open.len(), 1, "one workbook window");
+    let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
+    assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
 
     println!("mac_menu_appkit: ok");
 }

@@ -153,7 +153,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+        // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, &gridcraft_calc::is_known_function).map_err(|e| {
             EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
                 (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
                 _ => format!("We can't open '{name}': {e}"),
@@ -182,17 +183,17 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
         _ => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
     }
 }
@@ -304,6 +305,39 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
+/// times as ISO 8601, booleans `TRUE`/`FALSE`, errors as their text, text as stored. Save As CSV
+/// writes displayed text instead ([`save_bytes`]) and stays the default.
+pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
+    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
+    gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
+        gridcraft_core::Value::Number(n) if n.is_finite() => {
+            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
+                Some(((date, time), d)) => iso(&d, date, time),
+                None => n.to_string(),
+            }
+        }
+        gridcraft_core::Value::Text(t) => t.to_string(),
+        v => crate::display::value_text_as(wb, &v, "General"),
+    })
+    .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.
+fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
+    let day = format!("{:04}-{:02}-{:02}", d.year, d.month, d.day);
+    let mut clock = format!("{:02}:{:02}:{:02}", d.hour, d.minute, d.second);
+    if d.milli != 0 {
+        clock.push_str(&format!(".{:03}", d.milli));
+    }
+    match (date, time) {
+        (true, true) => format!("{day}T{clock}"),
+        (false, true) => clock,
+        _ => day,
+    }
 }
 
 pub(crate) fn esc(s: &str) -> String {
