@@ -180,10 +180,13 @@ sheet name, quoted when it needs quotes, when the selection is on another sheet:
 dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
 there does not press OK, which is not shown while collapsed). Cancel, Escape, a ribbon command
 that opens another dialog over it, and a scripted `ui.dialog.cancel` put the sheet and selection
-from before picking back; OK (and `ui.dialog.confirm`) puts them back before its command runs and
-then stays where the command leaves things, so a Data Analysis report written to a new sheet
-stays in view. A text-box draft left open on the sheet picked on is saved before the sheet
-changes, as any sheet switch saves it. While collapsed, the arrow keys move the selection on the grid,
+from before picking back; OK (and `ui.dialog.confirm`, for a dialog whose OK runs a command;
+Goal Seek presses its own OK and is scripted with `data.goalSeek`) puts them back before its
+command runs and then stays where the command leaves things, so a Data Analysis report written
+to a new sheet stays in view. A text-box draft left open on the sheet picked on is saved before
+the sheet changes, as any sheet switch saves it; when it cannot be saved (the sheet was
+protected meanwhile), OK does not run its command, the dialog stays open and the reason is
+shown. While collapsed, the arrow keys move the selection on the grid,
 Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, and the box
 follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
