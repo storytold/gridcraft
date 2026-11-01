@@ -4,18 +4,44 @@ use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
-pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
-    // Focus left on an editor that no longer exists goes back to the grid.
+fn handle_copy(app: &mut SheetApp, ctx: &egui::Context) -> bool {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let copy_combo = if mac { "Cmd+C" } else { "Ctrl+C" };
+    let target = app.ui.shortcuts.get(copy_combo).cloned();
+    if let Some(target) = target {
+        if !target.is_empty() {
+            crate::keymap::dispatch_target(app, ctx, &target);
+        }
+        true
+    } else {
+        app.copy_to_clipboard(ctx, "edit.copy");
+        false
+    }
+}
+
+fn handle_cut(app: &mut SheetApp, ctx: &egui::Context) -> bool {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let cut_combo = if mac { "Cmd+X" } else { "Ctrl+X" };
+    let target = app.ui.shortcuts.get(cut_combo).cloned();
+    if let Some(target) = target {
+        if !target.is_empty() {
+            crate::keymap::dispatch_target(app, ctx, &target);
+        }
+        true
+    } else {
+        app.copy_to_clipboard(ctx, "edit.cut");
+        false
+    }
+}
+
+fn should_skip_keyboard(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
     let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
     if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
         resp.request_focus();
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
-    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
+    editing
         || app.dialog.is_some()
         || other_focus
         || app.message.is_some()
@@ -23,7 +49,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
-    {
+}
+
+pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if should_skip_keyboard(app, ctx, resp) {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -46,10 +75,14 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     for ev in events {
         match ev {
             egui::Event::Copy => {
-                app.copy_to_clipboard(ctx, "edit.copy");
+                if handle_copy(app, ctx) {
+                    shortcut_ran = true;
+                }
             }
             egui::Event::Cut => {
-                app.copy_to_clipboard(ctx, "edit.cut");
+                if handle_cut(app, ctx) {
+                    shortcut_ran = true;
+                }
             }
             egui::Event::Paste(text) => app.paste_external(text),
             // GridCraft has no image-clipboard pipeline and no cell-picture insert-from-clipboard

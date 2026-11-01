@@ -143,6 +143,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Evaluate Formula…", "dialog:evaluateFormula", None),
                 ("-", "", None),
                 ("Record Actions", "automate.recordActions", None),
+                ("Customize Keyboard…", "dialog:customizeKeyboard", None),
                 ("Command Palette…", "dialog:commandSearch", Some("CMD+SHIFT+P")),
             ],
         ),
