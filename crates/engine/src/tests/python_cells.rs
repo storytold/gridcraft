@@ -227,3 +227,39 @@ fn go_to_special_counts_a_python_cell_as_a_formula_not_a_constant() {
     assert_eq!(r["count"], 1, "{r}");
     assert_eq!(r["selection"], "A3", "{r}");
 }
+
+#[test]
+fn a_macro_counts_python_code_as_data_and_a_blocked_spill_as_no_write() {
+    let mut s = s();
+    // F2 shows 1, its cached value: a step that enters 1 there still replaces the code.
+    plant(&mut s, 0, "F2", "1");
+    // H2's code shows #BLOCKED!, as any other new code there would.
+    s.execute("python.set", json!({"cell": "H2", "code": "'a'"})).unwrap();
+    // J2's result spills over J2:J3. A step that writes J3 blocks it, which doesn't write J2.
+    s.execute("python.set", json!({"cell": "J2", "code": "[5, 6]"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = Arc::make_mut(&mut d.wb);
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("J2").unwrap()).unwrap();
+        let data = vec![Value::Number(5.0), Value::Number(6.0)];
+        let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, data).unwrap()));
+        Arc::make_mut(cell.py.as_mut().unwrap()).output =
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    }
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(super::v(&s, "J3"), Value::Number(6.0));
+    super::macros::put(
+        &mut s,
+        json!({"name": "Py", "steps": [
+            {"command": "cell.set", "params": {"cell": "F2", "input": "1"}},
+            {"command": "python.set", "params": {"cell": "H2", "code": "'b'"}},
+            {"command": "cell.set", "params": {"cell": "J3", "input": "x"}}
+        ]}),
+    );
+    let c = s.execute("macro.check", json!({"name": "Py"})).unwrap();
+    assert_eq!(c["footprint"]["sheets"][0]["cells"], json!(["F2", "H2", "J3"]), "{c}");
+    assert_eq!(c["footprint"]["sheets"][0]["conflicts"], json!(["F2", "H2"]), "{c}");
+    let e = s.execute("macro.run", json!({"name": "Py", "onConflict": "fail"})).unwrap_err().to_string();
+    assert!(e.contains("F2") && e.contains("H2") && !e.contains("J2"), "{e}");
+    assert_eq!(code(&s, 0, "F2").as_deref(), Some("1"), "nothing was changed");
+}
