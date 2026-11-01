@@ -920,4 +920,83 @@ pub(crate) mod tests {
         calc_eight.cells_changed(&mut eight, &[key]);
         assert_eq!(snapshot(&one), snapshot(&eight));
     }
+
+    const VLOOKUP_IF_FORMULA: &str = r#"=IF(VLOOKUP(Data!$A$1,Data!$B$1:$C$2,2,FALSE)="alpha","yes"&Data!$A$1,"no")"#;
+
+    fn build_chain_workbook(wb: &mut Workbook) {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::new(0, 0), Cell::value(Value::Number(1.0)));
+        sh.cells.set(CellRef::new(0, 1), Cell::formula(Formula::new("=A1+1")));
+        for r in 1..200 {
+            sh.cells.set(CellRef::new(r, 1), Cell::formula(Formula::new(&format!("=B{r}+1"))));
+        }
+    }
+
+    fn build_vlookup_workbook(wb: &mut Workbook) {
+        wb.sheet_mut(0).unwrap().name = "Data".into();
+        {
+            let data = wb.sheet_mut(0).unwrap();
+            data.cells.set(CellRef::new(0, 0), Cell::value(Value::Number(2.0)));
+            data.cells.set(CellRef::new(0, 1), Cell::value(Value::Number(1.0)));
+            data.cells.set(CellRef::new(0, 2), Cell::value(Value::text("alpha")));
+            data.cells.set(CellRef::new(1, 1), Cell::value(Value::Number(2.0)));
+            data.cells.set(CellRef::new(1, 2), Cell::value(Value::text("beta")));
+        }
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Calc")));
+        let calc = wb.sheet_mut(1).unwrap();
+        for r in 0..200 {
+            calc.cells.set(CellRef::new(r, 0), Cell::formula(Formula::new(VLOOKUP_IF_FORMULA)));
+        }
+    }
+
+    #[test]
+    fn serial_and_parallel_paths_agree_on_chain_and_vlookup_workbooks() {
+        let mut chain_one = Workbook::new();
+        build_chain_workbook(&mut chain_one);
+        chain_one.calc.set_max_workers(1);
+        let mut calc_chain_one = Calc::new();
+        calc_chain_one.recalc_all(&mut chain_one);
+
+        let mut chain_eight = Workbook::new();
+        build_chain_workbook(&mut chain_eight);
+        chain_eight.calc.set_max_workers(8);
+        let mut calc_chain_eight = Calc::new();
+        calc_chain_eight.recalc_all(&mut chain_eight);
+        assert_eq!(snapshot(&chain_one), snapshot(&chain_eight));
+
+        let a1 = (0, CellRef::new(0, 0));
+        chain_one.sheet_mut(0).unwrap().cells.set(a1.1, Cell::value(Value::Number(3.0)));
+        chain_eight.sheet_mut(0).unwrap().cells.set(a1.1, Cell::value(Value::Number(3.0)));
+        calc_chain_one.cells_changed(&mut chain_one, &[a1]);
+        calc_chain_eight.cells_changed(&mut chain_eight, &[a1]);
+        assert_eq!(snapshot(&chain_one), snapshot(&chain_eight));
+        let last = CellRef::new(199, 1);
+        assert_eq!(chain_one.sheet(0).unwrap().value(last), Value::Number(203.0));
+        assert_eq!(chain_eight.sheet(0).unwrap().value(last), Value::Number(203.0));
+
+        let mut lookup_one = Workbook::new();
+        build_vlookup_workbook(&mut lookup_one);
+        lookup_one.calc.set_max_workers(1);
+        let mut calc_lookup_one = Calc::new();
+        calc_lookup_one.recalc_all(&mut lookup_one);
+
+        let mut lookup_eight = Workbook::new();
+        build_vlookup_workbook(&mut lookup_eight);
+        lookup_eight.calc.set_max_workers(8);
+        let mut calc_lookup_eight = Calc::new();
+        calc_lookup_eight.recalc_all(&mut lookup_eight);
+        assert_eq!(snapshot(&lookup_one), snapshot(&lookup_eight));
+        let sample = CellRef::new(0, 0);
+        assert_eq!(lookup_one.sheet(1).unwrap().value(sample), Value::text("no"));
+        assert_eq!(lookup_eight.sheet(1).unwrap().value(sample), Value::text("no"));
+
+        let data_a1 = (0, CellRef::new(0, 0));
+        lookup_one.sheet_mut(0).unwrap().cells.set(data_a1.1, Cell::value(Value::Number(1.0)));
+        lookup_eight.sheet_mut(0).unwrap().cells.set(data_a1.1, Cell::value(Value::Number(1.0)));
+        calc_lookup_one.cells_changed(&mut lookup_one, &[data_a1]);
+        calc_lookup_eight.cells_changed(&mut lookup_eight, &[data_a1]);
+        assert_eq!(snapshot(&lookup_one), snapshot(&lookup_eight));
+        assert_eq!(lookup_one.sheet(1).unwrap().value(sample), Value::text("yes1"));
+        assert_eq!(lookup_eight.sheet(1).unwrap().value(sample), Value::text("yes1"));
+    }
 }
