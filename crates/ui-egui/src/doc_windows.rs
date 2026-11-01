@@ -37,6 +37,13 @@ pub struct DocWindows {
     /// The order the tabs are shown in (engine window ids); reordering is presentation only, the
     /// engine's window list keeps its own order.
     tab_order: Vec<u64>,
+    /// Tabs the user pinned: they stay first in the strip.
+    pinned: Vec<u64>,
+    /// Windows the user undocked: each gets a native window of its own.
+    detached: std::collections::HashSet<u64>,
+    /// The native windows of `detached` (engine window id per viewport).
+    detached_list: WindowList<u64>,
+    detached_viewports: Viewports,
     /// The root viewport is hidden because no window is open.
     root_hidden: bool,
 }
@@ -46,7 +53,19 @@ impl DocWindows {
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
         // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, tabs: true, tab_order: Vec::new(), root_hidden: false }
+        DocWindows {
+            list: WindowList::new(),
+            viewports: Viewports::new(Frame::Desktop),
+            base,
+            quit_with_last_window,
+            tabs: true,
+            tab_order: Vec::new(),
+            pinned: Vec::new(),
+            detached: std::collections::HashSet::new(),
+            detached_list: WindowList::new(),
+            detached_viewports: Viewports::new(Frame::Desktop),
+            root_hidden: false,
+        }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -236,17 +255,26 @@ impl DocWindows {
         // Keep the strip order: drop closed windows, append new ones (File › New, opened files).
         let visible = visible_windows(app);
         self.tab_order.retain(|w| visible.contains(w));
+        self.pinned.retain(|w| visible.contains(w));
+        self.detached.retain(|w| visible.contains(w));
         for w in &visible {
             if !self.tab_order.contains(w) {
                 self.tab_order.push(*w);
             }
         }
-        app.doc_tabs = Some(crate::doc_tabs::DocTabs::from_app(app, &self.tab_order));
+        // A window that stopped being detached (closed, or merged back) loses its native window.
+        let stale: Vec<u64> = self.detached_list.iter().map(|(_, w)| *w).filter(|w| !self.detached.contains(w)).collect();
+        for w in stale {
+            if let Some(id) = self.detached_list.find(|x| *x == w) {
+                self.detached_list.close(id);
+            }
+        }
+        app.doc_tabs = Some(crate::doc_tabs::DocTabs::from_app(app, &self.tab_order, &self.pinned, &self.detached));
         app.ui(ui);
-        let (picked, closed, reordered) = match app.doc_tabs.take() {
-            Some(t) => (t.picked, t.closed, t.reordered),
-            None => (None, Vec::new(), None),
-        };
+        let strip = app.doc_tabs.take();
+        let action = strip.as_ref().and_then(|t| t.action);
+        let reordered = strip.as_ref().and_then(|t| t.reordered);
+        let tabbed: Vec<u64> = strip.map(|t| t.tabs.iter().map(|w| w.window).collect()).unwrap_or_default();
         if let Some((moved, before)) = reordered {
             let order = &mut self.tab_order;
             if let Some(from) = order.iter().position(|w| *w == moved) {
@@ -255,25 +283,96 @@ impl DocWindows {
                 order.insert(at, moving);
             }
         }
-        for w in closed {
-            let _ = app.run_or_alert("window.close", json!({"window": w}));
-        }
-        let active = app.session.active_window();
-        if let Some(w) = picked.filter(|w| Some(*w) != active) {
-            if let Some(previous) = active.filter(|p| app.session.window(*p).is_some()) {
-                // The user left this window: its draft is entered there, as Enter would.
-                app.enter_window(previous);
-                let _ = app.settle_drafts();
+        match action {
+            Some(crate::doc_tabs::TabAction::Pick(w)) => self.pick_tab(app, w),
+            Some(crate::doc_tabs::TabAction::Save(w)) => {
+                self.pick_tab(app, w);
+                let _ = app.run_or_alert("file.save", json!({}));
             }
-            app.enter_window(w);
-            if let Some(id) = self.find(w) {
-                self.list.focus(id);
+            Some(crate::doc_tabs::TabAction::Close(w)) => {
+                let _ = app.run_or_alert("window.close", json!({"window": w}));
+            }
+            Some(crate::doc_tabs::TabAction::CloseRight(w)) => {
+                // Every tab after `w` in the strip's order, right to left so indices stay valid.
+                if let Some(at) = tabbed.iter().position(|x| *x == w) {
+                    for x in tabbed[at + 1..].iter().rev() {
+                        let _ = app.run_or_alert("window.close", json!({"window": *x}));
+                    }
+                }
+            }
+            Some(crate::doc_tabs::TabAction::CloseOthers(w)) => {
+                for x in tabbed.iter().filter(|x| **x != w) {
+                    let _ = app.run_or_alert("window.close", json!({"window": *x}));
+                }
+            }
+            Some(crate::doc_tabs::TabAction::CloseAll) => {
+                for x in tabbed.iter().rev() {
+                    let _ = app.run_or_alert("window.close", json!({"window": *x}));
+                }
+            }
+            Some(crate::doc_tabs::TabAction::Pin(w)) => {
+                if let Some(at) = self.pinned.iter().position(|x| *x == w) {
+                    self.pinned.remove(at);
+                } else {
+                    self.pinned.push(w);
+                }
+            }
+            Some(crate::doc_tabs::TabAction::MoveStart(w)) => self.tab_order.retain(|x| *x != w),
+            Some(crate::doc_tabs::TabAction::MoveEnd(w)) => {
+                self.tab_order.retain(|x| *x != w);
+                self.tab_order.push(w);
+            }
+            Some(crate::doc_tabs::TabAction::Detach(w)) => {
+                if self.detached.insert(w) {
+                    self.detached_list.open(w);
+                }
+            }
+            None => {}
+        }
+        // Undocked windows draw as native windows of their own, after the tabbed one.
+        if !self.detached_list.is_empty() {
+            let base = self.base.clone();
+            let titles: std::collections::HashMap<u64, String> =
+                self.detached_list.iter().map(|(_, w)| (*w, window_title(app, *w))).collect();
+            let Self { detached_viewports, detached_list, .. } = self;
+            let events = detached_viewports.show(
+                ui,
+                detached_list,
+                |_, w| base.clone().with_title(titles.get(w).cloned().unwrap_or_default()),
+                |ui, _, w| {
+                    app.show_window(*w);
+                    app.ui(ui);
+                },
+            );
+            for event in events {
+                if let WindowEvent::CloseRequested(id) = event
+                    && let Some(w) = detached_list.get(id).copied()
+                {
+                    let _ = app.run_or_alert("window.close", json!({"window": w}));
+                }
             }
         }
         self.sync(app, ctx);
         // The native title follows the tab the user picked.
         if let Some(w) = app.session.active_window() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(app, w)));
+        }
+    }
+
+    /// Brings `w`'s tab forward, entering the previous window's draft first (as moving to a native
+    /// window does).
+    fn pick_tab(&mut self, app: &mut SheetApp, w: u64) {
+        let active = app.session.active_window();
+        if Some(w) == active {
+            return;
+        }
+        if let Some(previous) = active.filter(|p| app.session.window(*p).is_some()) {
+            app.enter_window(previous);
+            let _ = app.settle_drafts();
+        }
+        app.enter_window(w);
+        if let Some(id) = self.find(w) {
+            self.list.focus(id);
         }
     }
 

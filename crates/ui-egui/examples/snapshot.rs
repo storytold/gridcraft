@@ -117,7 +117,7 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 if tabs {
-                    app.doc_tabs = Some(gridcraft_ui_egui::doc_tabs::DocTabs::from_app(&app, &[]));
+                    app.doc_tabs = Some(gridcraft_ui_egui::doc_tabs::DocTabs::from_app(&app, &[], &[], &Default::default()));
                 }
                 app.grid.pane = pane;
                 app.selected_chart = chart;

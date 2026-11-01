@@ -120,18 +120,25 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
             #[cfg(not(target_arch = "wasm32"))]
             if app.doc_tabs.is_some() {
-                let close = app.ui.language.tr("Close").to_string();
+                let lang = app.ui.language;
                 let labels = crate::doc_tabs::Labels {
-                    close: close.clone(),
-                    others: app.ui.language.tr("Close others").to_string(),
-                    all: app.ui.language.tr("Close all").to_string(),
+                    save: lang.tr("Save").to_string(),
+                    close: lang.tr("Close").to_string(),
+                    pin: lang.tr("Pin tab").to_string(),
+                    detach: lang.tr("Standalone window").to_string(),
+                    move_to: lang.tr("Move tab to").to_string(),
+                    start: lang.tr("Start").to_string(),
+                    end: lang.tr("End").to_string(),
+                    others: lang.tr("Close others").to_string(),
+                    right: lang.tr("Close to the right").to_string(),
+                    all: lang.tr("Close all").to_string(),
                 };
                 // Tabs take at most 45% of the bar, so the centred title and the right-hand
                 // controls keep their room; the rest scrolls.
                 let max_w = (rect.width() * 0.45).max(120.0);
                 ui.add_space(10.0);
                 if let Some(tabs) = &mut app.doc_tabs {
-                    crate::doc_tabs::show_inline(ui, tabs, &close, &labels, max_w);
+                    crate::doc_tabs::show_inline(ui, tabs, &labels, max_w);
                 }
             }
             let left_end = ui.min_rect().right();
