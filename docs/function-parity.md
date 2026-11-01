@@ -112,7 +112,10 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+XIRR, YIELD) are the highest-risk for last-digit differences. RATE follows Excel's own iteration, reconstructed from observation (secant from the guess and the guess ± 0.001, at most 200 steps,
+stop within 1e-7 by step and value, a looser 1e-4 check after 200 steps), so it returns the same
+iterate as Excel where convergence is slow (about -100% for `RATE(n,0,-pv,0)`) and `#NUM!` where
+Excel's solver gives up (very large rates); roots at 0% differ only by rounding noise (under 1e-7).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -168,6 +171,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-14 | minor | Analysis ToolPak value arguments (EOMONTH, WORKDAY, YEARFRAC, COUPDAYS, DISC, BIN2DEC, IM* and the rest, observed in Excel 365) give `#VALUE!` for a multi-cell reference instead of lifting it |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
+| 2026-10-14 | minor | RATE follows Excel's iteration (secant, 200 steps, 1e-7 by step and value): `RATE(5,0,-100,0)` is -0.999999409145182 like Excel instead of `#NUM!`, `RATE(4,0,-0.0001,100)` is `#NUM!` like Excel instead of 30.62 |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |
