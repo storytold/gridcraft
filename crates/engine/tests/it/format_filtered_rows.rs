@@ -109,6 +109,19 @@ fn rows_hidden_by_hand_are_still_formatted() {
 }
 
 #[test]
+fn rows_hidden_by_a_collapsed_group_are_still_formatted() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "3:4"})).unwrap();
+    s.execute("data.hideDetail", json!({"rows": "3:4"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+    s.execute("home.fillColor", json!({"range": "A2:A5", "color": "#FFFF00"})).unwrap();
+    for a in ["A2", "A3", "A4", "A5"] {
+        assert_eq!(fill(&s, a), yellow(), "{a}");
+    }
+}
+
+#[test]
 fn undo_restores_the_whole_column_format() {
     let mut s = filtered();
     s.execute("home.fillColor", json!({"range": "B:B", "color": "#FFFF00"})).unwrap();
