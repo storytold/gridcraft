@@ -1,14 +1,13 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
-//!
-//! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
+//! - The 14 standard fonts (no embedding) with `WinAnsiEncoding`, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
-//!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   `WinAnsiEncoding` (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
+//!   font with the `UniGB-UTF16-H` `CMap` instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
-//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
+//! - RGBA images as RGB image `XObjects` with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
+//! Streams are written uncompressed (images use the trivial `RunLengthDecode` filter) so the crate
 //! needs no dependencies.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -48,7 +47,7 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus Symbol and `ZapfDingbats`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -134,9 +133,9 @@ impl Font {
     /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
     /// Courier, everything else to Helvetica.
     pub fn family_for(name: &str) -> Family {
-        let n = name.to_ascii_lowercase();
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
+        let n = name.to_ascii_lowercase();
         if MONO.iter().any(|m| n.contains(m)) {
             Family::Mono
         } else if SERIF.iter().any(|s| n.contains(s)) && !n.contains("sans") {
@@ -177,17 +176,18 @@ impl Font {
 }
 
 /// Width of `text` in points when set in `font` at `size` points.
+#[expect(clippy::cast_precision_loss, reason = "The public API returns f32; accumulated u64 units may exceed its exact integer range")]
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     // u64: a u32 sum overflows for ~8 million characters.
     let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
     units as f32 * size / 1000.0
 }
 
-/// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.
+/// Unicode → `WinAnsiEncoding` (CP1252) byte; unmappable characters become `?`.
 pub fn win_ansi(c: char) -> u8 {
     let u = c as u32;
     if (0x20..0x7F).contains(&u) || (0xA0..=0xFF).contains(&u) {
-        return u as u8;
+        return u8::try_from(u).unwrap_or(b'?');
     }
     match c {
         '€' => 0x80,
@@ -226,12 +226,12 @@ pub fn win_ansi(c: char) -> u8 {
 const CID_FONT: usize = Font::ALL.len();
 /// Number of font resources a page can use.
 const FONT_SLOTS: usize = CID_FONT + 1;
-/// Base font of the CID font used for characters WinAnsiEncoding lacks.
+/// Base font of the CID font used for characters `WinAnsiEncoding` lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
 const CID_WIDTH: u16 = 1000;
 
-/// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
+/// True when `c` has no `WinAnsiEncoding` byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
     !c.is_control() && c != '?' && win_ansi(c) == b'?'
 }
@@ -247,7 +247,7 @@ fn pdf_utf16_string(text: &str) -> String {
     s
 }
 
-/// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
+/// A PDF literal string `( … )` for `text` in `WinAnsiEncoding`.
 fn pdf_string(text: &str) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
@@ -282,6 +282,7 @@ fn pdf_uri_string(uri: &str) -> String {
 }
 
 /// A number for a content stream: finite, short.
+#[expect(clippy::float_cmp, clippy::cast_possible_truncation, reason = "Integral detection is exact by design; the clamp bounds the f32-to-i64 cast")]
 fn n(v: f32) -> String {
     let v = if v.is_finite() { v.clamp(-1.0e7, 1.0e7) } else { 0.0 };
     let r = (v * 1000.0).round() / 1000.0;
@@ -320,7 +321,7 @@ fn dash_values(dash: &[f32]) -> String {
 }
 
 fn rgb_op(c: Rgb, stroke: bool) -> String {
-    let f = |v: u8| n(v as f32 / 255.0);
+    let f = |v: u8| n(f32::from(v) / 255.0);
     format!("{} {} {} {}", f(c[0]), f(c[1]), f(c[2]), if stroke { "RG" } else { "rg" })
 }
 
@@ -431,24 +432,32 @@ impl Page {
         }
     }
     /// Intersects the clip with a rectangle (until the next [`Page::restore`]).
-    pub fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + h)), n(w.max(0.0)), n(h.max(0.0)));
+    pub fn clip_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let s = format!("{} {} {} {} re W n", n(x), n(self.y(y + height)), n(width.max(0.0)), n(height.max(0.0)));
         self.op(&s);
     }
 
-    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
-        if !(extent(w) && extent(h) && finite(&[x, y])) {
+    pub fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
+        if !(extent(width) && extent(height) && finite(&[x, y])) {
             return;
         }
-        let s = format!("{}\n{} {} {} {} re f", rgb_op(color, false), n(x), n(self.y(y + h)), n(w), n(h));
+        let s = format!("{}\n{} {} {} {} re f", rgb_op(color, false), n(x), n(self.y(y + height)), n(width), n(height));
         self.op(&s);
     }
 
-    pub fn rect_stroke(&mut self, x: f32, y: f32, w: f32, h: f32, width: f32, color: Rgb) {
-        if !finite(&[x, y, w, h]) {
+    pub fn rect_stroke(&mut self, x: f32, y: f32, rect_width: f32, rect_height: f32, width: f32, color: Rgb) {
+        if !finite(&[x, y, rect_width, rect_height]) {
             return;
         }
-        let s = format!("{}\n{} w [] 0 d\n{} {} {} {} re S", rgb_op(color, true), n(stroke_width(width)), n(x), n(self.y(y + h)), n(w), n(h));
+        let s = format!(
+            "{}\n{} w [] 0 d\n{} {} {} {} re S",
+            rgb_op(color, true),
+            n(stroke_width(width)),
+            n(x),
+            n(self.y(y + rect_height)),
+            n(rect_width),
+            n(rect_height)
+        );
         self.op(&s);
     }
 
@@ -518,10 +527,10 @@ impl Page {
 
     /// A circle approximated by four cubic Béziers.
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, fill: Option<Rgb>, stroke: Option<(Rgb, f32)>) {
+        const K: f32 = 0.552_284_8;
         if !extent(r) || !finite(&[cx, cy]) || (fill.is_none() && stroke.is_none()) {
             return;
         }
-        const K: f32 = 0.552_284_8;
         let k = r * K;
         let y = self.y(cy);
         let mut s = String::new();
@@ -609,11 +618,13 @@ impl Page {
     pub fn image_rgba(&mut self, destination: Rect, rgba: &[u8], pixel_size: [u32; 2]) {
         let Rect { x, y, width: w, height: h } = destination;
         let [pw, ph] = pixel_size;
-        let px = pw as u64 * ph as u64;
+        let px = u64::from(pw) * u64::from(ph);
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
-        let px = px as usize;
+        let Ok(px) = usize::try_from(px) else {
+            return;
+        };
         let mut rgb = Vec::with_capacity(px * 3);
         let mut alpha = Vec::with_capacity(px);
         for p in rgba.as_chunks::<4>().0.iter().take(px) {
@@ -644,6 +655,7 @@ pub struct PdfDoc {
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
+#[expect(clippy::cast_possible_truncation, reason = "PackBits repeat and literal lengths are bounded to 1..=128")]
 fn run_length(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() / 2 + 16);
     let mut i = 0;
@@ -699,6 +711,130 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
+type PdfObject = (u32, Vec<u8>);
+
+struct SerializedPage {
+    objects: Vec<PdfObject>,
+    page_id: u32,
+    annotations: Vec<(u32, LinkAnnotation)>,
+}
+
+fn push_font_objects(font_ids: &[u32; FONT_SLOTS], objects: &mut Vec<PdfObject>) -> String {
+    let mut font_dict = String::new();
+    for (i, id) in font_ids.iter().enumerate() {
+        if *id == 0 {
+            continue;
+        }
+        let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
+        if i == CID_FONT {
+            let (cid_id, desc_id) = (id + 1, id + 2);
+            objects.push((
+                *id,
+                format!("<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>")
+                    .into_bytes(),
+            ));
+            objects.push((
+                cid_id,
+                format!(
+                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
+                )
+                .into_bytes(),
+            ));
+            objects.push((
+                desc_id,
+                format!(
+                    "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
+                )
+                .into_bytes(),
+            ));
+            continue;
+        }
+        let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
+        let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
+        objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
+    }
+    font_dict
+}
+
+fn serialize_page(page: &mut Page, next: &mut u32, font_dict: &str, page_count: usize) -> SerializedPage {
+    while page.depth > 0 {
+        page.restore();
+    }
+    let mut objects = Vec::new();
+    let mut xobjects = String::new();
+    for (k, img) in page.images.iter().enumerate() {
+        let img_id = *next;
+        *next += 1;
+        let smask = match &img.alpha {
+            Some(a) => {
+                let id = *next;
+                *next += 1;
+                let data = run_length(a);
+                let mut o = format!(
+                    "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode /Length {} >>\nstream\n",
+                    img.width,
+                    img.height,
+                    data.len()
+                )
+                .into_bytes();
+                o.extend_from_slice(&data);
+                o.extend_from_slice(b"\nendstream");
+                objects.push((id, o));
+                format!(" /SMask {id} 0 R")
+            }
+            None => String::new(),
+        };
+        let data = run_length(&img.rgb);
+        let mut o = format!(
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8{} /Filter /RunLengthDecode /Length {} >>\nstream\n",
+            img.width,
+            img.height,
+            smask,
+            data.len()
+        )
+        .into_bytes();
+        o.extend_from_slice(&data);
+        o.extend_from_slice(b"\nendstream");
+        objects.push((img_id, o));
+        let _ = write!(xobjects, "/Im{} {} 0 R ", k + 1, img_id);
+    }
+    let content_id = *next;
+    let page_id = *next + 1;
+    *next += 2;
+    let body = std::mem::take(&mut page.content);
+    let mut o = format!("<< /Length {} >>\nstream\n", body.len()).into_bytes();
+    o.extend_from_slice(body.as_bytes());
+    o.extend_from_slice(b"endstream");
+    objects.push((content_id, o));
+    let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
+    let mut link_refs = String::new();
+    let mut annotations = Vec::new();
+    for link in std::mem::take(&mut page.links) {
+        if matches!(&link.target, LinkTarget::Page { index, .. } if *index >= page_count) {
+            continue;
+        }
+        let id = *next;
+        *next += 1;
+        let _ = write!(link_refs, "{id} 0 R ");
+        annotations.push((id, link));
+    }
+    let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
+    objects.push((
+        page_id,
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R{} >>",
+            n(page.width),
+            n(page.height),
+            font_dict,
+            xo,
+            content_id,
+            annots
+        )
+        .into_bytes(),
+    ));
+    SerializedPage { objects, page_id, annotations }
+}
+
 impl PdfDoc {
     pub fn new() -> PdfDoc {
         PdfDoc::default()
@@ -743,119 +879,16 @@ impl PdfDoc {
                 next += if i == CID_FONT { 3 } else { 1 };
             }
         }
-        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut objects: Vec<PdfObject> = Vec::new();
+        let font_dict = push_font_objects(&font_ids, &mut objects);
+        let page_count = self.pages.len();
         let mut kids = Vec::new();
         let mut annotations = Vec::new();
-        let page_count = self.pages.len();
-        let mut font_dict = String::new();
-        for (i, id) in font_ids.iter().enumerate() {
-            if *id != 0 {
-                let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
-                if i == CID_FONT {
-                    let (cid_id, desc_id) = (id + 1, id + 2);
-                    objects.push((
-                        *id,
-                        format!(
-                            "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
-                        )
-                        .into_bytes(),
-                    ));
-                    objects.push((
-                        cid_id,
-                        format!(
-                            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
-                        )
-                        .into_bytes(),
-                    ));
-                    objects.push((
-                        desc_id,
-                        format!(
-                            "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
-                        )
-                        .into_bytes(),
-                    ));
-                    continue;
-                }
-                let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
-                let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
-                objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
-            }
-        }
         for page in &mut self.pages {
-            while page.depth > 0 {
-                page.restore();
-            }
-            let mut xobjects = String::new();
-            for (k, img) in page.images.iter().enumerate() {
-                let img_id = next;
-                next += 1;
-                let smask = match &img.alpha {
-                    Some(a) => {
-                        let id = next;
-                        next += 1;
-                        let data = run_length(a);
-                        let mut o = format!(
-                            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode /Length {} >>\nstream\n",
-                            img.width,
-                            img.height,
-                            data.len()
-                        )
-                        .into_bytes();
-                        o.extend_from_slice(&data);
-                        o.extend_from_slice(b"\nendstream");
-                        objects.push((id, o));
-                        format!(" /SMask {id} 0 R")
-                    }
-                    None => String::new(),
-                };
-                let data = run_length(&img.rgb);
-                let mut o = format!(
-                    "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8{} /Filter /RunLengthDecode /Length {} >>\nstream\n",
-                    img.width,
-                    img.height,
-                    smask,
-                    data.len()
-                )
-                .into_bytes();
-                o.extend_from_slice(&data);
-                o.extend_from_slice(b"\nendstream");
-                objects.push((img_id, o));
-                let _ = write!(xobjects, "/Im{} {} 0 R ", k + 1, img_id);
-            }
-            let content_id = next;
-            let page_id = next + 1;
-            next += 2;
-            let body = std::mem::take(&mut page.content);
-            let mut o = format!("<< /Length {} >>\nstream\n", body.len()).into_bytes();
-            o.extend_from_slice(body.as_bytes());
-            o.extend_from_slice(b"endstream");
-            objects.push((content_id, o));
-            let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
-            let mut link_refs = String::new();
-            for link in std::mem::take(&mut page.links) {
-                if matches!(&link.target, LinkTarget::Page { index, .. } if *index >= page_count) {
-                    continue;
-                }
-                let id = next;
-                next += 1;
-                let _ = write!(link_refs, "{id} 0 R ");
-                annotations.push((id, link));
-            }
-            let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
-            objects.push((
-                page_id,
-                format!(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R{} >>",
-                    n(page.width),
-                    n(page.height),
-                    font_dict,
-                    xo,
-                    content_id,
-                    annots
-                )
-                .into_bytes(),
-            ));
-            kids.push(page_id);
+            let serialized = serialize_page(page, &mut next, &font_dict, page_count);
+            objects.extend(serialized.objects);
+            kids.push(serialized.page_id);
+            annotations.extend(serialized.annotations);
         }
         for (id, link) in annotations {
             let [x0, y0, x1, y1] = link.rect;
@@ -899,11 +932,11 @@ impl PdfDoc {
             out.extend_from_slice(b"\nendobj\n");
         }
         let xref = out.len();
-        let mut x = format!("xref\n0 {}\n0000000000 65535 f \n", next);
+        let mut x = format!("xref\n0 {next}\n0000000000 65535 f \n");
         for off in offsets.iter().skip(1) {
             let _ = writeln!(x, "{off:010} 00000 n ");
         }
-        let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
+        let _ = write!(x, "trailer\n<< /Size {next} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{xref}\n%%EOF\n");
         out.extend_from_slice(x.as_bytes());
         out
     }
