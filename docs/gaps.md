@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (§13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (§13: Solver Options; Japanese 和暦 date formats; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -109,7 +109,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - Catalog: ribbon-only in five languages (#31, #104, #82; ~12% of strings each), and 943 strings
   (~43%) in Japanese (10-17) and Brazilian Portuguese, including the dialog labels, messages, File
   view and menus. The remaining dialogs, menus and messages are English; en-US function names and
-  separators (#45); German in PR #163. **Estimate:**
+  separators (#45); Japanese 和暦 date formats landed (`[$-411]`, era tokens, gannen 元年; other
+  locale formats ignored); German in PR #163. **Estimate:**
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
@@ -190,6 +191,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
+| 2026-10-20 | minor | §11: Japanese 和暦 date formats in `crates/numfmt` (`[$-411]`, `g`/`gg`/`ggg`, era year `e`/`ee`, gannen 元年); other locale tags stay ignored |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
