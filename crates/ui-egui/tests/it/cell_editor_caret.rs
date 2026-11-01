@@ -61,6 +61,12 @@ fn caret_contrasts_with_the_cell_fill() {
 /// What the in-cell editor paints while editing A1 with `text`, after `setup`: the colours of
 /// its text, and whether a backdrop of `fill` was painted.
 fn editor_paint(setup: &dyn Fn(&mut SheetApp), text: &str, fill: Color32) -> (Vec<Color32>, bool) {
+    let (chars, backdrop) = editor_chars(setup, text, fill);
+    (chars.into_iter().map(|(_, c)| c).collect(), backdrop)
+}
+
+/// [`editor_paint`], with the colour of each character of the text.
+fn editor_chars(setup: &dyn Fn(&mut SheetApp), text: &str, fill: Color32) -> (Vec<(char, Color32)>, bool) {
     let ctx = Context::default();
     theme::apply(&ctx, false);
     let mut session = Session::new();
@@ -88,7 +94,13 @@ fn editor_paint(setup: &dyn Fn(&mut SheetApp), text: &str, fill: Color32) -> (Ve
     else {
         return (Vec::new(), false);
     };
-    let colors = shown.galley.job.sections.iter().map(|s| s.format.color).collect();
+    let colors = shown
+        .galley
+        .job
+        .sections
+        .iter()
+        .flat_map(|s| text.get(s.byte_range.start.0..s.byte_range.end.0).unwrap_or_default().chars().map(|ch| (ch, s.format.color)))
+        .collect();
     // The editor's backdrop is the last filled rectangle painted before its text (the grid's own
     // cell, painted earlier, would match whatever the editor did).
     let backdrop = output.shapes.get(..at).unwrap_or_default().iter().rev().find_map(|s| match &s.shape {
@@ -130,12 +142,20 @@ fn the_editor_backdrop_is_the_fill_the_cell_shows() {
 
 #[test]
 fn a_formula_keeps_the_font_colour_and_colours_its_references() {
-    // #3011 review: in a formula, the references take their highlight colours and the rest of
-    // the text (`=`, operators, numbers) the cell's font colour.
-    let (colors, _) = editor_paint(&white_on_black, "=B2+1", Color32::BLACK);
-    assert!(colors.contains(&Color32::WHITE), "`=` and `+1` in the font colour: {colors:?}");
-    assert!(colors.iter().any(|&c| c != Color32::WHITE && c != Color32::BLACK), "`B2` in a reference colour: {colors:?}");
-    // On an automatic-colour cell the reference is coloured too.
-    let (plain, _) = editor_paint(&|_| {}, "=B2+1", Color32::WHITE);
-    assert!(plain.contains(&Color32::BLACK) && plain.iter().any(|&c| c != Color32::BLACK), "{plain:?}");
+    // #3011 review: in a formula, the reference takes its highlight colour and the rest of the
+    // text (`=`, the operator, the number) the cell's font colour.
+    let (chars, _) = editor_chars(&white_on_black, "=B2+1", Color32::BLACK);
+    let text: String = chars.iter().map(|&(ch, _)| ch).collect();
+    assert_eq!(text, "=B2+1", "every character painted once");
+    let color = |ch: char| chars.iter().find(|&&(c, _)| c == ch).map(|&(_, c)| c).unwrap();
+    for ch in ['=', '+', '1'] {
+        assert_eq!(color(ch), Color32::WHITE, "`{ch}` in the font colour: {chars:?}");
+    }
+    let reference = color('B');
+    assert_eq!(color('2'), reference, "the whole reference in one colour");
+    assert!(reference != Color32::WHITE && reference != Color32::BLACK, "`B2` in a reference colour: {chars:?}");
+    // On an automatic-colour cell the same reference colour, and black for the rest.
+    let (plain, _) = editor_chars(&|_| {}, "=B2+1", Color32::WHITE);
+    let want = [('=', Color32::BLACK), ('B', reference), ('2', reference), ('+', Color32::BLACK), ('1', Color32::BLACK)];
+    assert_eq!(plain, want);
 }
