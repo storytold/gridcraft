@@ -227,13 +227,18 @@ mod title_bar_tests {
         assert_eq!(title_max_width(500.0, 520.0, 900.0), 0.0);
     }
 
-    /// Lay out a title in a real egui frame, returning (title text, title width, dot width).
+    /// Lay out a title in a real egui frame, checking baselines and returning (text, width, dot width).
     fn layout_title(title: &str, dirty: bool, max_w: f32) -> (String, f32, f32) {
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());
         let mut out = (String::new(), 0.0, 0.0);
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
             let (galley, dot) = title_galleys(ui.painter(), title, dirty, max_w, Color32::WHITE);
+            for row in &galley.rows {
+                if let Some(first) = row.glyphs.first() {
+                    assert!(row.glyphs.iter().all(|glyph| (glyph.pos.y - first.pos.y).abs() < 0.01), "title glyphs share a baseline: {title:?}");
+                }
+            }
             // The glyphs actually drawn: `galley.text()` is the untruncated source.
             let shown = galley.rows.iter().flat_map(|r| r.glyphs.iter().map(|g| g.chr)).collect();
             out = (shown, galley.size().x, dot.map_or(0.0, |d| d.size().x));

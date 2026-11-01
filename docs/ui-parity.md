@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (CJK fallback baseline alignment; earlier: checkbox cells print as boxes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (CJK title baseline regression and manual visual-size validation; earlier: CJK fallback baseline alignment) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -184,6 +184,10 @@ Mixed CJK, Latin and digits share a baseline in the grid, editor and window titl
 fallback fonts are used. Baseline alignment can increase line height; manual row heights
 continue to clip oversized text.
 
+A compiled macOS build was also checked manually: mixed CJK text and digits had a consistent
+perceived size after this fix, without a glyph-scale adjustment. Automated regressions check
+baseline positions, including the actual truncated title layout; visual size was checked manually.
+
 Pixel comparison against Excel screenshots hasn't been run since M1; fonts depend on the system
 (no Calibri; Carlito would match metrics, #29, #4, #168 for weights); icons are GridCraft's own
 by rule and will never match Office's, by design.
@@ -198,6 +202,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Assert shared baselines in the actual title layout and record manual visual-size validation of a compiled macOS build |
 | 2026-10-31 | minor | CJK fallback text shares the Latin baseline in cells, editors and window titles; fixed row heights and clipping remain workbook-controlled |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
