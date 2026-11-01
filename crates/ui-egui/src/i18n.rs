@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod el;
+mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
@@ -23,6 +24,7 @@ mod pl;
 mod pt;
 mod ro;
 mod ru;
+mod ru_functions;
 mod sr;
 mod tr;
 mod uk;
@@ -185,8 +187,13 @@ impl Language {
         }
     }
 
+    /// Selects formula syntax for the interface language; languages without alias tables use English.
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        match self {
+            Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::Ru => gridcraft_engine::formula::FormulaLocale::Ru,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -194,7 +201,12 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+        self.translation(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// Raw catalog lookup for contextual labels and shared message templates.
+    pub fn translation(self, text: &str) -> Option<&'static str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
@@ -214,17 +226,32 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        }
     }
 
+    /// Ribbon tabs can be nouns while their corresponding commands are verbs.
+    pub fn tr_tab(self, text: &str) -> &str {
+        self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))
+    }
+
+    /// Translates known fixed or templated diagnostics after removing engine command wrappers.
+    /// Unmatched parameter errors retain their command context; other command wrappers are cleaned.
+    /// Captured user data stays literal.
     pub(crate) fn tr_error(self, message: &str) -> String {
-        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+        let original_parameters = message.starts_with("invalid parameters for `").then_some(message);
+        let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
+            crate::clean_error(message)
+        } else {
+            message.to_owned()
+        };
 
         let translated = self.tr(&message);
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
 
-        if translated == fallback { message } else { translated.to_owned() }
+        if translated != fallback {
+            return translated.to_owned();
+        }
+        error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -243,6 +270,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -515,5 +543,48 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod russian_tests {
+    use super::*;
+    /// Unknown parameter errors retain the engine's command context without affecting translated details.
+    #[test]
+    fn unmatched_parameter_errors_keep_the_command_context() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let error = session.execute("data.showLevels", serde_json::json!({})).unwrap_err().to_string();
+        assert!(error.starts_with("invalid parameters for `data.showLevels`: "), "{error}");
+        for language in [Language::En, Language::Ru] {
+            assert_eq!(language.tr_error(&error), error);
+            assert_eq!(language.tr_error("command `data.showLevels`: Untranslated outline failure {value}"), "Untranslated outline failure {value}");
+        }
+        assert_eq!(Language::Ru.tr_error("invalid parameters for `chart`: Select a chart first."), Language::Ru.tr("Select a chart first."));
+        assert_eq!(Language::Ru.tr_error("invalid parameters for `cell.set`: missing `cell`"), "Не указан параметр `cell`");
+    }
+
+    /// Checks Russian diagnostics remove command wrappers while preserving captured names and unknown messages.
+    #[test]
+    fn russian_error_messages_preserve_data_and_clean_command_wrappers() {
+        let ru = Language::Ru;
+        assert_eq!(ru.tr_error("command `chart` is not available right now: Select a chart first."), ru.tr("Select a chart first."));
+        assert_eq!(
+            ru.tr_error("invalid parameters for `cell.set`: invalid cell reference `Лист{key}` for `cell`"),
+            "Неверная ссылка на ячейку `Лист{key}` в параметре `cell`"
+        );
+        assert_eq!(ru.tr_error("unexpected end of formula"), ru.tr("unexpected end of formula"));
+        assert_eq!(ru.tr_tab("Insert"), ru.tr("Tab|Insert"));
+        assert_eq!(ru.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let error = session.execute("cell.set", serde_json::json!({"cell":"A1","input":"=SUM()"})).unwrap_err().to_string();
+        let translated = ru.tr_error(&error);
+        assert!(translated.contains(ru.formula_locale().function_name("SUM")), "{translated}");
+        assert!(translated.contains(ru.function_argument("number").unwrap()), "{translated}");
+        let error = session.execute("cell.set", serde_json::json!({"cell":"Лист{key}","input":"1"})).unwrap_err().to_string();
+        let translated = ru.tr_error(&error);
+        assert!(translated.contains("Лист{key}"));
+        assert_ne!(translated, error);
     }
 }

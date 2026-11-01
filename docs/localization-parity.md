@@ -1,11 +1,25 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (shared locale data and Russian interface, formulas and errors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
 right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
+
+## Russian update (2026-10-29)
+
+Russian now extends #676's catalog with the current catalog union and newer main-only keys.
+The Insert ribbon tab uses the noun «Вставка» separately from the Insert command «Вставить»;
+the Start and Save Changes dialogs look up their visible text at draw time. Missing strings
+continue to fall back to English; this is coverage of catalog keys, not every literal in the UI.
+
+Formula input adapts #1850's 199 aliases to the current parser and help architecture. Unicode
+LET/LAMBDA name precedence and iterative handling of long flat expressions are retained.
+Russian help for 23 functions is English-keyed in `i18n/ru_functions.rs`. Localized error
+literals round-trip at the editor boundary, with canonical storage/API/XLSX syntax. Fixed
+messages use `tr_error`; selected dynamic parser/parameter messages preserve captured user data.
+Russian regional number/date formats and the remaining function help are still outstanding.
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
@@ -22,8 +36,8 @@ right-to-left sheets and full complex-script support. Part of
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
   hint is assembled with the formula syntax's function name and separator. Spanish translates
-  the 10 common functions it had help for (SUM, AVERAGE, IF…); other languages show the English
-  help.
+  10 common functions (SUM, AVERAGE, IF…); Russian now translates 23 through the same tables.
+  Other languages show the English help where no help table is supplied.
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
@@ -37,10 +51,10 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Canonical file/API formulas, localized cell entry.** Files and APIs keep English names,
+  comma arguments and decimal points. Spanish and Russian cell/formula-bar entry use locale data
+  for aliases and separators. Number/date display still uses the canonical formats; regional
+  formats and other language tables are separate open work (including #163 and #2822).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -85,9 +99,9 @@ separators, number/date formats, machine translation with agent review, and scri
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
+Russian is described in the current update above. Other shipped languages in this historical table include German (de), Czech (cs), French (fr) and Turkish (tr).
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
+Russian is described in the current update above. Historical counts for German (de) and Dutch (nl) below predate the current Russian catalog.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
@@ -99,9 +113,9 @@ language (none so far) and of localized function names.
    status and error messages, command labels, function descriptions). A string a catalog lacks
    shows in English and never fails a check: `cargo xtask i18n-report` lists the missing strings
    per language, and `cargo xtask ci` runs it first. Language switching and the system-language default already exist (#31).
-2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
-   boundary only (files keep en-US invariant names), locale number and date formats, list
-   separators in CSV.
+2. Extend locale-aware formulas through the shared `LocaleData` and per-language modules at the
+   formula-bar boundary (files keep invariant names); regional number/date formats and CSV
+   separator policies remain separate work.
 3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
@@ -110,6 +124,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Russian: refresh #676 catalog, adapt #1850 formula aliases to current help/name handling, localize error literals and selected parameter/parser diagnostics at the UI boundary |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

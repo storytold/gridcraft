@@ -4,7 +4,7 @@ use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::formula_refs;
+use crate::editor::formula_refs_in;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -156,6 +156,8 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     sh.spill_anchor(at)
 }
 
+/// Returns localized formula-bar text for the active cell or its spill anchor.
+/// Respects hidden formulas and supplies picture descriptions when the selected cell contains a picture.
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
@@ -181,7 +183,7 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            crate::formula_locale::edit_text(&d.wb, sh, a, app.ui.language.formula_locale())
         };
     }
     String::new()
@@ -298,7 +300,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let EditorKeyOutcome { action, arrow, cancel } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
-    let refs = formula_refs(&ed.text);
+    let refs = formula_refs_in(&ed.text, ed.locale);
     let t = Tokens::get(ui.ctx());
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
     let cell_text_color = if on_sheet { t.cell_text } else { t.text };
@@ -605,7 +607,7 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
     let caret_b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
-    for (a, b, ..) in formula_refs(&ed.text) {
+    for (a, b, ..) in formula_refs_in(&ed.text, ed.locale) {
         if a <= caret_b && caret_b <= b {
             let Some(r) = ed.text.get(a..b) else { return };
             let cycled: String = r

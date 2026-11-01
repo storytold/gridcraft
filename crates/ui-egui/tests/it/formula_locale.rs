@@ -16,6 +16,27 @@ fn app() -> SheetApp {
 fn formula(app: &SheetApp) -> String {
     app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.to_string()
 }
+
+/// Localized error literals do not hide reference spans used by colouring, F4 and point mode.
+#[test]
+fn localized_errors_preserve_reference_spans_in_the_draft_language() {
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_ui_egui::editor::{formula_refs, formula_refs_in};
+    let source = "=ЕСЛИОШИБКА(#ССЫЛКА!;СУММ(A1;B2:C3;1,5;{1\\2;3\\4};'Лист'!A1))";
+    let refs = formula_refs_in(source, FormulaLocale::Ru);
+    assert_eq!(refs.iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["A1", "B2:C3", "A1"]);
+    assert_eq!(refs.iter().map(|r| &source[r.0..r.1]).collect::<Vec<_>>(), ["A1", "B2:C3", "'Лист'!A1"]);
+    assert_eq!(refs.last().unwrap().3.as_deref(), Some("Лист"));
+    // Changing the interface does not change an existing draft's captured syntax.
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    app.begin_edit(Some(source.to_string()), false);
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    let draft = app.editor.as_ref().unwrap();
+    assert_eq!(formula_refs_in(&draft.text, draft.locale), refs);
+    let english = "=IFERROR(#REF!,A1+B2:C3)";
+    assert_eq!(formula_refs(english), formula_refs_in(english, FormulaLocale::En));
+}
 fn enter(app: &mut SheetApp, text: &str) -> bool {
     app.begin_edit(Some(text.into()), false);
     app.commit_edit(0, 0, false, false)
@@ -239,4 +260,80 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     assert!(!enter(&mut app, "=TOPLA(1;2)"));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
+}
+/// Checks Russian editor entry and display survive XLSX round trips while engine/API syntax stays canonical.
+#[test]
+fn russian_entry_roundtrips_through_xlsx_and_keeps_api_canonical() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    assert!(enter(&mut app, "=если(истина;сумм(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"russian.xlsx","base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=ЕСЛИ(ИСТИНА;СУММ(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert!(app.run("cell.set", json!({"cell":"A2","input":"=SUM(1,2)"})).is_ok());
+    assert!(app.run("cell.set", json!({"cell":"A3","input":"=СУММ(1;2)"})).is_err());
+    assert!(enter(&mut app, "=ЕСЛИОШИБКА(#ССЫЛКА!;42)"));
+    assert_eq!(formula(&app), "IFERROR(#REF!,42)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+}
+
+/// Checks localized Boolean/error values and similar literal text retain their types through editing.
+#[test]
+fn russian_constants_and_literal_text_do_not_change_type_when_edited() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    for (typed, expected) in [("#ССЫЛКА!", Value::Error(CellError::Ref)), ("истина", Value::Bool(true)), ("ложь", Value::Bool(false))]
+    {
+        assert!(enter(&mut app, typed));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+        app.begin_edit(None, false);
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+    }
+    for text in ["#ССЫЛКА!", "ИСТИНА", "ЛОЖЬ", "+сумм(1)"] {
+        app.run("cell.set", json!({"cell":"A1","input":format!("'{text}")})).unwrap();
+        app.begin_edit(None, false);
+        assert!(app.editor.as_ref().unwrap().text.starts_with('\''));
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(text));
+    }
+}
+
+/// Checks Russian autocomplete and argument insertion place the caret at valid Unicode positions.
+#[test]
+fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_ui_egui::editor::EditState;
+    let mut editor = EditState::new(0, 0, CellRef::new(0, 0), "=сче".into(), true, false);
+    editor.locale = FormulaLocale::Ru;
+    editor.update_autocomplete(&["СЧЁТ".into(), "СЧЁТЕСЛИ".into()]);
+    assert_eq!(editor.autocomplete, vec!["СЧЁТ", "СЧЁТЕСЛИ"]);
+    assert!(editor.accept_autocomplete());
+    assert_eq!(editor.text, "=СЧЁТ(");
+    assert_eq!(editor.caret, editor.text.chars().count());
+    assert_eq!(editor.current_function(), Some(("СЧЁТ".into(), 0)));
+    assert!(editor.insert_argument_names(Language::Ru));
+    assert!(editor.text.contains(Language::Ru.function_argument("value").unwrap()));
+}
+
+/// Checks explicit Text formatting protects localized-looking input in both supported translated syntaxes.
+#[test]
+fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
+    for code in ["es", "ru"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language":code})).unwrap();
+        app.run("home.numberFormat", json!({"format":"@"})).unwrap();
+        let locale = app.ui.language.formula_locale();
+        for text in [locale.function_name("TRUE"), locale.error_name(CellError::Ref)] {
+            assert!(enter(&mut app, text));
+            app.begin_edit(None, false);
+            assert_eq!(app.editor.as_ref().unwrap().text, text);
+            app.editor.as_mut().unwrap().text.push('!');
+            assert!(app.commit_edit(0, 0, false, false));
+            assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(format!("{text}!")));
+        }
+    }
 }
