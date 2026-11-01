@@ -311,19 +311,14 @@ impl SheetApp {
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
-                } else if let Some(pick) = &self.services.pick_open
-                    && let Some(path) = pick()
-                {
-                    self.open_path(&path);
+                } else {
+                    self.pick_path(crate::PathPick::Open, super::AfterPick::Open);
                 }
             }
             "saveAs" => {
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
-                    }
+                if self.services.pick_save.is_some() {
+                    self.pick_path(crate::PathPick::Save(suggested), super::AfterPick::SaveAs);
                 } else if self.services.download.is_some()
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
                     && let Some(dl) = &self.services.download

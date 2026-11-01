@@ -1,6 +1,7 @@
 use super::printing;
 
 type PickSave = Box<dyn Fn(&str) -> Option<String>>;
+type PickAsync = Box<dyn Fn(PathPick, std::sync::mpsc::Sender<Option<String>>)>;
 type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
@@ -15,6 +16,13 @@ pub struct Services {
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
+    /// macOS: start a picker that doesn't block the frame and send its answer (`None` when
+    /// cancelled) on the channel; used instead of `pick_open` and `pick_save`. A blocking picker
+    /// runs AppKit's modal loop inside winit's event handler, and an event delivered there (a
+    /// Finder drag, a trackpad gesture, resizing the panel) aborts the process and loses the
+    /// user's work (#1911, #2042, #2906). Hosts keep `pick_open`/`pick_save` set too: their
+    /// presence is what tells the desktop from the web.
+    pub pick_async: Option<PickAsync>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -41,6 +49,15 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+}
+
+/// A path asked of the host's asynchronous picker ([`Services::pick_async`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PathPick {
+    /// A workbook to open.
+    Open,
+    /// Where to save; the suggested file name's extension is the file type asked for.
+    Save(String),
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
