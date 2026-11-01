@@ -114,6 +114,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Diagrame sparkline",
         "Checkbox" => "Casetă de selectare",
         "Insert checkboxes in the selected cells" => "Inserați casete de selectare în celulele selectate",
+        "Button" => "Buton",
+        "Slider" => "Glisor",
+        "Spin Button" => "Buton rotativ",
+        "Draw a button that runs a macro or a command" => "Desenați un buton care rulează o macrocomandă sau o comandă",
+        "Draw a slider that sets a whole number in a linked cell" => "Desenați un glisor care setează un număr întreg într-o celulă legată",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Desenați un buton rotativ care modifică pas cu pas un număr întreg într-o celulă legată"
+        }
+        "Edit Text" => "Editare text",
+        "Assign Action…" => "Atribuire acțiune…",
+        "Format Control…" => "Formatare control…",
         "Header & Footer" => "Antet și subsol",
         "Draw with ink" => "Desenare cu cerneală",
         "Eraser" => "Radieră",

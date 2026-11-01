@@ -213,8 +213,10 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
-/// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
-/// kept in the returned tree.
+/// Parses a part; complete elements named in `split` that are children or grandchildren of the
+/// root (`sst/si`, `worksheet/sheetData/row`) are handed to `cb` and not kept in the returned
+/// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the
+/// tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
@@ -241,9 +243,10 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
         kept: &mut usize,
     ) -> Result<(), IoError> {
+        let shallow = stack.len() <= 2;
         match stack.last_mut() {
             Some(parent) => {
-                if split.contains(&el.name.as_str()) {
+                if shallow && split.contains(&el.name.as_str()) {
                     cb(el)?;
                 } else {
                     *kept = kept.saturating_add(1);

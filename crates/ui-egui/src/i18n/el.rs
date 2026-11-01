@@ -235,6 +235,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "Μετατροπή σε σχόλια",
         "Checkbox" => "Πλαίσιο ελέγχου",
         "Insert checkboxes in the selected cells" => "Εισαγωγή πλαισίων ελέγχου στα επιλεγμένα κελιά",
+        "Button" => "Κουμπί",
+        "Slider" => "Ρυθμιστικό",
+        "Spin Button" => "Κουμπί περιστροφής",
+        "Draw a button that runs a macro or a command" => "Σχεδίαση κουμπιού που εκτελεί μια μακροεντολή ή μια εντολή",
+        "Draw a slider that sets a whole number in a linked cell" => "Σχεδίαση ρυθμιστικού που ορίζει έναν ακέραιο αριθμό σε ένα συνδεδεμένο κελί",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Σχεδίαση κουμπιού περιστροφής που αλλάζει κατά βήματα έναν ακέραιο αριθμό σε ένα συνδεδεμένο κελί"
+        }
+        "Edit Text" => "Επεξεργασία κειμένου",
+        "Assign Action…" => "Αντιστοίχιση ενέργειας…",
+        "Format Control…" => "Μορφοποίηση στοιχείου ελέγχου…",
         "Sheet\nRight-to-Left" => "Φύλλο από\nδεξιά προς αριστερά",
         "Sheet Right-to-Left" => "Φύλλο από δεξιά προς αριστερά",
         "Data\nAnalysis" => "Ανάλυση\nδεδομένων",

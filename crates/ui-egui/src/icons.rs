@@ -106,6 +106,12 @@ pub enum Icon {
     Symbol,
     Sparkline,
     Checkbox,
+    /// A form button with a pointer.
+    Button,
+    /// A form slider (scroll bar).
+    Slider,
+    /// A form spin button.
+    Spin,
     Function,
     Name,
     Trace,
@@ -531,6 +537,23 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         Icon::Checkbox => {
             g.rect(2.0, 2.0, 12.0, 12.0, None, Some(c));
             g.line(&[(4.5, 8.0), (7.0, 10.5), (11.5, 5.0)], c, 1.4);
+        }
+        Icon::Button => {
+            let frame = Rect::from_min_max(g.pt(1.5, 3.0), g.pt(14.5, 11.0));
+            g.p.rect_filled(frame, 2.0 * g.s, paper);
+            g.p.rect_stroke(frame, 2.0 * g.s, Stroke::new(1.0, c), egui::StrokeKind::Inside);
+            g.poly(&[(9.0, 7.5), (9.0, 15.0), (13.5, 12.5)], c);
+        }
+        Icon::Slider => {
+            g.line(&[(2.0, 8.0), (14.0, 8.0)], light, 1.6);
+            g.line(&[(2.0, 8.0), (7.0, 8.0)], blue, 1.6);
+            g.circle(7.0, 8.0, 2.4, Some(paper), Some(c));
+        }
+        Icon::Spin => {
+            g.rect(4.0, 1.5, 8.0, 13.0, Some(paper), Some(c));
+            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], c);
+            g.poly(&[(8.0, 3.2), (10.5, 6.3), (5.5, 6.3)], c);
+            g.poly(&[(5.5, 9.7), (10.5, 9.7), (8.0, 12.8)], c);
         }
         Icon::Fx => g.text(8.0, 8.0, "fx", 10.5, c, (false, true)),
         Icon::Plus => {

@@ -1,5 +1,4 @@
 use super::geo::Geo;
-use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
@@ -33,7 +32,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
-    let events = ctx.input(|i| i.events.clone());
+    let events = grid_events(app, ctx, sh);
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -124,9 +123,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    // With an object selected, Delete and Backspace delete it, not the cells.
+                    Key::Delete if app.delete_selected_object() => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
+                    Key::Backspace if app.delete_selected_object() => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
@@ -134,6 +134,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                             app.begin_edit(Some(String::new()), false);
                         }
                     }
+                    Key::Escape if app.selected_object.is_some() => app.selected_object = None,
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;
@@ -154,5 +155,24 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             _ => {}
         }
+    }
+}
+
+/// This frame's input events, without those the focused form control took.
+fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui::Event> {
+    let events = ctx.input(|i| i.events.clone());
+    events.into_iter().filter(|ev| !form_control_event(app, sh, ev)).collect()
+}
+
+/// Whether the focused form control takes `ev`: arrows, Page Up and Down, Home, End, Space and
+/// Enter without Ctrl, Cmd or Alt, and the space a Space press types (it presses a focused button
+/// and doesn't start typing in a cell).
+fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool {
+    match ev {
+        egui::Event::Text(text) => text == " " && app.grid.focused_control.is_some() && app.selected_object.is_none(),
+        egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
+            !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key, *repeat)
+        }
+        _ => false,
     }
 }

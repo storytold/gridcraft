@@ -21,6 +21,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
+pub mod control_ui;
 mod craft_fonts_policy;
 pub mod credits;
 pub mod dialogs;
@@ -30,6 +31,7 @@ pub mod doc_windows;
 pub mod editor;
 mod floating_pictures;
 pub mod fonts;
+pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
@@ -40,6 +42,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -266,8 +269,8 @@ pub struct SheetApp {
     /// false (a bare test/embedder that never runs the hook) capture code falls back to egui's
     /// current input instead of reusing a stale recorded value.
     pub(crate) capture_geometry_from_raw: bool,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape or slicer).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.

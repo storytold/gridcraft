@@ -77,7 +77,7 @@ impl SheetApp {
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
-            self.selected_chart = Some(chart);
+            self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Chart, chart));
         }
         if id == "file.exportPdf"
             && let Ok(r) = &r
@@ -259,6 +259,7 @@ impl SheetApp {
     pub fn after_engine(&mut self) {
         // The requests belong to the window the command left active.
         self.follow_active_window();
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),

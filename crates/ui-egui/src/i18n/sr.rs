@@ -114,6 +114,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Mini grafikoni",
         "Checkbox" => "Polje za potvrdu",
         "Insert checkboxes in the selected cells" => "Umetni polja za potvrdu u izabrane ćelije",
+        "Button" => "Dugme",
+        "Slider" => "Klizač",
+        "Spin Button" => "Dugme za okretanje",
+        "Draw a button that runs a macro or a command" => "Nacrtaj dugme koje pokreće makro ili komandu",
+        "Draw a slider that sets a whole number in a linked cell" => "Nacrtaj klizač koji postavlja ceo broj u povezanoj ćeliji",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Nacrtaj dugme za okretanje koje menja ceo broj u povezanoj ćeliji po koracima"
+        }
+        "Edit Text" => "Uredi tekst",
+        "Assign Action…" => "Dodeli radnju…",
+        "Format Control…" => "Oblikuj kontrolu…",
         "Header & Footer" => "Zaglavlje i podnožje",
         "Draw with ink" => "Crtaj mastilom",
         "Eraser" => "Gumica",

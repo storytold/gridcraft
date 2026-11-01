@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
 use crate::features::{
-    AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, PivotTable, PrintSettings, Shape, SheetProtection, Slicer, Sparkline, Table,
-    Validation,
+    Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
+    SheetProtection, Slicer, Sparkline, Table, Validation,
 };
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -111,6 +111,10 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
+    /// take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -182,6 +186,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            controls: vec![],
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
@@ -202,6 +207,88 @@ impl Sheet {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
     }
 
+    /// The floating object with workbook-unique id `id` on this sheet.
+    pub fn object_ref(&self, id: u32) -> Option<ObjRef> {
+        let kind = if self.charts.iter().any(|o| o.id == id) {
+            ObjKind::Chart
+        } else if self.images.iter().any(|o| o.id == id) {
+            ObjKind::Image
+        } else if self.shapes.iter().any(|o| o.id == id) {
+            ObjKind::Shape
+        } else if self.slicers.iter().any(|o| o.id == id) {
+            ObjKind::Slicer
+        } else if self.controls.iter().any(|o| o.id == id) {
+            ObjKind::Control
+        } else {
+            return None;
+        };
+        Some(ObjRef::new(kind, id))
+    }
+
+    /// Whether the floating object `o` exists on this sheet.
+    pub fn has_object(&self, o: ObjRef) -> bool {
+        self.object_anchor(o).is_some()
+    }
+
+    /// The anchor of the floating object `o`.
+    pub fn object_anchor(&self, o: ObjRef) -> Option<Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+        }
+    }
+
+    pub fn object_anchor_mut(&mut self, o: ObjRef) -> Option<&mut Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+        }
+    }
+
+    /// Removes the floating object `o`; false when there is no such object.
+    pub fn remove_object(&mut self, o: ObjRef) -> bool {
+        fn take<T>(v: &mut Vec<T>, f: impl Fn(&T) -> bool) -> bool {
+            let n = v.len();
+            v.retain(|x| !f(x));
+            v.len() != n
+        }
+        match o.kind {
+            ObjKind::Chart => take(&mut self.charts, |c| c.id == o.id),
+            ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
+            ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
+            ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
+        }
+    }
+
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers, controls)
+    /// that [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old
+    /// ones and write them back in step.
+    pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
+        self.charts
+            .iter()
+            .map(|o| &o.anchor)
+            .chain(self.images.iter().map(|o| &o.anchor))
+            .chain(self.shapes.iter().map(|o| &o.anchor))
+            .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
+    }
+
+    pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
+        self.charts
+            .iter_mut()
+            .map(|o| &mut o.anchor)
+            .chain(self.images.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
+    }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {
@@ -625,6 +712,96 @@ mod tests {
         assert_eq!(s.col_at(1e12), gridcraft_core::MAX_COLS - 1);
         assert_eq!(s.col_at(-5.0), 0);
         assert_eq!(s.col_left(2), 128.0);
+    }
+
+    use crate::features::{ChartKind, LegendPos, ShapeFormat, ShapeKind};
+
+    /// Adds a floating object of `kind` with id `id` at `anchor`. The match is exhaustive on
+    /// purpose: a new kind of floating object does not compile here until this test covers it,
+    /// and the counts in `object_anchor_accessors_visit_the_same_objects_in_the_same_order`
+    /// then catch an accessor that was not taught about it.
+    fn push_object(s: &mut Sheet, kind: ObjKind, id: u32, anchor: Anchor) {
+        match kind {
+            ObjKind::Chart => s.charts.push(Chart {
+                id,
+                kind: ChartKind::default(),
+                anchor,
+                title: None,
+                series: vec![],
+                legend: LegendPos::default(),
+                data_labels: false,
+                gridlines: false,
+                style: 0,
+                x_title: None,
+                y_title: None,
+                source: None,
+                by_rows: false,
+                pivot: None,
+            }),
+            ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
+            ObjKind::Shape => s.shapes.push(Shape {
+                id,
+                kind: ShapeKind::default(),
+                anchor,
+                fill: Color::default(),
+                line: Color::default(),
+                text: String::new(),
+                format: ShapeFormat::default(),
+            }),
+            ObjKind::Slicer => {
+                s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
+            }
+            ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
+        }
+    }
+
+    /// Sorting, and inserting or deleting rows and columns, read every anchor through
+    /// `object_anchors`, compute the new ones and write them back through `object_anchors_mut`
+    /// in step. The two must visit the same objects in the same order, or an object receives
+    /// another object's anchor; a kind that reaches only one of them would break that silently.
+    #[test]
+    fn object_anchor_accessors_visit_the_same_objects_in_the_same_order() {
+        let mut s = Sheet::new("S");
+        // Two objects of every kind, inserted in a mixed order, with ids unrelated to the kind.
+        // Each anchor cell's row carries the id, so an anchor read back names its object.
+        let inserted = [
+            (ObjKind::Slicer, 7),
+            (ObjKind::Chart, 3),
+            (ObjKind::Image, 11),
+            (ObjKind::Shape, 2),
+            (ObjKind::Chart, 9),
+            (ObjKind::Slicer, 1),
+            (ObjKind::Image, 4),
+            (ObjKind::Control, 6),
+            (ObjKind::Shape, 12),
+            (ObjKind::Control, 10),
+        ];
+        for &(kind, id) in &inserted {
+            push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
+        }
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len() + s.controls.len();
+        assert_eq!(per_kind, inserted.len());
+        assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
+        assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
+        // Mark each anchor with its position through the mutable accessor; the shared accessor
+        // reads the marks back in the same sequence.
+        for (i, a) in s.object_anchors_mut().enumerate() {
+            a.dx = i as f32;
+        }
+        let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
+        assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
+        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in insertion
+        // order) and every object appears in it once.
+        let documented: Vec<u32> =
+            ObjKind::ALL.iter().flat_map(|&k| inserted.iter().filter(move |(kind, _)| *kind == k).map(|&(_, id)| id)).collect();
+        let visited: Vec<u32> = s.object_anchors().map(|a| a.cell.row).collect();
+        assert_eq!(visited, documented);
+        // The mark written through the bulk accessor landed on the object `object_anchor` finds
+        // by kind and id.
+        for &(kind, id) in &inserted {
+            let position = documented.iter().position(|&x| x == id).map(|p| p as f32);
+            assert_eq!(s.object_anchor(ObjRef::new(kind, id)).map(|a| a.dx), position, "{kind:?} {id}");
+        }
     }
 }
 

@@ -1,5 +1,7 @@
+use gridcraft_engine::model::ObjKind;
+
 use super::geo::Geo;
-use super::interact::{OBJECT_RESIZE_RADIUS, col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
+use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
@@ -21,8 +23,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     {
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
-    // Draw tools own the cursor over cells, including while recording a stroke.
-    if !app.session.draw_tool.is_empty() && in_cells {
+    // Draw tools and Insert › Controls placement own the cursor over cells, including while
+    // recording a stroke or drawing the control.
+    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
@@ -30,7 +33,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     // has Drag::None and uses hover. A click can briefly leave a drag state after release.
     if resp.dragged()
         && pointer.primary_down()
-        && let Some(cursor) = drag_cursor(&app.grid.drag)
+        && let Some(cursor) = drag_cursor(&app.grid.drag, geo.rtl)
     {
         ctx.set_cursor_icon(cursor);
         return;
@@ -42,18 +45,19 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
 }
 
-/// The cursor a held drag shows, or `None` when the drag leaves it to hover.
-fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
+/// The cursor a held drag shows, or `None` when the drag leaves it to hover. `rtl` swaps the
+/// diagonal resize cursors of an object's corner handles on a mirrored sheet.
+fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
     match drag {
         Drag::None => None,
         Drag::Select => Some(CursorIcon::Cell),
         Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-        Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+        Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
     }
 }
 
@@ -75,10 +79,20 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let border_panes = geo.range_panes(sel.current());
     let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
     let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
-    let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
-    let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
-    if app.grid.drag == Drag::None && near_corner {
-        ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+    // The selected object's handles resize it; any object's body moves it.
+    let idle = app.grid.drag == Drag::None && app.editor.is_none();
+    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
+    let hit = if idle { crate::chartview::hit(app, geo, sh, p) } else { None };
+    // A form control works on click unless it is selected (or Ctrl or Cmd is held).
+    let mods = ctx.input(|i| i.modifiers);
+    let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
+    let on_object = hit.is_some();
+    if let Some(h) = object_handle {
+        ctx.set_cursor_icon(h.cursor(geo.rtl));
+    } else if works {
+        ctx.set_cursor_icon(CursorIcon::PointingHand);
+    } else if on_object {
+        ctx.set_cursor_icon(CursorIcon::Move);
     } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
         header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
     } else if on_handle && app.editor.is_none() {

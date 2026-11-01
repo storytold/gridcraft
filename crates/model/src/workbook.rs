@@ -463,26 +463,55 @@ impl Workbook {
         }
         None
     }
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
+    /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
-        let mut m = 0;
-        for s in &self.sheets {
-            for c in &s.charts {
-                m = m.max(c.id);
-            }
-            for c in &s.images {
-                m = m.max(c.id);
-            }
-            for c in &s.shapes {
-                m = m.max(c.id);
-            }
-            for c in &s.tables {
-                m = m.max(c.id);
-            }
-            for c in &s.slicers {
-                m = m.max(c.id);
-            }
+        self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
+    }
+
+    /// `count` distinct ids no object in the workbook uses, sorted: the ones above the largest id
+    /// in use while they last, then the lowest free ones. Fewer come back only when the id space
+    /// is exhausted.
+    pub fn free_object_ids(&self, count: usize) -> Vec<u32> {
+        let mut used: Vec<u32> = self
+            .sheets
+            .iter()
+            .flat_map(|s| {
+                s.charts
+                    .iter()
+                    .map(|o| o.id)
+                    .chain(s.images.iter().map(|o| o.id))
+                    .chain(s.shapes.iter().map(|o| o.id))
+                    .chain(s.tables.iter().map(|o| o.id))
+                    .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
+            })
+            .collect();
+        used.sort_unstable();
+        used.dedup();
+        let max = used.last().copied().unwrap_or(0);
+        let mut out = Vec::with_capacity(count.min(1 << 16));
+        let mut next = max.checked_add(1);
+        while out.len() < count
+            && let Some(id) = next
+        {
+            out.push(id);
+            next = id.checked_add(1);
         }
-        m + 1
+        // Past the top: the gaps below the largest id, from 1 (0 is never an object's id).
+        let mut taken = used.iter().copied().peekable();
+        let mut id = 1u32;
+        while out.len() < count && id < max {
+            while taken.next_if(|&t| t < id).is_some() {}
+            if taken.peek() == Some(&id) {
+                taken.next();
+            } else {
+                out.push(id);
+            }
+            id += 1;
+        }
+        out.sort_unstable();
+        out
     }
 }
 
@@ -531,5 +560,71 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn object_ids_never_overflow_or_repeat() {
+        let mut wb = Workbook::new();
+        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        assert_eq!(wb.next_object_id(), 1);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(7));
+        }
+        assert_eq!(wb.next_object_id(), 8);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX));
+        }
+        // An id read from a file at the maximum: the lowest free id, not the maximum again.
+        assert_eq!(wb.next_object_id(), 1);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(1));
+            sh.images.push(image(3));
+        }
+        assert_eq!(wb.next_object_id(), 2);
+        assert_eq!(wb.free_object_ids(4), vec![2, 4, 5, 6], "the gaps, skipping 1, 3 and 7");
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX - 1));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
+    }
+
+    /// A file can use the largest id and the one below it: nothing is free above them, so the free
+    /// ids are the lowest unused ones from 1 (0 is never an object's id), and a large request is
+    /// served in time linear in the count and the ids in use.
+    #[test]
+    fn free_object_ids_come_from_below_when_nothing_is_free_above() {
+        let mut wb = Workbook::new();
+        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX));
+            sh.images.push(image(u32::MAX - 1));
+            sh.images.push(image(0));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, 3]);
+        assert_eq!(wb.next_object_id(), 1);
+        // The 100,000 lowest free ids: distinct, ascending, none of them in use.
+        let many = wb.free_object_ids(100_000);
+        assert_eq!(many.len(), 100_000);
+        assert!(many.windows(2).all(|w| w[0] < w[1]), "ascending without repeats");
+        assert!(!many.contains(&0) && !many.contains(&(u32::MAX - 1)) && !many.contains(&u32::MAX));
+        assert_eq!(wb.free_object_ids(0), Vec::<u32>::new());
     }
 }

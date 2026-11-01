@@ -112,6 +112,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Sparklines",
         "Checkbox" => "Checkbox",
         "Insert checkboxes in the selected cells" => "Checkboxes invoegen in de geselecteerde cellen",
+        "Button" => "Knop",
+        "Slider" => "Schuifregelaar",
+        "Spin Button" => "Kringveld",
+        "Draw a button that runs a macro or a command" => "Een knop tekenen die een macro of een opdracht uitvoert",
+        "Draw a slider that sets a whole number in a linked cell" => "Een schuifregelaar tekenen die een geheel getal in een gekoppelde cel instelt",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Een kringveld tekenen dat een geheel getal in een gekoppelde cel stapsgewijs wijzigt"
+        }
+        "Edit Text" => "Tekst bewerken",
+        "Assign Action…" => "Actie toewijzen…",
+        "Format Control…" => "Besturingselement opmaken…",
         "Header & Footer" => "Koptekst & voettekst",
         "Draw with ink" => "Tekenen met inkt",
         "Eraser" => "Gum",

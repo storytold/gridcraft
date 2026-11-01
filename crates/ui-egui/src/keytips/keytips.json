@@ -1046,6 +1046,13 @@
    "note": ""
   },
   {
+   "seq": "NBU",
+   "kind": "command",
+   "target": "insert.button",
+   "excel": "Button (Form Control)",
+   "note": ""
+  },
+  {
    "seq": "NC1",
    "kind": "control",
    "target": "insert.chart.column",
@@ -1233,6 +1240,13 @@
    "note": "Statistical chart (kind TBD)"
   },
   {
+   "seq": "NSB",
+   "kind": "command",
+   "target": "insert.spinButton",
+   "excel": "Spin Button (Form Control)",
+   "note": ""
+  },
+  {
    "seq": "NSC",
    "kind": "command",
    "target": "insert.screenshot",
@@ -1260,6 +1274,13 @@
    "kind": "command",
    "target": "insert.shape",
    "excel": "Shapes",
+   "note": ""
+  },
+  {
+   "seq": "NSL",
+   "kind": "command",
+   "target": "insert.slider",
+   "excel": "Scroll Bar (Form Control)",
    "note": ""
   },
   {

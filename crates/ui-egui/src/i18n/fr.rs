@@ -118,6 +118,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Courbes de tendance",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
+        "Button" => "Bouton",
+        "Slider" => "Curseur",
+        "Spin Button" => "Toupie",
+        "Draw a button that runs a macro or a command" => "Dessiner un bouton qui exécute une macro ou une commande",
+        "Draw a slider that sets a whole number in a linked cell" => "Dessiner un curseur qui définit un nombre entier dans une cellule liée",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Dessiner une toupie qui modifie par pas un nombre entier dans une cellule liée"
+        }
+        "Edit Text" => "Modifier le texte",
+        "Assign Action…" => "Affecter une action…",
+        "Format Control…" => "Format de contrôle…",
         "Header & Footer" => "En-tête et pied de page",
         "Draw with ink" => "Dessiner à l'encre",
         "Eraser" => "Gomme",

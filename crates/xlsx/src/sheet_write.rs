@@ -279,29 +279,51 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
 }
 
 fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::passthrough::SheetKept<'_>, rels: &mut Rels, out: &mut Out) {
-    // Notes: comments part + VML so Excel shows them. Threaded comments also get a legacy note
-    // (its text with the replies as lines, for readers without threaded comments) linked by id.
-    if !sheet.comments.is_empty() {
-        out.comments += 1;
-        let n = out.comments;
-        let ids = thread_ids(sheet, si);
-        out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
-        if !ids.is_empty() {
-            let x = threaded_xml(sheet, &ids, &mut out.persons);
-            out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
-            rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+    // Notes and form controls share one legacy VML drawing: notes need it for Excel to show them,
+    // and controls carry their `x:ClientData` there. Shape ids come from 1024-id blocks listed in
+    // the drawing's idmap (after the blocks kept header and footer drawings use), notes first, so
+    // a control's `shapeId` names its VML shape. Threaded comments also get a legacy note (its
+    // text with the replies as lines, for readers without threaded comments) linked by id.
+    let mut controls = String::new();
+    if !sheet.comments.is_empty() || !sheet.controls.is_empty() {
+        let shapes = (sheet.comments.len() as u64).saturating_add(sheet.controls.len() as u64);
+        let blocks = u32::try_from(shapes.saturating_add(1).div_ceil(1024)).unwrap_or(u32::MAX).max(1);
+        let first = out.kept.notes_block(out.vml_block.saturating_add(1));
+        out.vml_block = out.vml_block.saturating_add(blocks);
+        let idmap = (first..first.saturating_add(blocks)).map(|b| b.to_string()).collect::<Vec<_>>().join(",");
+        // With a kept drawing, our shapes join it in a block of their own.
+        let base = kept.shape_base().unwrap_or(u64::from(first) * 1024);
+        let notes = sheet.comments.len() as u64;
+        let mut control_shapes = String::new();
+        if !sheet.controls.is_empty() {
+            let w = crate::controls::write(out, rels, sheet, |i| base + 1 + notes + i as u64);
+            controls = w.entries;
+            control_shapes = format!("{}{}", crate::controls::SHAPETYPE, w.vml);
         }
+        if !sheet.comments.is_empty() {
+            out.comments += 1;
+            let n = out.comments;
+            let ids = thread_ids(sheet, si);
+            out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
+            if !ids.is_empty() {
+                let x = threaded_xml(sheet, &ids, &mut out.persons);
+                out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
+                rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+            }
+            rels.add("comments", &format!("../comments{n}.xml"));
+        }
+        out.vmls += 1;
+        let v = out.vmls;
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
-        let vml_name = format!("xl/drawings/vmlDrawing{n}.vml");
-        let vml = kept.notes_vml(vml_xml(sheet, out.kept.notes_block(n)), &vml_name, out);
+        let vml_name = format!("xl/drawings/vmlDrawing{v}.vml");
+        let vml = kept.notes_vml(vml_xml(sheet, &idmap, base, &control_shapes), &vml_name, out);
         out.part(&vml_name, None, vml.into_bytes());
-        rels.add("comments", &format!("../comments{n}.xml"));
-        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
+        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{v}.vml"));
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     } else if let Some(rid) = kept.lone_vml(rels, out) {
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     }
-    s.push_str(&kept.elements());
+    s.push_str(&kept.elements(&controls));
 }
 
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {

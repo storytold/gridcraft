@@ -259,7 +259,7 @@ fn object_move_and_resize_keep_their_cursors_and_update_the_object() {
         let mut h = harness();
         let result = h.state_mut().session.execute("insert.chart", json!({"type": "column", "at": "D3", "width": 300, "height": 200})).unwrap();
         let id = result["chart"].as_u64().unwrap() as u32;
-        h.state_mut().selected_chart = Some(id);
+        h.state_mut().select_object_id(Some(id));
         h.run_steps(2);
         let g = geo(&h);
         let min = cell(&h, "D3").min;
@@ -268,7 +268,7 @@ fn object_move_and_resize_keep_their_cursors_and_update_the_object() {
         let target = start + vec2(60.0, 30.0);
         let cursor = if resize { CursorIcon::ResizeNwSe } else { CursorIcon::Move };
         move_with_cursor(&mut h, target, cursor);
-        assert!(matches!(h.state().grid.drag, Drag::Object { resize: r, .. } if r == resize));
+        assert!(matches!(h.state().grid.drag, Drag::Object { handle, .. } if handle.is_some() == resize));
         move_with_cursor(&mut h, target + vec2(1.0, 1.0), cursor);
         button(&mut h, target, false);
         assert_eq!(h.state().grid.drag, Drag::None);

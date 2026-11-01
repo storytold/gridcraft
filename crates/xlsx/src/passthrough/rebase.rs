@@ -1,4 +1,4 @@
-use super::read::merge_vml;
+use super::read::{first_free_block, merge_vml};
 use super::write::{NameMap, attach, part_rels_xml, remap, write_parts};
 use super::*;
 
@@ -28,7 +28,15 @@ impl<'a> SheetKept<'a> {
         }
     }
 
-    /// GridCraft's notes VML for part `name`, merged with the kept control and object shapes.
+    /// The number GridCraft's own VML shapes start after when they join the kept drawing
+    /// ([`SheetKept::notes_vml`] numbers them `base + 1`, `base + 2`…); `None` without one.
+    pub fn shape_base(&self) -> Option<u64> {
+        let vml = self.vml()?;
+        Some(first_free_block(&String::from_utf8_lossy(&vml.data)).saturating_mul(1024))
+    }
+
+    /// GridCraft's notes and form controls VML for part `name`, merged with the kept control and
+    /// object shapes.
     pub fn notes_vml(&self, ours: String, name: &str, out: &mut Out) -> String {
         let Some(vml) = self.vml() else { return ours };
         self.write_vml_rels(vml, name, out);
@@ -50,16 +58,30 @@ impl<'a> SheetKept<'a> {
         self.ids.get(old).map(String::as_str)
     }
 
-    /// The kept sheet elements, in schema order.
-    pub fn elements(&self) -> String {
-        let Some(p) = self.p else { return String::new() };
+    /// The kept sheet elements, in schema order, with GridCraft's own form control entries
+    /// (`controls`, see `controls::write`) in the sheet's one `<controls>` element.
+    pub fn elements(&self, controls: &str) -> String {
         let mut s = String::new();
-        for slot in SHEET_SLOTS {
-            for e in p.elements.iter().filter(|e| e.slot == *slot) {
-                if let Some(x) = remap(&e.xml, &self.ids) {
-                    s.push_str(&x);
+        let mut placed = controls.is_empty();
+        if let Some(p) = self.p {
+            for slot in SHEET_SLOTS {
+                for e in p.elements.iter().filter(|e| e.slot == *slot) {
+                    if let Some(mut x) = remap(&e.xml, &self.ids) {
+                        if *slot == "controls"
+                            && !placed
+                            && let Some(i) = x.rfind("</controls>")
+                        {
+                            x.insert_str(i, controls);
+                            placed = true;
+                        }
+                        s.push_str(&x);
+                    }
                 }
             }
+        }
+        // `<controls>` comes last of the kept elements.
+        if !placed {
+            s.push_str(&crate::controls::controls_element(controls));
         }
         s
     }

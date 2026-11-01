@@ -19,7 +19,7 @@ fn emu_px(v: Option<i64>) -> f32 {
     v.map(|e| (e as f64 / EMU_PER_PX).clamp(-1e7, 1e7) as f32).unwrap_or(0.0)
 }
 
-fn marker(e: &El) -> (CellRef, f32, f32) {
+pub(crate) fn marker(e: &El) -> (CellRef, f32, f32) {
     let num = |n: &str| e.child(n).and_then(|c| c.text.trim().parse::<i64>().ok());
     let col = num("col").unwrap_or(0).clamp(0, MAX_COLS as i64 - 1) as u32;
     let row = num("row").unwrap_or(0).clamp(0, MAX_ROWS as i64 - 1) as u32;

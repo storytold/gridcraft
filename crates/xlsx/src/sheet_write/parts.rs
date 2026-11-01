@@ -348,13 +348,14 @@ fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
     (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
 }
 
-/// Legacy VML shapes Excel uses to display notes.
-pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
+/// Legacy VML shapes Excel uses to display notes (numbered from `base + 1`), followed by the
+/// form control shapes `controls`. `idmap` lists the shape blocks the drawing uses.
+pub(super) fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
@@ -368,6 +369,7 @@ pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
 }

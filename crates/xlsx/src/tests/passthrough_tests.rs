@@ -938,3 +938,64 @@ fn notes_take_shape_blocks_the_header_pictures_dont_use() {
     }
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
 }
+
+#[test]
+fn modelled_form_controls_join_kept_ones_in_one_controls_element() {
+    use gridcraft_model::{Anchor, ControlKind, FormControl};
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    assert!(wb.sheet(0).unwrap().controls.is_empty(), "a check box stays with pass-through");
+    let anchor = Anchor { cell: gridcraft_core::CellRef::new(8, 1), width: 120.0, height: 20.0, ..Default::default() };
+    let slider = FormControl { id: 900, kind: ControlKind::Slider, anchor, link: Some("$B$9".into()), value: 40, ..Default::default() };
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.controls.push(slider);
+    }
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_eq!(sx.matches("<controls").count(), 1, "{sx}");
+    // The kept check box and the slider, each with its own properties part.
+    let ids: Vec<&str> = sx.split("<control shapeId=\"").skip(1).filter_map(|r| r.split('"').next()).collect();
+    assert!(ids.contains(&"1026"), "{ids:?}");
+    let ours = ids.iter().find(|i| **i != "1026").copied().unwrap_or_default();
+    assert_eq!(u.find(CTRL_PROP.as_bytes()).len(), 1, "the kept properties part is written once");
+    // One VML drawing holds the kept shapes, the note and the slider, in fresh blocks.
+    let vml = u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawing", "r:id")).1);
+    assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"), "{vml}");
+    assert!(vml.contains(&format!("id=\"_x0000_s{ours}\"")) && vml.contains("ObjectType=\"Scroll\""), "{vml}");
+    assert!(vml.contains("id=\"_x0000_t201\""), "the form control shape type is defined");
+    assert_eq!(ours, "2050", "the note is 2049, the slider follows it");
+
+    // Read back: the slider is modelled again and the check box is kept, once.
+    let (wb2, rep) = read_xlsx(&out).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let data = wb2.sheet(0).unwrap();
+    assert_eq!(data.controls.len(), 1);
+    assert_eq!((data.controls[0].kind, data.controls[0].value, data.controls[0].link.as_deref()), (ControlKind::Slider, 40, Some("$B$9")));
+    let kept = data.preserved.as_deref().unwrap();
+    let controls = kept.elements.iter().find(|e| e.slot == "controls").map(|e| e.xml.clone()).unwrap_or_default();
+    assert!(controls.contains("Check Box 1") && !controls.contains(&format!("shapeId=\"{ours}\"")), "{controls}");
+    let kept_vml = String::from_utf8_lossy(&kept.vml.as_ref().unwrap().data).into_owned();
+    assert!(!kept_vml.contains("ObjectType=\"Scroll\""), "the modelled slider's shape is not kept");
+    // A second save writes the same controls again, without duplicates.
+    let again = Unpacked::new(&write_xlsx(&wb2).unwrap());
+    let sx2 = again.text(&sheet_part(&again, "Data"));
+    assert_eq!(sx2.matches("<control shapeId=").count(), sx.matches("<control shapeId=").count(), "{sx2}");
+    again.assert_valid();
+}
+
+#[test]
+fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
+    use gridcraft_model::{ControlKind, FormControl};
+    let mut wb = gridcraft_model::Workbook::default();
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.controls.push(FormControl { id: 1, kind: ControlKind::Button, text: "Go".into(), ..Default::default() });
+        sh.controls.push(FormControl { id: 2, kind: ControlKind::Spin, ..Default::default() });
+    }
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 2);
+    assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
+}

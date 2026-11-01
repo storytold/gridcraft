@@ -113,6 +113,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Спарклайны",
         "Checkbox" => "Флажок",
         "Insert checkboxes in the selected cells" => "Вставить флажки в выбранные ячейки",
+        "Button" => "Кнопка",
+        "Slider" => "Ползунок",
+        "Spin Button" => "Счётчик",
+        "Draw a button that runs a macro or a command" => "Нарисовать кнопку, которая запускает макрос или команду",
+        "Draw a slider that sets a whole number in a linked cell" => "Нарисовать ползунок, который задаёт целое число в связанной ячейке",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Нарисовать счётчик, который изменяет целое число в связанной ячейке с шагом"
+        }
+        "Edit Text" => "Изменить текст",
+        "Assign Action…" => "Назначить действие…",
+        "Format Control…" => "Формат элемента управления…",
         "Header & Footer" => "Верхний и нижний колонтитулы",
         "Draw with ink" => "Рисование от руки",
         "Eraser" => "Ластик",

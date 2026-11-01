@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-25 · **Change:** minor (recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-10-31 · **Change:** minor (form buttons run macros; `macro.run` takes `output`)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -98,12 +98,18 @@ refused rather than read as the header.
 
 ## Running
 
-`macro.run {name, inputs?, onConflict?, overwrite?, approve?, timeLimit?}`:
+`macro.run {name, inputs?, output?, onConflict?, overwrite?, approve?, timeLimit?}` (`output`
+replaces the macro's output anchor for this run, as a form button that sends the output elsewhere
+does; `macro.check` and the debugger take it too). The policy and the approval go by the macro as
+it is stored; the footprint, the conflict rule and the check of each step work on the cells
+`output` names, so data there is protected as at the macro's own anchor. An `output` that isn't
+reference text of at most 1,024 characters, or that names no cell (a bad reference, a sheet that
+doesn't exist, a cell outside the grid), is refused before anything runs:
 
 1. **Policy.** File commands other than Properties, exports and printing (such as Open, Save
    and Close), app, window (including New Window, Hide and Unhide), automate and macro commands,
-   and Undo and Redo, never run in a macro. File › Properties runs, and so do exports and
-   printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
+   Undo and Redo, and pressing a form control (`control.press`), never run in a macro. File ›
+   Properties runs, and so do exports and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
    `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
@@ -138,9 +144,9 @@ refused rather than read as the header.
    do; a step that deletes one of them, or changes the size of a range a Repeat is going over,
    stops the run.
 
-`macro.check {name, inputs?, onConflict?, overwrite?, timeLimit?}` reports the bound inputs, the
-output anchor, any approval needed and the footprint, and puts back everything the dry run
-changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
+`macro.check {name, inputs?, output?, onConflict?, overwrite?, timeLimit?}` reports the bound
+inputs, the output anchor (`output` when given), any approval needed and the footprint, and puts
+back everything the dry run changed. `ok` says whether `macro.run` with the same parameters would go ahead without a question;
 when it wouldn't, `errors` says why: the run would fail at a step, a Stop step rolls it back, it
 would write over data under `ask` or `fail`, shifting can't make room (the check shifts and
 checks again, then puts everything back), or the run would go past
@@ -246,6 +252,18 @@ kept but does not run the macro.
 {name, to}`. Saving under a name a macro has is refused unless `replace: true` is passed, and
 renaming to one is refused; names compare ignoring the case of the letters A to Z. A renamed macro is checked
 against every limit again, its size included. Saving, renaming and deleting are undoable.
+Renaming a macro also renames it in the form buttons that run it.
+
+## Form buttons
+
+A form button (Insert › Controls › Button, `insert.button`) runs a macro or one command when it is
+pressed (`control.press {id, approve?, onConflict?}`). `control.assign {id, macro, input?,
+output?}` makes it run a macro, on the selection when it is pressed (`input: "selection"`, the
+default) or always on one range (`input: "B2:D9"`), with an optional output cell; `control.assign
+{id, command, params}` makes it run a command with fixed parameters. A macro runs through
+`macro.run` with its checks; a command goes through the same policy as a macro step and runs, as
+a step does, inside the scripts' file sandbox unless it is an approved file command, so a button
+in a workbook opened from a file asks before it runs anything.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's

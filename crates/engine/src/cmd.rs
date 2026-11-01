@@ -2,6 +2,7 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod controls;
 pub mod data;
 pub mod draw;
 pub mod edit;
@@ -138,6 +139,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(controls::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
@@ -401,6 +403,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }

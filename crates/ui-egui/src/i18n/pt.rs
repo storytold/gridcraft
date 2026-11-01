@@ -110,6 +110,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Minigráficos",
         "Checkbox" => "Caixa de Seleção",
         "Insert checkboxes in the selected cells" => "Inserir caixas de seleção nas células selecionadas",
+        "Button" => "Botão",
+        "Slider" => "Controle Deslizante",
+        "Spin Button" => "Botão de Rotação",
+        "Draw a button that runs a macro or a command" => "Desenhar um botão que executa uma macro ou um comando",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Desenhar um controle deslizante que define um número inteiro em uma célula vinculada"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Desenhar um botão de rotação que altera um número inteiro em uma célula vinculada"
+        }
+        "Edit Text" => "Editar Texto",
+        "Assign Action…" => "Atribuir Ação…",
+        "Format Control…" => "Formatar Controle…",
         "Header & Footer" => "Cabeçalho e Rodapé",
         "Draw with ink" => "Desenhar com Tinta",
         "Eraser" => "Borracha",

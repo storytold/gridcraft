@@ -241,6 +241,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "Açıklamalara Dönüştür",
         "Checkbox" => "Onay Kutusu",
         "Insert checkboxes in the selected cells" => "Seçili hücrelere onay kutuları ekle",
+        "Button" => "Düğme",
+        "Slider" => "Kaydırıcı",
+        "Spin Button" => "Döndürme Düğmesi",
+        "Draw a button that runs a macro or a command" => "Makro veya komut çalıştıran bir düğme çiz",
+        "Draw a slider that sets a whole number in a linked cell" => "Bağlı bir hücrede tamsayı ayarlayan bir kaydırıcı çiz",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Bağlı bir hücredeki tamsayıyı adım adım değiştiren bir döndürme düğmesi çiz"
+        }
+        "Edit Text" => "Metni Düzenle",
+        "Assign Action…" => "Eylem Ata…",
+        "Format Control…" => "Denetimi Biçimlendir…",
         "Sheet\nRight-to-Left" => "Sayfa\nSağdan Sola",
         "Sheet Right-to-Left" => "Sayfa Sağdan Sola",
         "Data\nAnalysis" => "Veri\nAnalizi",
