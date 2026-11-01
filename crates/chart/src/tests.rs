@@ -1255,3 +1255,185 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+/// Explicit Excel chart styles should affect default series colours,
+/// without changing the workbook theme.
+#[test]
+fn explicit_chart_styles_use_distinct_default_colors() {
+    let wb = Workbook::default();
+
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series.push(Series {
+        name: None,
+        categories: None,
+        values: "{10,20,30}".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    });
+
+    c.style = 2;
+    let style2 = resolve(&wb, 0, &c).series[0].color;
+    assert_eq!(style2, series_color(&wb.theme, 0));
+
+    c.style = 1;
+    let style1 = resolve(&wb, 0, &c).series[0].color;
+
+    c.style = 9;
+    let style9 = resolve(&wb, 0, &c).series[0].color;
+
+    assert_ne!(style1, style2, "style 1 should differ from style 2");
+    assert_ne!(style9, style2, "style 9 should differ from style 2");
+}
+
+/// Excel chart styles must not override explicitly assigned series colours.
+#[test]
+fn explicit_chart_styles_preserve_custom_series_colors() {
+    let wb = Workbook::default();
+    let mut c = chart(ChartKind::ColumnClustered);
+
+    c.series.push(Series {
+        name: None,
+        categories: None,
+        values: "{10,20,30}".into(),
+        bubble_sizes: None,
+        color: Some(Color::rgb(12, 34, 56)),
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    });
+
+    for style in [1, 2, 9] {
+        c.style = style;
+        let data = resolve(&wb, 0, &c);
+
+        assert_eq!(data.series[0].color, [12, 34, 56, 255], "explicit series colour changed under chart style {style}");
+    }
+}
+
+/// Check the first four point colours measured in Excel for styles 1 and 9.
+#[test]
+fn excel_chart_styles_use_measured_point_palette() {
+    let wb = Workbook::default();
+    let mut c = chart(ChartKind::Pie);
+
+    c.series.push(Series {
+        name: None,
+        categories: None,
+        values: "{10,20,30,40}".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    });
+
+    let expected = [[0x61, 0x61, 0x61, 0xFF], [0xB3, 0xB3, 0xB3, 0xFF], [0x81, 0x81, 0x81, 0xFF], [0x50, 0x50, 0x50, 0xFF]];
+
+    for style in [1, 9] {
+        c.style = style;
+        let data = resolve(&wb, 0, &c);
+
+        assert_eq!(&data.palette[..4], &expected);
+        assert_eq!(data.series[0].color, expected[0]);
+    }
+}
+
+/// Excel's default-theme chart colours depend on the total series count.
+#[test]
+fn excel_chart_styles_depend_on_series_count() {
+    let wb = Workbook::default();
+
+    let base_series = Series {
+        name: None,
+        categories: None,
+        values: "{10,20,30,40}".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    };
+
+    let cases: &[(usize, [[u8; 4]; 3])] = &[
+        (6, [[0x55, 0x55, 0x55, 0xFF], [0x9E, 0x9E, 0x9E, 0xFF], [0x72, 0x72, 0x72, 0xFF]]),
+        (12, [[0x4F, 0x4F, 0x4F, 0xFF], [0x93, 0x93, 0x93, 0xFF], [0x6A, 0x6A, 0x6A, 0xFF]]),
+    ];
+
+    for (count, expected) in cases {
+        for style in [1, 9] {
+            let mut c = chart(ChartKind::ColumnClustered);
+            c.style = style;
+            c.series = vec![base_series.clone(); *count];
+
+            let data = resolve(&wb, 0, &c);
+
+            assert_eq!(data.series.len(), *count);
+
+            for (i, color) in expected.iter().enumerate() {
+                assert_eq!(data.series[i].color, *color, "style {style}, {count} series, index {i}");
+            }
+        }
+    }
+}
+
+/// Style 9 uses white outlines on column and bar data rectangles.
+#[test]
+fn explicit_style_nine_draws_white_column_outlines() {
+    let wb = Workbook::default();
+
+    for kind in [
+        ChartKind::ColumnClustered,
+        ChartKind::BarClustered,
+        ChartKind::ColumnStacked,
+        ChartKind::BarStacked,
+        ChartKind::ColumnStacked100,
+        ChartKind::BarStacked100,
+    ] {
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.series.push(Series {
+            name: None,
+            categories: None,
+            values: "{10,20,30,40}".into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            quartiles: Default::default(),
+            smooth: false,
+            trendlines: Vec::new(),
+        });
+
+        for style in [1, 2, 9] {
+            c.style = style;
+            let data = resolve(&wb, 0, &c);
+            let color = data.series[0].color;
+            let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+
+            let outlines: Vec<_> = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Rect { fill: Some(fill), stroke, .. } if *fill == color => Some(*stroke),
+                    _ => None,
+                })
+                .collect();
+
+            assert!(!outlines.is_empty(), "No data rectangles for {kind:?}, style {style}");
+
+            let expected = if style == 9 { Some(([255, 255, 255, 255], 1.0)) } else { None };
+
+            assert!(outlines.iter().all(|stroke| *stroke == expected), "Unexpected outline for {kind:?}, style {style}: {outlines:?}");
+        }
+    }
+}

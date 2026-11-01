@@ -30,6 +30,28 @@ pub fn series_color(theme: &Theme, i: usize) -> Rgba {
     [r, g, b, 0xFF]
 }
 
+/// Excel reference colours for explicit styles 1 and 9.
+///
+/// These palettes cover measured default-theme examples.
+/// Other counts still use the existing theme-based fallback.
+fn chart_style_series_color(theme: &Theme, style: u32, index: usize, count: usize) -> Rgba {
+    if !matches!(style, 1 | 9) {
+        return series_color(theme, index);
+    }
+
+    const SMALL: [u8; 4] = [0x61, 0xB3, 0x81, 0x50];
+    const MEDIUM: [u8; 8] = [0x55, 0x9E, 0x72, 0x46, 0x83, 0xC1, 0x9A, 0xC8];
+    const LARGE: [u8; 16] = [0x4F, 0x93, 0x6A, 0x40, 0x7A, 0xB4, 0x61, 0xB3, 0x81, 0x50, 0x95, 0xDA, 0xAF, 0xD2, 0xBA, 0xAA];
+
+    let shades: &[u8] = match count {
+        1..=4 => &SMALL,
+        5..=8 => &MEDIUM,
+        9..=16 => &LARGE,
+        _ => return series_color(theme, index),
+    };
+
+    shades.get(index).map_or_else(|| series_color(theme, index), |shade| [*shade, *shade, *shade, 0xFF])
+}
 /// The first `n` series colours for `theme`.
 pub fn default_palette(theme: &Theme, n: usize) -> Vec<Rgba> {
     (0..n.min(4096)).map(|i| series_color(theme, i)).collect()
@@ -231,8 +253,12 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let color =
-            s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
+        let color = s
+            .color
+            .as_ref()
+            .and_then(|c| c.resolve(&wb.theme))
+            .map(|[r, g, b]| [r, g, b, 0xFF])
+            .unwrap_or_else(|| chart_style_series_color(&wb.theme, chart.style, i, chart.series.len().min(MAX_SERIES)));
         let kind = effective_kind(chart.kind, s.kind, i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
@@ -273,6 +299,46 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
-    let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
+    let palette = if matches!(chart.style, 1 | 9) {
+        (0..n.min(PALETTE_CYCLE)).map(|i| chart_style_series_color(&wb.theme, chart.style, i, n)).collect()
+    } else {
+        default_palette(&wb.theme, n.min(PALETTE_CYCLE))
+    };
     ChartData { categories, category_levels, series, palette }
+}
+
+#[cfg(test)]
+mod explicit_style_palette_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_style_palette_boundaries() {
+        let theme = Workbook::default().theme;
+
+        for style in [1, 9] {
+            for count in [0, 17, 255] {
+                for index in [0, 1, 4, 8, 16] {
+                    assert_eq!(chart_style_series_color(&theme, style, index, count), series_color(&theme, index),);
+                }
+            }
+
+            for (count, expected_first) in [(1, 0x61), (4, 0x61), (5, 0x55), (8, 0x55), (9, 0x4F), (16, 0x4F)] {
+                assert_eq!(
+                    chart_style_series_color(&theme, style, 0, count),
+                    [expected_first, expected_first, expected_first, 255],
+                    "style {style}, count {count}",
+                );
+
+                assert_eq!(
+                    chart_style_series_color(&theme, style, 16, count),
+                    series_color(&theme, 16),
+                    "out-of-range index for style {style}, count {count}",
+                );
+            }
+        }
+
+        for style in [0, 2, 10, 48] {
+            assert_eq!(chart_style_series_color(&theme, style, 0, 4), series_color(&theme, 0),);
+        }
+    }
 }
