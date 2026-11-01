@@ -25,7 +25,7 @@ fn next_stays_on_the_last_visible_sheet() {
     for _ in 0..2 {
         session.execute("sheet.next", json!({})).unwrap();
         let doc = session.active().unwrap();
-        assert_eq!(doc.wb.active_sheet, 1);
+        assert_eq!(doc.wb.active_sheet(), 1);
         assert_eq!(doc.selection.active.a1(), "C7");
     }
 }
@@ -36,7 +36,7 @@ fn previous_stays_on_the_first_visible_sheet() {
     for _ in 0..2 {
         session.execute("sheet.previous", json!({})).unwrap();
         let doc = session.active().unwrap();
-        assert_eq!(doc.wb.active_sheet, 2);
+        assert_eq!(doc.wb.active_sheet(), 2);
         assert_eq!(doc.selection.active.a1(), "C7");
     }
 }
@@ -45,10 +45,10 @@ fn previous_stays_on_the_first_visible_sheet() {
 fn navigation_skips_hidden_sheets_in_both_directions() {
     let mut session = workbook(&[1, 2], 0);
     session.execute("sheet.next", json!({})).unwrap();
-    assert_eq!(session.active().unwrap().wb.active_sheet, 3);
+    assert_eq!(session.active().unwrap().wb.active_sheet(), 3);
     session.execute("sheet.previous", json!({})).unwrap();
     let doc = session.active().unwrap();
-    assert_eq!(doc.wb.active_sheet, 0);
+    assert_eq!(doc.wb.active_sheet(), 0);
     assert_eq!(doc.selection.active.a1(), "C7");
 }
 
@@ -58,7 +58,7 @@ fn navigation_with_one_visible_sheet_is_a_noop() {
     for command in ["sheet.previous", "sheet.next"] {
         session.execute(command, json!({})).unwrap();
         let doc = session.active().unwrap();
-        assert_eq!(doc.wb.active_sheet, 1);
+        assert_eq!(doc.wb.active_sheet(), 1);
         assert_eq!(doc.selection.active.a1(), "C7");
     }
 }
@@ -73,6 +73,6 @@ fn very_hidden_sheets_are_skipped_at_interior_and_boundary_positions() {
     }
     for (command, expected) in [("sheet.next", 2), ("sheet.next", 2), ("sheet.previous", 0)] {
         session.execute(command, json!({})).unwrap();
-        assert_eq!(session.active().unwrap().wb.active_sheet, expected);
+        assert_eq!(session.active().unwrap().wb.active_sheet(), expected);
     }
 }

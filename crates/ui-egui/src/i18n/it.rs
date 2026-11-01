@@ -2,6 +2,7 @@
 //! wording (sentence case, «Blocca riquadri», «Unisci e allinea al centro»); anything absent falls
 //! back to English.
 
+/// Returns the Italian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Incolla",
@@ -205,6 +206,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Anteprima interruzioni\ndi pagina",
         "Page\nLayout" => "Layout\ndi pagina",
         "Formula Bar" => "Barra della formula",
+        "Name Box" => "Casella nome",
+        "Cell Editor" => "Editor di cella",
+        "Font Size" => "Dimensione carattere",
         "Gridlines" => "Griglia",
         "Headings" => "Intestazioni",
         "Zoom" => "Zoom",
@@ -302,6 +306,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Scuro",
         "Sheet Options|View" => "Visualizza",
         "Print" => "Stampa",
+        "Print What" => "Cosa stampare",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Fai clic per aggiungere dati",
         "Add header" => "Aggiungi intestazione",
@@ -981,6 +986,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Layout rapporto",
         "Compact" => "Compatto",
         "Tabular" => "Tabulare",
+        "Record Macro" => "Registra macro",
+        "Stop Recording" => "Interrompi registrazione",
+        "Use Relative References" => "Usa riferimenti relativi",
+        "Run\nMacro" => "Esegui macro",
+        "Macros…" => "Macro…",
+        "Recording" => "Registrazione",
+        "New Macro" => "Nuova macro",
+        "Show" => "Mostra",
         _ => return None,
     })
 }

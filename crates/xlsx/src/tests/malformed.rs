@@ -47,6 +47,20 @@ fn missing_parts() {
 }
 
 #[test]
+fn workbook_part_selection_and_validation() {
+    let root_rels = super::ROOT_RELS.replace("xl/workbook.xml", "xl/missing.xml");
+    let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#;
+    let fallback = make_zip(&[("_rels/.rels", root_rels.as_bytes()), ("xl/workbook.xml", workbook.as_bytes())]);
+    assert!(read_xlsx(&fallback).is_ok());
+
+    let wrong_root = make_zip(&[("xl/workbook.xml", b"<worksheet/>")]);
+    assert!(matches!(read_xlsx(&wrong_root), Err(IoError::Format(message)) if message.contains("unexpected root element <worksheet>")));
+
+    let ods = make_zip(&[("content.xml", b"<document/>")]);
+    assert!(matches!(read_xlsx(&ods), Err(IoError::Format(message)) if message.contains("OpenDocument")));
+}
+
+#[test]
 fn huge_coordinates_and_dimensions() {
     let body = r#"<dimension ref="A1:XFD1048576"/><cols><col min="1" max="4000000000" width="1e308"/><col min="0" max="0"/></cols>
       <sheetData><row r="4294967295"><c r="A1"><v>1</v></c></row><row r="2000000"><c r="A2000000"><v>1</v></c></row>

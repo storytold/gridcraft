@@ -283,7 +283,7 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
 /// `Ui` (not the app) read it to translate their labels; [`set_current`] writes it once per frame.
 fn lang_key() -> egui::Id {
-    egui::Id::new("gridcraft.language")
+    egui::Id::unique("gridcraft.language")
 }
 
 /// The language the current frame is drawing in. `En` when unset.
@@ -374,6 +374,21 @@ mod tests {
         }
     }
 
+    /// The screen-reader names for the formula-bar controls must be translated in every catalog
+    /// (no silent English fallback) and stay single-line labels.
+    #[test]
+    fn accessible_control_names_are_translated_in_every_catalog() {
+        for key in ["Name Box", "Cell Editor", "Font Size", "Sheet Name", "Text Box"] {
+            for language in Language::ALL {
+                let shown = language.tr(key);
+                assert!(!shown.contains('\n'), "{}: {key:?} is not a single-line label: {shown:?}", language.code());
+                if language != Language::En {
+                    assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+                }
+            }
+        }
+    }
+
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
@@ -403,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn tags_reduce_to_a_supported_language() {
+    fn tags_reduce_to_supported_languages() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
@@ -415,6 +430,10 @@ mod tests {
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
@@ -426,6 +445,10 @@ mod tests {
         assert_eq!(Language::from_tag("fr_CA"), Some(Language::Fr));
         assert_eq!(Language::parse("fr"), Some(Language::Fr));
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
+    }
+
+    #[test]
+    fn tags_reduce_to_other_supported_languages() {
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
         assert_eq!(Language::from_tag("tr-TR"), Some(Language::Tr));
@@ -437,6 +460,10 @@ mod tests {
         assert_eq!(Language::from_tag("it-IT"), Some(Language::It));
         assert_eq!(Language::from_tag("it_CH.UTF-8"), Some(Language::It));
         assert_eq!(Language::parse("it"), Some(Language::It));
+    }
+
+    #[test]
+    fn tags_reduce_to_remaining_supported_languages() {
         assert_eq!(Language::from_tag("uk-XX"), Some(Language::Uk));
         assert_eq!(Language::parse("uk"), Some(Language::Uk));
         assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
@@ -448,7 +475,6 @@ mod tests {
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
     }
-
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
         // Deserializing never reads the host locale (tests stay deterministic); the desktop app

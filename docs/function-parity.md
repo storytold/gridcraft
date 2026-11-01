@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-25 · **Change:** minor (the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -20,8 +20,8 @@ Excel's worksheet functions, category by category, against GridCraft's function 
   evaluator's special forms in `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE,
   OFFSET, INDIRECT, INDEX, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
   MAKEARRAY…), excluding the test-only `ADD2`. Every one is an Excel name.
-- **Not on Microsoft's list:** USDOLLAR, a legacy function Excel still evaluates (like DOLLAR),
-  is in our library as a Compatibility function for files that use it. It is not counted above.
+- **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
+  are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
   cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
   WEBSERVICE and FILTERXML; Excel for Windows has them.
@@ -86,16 +86,26 @@ This improves series preparation; it does not change the model-fitting or season
 | Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156) |
 | Implicit intersection `@`, legacy CSE array formulas | done, the entered range filled (PR #156) |
 | Array lifting: an array in a scalar argument evaluates the function per element | done. The Analysis ToolPak functions (EOMONTH, EDATE, WORKDAY(.INTL), NETWORKDAYS(.INTL), YEARFRAC, WEEKNUM, the COUP*, PRICE*, YIELD*, ODD*, TBILL*, ACCRINT*, AMOR*, DISC, DURATION, CUMIPMT/CUMPRINC, EFFECT, NOMINAL, DOLLARDE/FR, XNPV/XIRR rate and guess, FVSCHEDULE principal, ISEVEN/ISODD, QUOTIENT, MROUND, FACTDOUBLE, SQRTPI, RANDBETWEEN, SERIESSUM, the base conversions, CONVERT, DELTA, GESTEP, ERF/ERFC, BESSEL*, COMPLEX and IM* except IMSUM/IMPRODUCT) give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does in both dynamic-array and legacy formulas; array constants and computed arrays (`A1:A3+0`) still lift, and range arguments (holidays, schedule, cash flows) and the .INTL weekend accept ranges. Difference: BYROW/BYCOL pass their row or column to the LAMBDA as values, so `BYROW(A1:B3,LAMBDA(r,EOMONTH(r,0)))` lifts where Excel gives `#VALUE!` |
+| YEARFRAC basis 0, February-end start to day 31 | done: Excel 16.0 returns 31/360 for `YEARFRAC(2021-02-28,2021-03-31,0)` (0.08611111111111111); regression also covers leap day and reversed dates |
 | Trim references `A1:.E10` (trailing), `A1.:E10` (leading), `A1.:.E10` (both), also on whole rows/columns (`A:.A`) | done; evaluated as `TRIMRANGE(range, code, code)`, adjusted on insert/delete; files store `_xlfn.TRIMRANGE(range,code,code)` (Excel's own file spelling unconfirmed in public docs), `_xlfn._TRO_ALL/_TRO_LEADING/_TRO_TRAILING(...)` read too |
 | LET, LAMBDA, named LAMBDAs, ISOMITTED, MAP/REDUCE/SCAN/BYROW/BYCOL/MAKEARRAY | done. A LAMBDA that calls itself more than 140 times, or a formula nested past the depth limit, gives `#NUM!` (the target app allows deeper recursion, #1581). Calling a defined name that holds an error value gives that error, not `#NAME?` |
-| Iterative calculation for circular references | done: with Enable Iterative Calculation on (`formulas.calculationOptions` `{iterative, maxIterations, maxChange}`, saved as `<calcPr iterate iterateCount iterateDelta>`), loops are evaluated again from their previous values (blank = 0) until no cell on a loop changes by Maximum Change or Maximum Iterations is reached; off, cycles give `#CIRC!`. Differences: no Options dialog yet (command only); GridCraft recalculates on open, so a loop that never settles (`=A1+1`) advances again each time the file is opened |
+| Iterative calculation for circular references | done: with Enable Iterative Calculation on (`formulas.calculationOptions` `{iterative, maxIterations, maxChange}`, saved as `<calcPr iterate iterateCount iterateDelta>`), loops are evaluated again from their previous values (blank = 0) until no cell on a loop changes by Maximum Change or Maximum Iterations is reached; off, cycles give `#CIRC!`. Set in File › Options › Formulas (Enable iterative calculation, Maximum Iterations 1 to 32767, Maximum Change 0 or more; the two fields are disabled while iteration is off). Differences: GridCraft recalculates on open, so a loop that never settles (`=A1+1`) advances again each time the file is opened
 | 15-significant-digit comparison semantics | done (#57): `=0.1+0.2=0.3` is TRUE, and MATCH and COUNTIF compare the same way. Arithmetic keeps full precision, as Excel does — `=(0.1+0.2)-0.3` is 5.55E-17 |
+| IMSQRT and the other IM* functions against Excel's text | IMSQRT follows Excel's polar route, so a negative real gives Excel's stray real part: `IMSQRT("-4")` is `1.22514845490862E-16+2i` (checked in Excel 16.0 on 79 inputs). Differences kept: IMSQRT of a number with a part above about 1E154 or below about 1E-155 gives the exact root (Excel gives `#NUM!` or 0); IMPOWER, IMEXP, IMSIN, IMCOS, IMSINH and IMCOSH keep exact results where Excel shows the same kind of noise (`IMPOWER("-4",2)` is `16-3.92047505570758E-15i`) or different trailing digits near multiples of pi/2; IMCSC and IMCSCH differ by one unit in the 15th digit; IMARGUMENT returns 16–17 digits where Excel returns 15; the text of IM* and COMPLEX results differs for some magnitudes (Excel writes `COMPLEX(1E-10,1)` as `0.0000000001+i` but `COMPLEX(0.000000123456789012345,1)` as `1.23456789012345E-07+i`, and an integer past 15 digits rounded and zero-padded) |
+| MOD quotient limit | done: Excel 16.0 returns `#NUM!` when `ABS(number/divisor) >= 1.1259E12`; lower quotients retain the remainder |
+| PERCENTRANK significance and precision | done: Excel 16.0 returns `#DIV/0!` from significance 309, and rounds to 15 significant digits for significance 15–308 |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Long flat operator chains (`=A1+A2+…`, `-`, `*`, `/`, `^`, `&`, comparisons) | done: no operand limit below Excel's 8,192-character formula limit (Excel, observed: `=1+1+…` with 4,096 operands is exactly 8,192 characters with the `=` and calculates; one more character is refused). Evaluated (#484), printed (#628), stored, copied, adjusted, saved and reopened without recursing once per operand, on a 1 MiB stack (#916); written to XLSX as plain formulas, not dynamic arrays; Spanish entry accepts them |
 | Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
 
 ## Depth (estimated)
+
+| Function | Excel parity note |
+|---|---|
+| BINOM.DIST / BINOM.DIST.RANGE | Trial count is truncated, then must be at most 2,147,483,646; larger trials return `#NUM!`. |
+| BETA.DIST | Density mode returns `#NUM!` at the lower or upper interval endpoint when the corresponding shape parameter is less than or equal to 1; cumulative endpoint results remain 0 and 1. |
+| HARMEAN | Returns `#N/A` when arrays and references contain no numeric observations; zero and negative numeric observations still return `#NUM!`. |
 
 **~82% ready.** The library is broad and has 96 test functions in `crates/functions` with many
 assertions each, but there is no conformance suite against Excel-computed results, and user
@@ -123,6 +133,26 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
+| 2026-10-31 | minor | DEC2BIN, DEC2HEX and DEC2OCT validate `places` before returning negative two's-complement output, and Boolean places return `#VALUE!`, matching Excel |
+| 2026-10-31 | minor | BITLSHIFT and BITRSHIFT return `0` for zero operands shifted beyond 53 bits in either direction; nonzero operands retain the `#NUM!` limit, matching Excel |
+| 2026-10-31 | minor | UNICHAR returns `#N/A` for U+FDD0–U+FDEF and U+FFFE/U+FFFF on every plane; adjacent valid characters and existing invalid-range/surrogate errors remain unchanged, matching Excel |
+| 2026-10-31 | minor | UPPER, LOWER and PROPER use single-character casing: `UPPER("Straße")` keeps ß, `LOWER("İ")` returns i, and `PROPER("İSTANBUL")` returns Istanbul, matching Windows Excel 16.0 build 20527 in LCID 1033 |
+| 2026-10-31 | minor | FIXED and DOLLAR format the rounded number's shortest decimal representation before padding requested fractional zeroes, so 1.1 at 16 places and 1.005 at 20 places do not expose binary noise; measured in Windows Excel 16.0 build 20527, LCID 1033 |
+| 2026-10-31 | minor | FIXED accepts output through 255 characters; DOLLAR accepts output through 254. Windows Excel 16.0 build 20527 (LCID 1033) confirmed the distinct cutoffs with grouped and ungrouped values, signs, currency layout and decimal places |
+| 2026-10-31 | minor | DOLLAR uses the input sign for negative amounts that round to zero at nonnegative decimal places (`DOLLAR(-0.0001,0)` is `($0)`); when negative decimal places round to zero, Excel returns `$0`. Exact zero and negative zero stay unsigned; FIXED still returns `0` for `FIXED(-0.0001,0)` |
+| 2026-10-31 | minor | F.DIST, F.DIST.RT, F.INV and F.INV.RT accept degrees of freedom at the 10-billion boundary; F.INV uses the complementary tail, with a gamma-tail limit when numerator degrees dominate, to preserve inverse accuracy; values above the limit remain invalid |
+| 2026-10-31 | minor | T.DIST returns `#DIV/0!` in density mode and `#NUM!` in cumulative mode when degrees truncate to zero; negative integer degrees remain `#NUM!` |
+| 2026-10-31 | minor | Student-t density uses an asymptotic log-gamma ratio for large degrees of freedom, avoiding cancellation while preserving bounded work; checked against Excel at 100 million and 10 billion degrees |
+| 2026-10-31 | minor | T.INV probability zero returns `#DIV/0!`, while other out-of-range probabilities and invalid degrees remain `#NUM!`; T.INV.2T keeps its separate boundary behavior |
+| 2026-10-31 | minor | GAMMA.DIST density at x=0 and shape 1 returns `#NUM!` for all positive scales; the cumulative branch and other shape boundaries are unchanged |
+| 2026-10-31 | minor | WEIBULL.DIST returns zero at x=0 in both density and cumulative modes, including shape below one; negative x remains `#NUM!` |
+| 2026-10-31 | minor | BINOM.DIST and BINOM.DIST.RANGE reject trial counts above 2,147,483,646 after truncation |
+| 2026-10-31 | minor | BETA.DIST density returns `#NUM!` at the lower endpoint with alpha less than or equal to 1 and upper endpoint with beta less than or equal to 1; cumulative behavior is unchanged |
+| 2026-10-31 | minor | HARMEAN returns `#N/A` when array or reference inputs contain no numbers; nonpositive numeric observations remain `#NUM!` |
+| 2026-10-31 | minor | YEARFRAC basis 0 tests the end-31 rule against the original start day; MOD returns `#NUM!` from a quotient of 1.1259E12; PERCENTRANK returns `#DIV/0!` from significance 309 and 15 significant digits from 15 (Excel 16) |
+| 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
+| 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |
@@ -131,6 +161,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-19 | minor | Long flat operator chains (#916): 4,096 operands (Excel's 8,192-character limit) no longer overflow the stack when entered, filled, adjusted or saved; chains past 64 operands are no longer saved as dynamic-array formulas; Spanish entry no longer refuses chains past 256 operands |
 | 2026-10-17 | minor | 15-significant-digit comparison moved from missing to done (#57), and the resolved caveats on the 3-D reference, dynamic-array and legacy-array rows cleared (#140, #133, #139, #156) |
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
+| 2026-10-15 | minor | Iterative calculation: Maximum Iterations and Maximum Change are set in File › Options › Formulas (dropped "no Options dialog yet") |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
 | 2026-10-14 | minor | MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP and LOOKUP compare numbers exactly in every match and search mode, as Excel 365 does: `MATCH(0.1+0.2,{0.3},0)` is `#N/A` and 0.3 sorts below 0.30000000000000004 in approximate and binary search. `=`, SWITCH and the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS…) keep comparing at 15 significant digits, also as observed |
