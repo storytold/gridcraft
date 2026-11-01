@@ -2,7 +2,9 @@ use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, ref
 use super::show::{build_params, form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
-pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+/// Data › What-If Analysis › Goal Seek. OK runs `data.goalSeek` here; Cancel clears `open`, as
+/// the shared buttons do, so cancelling is never taken for a confirmation.
+pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     egui::Grid::new("gs").show(ui, |ui| {
         let l = ui.label("Set cell:");
         ref_edit(app, ui, d, "set", RefLabel::By(l.id), 200.0);
@@ -19,8 +21,7 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
     });
     let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     let (set, to, changing) = (get("set"), get("to"), get("changing"));
-    let mut open = true;
-    ok_cancel(ui, confirm, &mut open);
+    ok_cancel(ui, confirm, open);
     if *confirm && home_sheet_deleted(app, d) {
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));
         *confirm = false;
@@ -36,9 +37,6 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
         }
-    }
-    if !open {
-        *confirm = true;
     }
 }
 

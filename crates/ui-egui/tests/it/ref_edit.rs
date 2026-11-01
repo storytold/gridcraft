@@ -878,8 +878,9 @@ fn a_text_box_draft_is_saved_before_a_scripted_cancel_leaves_the_picked_sheet() 
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
 }
 
-#[test]
-fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
+/// `quoted_sheet()` with a text box on its second sheet and a third sheet, Scratch, so that a
+/// draft of the text box can be left where it cannot be saved (see [`strand_a_draft`]).
+fn draft_workbook() -> (Session, u32) {
     let mut s = quoted_sheet();
     s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
     let id =
@@ -887,6 +888,30 @@ fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
     s.execute("home.insertSheet", json!({"name": "Scratch", "before": 2})).unwrap();
     s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
     s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    (s, id)
+}
+
+/// With the second sheet shown: starts editing its text box `id`, types a note, then has a
+/// script show Scratch straight through the engine. The draft's worksheet is no longer the
+/// active one, so it can't be saved, and showing the dialog's sheet again (which saves drafts
+/// first) is refused.
+fn strand_a_draft(h: &mut H, id: u32) {
+    assert!(h.state_mut().begin_text_box_edit(id));
+    h.run_steps(3);
+    key(h, Key::A, Modifiers::COMMAND);
+    type_text(h, "Picked note");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 2})).unwrap();
+    h.run_steps(3);
+    assert_eq!(selection(h).0, 2);
+}
+
+fn draft_text(h: &H) -> Option<String> {
+    h.state().text_box_editor.as_ref().map(|ed| ed.text.clone())
+}
+
+#[test]
+fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
+    let (s, id) = draft_workbook();
     let mut h = harness(s);
     h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
     h.run_steps(4);
@@ -897,16 +922,7 @@ fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
     key(&mut h, Key::Escape, Modifiers::NONE);
     control(&mut h, "ui.dialog.set", json!({"field": "outputTo", "value": "range"}));
     control(&mut h, "ui.dialog.set", json!({"field": "output", "value": "$H$1"}));
-    // A text box on the picked sheet is being edited when a script shows a third sheet straight
-    // through the engine: the draft's worksheet is no longer the active one, so it can't be
-    // saved, and showing the dialog's sheet again (which saves drafts first) is refused.
-    assert!(h.state_mut().begin_text_box_edit(id));
-    h.run_steps(3);
-    key(&mut h, Key::A, Modifiers::COMMAND);
-    type_text(&mut h, "Picked note");
-    h.state_mut().session.execute("sheet.activate", json!({"sheet": 2})).unwrap();
-    h.run_steps(3);
-    assert_eq!(selection(&h).0, 2);
+    strand_a_draft(&mut h, id);
     let h1 = |h: &H, sheet: usize| h.state().session.active().unwrap().wb.sheets[sheet].value(CellRef::parse("H1").unwrap());
 
     // The control channel's confirm: the dialog's sheet can't be shown again, so the command
@@ -930,4 +946,84 @@ fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
         assert!(h1(&h, sheet).is_empty(), "no report on sheet {sheet}: {:?}", h1(&h, sheet));
     }
     assert_eq!(h.state().text_box_editor.as_ref().map(|ed| ed.text.as_str()), Some("Picked note"), "the person's text is kept");
+}
+
+#[test]
+fn a_scripted_cancel_with_an_unsavable_draft_keeps_the_dialog_until_it_can_go_home() {
+    let (s, id) = draft_workbook();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "'O''Brien Rates'!$A$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    strand_a_draft(&mut h, id);
+    // The dialog's sheet can't be shown again: the script gets the reason, the dialog stays.
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert_eq!(draft_text(&h).as_deref(), Some("Picked note"), "the draft is kept");
+    assert_eq!(selection(&h).0, 2);
+    // Back on the draft's sheet, cancelling saves the draft and goes home.
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(draft_text(&h), None, "the draft was saved");
+    let text = h.state().session.active().unwrap().wb.sheets[1].shapes.iter().find(|s| s.id == id).unwrap().text.clone();
+    assert_eq!(text, "Picked note");
+    assert_eq!(selection(&h), (0, "B5".into()));
+}
+
+#[test]
+fn the_windows_cancel_with_an_unsavable_draft_closes_the_dialog_and_says_why() {
+    let (s, id) = draft_workbook();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    let title = h.state().dialog.as_ref().unwrap().title.clone();
+    click_button(&mut h, "Collapse dialog", 0);
+    next_sheet(&mut h);
+    drag(&mut h, "A1", "A6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    strand_a_draft(&mut h, id);
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Cancel closes the dialog whatever the draft's state");
+    let message = h.state().message.clone().unwrap_or_default();
+    assert_eq!(message.0, title, "the dialog says why it could not go home: {message:?}");
+    assert_eq!(draft_text(&h).as_deref(), Some("Picked note"), "the draft is kept");
+    assert_eq!(selection(&h).0, 2, "the selection stays where it is");
+    let wb = &h.state().session.active().unwrap().wb;
+    for sheet in 0..3 {
+        assert!(wb.sheets[sheet].value(CellRef::parse("H1").unwrap()).is_empty(), "nothing ran on sheet {sheet}");
+    }
+}
+
+#[test]
+fn goal_seeks_cancel_with_an_unsavable_draft_closes_without_running() {
+    let (s, id) = draft_workbook();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    drag(&mut h, "A2", "A2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    // A To value OK would use, so a run by mistake would show on the other sheet's A2.
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    strand_a_draft(&mut h, id);
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Cancel is not a confirmation: the dialog closes");
+    let a2 = h.state().session.active().unwrap().wb.sheets[1].value(CellRef::parse("A2").unwrap());
+    assert_eq!(a2.as_f64(), Some(2.0), "Goal Seek did not run: {a2:?}");
+    assert_eq!(draft_text(&h).as_deref(), Some("Picked note"), "the draft is kept");
+    let message = h.state().message.clone().unwrap_or_default();
+    assert_eq!(message.0, "Goal Seek", "the reason is shown: {message:?}");
+    assert_eq!(selection(&h).0, 2);
 }

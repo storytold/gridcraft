@@ -186,7 +186,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
-                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
@@ -434,12 +434,18 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if confirm {
         open = false;
     }
-    if !open && !confirm {
+    if !open
+        && !confirm
+        && let Err(e) = end_pick(app, &mut d)
+    {
         // Cancelled or closed: back to the sheet and selection from before picking. A confirmed
         // OK went back before its command ran, and stays where the command left things (Data
-        // Analysis shows the report sheet it added). A draft that can't be saved keeps its
-        // message; there is no command left to protect.
-        let _ = end_pick(app, &mut d);
+        // Analysis shows the report sheet it added). When the dialog's sheet can't be shown
+        // again (a text-box draft on the picked sheet could not be saved), Cancel still closes
+        // the dialog, since there is no command left to protect: the reason is shown, and the
+        // draft and the selection stay where they are for the person to deal with. A script's
+        // `ui.dialog.cancel` gets the error instead and keeps the dialog, so it can act on it.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new

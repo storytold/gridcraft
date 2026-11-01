@@ -303,8 +303,14 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 };
             }
             // Back to the sheet and selection from before a reference box picked, as Cancel does.
-            if let Some(mut d) = app.dialog.take() {
-                let _ = d.end_pick(app);
+            // When the dialog's sheet can't be shown again (a text-box draft on the picked sheet
+            // could not be saved), the dialog stays and the script gets the reason; the window's
+            // Cancel closes it and shows the reason, since a person can see the message.
+            if let Some(mut d) = app.dialog.take()
+                && let Err(e) = d.end_pick(app)
+            {
+                app.dialog = Some(d);
+                return err(e);
             }
             ok(Json::Null)
         }
