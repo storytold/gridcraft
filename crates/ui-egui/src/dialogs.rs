@@ -487,8 +487,9 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook; OK runs `link.open`, which
-            // refuses anything but http, https and mailto.
+            // Asks before a web or e-mail link or a local document link leaves the workbook; OK
+            // runs `link.open`, which opens only http, https and mailto addresses and existing
+            // documents of the types in `links::LOCAL_DOCUMENTS`.
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
                 Dialog::form(

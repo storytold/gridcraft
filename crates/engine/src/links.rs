@@ -64,7 +64,10 @@ pub fn classify_in(target: &str, workbook_path: Option<&str>) -> LinkKind {
         return LinkKind::Refused("The link contains control characters.".into());
     }
     let Some(path) = local_path(t) else { return classify(t) };
-    if path.starts_with("\\\\") || path.starts_with("//") {
+    if path.chars().any(char::is_control) {
+        return LinkKind::Refused("The link contains control characters.".into());
+    }
+    if is_network(&path) {
         return LinkKind::Refused("Links to network locations aren't opened.".into());
     }
     let ext = std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
@@ -86,12 +89,17 @@ pub fn classify_in(target: &str, workbook_path: Option<&str>) -> LinkKind {
 pub fn is_local_document(path: &str) -> bool {
     !path.chars().any(char::is_control)
         && is_absolute(path)
-        && !path.starts_with("\\\\")
-        && !path.starts_with("//")
+        && !is_network(path)
         && std::path::Path::new(path)
             .extension()
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|e| LOCAL_DOCUMENTS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// A network location (`\\\\host\\share`, `//host/share`, or any mix of the two separators,
+/// which Windows treats alike).
+fn is_network(p: &str) -> bool {
+    p.replace('\\', "/").starts_with("//")
 }
 
 /// `C:\\x`, `C:/x` or `/x`.
@@ -189,13 +197,28 @@ mod tests {
         assert_eq!(classify_in("C:\\Docs\\a.PDF", None), LinkKind::LocalFile("C:\\Docs\\a.PDF".into()));
         assert_eq!(classify_in("file:///C:/Docs/a.pdf", None), LinkKind::LocalFile("C:/Docs/a.pdf".into()));
         assert!(matches!(classify_in("a.pdf", None), LinkKind::Refused(_)));
-        for bad in ["calc.exe", "C:\\Windows\\calc.exe", "x.bat", "x.lnk", "\\\\host\\share\\a.pdf", "//host/a.pdf", "file://host/share/a.pdf", "run.ps1", "a.pdf\u{1}"] {
+        for bad in [
+            "calc.exe",
+            "C:\\Windows\\calc.exe",
+            "x.bat",
+            "x.lnk",
+            "\\\\host\\share\\a.pdf",
+            "//host/a.pdf",
+            "file://host/share/a.pdf",
+            "run.ps1",
+            "a.pdf\u{1}",
+            "Receipts/a%0Ab.pdf",
+            "/\\host\\share\\a.pdf",
+            "file:///\\\\host\\share\\a.pdf",
+            "%5C%5Chost%5Cshare%5Ca.pdf",
+        ] {
             assert!(matches!(classify_in(bad, base), LinkKind::Refused(_)), "{bad:?} -> {:?}", classify_in(bad, base));
         }
         assert!(matches!(classify_in("https://a.example/x.pdf", base), LinkKind::External(_)));
         assert!(matches!(classify_in("Sheet2!A1", base), LinkKind::Internal(_)));
         assert!(matches!(classify_in("Total", base), LinkKind::Internal(_)));
         assert!(is_local_document("C:\\x\\a.pdf") && !is_local_document("C:\\x\\a.exe") && !is_local_document("a.pdf"));
+        assert!(!is_local_document("/\\host\\share\\a.pdf") && !is_local_document("\\\\host\\share\\a.pdf"));
     }
 
     #[test]

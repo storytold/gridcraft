@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Link",
             ["Insert", "Links"],
             Some("Cmd+K"),
-            "{cell?, target: \"https://…\" | \"Book.xlsx\" | \"Sheet2!A1\" | \"mailto:…\", text?, tooltip?, remove?: bool}",
+            "{cell?, target: \"https://…\" | \"Book.xlsx\" | \"Receipts\\a.pdf\" | \"C:\\Docs\\a.pdf\" | \"file:///C:/Docs/a.pdf\" | \"Sheet2!A1\" | \"mailto:…\", text?, tooltip?, remove?: bool}",
             has_doc,
             insert_link
         ),
@@ -171,7 +171,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Receipts\\a.pdf\" | \"C:\\Docs\\a.pdf\" | \"file:///C:/Docs/a.pdf\" | \"Sheet2!A1\", cell?} (default: the cell's link); opens http, https and mailto addresses and existing documents on this computer (relative paths resolve against the workbook's folder; only the types in links::LOCAL_DOCUMENTS: PDF, pictures, text and office files); programs, scripts, shortcuts, network paths and any other scheme are an error; the UI asks before opening",
             has_doc,
             open_link
         ),
