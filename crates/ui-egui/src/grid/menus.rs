@@ -122,6 +122,10 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     ui.checkbox(on, v.as_str());
                 }
             });
+            // Past Excel's 10,000 distinct items the rest are left out, and the menu says so.
+            if st.list.truncated {
+                ui.label(egui::RichText::new(app.ui.language.tr("Not all items showing")).weak());
+            }
             if dirty {
                 st.list.refresh(&needle);
             }
