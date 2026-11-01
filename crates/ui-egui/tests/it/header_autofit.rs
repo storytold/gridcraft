@@ -153,6 +153,7 @@ fn dragging_a_boundary_inside_a_multi_area_selection_resizes_every_selected_line
     }
 }
 
+/// AutoFit keeps the actual painted heading clear of its filter button at every tested zoom.
 #[test]
 fn table_filter_autofit_works_through_command_and_header_double_click() {
     for zoom in [50, 100, 200] {
@@ -182,9 +183,18 @@ fn table_filter_autofit_works_through_command_and_header_double_click() {
             let cell = gridcraft_engine::core::CellRef::new(0, 0);
             let rect = geo.cell_rect(sheet, cell);
             let button = gridcraft_ui_egui::grid::filter_button_rect(&geo, sheet, cell);
-            let style = app.session.active().unwrap().wb.styles.get(sheet.style_id(cell));
-            let text_width = gridcraft_engine::cmd::format::approx_text_width("Quarterly Revenue", style.font.size, style.font.bold) * geo.z;
-            assert!(rect.left() + text_width + 2.5 * geo.z < button.left(), "heading overlaps filter: zoom={zoom}, double_click={double_click}");
+            // AutoFit uses the installed renderer font; the headless average-glyph estimate
+            // can be wider and does not describe the text actually painted in this cell.
+            let heading = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Quarterly Revenue" && rect.contains(text.pos) => Some(text),
+                    _ => None,
+                })
+                .expect("the table heading is painted in its cell");
+            assert!(heading.pos.x + heading.galley.size().x < button.left(), "heading overlaps filter: zoom={zoom}, double_click={double_click}");
             assert_eq!(app.session.active().unwrap().undo.len(), 1);
             h.state_mut().session.execute("edit.undo", json!({})).unwrap();
             assert_eq!(sizes(&h, false)[0], 100.0);
