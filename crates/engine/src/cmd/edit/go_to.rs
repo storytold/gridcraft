@@ -1,5 +1,5 @@
 use super::selection::{select_region, selection_set};
-use super::{CellRef, EngineError, Json, RangeRef, Result, Session, bad, bool_param, coalesce, json, split_sheet, str_param};
+use super::{CellRef, EngineError, Json, MAX_SPECIAL_AREAS, RangeRef, Result, Session, bad, bool_param, coalesce, json, split_sheet, str_param};
 
 /// How many references the Go To dialog keeps for going back to.
 pub(super) const GO_TO_RECENT: usize = 10;
@@ -192,7 +192,9 @@ pub(super) fn go_to_special(s: &mut Session, p: &Json) -> Result<Json> {
     if hits.is_empty() {
         return Err(EngineError::Other("No cells were found.".into()));
     }
-    let ranges = coalesce(&hits);
+    let Some(ranges) = coalesce(&hits) else {
+        return Err(bad("edit.goToSpecial", format!("more than {MAX_SPECIAL_AREAS} separate areas; narrow the range")));
+    };
     let d = s.doc_mut()?;
     d.selection = crate::Selection { active: hits[0], anchor: hits[0], ranges };
     Ok(json!({"selection": d.selection.a1(), "count": hits.len()}))
