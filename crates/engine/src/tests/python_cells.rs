@@ -296,3 +296,23 @@ fn replace_leaves_python_code_that_would_no_longer_fit() {
     assert_eq!(r["skipped"], 1);
     assert_eq!(code(&s, 0, "A1").as_deref(), Some(long.as_str()));
 }
+
+#[test]
+fn a_hidden_python_cell_on_a_protected_sheet_hides_its_code() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "secret = 1\nsecret"})).unwrap();
+    s.execute("python.set", json!({"cell": "B1", "code": "'shown'"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+    let hidden = |s: &Session, a: &str| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        crate::display::formula_hidden(&d.wb, sh, CellRef::parse(a).unwrap())
+    };
+    assert!(!hidden(&s, "A1"), "an unprotected sheet hides nothing");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(hidden(&s, "A1"), "Hidden on a protected sheet hides the code, as it hides a formula");
+    assert!(!hidden(&s, "B1"));
+    // Editing it is refused where a formula's would be: the cell is locked.
+    assert!(s.execute("python.set", json!({"cell": "A1", "code": "2"})).is_err());
+    assert_eq!(code(&s, 0, "A1").as_deref(), Some("secret = 1\nsecret"));
+}

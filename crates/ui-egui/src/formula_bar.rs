@@ -173,7 +173,8 @@ fn active_input(app: &SheetApp) -> String {
             .unwrap_or_default();
     }
     if let Some(c) = sh.cell(a) {
-        if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
+        // A Hidden cell on a protected sheet shows neither its formula nor its Python code.
+        if (c.formula.is_some() || c.py.is_some()) && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
         return if let Some(f) = &c.formula {
@@ -752,6 +753,23 @@ mod spill_tests {
         check(&mut app, "A2", "=SORT(Sheet1!D1:D3)", true);
         app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
         check(&mut app, "A2", "=FILTER(D1:D3,D1:D3>0)", true);
+    }
+
+    #[test]
+    fn a_hidden_python_cell_on_a_protected_sheet_shows_no_code() {
+        let mut app = app();
+        app.run("python.set", json!({"cell": "A1", "code": "secret = 1\nsecret"})).unwrap();
+        app.run("python.set", json!({"cell": "B1", "code": "'shown'"})).unwrap();
+        set(&mut app, "C1", "=1+1");
+        app.run("home.formatCells", json!({"range": "A1:C1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+        app.run("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": true, "hidden": false}}})).unwrap();
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), "secret = 1\nsecret", "an unprotected sheet hides nothing");
+        app.run("review.protectSheet", json!({})).unwrap();
+        for (cell, text) in [("A1", ""), ("B1", "'shown'"), ("C1", "")] {
+            select(&mut app, cell);
+            assert_eq!(active_input(&app), text, "{cell}");
+        }
     }
     #[test]
     /// A disabled spill formula paints disabled and does not edit; clicking an active formula starts formula-bar editing in both light and dark themes, with accessibility checks.
