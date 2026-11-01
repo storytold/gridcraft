@@ -634,7 +634,7 @@ pub const TURKISH_ALIASES: &[(&str, &str)] = &[
     ("Z.TEST", "ZTEST"),
 ];
 
-pub(crate) fn turkish_eq_ignore_case(a: &str, b: &str) -> bool {
+pub fn turkish_eq_ignore_case(a: &str, b: &str) -> bool {
     let mut a_chars = a.chars();
     let mut b_chars = b.chars();
     loop {
@@ -645,8 +645,7 @@ pub(crate) fn turkish_eq_ignore_case(a: &str, b: &str) -> bool {
                     continue;
                 }
                 let matches = match (ca, cb) {
-                    ('i' | 'İ', 'i' | 'İ') => true,
-                    ('ı' | 'I', 'ı' | 'I') => true,
+                    ('i' | 'İ' | 'ı' | 'I', 'i' | 'İ' | 'ı' | 'I') => true,
                     ('ç' | 'Ç', 'ç' | 'Ç') => true,
                     ('ğ' | 'Ğ', 'ğ' | 'Ğ') => true,
                     ('ö' | 'Ö', 'ö' | 'Ö') => true,
