@@ -193,8 +193,12 @@ Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the da
 follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
 elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
-keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. The
-collapse button is reachable from the keyboard and named for screen readers. Goal Seek, Solver
+keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. The dialog remembers the sheet it was opened on by name and follows a rename of it through
+the engine's recorded undo steps (a step that keeps the sheet count and changes one name, at
+that sheet's index, on a sheet that keeps its cells); a sheet deleted and another inserted in
+its place, even in one script batch, is not taken for it, so OK is refused and Cancel leaves
+the selection where it is. The collapse button is reachable from the keyboard and named for
+screen readers. Goal Seek, Solver
 (objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
 Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
