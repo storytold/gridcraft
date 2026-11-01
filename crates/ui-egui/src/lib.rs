@@ -6,6 +6,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod autosave;
+
 /// GridCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,7 +16,6 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     accent: Some([0x1f, 0x9d, 0x55]),
     ..craft_update::suite::GRIDCRAFT
 };
-
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -196,6 +197,11 @@ pub struct Perf {
     pub frame_ms: f64,
     pub grid_ms: f64,
     pub fps: f64,
+    /// How long the last AutoSave held up its frame (taking the snapshot), how long its worker
+    /// took to write the file, and how many AutoSaves finished.
+    pub autosave_ms: f64,
+    pub autosave_write_ms: f64,
+    pub autosaves: u64,
     last: f64,
 }
 
@@ -229,6 +235,10 @@ pub struct SheetApp {
     /// without reaching input handling, so the hook must offer the same step again.
     pub(crate) synthetic_injected_at_pass: Option<u64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The AutoSave being written on its worker thread.
+    pub autosave_job: Option<autosave::InFlight>,
+    /// Failed AutoSaves in a row; each one doubles the wait before the next try (up to 64 s).
+    pub autosave_failures: u32,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
