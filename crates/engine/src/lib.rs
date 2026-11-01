@@ -563,6 +563,17 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
+    /// The warning an edit of `at` on `sheet` gets from sheet protection, or `None` when the edit
+    /// is allowed. Front ends ask before opening an editor, so typing into a locked cell never
+    /// leaves a draft that can't be entered (and so blocks saving).
+    pub fn locked_cell_message(&self, sheet: usize, at: CellRef) -> Option<String> {
+        let d = self.active()?;
+        let sh = d.wb.sheet(sheet)?;
+        if !sh.is_protected() || !d.wb.styles.get(sh.style_id(at)).protection.locked {
+            return None;
+        }
+        cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
+    }
     /// Opens a workbook in a new window, which becomes the active one.
     pub fn add_document(&mut self, d: DocState) -> usize {
         let uid = d.uid;
