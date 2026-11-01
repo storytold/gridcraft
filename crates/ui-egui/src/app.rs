@@ -267,6 +267,10 @@ impl SheetApp {
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
         }
+        // After the whole UI, title bar drawn or not (a host may have just hidden it), and only
+        // from the window the pointer is in (see `ribbon::movable_to_sync`).
+        #[cfg(not(target_arch = "wasm32"))]
+        ribbon::sync_window_movable(&ctx);
     }
 
     /// Current selection's top-left cell text as A1 (for the Name Box).
