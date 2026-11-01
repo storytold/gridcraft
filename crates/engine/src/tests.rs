@@ -1401,6 +1401,17 @@ fn protection_refuses_edits_of_locked_cells() {
 }
 
 #[test]
+fn locked_cell_message_matches_what_an_edit_would_be_refused_with() {
+    let s = protected(json!({}));
+    let locked = CellRef::parse("A1").unwrap();
+    let unlocked = CellRef::parse("D1").unwrap();
+
+    assert!(s.locked_cell_message(0, locked).is_some_and(|m| m.contains("protected sheet")));
+    assert_eq!(s.locked_cell_message(0, unlocked), None, "an unlocked cell stays editable");
+    assert_eq!(s.locked_cell_message(9, locked), None, "no such sheet");
+}
+
+#[test]
 fn protection_allows_permitted_row_and_column_edits() {
     let mut s = protected(json!({"insertRows": true, "deleteRows": true, "insertColumns": true}));
     // Inserting shifts locked cells, which the protection allows.
@@ -2400,6 +2411,36 @@ fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
         s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(total), "deleting {deleted}");
         assert_eq!(v(&s, "B1"), direct, "deleting {deleted}");
+    }
+}
+
+#[test]
+fn workbook_view_roundtrips_after_sheet_deletion_and_reordering() {
+    let view = gridcraft_model::WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: true, show_vertical_scroll: false, tab_ratio: 350 };
+    for (initial_active, command, params, expected_order, expected_active) in [
+        ("Third", "home.deleteSheet", json!({"sheet": "First"}), vec!["Second", "Third"], 1),
+        ("Third", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 1),
+        ("First", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "Third", "to": 0}), vec!["Third", "First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "First", "to": 2}), vec!["Second", "Third", "First"], 2),
+    ] {
+        let mut session = s();
+        session.execute("sheet.rename", json!({"name": "First"})).unwrap();
+        for name in ["Second", "Third"] {
+            session.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).view = view;
+        session.execute("sheet.activate", json!({"sheet": initial_active})).unwrap();
+        session.execute(command, params).unwrap();
+
+        let wb = &session.doc().unwrap().wb;
+        assert_eq!(wb.active_sheet(), expected_active, "{command}");
+        assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command}");
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+        assert_eq!(back.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command} after reopening");
+        assert_eq!(back.active_sheet(), expected_active, "activeTab follows {command}");
+        assert_eq!(back.active().unwrap().name, expected_order[expected_active], "the active sheet is not a stale index");
+        assert_eq!(back.view, view, "workbook display settings survive {command}");
     }
 }
 
