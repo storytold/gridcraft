@@ -184,9 +184,11 @@ from before picking back; OK (and `ui.dialog.confirm`, for a dialog whose OK run
 Goal Seek presses its own OK and is scripted with `data.goalSeek`) puts them back before its
 command runs and then stays where the command leaves things, so a Data Analysis report written
 to a new sheet stays in view. A text-box draft left open on the sheet picked on is saved before
-the sheet changes, as any sheet switch saves it; when it cannot be saved (the sheet was
-protected meanwhile), OK does not run its command, the dialog stays open and the reason is
-shown. While collapsed, the arrow keys move the selection on the grid,
+the sheet changes, as any sheet switch saves it; when it cannot be saved (a script showed
+another sheet meanwhile), OK does not run its command and the dialog stays open with the
+reason, while Cancel still closes the dialog, shows the reason and leaves the draft and the
+selection where they are (a scripted `ui.dialog.cancel` fails and keeps the dialog instead, so
+the script can act). While collapsed, the arrow keys move the selection on the grid,
 Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, and the box
 follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
