@@ -1,5 +1,6 @@
 use super::draw::{Block, Look, rgb_of};
-use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use super::{CellRef, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use gridcraft_model::{StyleProperty, VertAlign};
 
 const PAD_PX: f32 = 2.0;
 
@@ -137,7 +138,8 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         return;
     }
     let st = &l.style;
-    let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
+    let normal_size = st.font.size.clamp(1.0, 409.0) * b.scale;
+    let mut size = normal_size * if st.font.vert == VertAlign::Baseline { 1.0 } else { 0.67 };
     let font = font_for(st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
@@ -145,8 +147,8 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     let code = st.num_fmt.as_str();
     let formatted = crate::display::format(&v, code, wb);
     let mut color = formatted.color.and_then(gridcraft_numfmt::FormatColor::rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
-    if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.font.color != Color::Auto) {
-        color = rgb_of(st.font.color, wb).unwrap_or(color);
+    if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.sets(StyleProperty::FontColor)) {
+        color = rgb_of(st.font.color, wb).unwrap_or([0, 0, 0]);
     }
     let is_num = matches!(v, Value::Number(_));
     let wrap = st.align.wrap;
@@ -190,11 +192,17 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     };
     let line_h = size * 1.2;
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let script_offset = match st.font.vert {
+        VertAlign::Superscript => -normal_size * 0.3,
+        VertAlign::Subscript => normal_size * 0.1,
+        _ => 0.0,
     };
+    let first_baseline = script_offset
+        + match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;

@@ -263,24 +263,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             }
             None => err("no dialog is open"),
         },
-        "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
-                Some(cmd) => {
-                    let params = crate::dialogs::build_params(&d);
-                    let home = app.ui_window();
-                    let r = app.run(cmd, params);
-                    if r.is_err() {
-                        app.return_dialog(home, d);
-                    }
-                    wrap(r)
-                }
-                None => {
-                    app.dialog = Some(d);
-                    err("this dialog has no OK command; drive it with its own commands")
-                }
-            },
-            None => err("no dialog is open"),
-        },
+        "ui.dialog.confirm" => confirm_dialog(app),
         "ui.dialog.cancel" => {
             // The macro step editor's draft, overlays and debug run go with its own close.
             if app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
@@ -289,7 +272,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     Err(e) => err(e),
                 };
             }
-            app.dialog = None;
+            app.dialog = app.dialog.take().and_then(|d| d.back.map(|d| *d));
             ok(Json::Null)
         }
         "ui.message.dismiss" => {
@@ -560,3 +543,48 @@ fn timeout_reply(message: &str, token: u64) -> Json {
 
 #[cfg(test)]
 mod tests;
+
+/// Confirms dialog drafts through the same guards as the graphical interface.
+fn confirm_dialog(app: &mut SheetApp) -> Outcome {
+    match app.dialog.take() {
+        Some(mut d) if d.name == "cfFormat" => {
+            let home = app.ui_window();
+            match d.confirm_custom_format(app) {
+                Ok(()) => {
+                    if let Some(back) = d.back.take() {
+                        app.return_dialog(home, *back);
+                    }
+                    ok(Json::Null)
+                }
+                Err(e) => {
+                    app.return_dialog(home, d);
+                    err(e)
+                }
+            }
+        }
+        Some(mut d) => {
+            if let Err(e) = d.validate_confirmation(app) {
+                app.dialog = Some(d);
+                return err(e);
+            }
+            match d.command {
+                Some(cmd) => {
+                    let params = crate::dialogs::build_params(&d);
+                    let home = app.ui_window();
+                    let r = app.run(cmd, params);
+                    if r.is_err() {
+                        app.return_dialog(home, d);
+                    } else if let Some(back) = d.back.take() {
+                        app.return_dialog(home, *back);
+                    }
+                    wrap(r)
+                }
+                None => {
+                    app.dialog = Some(d);
+                    err("this dialog has no OK command; drive it with its own commands")
+                }
+            }
+        }
+        None => err("no dialog is open"),
+    }
+}

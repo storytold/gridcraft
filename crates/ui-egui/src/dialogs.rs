@@ -67,8 +67,10 @@ pub struct Dialog {
     focus_first_field: bool,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
+    format_target: Option<(u64, String)>,
+    pub(crate) color_drafts: crate::format_editor::ColorDrafts,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
-    back: Option<Box<Dialog>>,
+    pub(crate) back: Option<Box<Dialog>>,
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -183,6 +185,8 @@ impl Dialog {
             focus_first_field: true,
             picture_inbox: None,
             picture_target: None,
+            format_target: None,
+            color_drafts: Default::default(),
             back: None,
             focus_initialized: false,
             pick: None,
@@ -206,11 +210,48 @@ impl Dialog {
             focus_first_field: false,
             picture_inbox: None,
             picture_target: None,
+            format_target: None,
+            color_drafts: Default::default(),
             back: None,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
         }
+    }
+
+    /// Identifies the active document and worksheet by stable document ID and worksheet name.
+    fn format_view(app: &SheetApp) -> Option<(u64, String)> {
+        let (document, _) = app.view_key()?;
+        app.session.active()?.wb.active().map(|sheet| (document, sheet.name.clone()))
+    }
+
+    /// Rejects formatting a different worksheet or confirming an enabled color field with invalid text.
+    pub(crate) fn validate_confirmation(&self, app: &SheetApp) -> Result<(), String> {
+        let current = Self::format_view(app);
+        let picking_on_original_document = self.name == "cfQuick"
+            && self.pick.as_ref().is_some_and(|pick| !pick.sheet.is_empty() && !pick.applies_to.is_empty())
+            && self.format_target.as_ref().zip(current.as_ref()).is_some_and(|(target, current)| target.0 == current.0);
+        if self.format_target.is_some() && self.format_target != current && !picking_on_original_document {
+            return Err("Return to the original worksheet to apply this conditional format.".into());
+        }
+        crate::format_editor::validate_colors(self)
+    }
+
+    /// Commits an existing rule’s format or returns a new-rule style draft to its parent after validation.
+    pub(crate) fn confirm_custom_format(&mut self, app: &mut SheetApp) -> Result<(), String> {
+        self.validate_confirmation(app)?;
+        if self.values.contains_key("ruleIndex") {
+            app.run(
+                "home.manageRules",
+                json!({"format": self.values.get("ruleIndex"), "style": self.values.get("style"), "expected": self.values.get("expected")}),
+            )?;
+        } else if let Some(back) = self.back.as_mut() {
+            if let Some(style) = self.values.get("style").cloned() {
+                back.values.insert("style".into(), style);
+            }
+            back.values.insert("preset".into(), json!("custom"));
+        }
+        Ok(())
     }
 
     /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
@@ -819,6 +860,7 @@ impl Dialog {
                         ("lightRedFill", "Light Red Fill"),
                         ("redText", "Red Text"),
                         ("redBorder", "Red Border"),
+                        ("custom", "Custom Format…"),
                     ],
                 });
                 let mut d = Dialog::form(
@@ -843,6 +885,26 @@ impl Dialog {
                 }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
+                d.values.insert("range".into(), json!(sel));
+                d.format_target = Self::format_view(app);
+                d
+            }
+            "cfFormat" => {
+                let patch = if p("style").is_null() { json!({}) } else { p("style") };
+                let style = match gridcraft_engine::cmd::insert::conditional_style(&patch) {
+                    Ok(style) => style,
+                    Err(e) => {
+                        app.message = Some(("Custom Conditional Format".into(), e.to_string()));
+                        return None;
+                    }
+                };
+                let mut d = Dialog::custom("cfFormat", "Custom Conditional Format", json!({"style": style}));
+                d.tab = p("tab").as_str().unwrap_or("Font").into();
+                d.format_target = Self::format_view(app);
+                if !p("ruleIndex").is_null() {
+                    d.values.insert("ruleIndex".into(), p("ruleIndex"));
+                    d.values.insert("expected".into(), p("expected"));
+                }
                 d
             }
             "formatCells" => {
@@ -915,7 +977,11 @@ impl Dialog {
                 dialog.result = Some(json!(names));
                 dialog
             }
-            "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "manageRules" => {
+                let mut d = Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({}));
+                d.format_target = Self::format_view(app);
+                d
+            }
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {

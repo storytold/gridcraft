@@ -2,8 +2,8 @@ use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
-    Workbook, split_sheet,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Value, Workbook,
+    split_sheet,
 };
 
 // ---------------------------------------------------------------- drawing
@@ -25,39 +25,15 @@ pub(super) struct Look {
     pub(super) cf: Option<crate::cf::CfLook>,
 }
 
-fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
+/// Combines cell, table and conditional styles into the effective style and fill used for PDF output.
+pub(super) fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
     let mut style = match sh.table_at(c) {
         Some(t) => crate::tables::table_cell_style(wb, si, t, c),
         None => wb.styles.get(sh.style_id(c)).clone(),
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
-        }
-        if st.font.color != Color::Auto {
-            style.font.color = st.font.color;
-        }
-        style.font.bold |= st.font.bold;
-        style.font.italic |= st.font.italic;
-        style.font.strike |= st.font.strike;
-        if st.font.underline != Underline::None {
-            style.font.underline = st.font.underline;
-        }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
-            style.num_fmt = st.num_fmt.clone();
-        }
-        for (dst, src) in [
-            (&mut style.borders.left, st.borders.left),
-            (&mut style.borders.right, st.borders.right),
-            (&mut style.borders.top, st.borders.top),
-            (&mut style.borders.bottom, st.borders.bottom),
-        ] {
-            if !src.is_none() {
-                *dst = src;
-            }
-        }
+        style.apply_differential(st);
     }
     let mut fill = match style.fill.pattern {
         PatternType::None => None,

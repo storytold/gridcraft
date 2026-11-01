@@ -6,6 +6,8 @@
 // The app's own module, built into this test (cargo builds harness = false tests with cfg(test), so its
 // unit tests compile here too without a harness to run them).
 #[cfg(target_os = "macos")]
+// This harness exercises installation only; the event loop and nested unit tests are unused here.
+#[allow(dead_code, unused_imports)]
 #[path = "../src/native_menu.rs"]
 mod native_menu;
 

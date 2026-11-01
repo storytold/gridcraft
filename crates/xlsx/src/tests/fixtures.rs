@@ -232,8 +232,24 @@ fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
     let out = crate::write_xlsx(&wb).unwrap();
     let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
     let st = String::from_utf8(st).unwrap();
-    let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
-    assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
+    let expected = crate::xml::parse(format!("<dxfs>{dxfs}</dxfs>").as_bytes()).unwrap();
+    let written = crate::xml::parse(st.as_bytes()).unwrap();
+    let written = written.child("dxfs").unwrap();
+    assert_eq!(written.children.len(), expected.children.len());
+    for (expected, actual) in expected.children.iter().zip(&written.children) {
+        if let Some(font) = expected.child("font") {
+            let actual_font = actual.child("font").unwrap();
+            assert_eq!(actual_font.children.len(), font.children.len());
+            for property in &font.children {
+                let actual_property = actual_font.child(&property.name).unwrap();
+                // A boolean's absent val and val="1" have the same meaning.
+                assert_eq!(actual_property.attr("val").unwrap_or("1"), property.attr("val").unwrap_or("1"));
+            }
+        }
+        assert_eq!(actual.child("protection"), expected.child("protection"));
+    }
+    let (reopened, _) = read_xlsx(&out).unwrap();
+    assert_eq!(reopened.sheet(0).unwrap().cond_formats, wb.sheet(0).unwrap().cond_formats);
 }
 
 /// A dxf writes its parts in schema order: the border comes before the protection.

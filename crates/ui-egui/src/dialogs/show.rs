@@ -83,7 +83,11 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
             for (k, val) in &d.values {
                 rule.insert(k.clone(), val.clone());
             }
-            v = json!({"rule": Json::Object(rule)});
+            if rule.get("preset").and_then(Json::as_str) != Some("custom") {
+                rule.remove("style");
+            }
+            let range = rule.remove("range");
+            v = json!({"range": range, "rule": Json::Object(rule)});
             if let Some(pick) = d.pick.as_ref().filter(|pick| !pick.applies_to.is_empty() && !pick.sheet.is_empty()) {
                 v["sheet"] = json!(pick.sheet.as_str());
                 v["range"] = json!(pick.applies_to);
@@ -137,6 +141,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
+        "cfFormat" => 680.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
@@ -164,6 +169,27 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "cfQuick" => {
+                    form_fields(ui, &mut d);
+                    let custom = d.values.remove("openCustom").and_then(|v| v.as_bool()) == Some(true);
+                    let edit_custom = d.values.get("preset").and_then(Json::as_str) == Some("custom") && ui.button(app.ui.language.tr("Edit Custom Format…")).clicked();
+                    if custom || edit_custom {
+                        let style = d.values.get("style").cloned().unwrap_or_else(|| {
+                            let preset = d.values.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText");
+                            serde_json::to_value(gridcraft_engine::cmd::insert::preset_style(preset)).unwrap_or(Json::Null)
+                        });
+                        app.open_dialog("cfFormat", json!({"style": style}));
+                    }
+                    if d.values.get("preset").and_then(Json::as_str) == Some("custom")
+                        && let Some(style) = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+                        crate::format_editor::preview(app, ui, &style);
+                    }
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
+                "cfFormat" => {
+                    crate::format_editor::editor(app, ui, &mut d);
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
@@ -382,6 +408,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && let Err(e) = d.validate_confirmation(app) {
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+        app.message = Some((d.title.clone(), e));
+        confirm = false;
+    }
+    if confirm
+        && d.name == "cfFormat"
+        && let Err(e) = d.confirm_custom_format(app)
+    {
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        confirm = false;
+    }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
@@ -422,6 +461,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         // behind it and comes back when it closes, as Excel returns to the Name Manager. Go To
         // hands over to Go To Special for good, as in Excel.
         if open && d.name != "goTo" {
+            if matches!(d.name.as_str(), "cfQuick" | "manageRules") {
+                child.format_target = d.format_target.clone();
+            }
             child.back = Some(Box::new(d));
         } else if child.back.is_none() {
             child.back = d.back.take();
@@ -559,7 +601,20 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         let field_label = ui.label(egui::RichText::new(lang.tr(label)).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                        if d.name == "dataValidation" {
+                        if d.name == "cfQuick" && key == "preset" {
+                            let selected = options.iter().find(|(v, _)| *v == cur).map(|(_, t)| *t).unwrap_or("Custom Format…");
+                            craft_ui::ComboBox::from_label(lang.tr("Format with")).selected_text(lang.tr(selected)).show_ui(ui, |ui| {
+                                for (val, text) in options {
+                                    if ui.selectable_label(cur == val, lang.tr(text)).clicked() {
+                                        if val == "custom" {
+                                            d.values.insert("openCustom".into(), json!(true));
+                                        } else {
+                                            d.values.insert(key.into(), json!(val));
+                                        }
+                                    }
+                                }
+                            });
+                        } else if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
                             craft_ui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)

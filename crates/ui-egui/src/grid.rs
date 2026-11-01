@@ -34,11 +34,11 @@ mod selection;
 mod show;
 mod tables;
 
-pub(crate) use cell_paint::paint_border;
 #[cfg(test)]
 pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
-use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
+use cell_paint::{center_across_end, display_text, look, painted_halign};
+pub(crate) use cell_paint::{numfmt_color, paint_border};
 pub use editor::validation_arrow;
 #[cfg(test)]
 use editor::{editor_slack, editor_width, list_picker_height};
