@@ -493,6 +493,22 @@ fn the_palette_export_as_pdf_asks_where_to_save() {
 }
 
 #[test]
+fn export_as_csv_without_a_path_asks_where_to_save_instead_of_opening_the_legacy_prompt() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-export-csv-menu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (asked, mut h) = pdf_picker_harness(&dir);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    // The native menu bar goes through run_or_alert, like the in-app menu.
+    h.state_mut().run_or_alert("file.exportCsv", serde_json::json!({}));
+    assert!(asked.lock().unwrap().first().is_some_and(|s| s.ends_with(".csv")), "the picker is offered a .csv name");
+    assert!(std::fs::read_to_string(dir.join("Report.csv")).unwrap().contains("42"));
+    assert!(h.state().message.is_none());
+    h.state_mut().run_or_alert("file.exportHtml", serde_json::json!({}));
+    assert!(dir.join("Report.html").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_cancelled_export_pdf_picker_writes_nothing() {
     let mut h = harness(Services { pick_save: Some(Box::new(|_| None)), ..Default::default() });
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
