@@ -41,12 +41,30 @@ use zoom::zoom_preset;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
-    Text { key: &'static str, label: &'static str },
-    Password { key: &'static str, label: &'static str },
-    Number { key: &'static str, label: &'static str },
-    Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
-    Check { key: &'static str, label: &'static str },
+    Text {
+        key: &'static str,
+        label: &'static str,
+    },
+    Password {
+        key: &'static str,
+        label: &'static str,
+    },
+    Number {
+        key: &'static str,
+        label: &'static str,
+    },
+    Choice {
+        key: &'static str,
+        label: &'static str,
+        options: Vec<(&'static str, &'static str)>,
+    },
+    Check {
+        key: &'static str,
+        label: &'static str,
+    },
     Note(String),
+    /// Text shown as it is, read-only and in a monospace font, scrolling when long (SQL).
+    Code(String),
 }
 
 #[derive(Clone, Debug)]
@@ -666,18 +684,10 @@ impl Dialog {
             "dbTrust" => {
                 // Excel's external data security warning: the connections and SQL come from the
                 // file, so nothing runs until the user enables them for this workbook.
-                let lang = app.ui.language;
-                let list: Vec<String> =
-                    p("connections").as_array().map(|a| a.iter().filter_map(Json::as_str).map(|c| format!("• {c}")).collect()).unwrap_or_default();
-                let text = format!(
-                    "{}\n{}\n{}",
-                    lang.tr("This workbook contains database connections saved in the file:"),
-                    list.join("\n"),
-                    lang.tr("Refresh connects to them and runs the SQL the file holds. Enable them only if you trust the source of this file.")
-                );
+                let fields = trust_fields(p("queries").as_array().map(Vec::as_slice).unwrap_or_default());
                 let mut values = params.clone();
                 values["trust"] = json!(true);
-                Dialog::form("dbTrust", "Security Warning", "data.refresh", vec![Note(text)], values)
+                Dialog::form("dbTrust", "Security Warning", "data.refresh", fields, values)
             }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
@@ -1105,9 +1115,51 @@ impl Dialog {
     }
 }
 
+/// The Security Warning's fields: each connection read from the file followed by the full SQL it
+/// would run, so a statement can't hide behind its connection.
+fn trust_fields(queries: &[Json]) -> Vec<Field> {
+    let conn = |q: &Json| q.get("connection").and_then(Json::as_str).map(str::to_string);
+    let mut fields = vec![Field::Note("This workbook contains database connections saved in the file:".into())];
+    let mut shown: Vec<String> = vec![];
+    for c in queries.iter().filter_map(conn) {
+        if shown.contains(&c) {
+            continue;
+        }
+        fields.push(Field::Note(format!("• {c}")));
+        for q in queries.iter().filter(|q| conn(q).as_ref() == Some(&c)) {
+            fields.push(Field::Code(q.get("sql").and_then(Json::as_str).unwrap_or_default().to_string()));
+        }
+        shown.push(c);
+    }
+    fields
+        .push(Field::Note("Refresh connects to them and runs the SQL the file holds. Enable them only if you trust the source of this file.".into()));
+    fields
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_warning_shows_each_statement_under_its_connection() {
+        let queries = [
+            json!({"connection": "sqlite: /x.db", "sql": "SELECT 1"}),
+            json!({"connection": "postgres: postgres://u@h/db", "sql": "SELECT 2"}),
+            json!({"connection": "sqlite: /x.db", "sql": "DELETE FROM t"}),
+        ];
+        let shown: Vec<String> = trust_fields(&queries)
+            .iter()
+            .map(|f| match f {
+                Field::Note(t) => t.clone(),
+                Field::Code(t) => format!("code: {t}"),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(
+            shown[1..shown.len() - 1],
+            ["• sqlite: /x.db", "code: SELECT 1", "code: DELETE FROM t", "• postgres: postgres://u@h/db", "code: SELECT 2"]
+        );
+    }
 
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {

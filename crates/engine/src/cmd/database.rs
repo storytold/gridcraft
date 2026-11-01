@@ -377,17 +377,22 @@ fn trust_queries(s: &mut Session) -> Result<()> {
 }
 
 /// Asks the host to confirm the workbook's untrusted database queries before any runs: the
-/// dialog lists each distinct connection (without passwords), and OK refreshes `tname` with
-/// `trust`.
+/// dialog lists each distinct connection (without passwords) with the SQL it would run, and OK
+/// refreshes `tname` with `trust`.
 fn ask_trust(s: &mut Session, tname: &str) -> Result<()> {
     let mut connections: Vec<String> = vec![];
+    let mut queries: Vec<Json> = vec![];
     for q in s.doc()?.wb.db_queries.iter().filter(|q| !q.trusted) {
         let c = format!("{}: {}", q.driver, crate::datasource::redact(&q.connection));
+        let entry = json!({"connection": c, "sql": q.query});
+        if !queries.contains(&entry) {
+            queries.push(entry);
+        }
         if !connections.contains(&c) {
             connections.push(c);
         }
     }
-    s.ui_requests.push(crate::UiRequest::Dialog("dbTrust".into(), json!({"table": tname, "connections": connections})));
+    s.ui_requests.push(crate::UiRequest::Dialog("dbTrust".into(), json!({"table": tname, "connections": connections, "queries": queries})));
     Ok(())
 }
 
@@ -890,6 +895,7 @@ mod tests {
         let Some(crate::UiRequest::Dialog(name, p)) = asked.first() else { panic!("no dialog: {asked:?}") };
         assert_eq!(name, "dbTrust");
         assert_eq!(p["connections"], json!(["sqlite: /x.db", "postgres: postgres://u@h/db"]));
+        assert_eq!(p["queries"], json!([{"connection": "sqlite: /x.db", "sql": "q1"}, {"connection": "postgres: postgres://u@h/db", "sql": "q2"}]));
         // Refresh All waits for the same answer, asks once, and still refreshes nothing.
         let r = s.execute("data.refreshAll", json!({})).unwrap();
         assert_eq!(r["refreshed"], 0);

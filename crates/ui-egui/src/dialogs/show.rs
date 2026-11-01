@@ -525,7 +525,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for f in d.fields.clone() {
+        for (row, f) in d.fields.clone().into_iter().enumerate() {
             match f {
                 Field::Text { key, label } => {
                     ui.vertical(|ui| {
@@ -613,6 +613,11 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     // context separator, so such a note is shown as it is.
                     let text = if t.contains('|') { t.as_str() } else { lang.tr(&t) };
                     ui.label(egui::RichText::new(text).small());
+                }
+                Field::Code(t) => {
+                    egui::ScrollArea::vertical().id_salt(("code", row)).max_height(120.0).show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut t.as_str()).font(egui::TextStyle::Monospace).desired_rows(1).desired_width(320.0));
+                    });
                 }
             }
             ui.end_row();
