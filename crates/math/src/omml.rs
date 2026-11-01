@@ -377,11 +377,9 @@ impl Writer {
                 self.out.push_str(&format!(
                     "<m:m><m:mPr><m:mcs><m:mc><m:mcPr><m:count m:val=\"{cols}\"/><m:mcJc m:val=\"center\"/></m:mcPr></m:mc></m:mcs></m:mPr>"
                 ));
+                // Every row the parser gives is written: RaTeX itself drops the empty last row a
+                // trailing `\\` leaves, and an empty row anywhere else is the author's blank line.
                 for row in body {
-                    // A trailing `\\` leaves an empty last row.
-                    if row.len() == 1 && matches!(row.first(), Some(ParseNode::OrdGroup { body, .. }) if body.is_empty()) && body.len() > 1 {
-                        continue;
-                    }
                     self.out.push_str("<m:mr>");
                     for k in 0..cols {
                         self.wrap1("m:e", row.get(k), st, depth + 1)?;
@@ -535,6 +533,18 @@ mod tests {
                 assert!(!o.contains(bad), "{src:?}: {o}");
             }
         }
+    }
+
+    #[test]
+    fn only_a_trailing_empty_row_is_dropped() {
+        // RaTeX drops the empty last row a trailing `\\` leaves (its `environments.rs`), and the
+        // writer keeps every row it is given, so a blank row in the middle, written as `\\ \\` or
+        // as `{}`, reaches Office as the sheet shows it. A RaTeX release that stopped dropping the
+        // trailing row would show up here as a third row.
+        assert_eq!(bare("\\begin{matrix} a \\\\ b \\\\ \\end{matrix}").matches("<m:mr>").count(), 2);
+        assert_eq!(bare("\\begin{cases} x \\\\ \\\\ y \\end{cases}").matches("<m:mr>").count(), 3);
+        assert_eq!(bare("\\begin{matrix} a \\\\ {} \\\\ b \\end{matrix}").matches("<m:mr>").count(), 3);
+        assert_eq!(bare("\\begin{matrix} \\\\ \\end{matrix}").matches("<m:mr>").count(), 1, "one blank row is still a row");
     }
 
     #[test]

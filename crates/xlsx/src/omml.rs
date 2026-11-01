@@ -602,6 +602,20 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_middle_row_comes_back_and_a_trailing_one_does_not() {
+        // The writer keeps an author's blank row and drops only the empty row a trailing `\\`
+        // leaves; the reader joins rows with `\\`, so the count of `\\` is the row count less one.
+        let back = |src: &str| {
+            let omml = gridcraft_math::to_omml(src, 11.0).unwrap();
+            to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap()
+        };
+        let cases = back("\\begin{cases} x \\\\ \\\\ y \\end{cases}");
+        assert_eq!(cases.matches("\\\\").count(), 2, "three rows: {cases}");
+        let trailing = back("\\begin{matrix} a \\\\ b \\\\ \\end{matrix}");
+        assert_eq!(trailing.matches("\\\\").count(), 1, "two rows: {trailing}");
+    }
+
+    #[test]
     fn writing_then_reading_keeps_the_maths() {
         for (_, src) in gridcraft_math::GALLERY {
             let omml = gridcraft_math::to_omml(src, 11.0).unwrap();
