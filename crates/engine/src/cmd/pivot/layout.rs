@@ -1,5 +1,5 @@
 use super::create::source_param;
-use super::fields::{canonical, in_axes, shift_values, update};
+use super::fields::{canonical, in_axes, shift_values, update, update_with_source};
 use super::params::{group_param, layout_name};
 use super::{
     Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
@@ -228,16 +228,17 @@ pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Replaces a pivot's source and refreshes it without requiring the old source to be valid.
+///
+/// Retains fields found in the replacement, preserves the position of the values axis,
+/// and returns the source, dropped field names, and refreshed range. The edit is atomic.
 pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.changeSource";
-    if str_param(p, "source").or_else(|| str_param(p, "range")).is_none() {
+    if str_param(p, "source").or_else(|| str_param(p, "range")).is_none_or(|t| t.trim().is_empty()) {
         return Err(bad(C, "missing `source`"));
     }
     let source = source_param(s, p)?;
-    let (si, _) = find_pivot(s, p)?;
-    let src = pv::read_source(&s.doc()?.wb, &source, si).map_err(other)?;
-    update(s, p, move |pt, _, _| {
-        pt.source = source.clone();
+    update_with_source(s, p, Some(&source), |pt, src, _| {
         let mut dropped: Vec<String> = vec![];
         let keep = |name: &str, dropped: &mut Vec<String>| {
             let ok = src.col(name).is_some();
