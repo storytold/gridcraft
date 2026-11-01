@@ -363,8 +363,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             resp.request_focus();
         }
         ed.request_focus = false;
-        // Closing a dialog that changed nothing (Cancel) gives the selection back as it was.
-        let range = if ed.keep_selection && !ed.sync_caret {
+        // Closing a dialog that changed nothing (Cancel) gives the selection back as it was, and
+        // AutoSum's proposed range comes selected (`select_from`).
+        let range = if let Some(from) = ed.select_from.take() {
+            ed.anchor = from;
+            egui::text::CCursorRange::two(egui::text::CCursor::new(from), egui::text::CCursor::new(ed.caret))
+        } else if ed.keep_selection && !ed.sync_caret {
             egui::text::CCursorRange::two(egui::text::CCursor::new(ed.anchor), egui::text::CCursor::new(ed.caret))
         } else {
             ed.anchor = ed.caret;
