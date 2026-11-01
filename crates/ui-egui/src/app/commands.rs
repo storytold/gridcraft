@@ -123,7 +123,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
@@ -213,6 +213,7 @@ impl SheetApp {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
             }
+            "ui.quickAnalysis" => crate::quick_analysis::toggle(self, p.get("open").and_then(Json::as_bool)),
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.
                 match p.get("page").and_then(Json::as_str).map(str::trim) {
