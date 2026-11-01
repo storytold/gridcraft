@@ -191,6 +191,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |

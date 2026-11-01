@@ -481,9 +481,9 @@ impl Workbook {
         // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
         for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
             for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| stale(s)) {
-                // Source over the length cap is refused before any layout work, so it costs
-                // little; an empty source still costs a call.
-                let cost = if s.text.len() > gridcraft_math::MAX_SOURCE_BYTES { 1 } else { s.text.len().max(1) };
+                // A source over the length cap never gets here: the cache answers for it without
+                // a lookup. An empty source still costs a call.
+                let cost = s.text.len().max(1);
                 if cost > budget {
                     s.math.refuse(&s.text, EQUATION_BUDGET_MESSAGE);
                     continue;

@@ -34,6 +34,11 @@ pub const MAX_EM: f32 = 10_000.0;
 /// Most items one equation may produce.
 pub const MAX_ITEMS: usize = 50_000;
 
+/// The error for a source over [`MAX_SOURCE_BYTES`]. It is one shared value so that a cache can
+/// answer for such a source by its length alone, without reading it.
+pub static SOURCE_TOO_LONG: std::sync::LazyLock<MathError> =
+    std::sync::LazyLock::new(|| MathError::new(format!("An equation can be at most {MAX_SOURCE_BYTES} characters long."), None));
+
 /// Why an equation could not be laid out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MathError {
@@ -221,7 +226,7 @@ fn parse(latex: &str) -> Result<Vec<ratex_parser::ParseNode>, MathError> {
 /// The size and nesting caps, checked before RaTeX sees the source.
 fn check_caps(latex: &str) -> Result<(), MathError> {
     if latex.len() > MAX_SOURCE_BYTES {
-        return Err(MathError::new(format!("An equation can be at most {MAX_SOURCE_BYTES} characters long."), None));
+        return Err(SOURCE_TOO_LONG.clone());
     }
     let mut depth = 0usize;
     let mut chars = latex.char_indices().peekable();

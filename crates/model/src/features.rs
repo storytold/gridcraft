@@ -617,9 +617,10 @@ pub struct Shape {
 ///
 /// An entry answers only for the source it was built from, compared in full: a hash match alone
 /// is not enough, so two sources whose hashes collide never share a layout. A source over
-/// [`gridcraft_math::MAX_SOURCE_BYTES`] is not copied into the entry (it never lays out, so its
-/// entry is always an error); it is matched by its length and hash, and only by another source
-/// over the cap.
+/// [`gridcraft_math::MAX_SOURCE_BYTES`] never lays out, so [`EquationCache::get`] answers for it
+/// by its length alone, with [`gridcraft_math::SOURCE_TOO_LONG`], and an entry built from one holds
+/// neither the source nor its hash: a painter asking every frame about a source of megabytes read
+/// from a file does no work on it.
 #[derive(Clone, Debug, Default)]
 pub struct EquationCache {
     /// A hash of the source the entry was built from (a quick first check).
@@ -639,34 +640,43 @@ impl PartialEq for EquationCache {
 
 fn source_key(src: &str) -> u64 {
     use std::hash::{Hash, Hasher};
+    #[cfg(test)]
+    equation_cache_tests::HASHES.with(|h| h.set(h.get() + 1));
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut h);
     h.finish()
 }
 
 impl EquationCache {
-    /// Whether this entry was built from `src`.
+    /// Whether this entry was built from `src`. Over the cap the length is the match (an entry for
+    /// such a source is always the same error); within it, the hash and then the source itself.
     fn holds(&self, src: &str) -> bool {
-        if self.layout.is_none() || self.len != src.len() || self.key != source_key(src) {
+        if self.layout.is_none() || self.len != src.len() {
             return false;
         }
-        match &self.source {
-            Some(s) => **s == *src,
-            None => src.len() > gridcraft_math::MAX_SOURCE_BYTES,
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return self.source.is_none();
         }
+        self.key == source_key(src) && self.source.as_deref() == Some(src)
     }
 
-    /// Makes this the entry for `src`, with `layout`.
+    /// Makes this the entry for `src`, with `layout`. A source over the cap is neither copied nor
+    /// hashed.
     fn store(&mut self, src: &str, layout: Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>) {
-        self.key = source_key(src);
+        let within = src.len() <= gridcraft_math::MAX_SOURCE_BYTES;
+        self.key = if within { source_key(src) } else { 0 };
         self.len = src.len();
-        self.source = (src.len() <= gridcraft_math::MAX_SOURCE_BYTES).then(|| std::sync::Arc::from(src));
+        self.source = within.then(|| std::sync::Arc::from(src));
         self.layout = Some(layout);
     }
 
     /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
-    /// for this source.
+    /// for this source. A source over [`gridcraft_math::MAX_SOURCE_BYTES`] is answered at once,
+    /// whatever the entry holds, by its length alone.
     pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return Some(Err(&*gridcraft_math::SOURCE_TOO_LONG));
+        }
         if !self.holds(src) {
             return None;
         }
@@ -873,6 +883,11 @@ mod trendline_forecast_tests {
 mod equation_cache_tests {
     use super::{EquationCache, source_key};
 
+    thread_local! {
+        /// How many sources `source_key` has hashed on this thread.
+        pub(super) static HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
     fn glyphs(c: &EquationCache, src: &str) -> Option<String> {
         let list = c.get(src)?.ok()?;
         Some(list.items.iter().filter_map(|i| if let gridcraft_math::Item::Glyph(g) = i { Some(g.ch) } else { None }).collect())
@@ -898,17 +913,40 @@ mod equation_cache_tests {
     }
 
     #[test]
-    fn sources_over_the_cap_are_not_copied_and_never_lay_out() {
+    fn sources_over_the_cap_are_not_copied_hashed_or_laid_out() {
         let long = "x".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
         let mut c = EquationCache::default();
+        HASHES.with(|h| h.set(0));
+        assert!(matches!(c.get(&long), Some(Err(e)) if e.message.contains("4096")), "answered before any refresh");
         assert!(c.refresh(&long));
         assert!(c.source.is_none(), "an over-cap source is not kept");
+        assert_eq!(c.key, 0, "nor hashed");
         assert!(matches!(c.get(&long), Some(Err(_))));
         assert!(!c.refresh(&long), "still cached");
         let other = "y".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
-        assert!(c.get(&other).is_none());
-        // Even a forged collision between two over-cap sources yields only an error.
-        c.key = source_key(&other);
-        assert!(matches!(c.get(&other), Some(Err(_))));
+        assert!(matches!(c.get(&other), Some(Err(_))), "another over-cap source gets the same answer");
+        assert_eq!(HASHES.with(|h| h.get()), 0, "nothing over the cap is hashed");
+        // Within the cap the lookup is unchanged: a hash, then the source compared in full.
+        assert!(c.refresh("x"));
+        assert!(c.get("x").is_some_and(|r| r.is_ok()));
+        assert!(HASHES.with(|h| h.get()) >= 2);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+    fn a_source_of_a_megabyte_is_looked_up_without_being_read() {
+        // The sheet painter asks the cache every frame and the PDF export every draw; a source
+        // read from a file can be megabytes, and the lookup must not scan it each time.
+        let big = "l".repeat(1 << 20);
+        let mut c = EquationCache::default();
+        c.refuse(&big, "budget");
+        HASHES.with(|h| h.set(0));
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            assert!(matches!(c.get(&big), Some(Err(_))));
+        }
+        let took = start.elapsed();
+        assert_eq!(HASHES.with(|h| h.get()), 0, "a thousand lookups read nothing");
+        assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 }
