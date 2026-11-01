@@ -281,6 +281,13 @@ pub(super) fn prepare_reports(
     if kinds.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
+    // A request that must write a sheet is refused before any report is built (a Limits report
+    // runs two optimisations per variable); only a Sensitivity report that may be skipped waits
+    // for the check after the loop.
+    let must_write = kinds.iter().any(|k| *k != ReportKind::Sensitivity || not_optimal == NotOptimal::Refuse);
+    if must_write && d.wb.protected_structure {
+        return Err(protected());
+    }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
     let mut built = Vec::new();
     let mut skipped = Vec::new();
@@ -317,9 +324,13 @@ pub(super) fn prepare_reports(
     // Only a report sheet changes the workbook's structure, so a request whose reports were all
     // skipped still succeeds in a protected workbook.
     if !built.is_empty() && d.wb.protected_structure {
-        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+        return Err(protected());
     }
     Ok((built, skipped))
+}
+
+fn protected() -> EngineError {
+    EngineError::Other("The workbook is protected and cannot be changed.".into())
 }
 
 /// Inserts prepared reports before the model's sheet, which stays active.

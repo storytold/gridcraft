@@ -666,6 +666,11 @@ fn solver_report_can_skip_a_sensitivity_report_the_values_do_not_support() {
     assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("not optimal"), "{r}");
     let err = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), true)).unwrap_err();
     assert!(err.to_string().contains("protected"), "{err}");
+    // A request that must write a sheet is refused before its reports are built, so an
+    // integer model's Limits report gives the protection message, not the report's own refusal.
+    let int_model = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"]});
+    let err = s.execute("data.solverReport", json!({"reports": ["limits"], "model": int_model, "values": {"A1": 1}})).unwrap_err();
+    assert!(err.to_string().contains("protected"), "{err}");
     let d = s.doc().unwrap();
     assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
     assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
