@@ -705,6 +705,100 @@ mod tests {
         assert_eq!(s.col_at(-5.0), 0);
         assert_eq!(s.col_left(2), 128.0);
     }
+
+    use crate::features::{ChartKind, EquationCache, LegendPos, ShapeFormat, ShapeKind};
+
+    /// Adds a floating object of `kind` with id `id` at `anchor`. The match is exhaustive on
+    /// purpose: a new kind of floating object does not compile here until this test covers it,
+    /// and the counts in `object_anchor_accessors_visit_the_same_objects_in_the_same_order`
+    /// then catch an accessor that was not taught about it. An equation is a shape of
+    /// `ShapeKind::Equation`, so it lives in `shapes` and is visited among them.
+    fn push_object(s: &mut Sheet, kind: ObjKind, id: u32, anchor: Anchor) {
+        match kind {
+            ObjKind::Chart => s.charts.push(Chart {
+                id,
+                kind: ChartKind::default(),
+                anchor,
+                title: None,
+                series: vec![],
+                legend: LegendPos::default(),
+                data_labels: false,
+                gridlines: false,
+                style: 0,
+                x_title: None,
+                y_title: None,
+                source: None,
+                by_rows: false,
+                pivot: None,
+            }),
+            ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
+            ObjKind::Shape | ObjKind::Equation => s.shapes.push(Shape {
+                id,
+                kind: if kind == ObjKind::Equation { ShapeKind::Equation } else { ShapeKind::default() },
+                anchor,
+                fill: Color::default(),
+                line: Color::default(),
+                text: String::new(),
+                format: ShapeFormat::default(),
+                math: EquationCache::default(),
+            }),
+            ObjKind::Slicer => {
+                s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
+            }
+        }
+    }
+
+    /// Sorting, and inserting or deleting rows and columns, read every anchor through
+    /// `object_anchors`, compute the new ones and write them back through `object_anchors_mut`
+    /// in step. The two must visit the same objects in the same order, or an object receives
+    /// another object's anchor; a kind that reaches only one of them would break that silently.
+    #[test]
+    fn object_anchor_accessors_visit_the_same_objects_in_the_same_order() {
+        let mut s = Sheet::new("S");
+        // Two objects of every kind, inserted in a mixed order, with ids unrelated to the kind.
+        // Each anchor cell's row carries the id, so an anchor read back names its object.
+        let inserted = [
+            (ObjKind::Slicer, 7),
+            (ObjKind::Chart, 3),
+            (ObjKind::Image, 11),
+            (ObjKind::Shape, 2),
+            (ObjKind::Chart, 9),
+            (ObjKind::Slicer, 1),
+            (ObjKind::Image, 4),
+            (ObjKind::Equation, 6),
+            (ObjKind::Shape, 12),
+            (ObjKind::Equation, 8),
+        ];
+        for &(kind, id) in &inserted {
+            push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
+        }
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len();
+        assert_eq!(per_kind, inserted.len());
+        assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
+        assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
+        // Mark each anchor with its position through the mutable accessor; the shared accessor
+        // reads the marks back in the same sequence.
+        for (i, a) in s.object_anchors_mut().enumerate() {
+            a.dx = i as f32;
+        }
+        let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
+        assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
+        // The sequence is the documented one (charts, images, shapes, slicers, each in insertion
+        // order; equations are shapes) and every object appears in it once.
+        let collection = |k: ObjKind| if k == ObjKind::Equation { ObjKind::Shape } else { k };
+        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer]
+            .iter()
+            .flat_map(|&k| inserted.iter().filter(move |(kind, _)| collection(*kind) == k).map(|&(_, id)| id))
+            .collect();
+        let visited: Vec<u32> = s.object_anchors().map(|a| a.cell.row).collect();
+        assert_eq!(visited, documented);
+        // The mark written through the bulk accessor landed on the object `object_anchor` finds
+        // by kind and id.
+        for &(kind, id) in &inserted {
+            let position = documented.iter().position(|&x| x == id).map(|p| p as f32);
+            assert_eq!(s.object_anchor(ObjRef::new(kind, id)).map(|a| a.dx), position, "{kind:?} {id}");
+        }
+    }
 }
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.

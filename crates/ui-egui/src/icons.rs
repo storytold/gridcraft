@@ -8,6 +8,27 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
 
 use crate::theme::{Cat, Tokens};
 
+/// The glyph on a Function Library book ([`Icon::FnBook`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FnGlyph {
+    /// Recently Used: a star.
+    Star,
+    /// Financial: a stack of coins.
+    Coins,
+    /// Logical: a question mark.
+    Question,
+    /// Text: a letter.
+    Letter,
+    /// Date & Time: a clock face.
+    Clock,
+    /// Lookup & Reference: a magnifier.
+    Magnifier,
+    /// Math & Trig: theta.
+    Theta,
+    /// More Functions: three dots.
+    Dots,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     Paste,
@@ -123,6 +144,9 @@ pub enum Icon {
     SheetList,
     Book,
     Folder,
+    /// A book with a coloured spine and a category glyph (Formulas › Function Library). The
+    /// spine and glyph take the accent colour of [`paint_accent`].
+    FnBook(FnGlyph),
     /// Header & Footer: a page with its top / bottom band marked.
     Header,
     Footer,
@@ -172,6 +196,10 @@ impl G<'_> {
         let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
         self.p.add(PathShape::line(v, PathStroke::new(w * self.s.clamp(1.0, 2.0), c)));
     }
+    fn closed(&self, pts: &[(f32, f32)], c: Color32, w: f32) {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
+        self.p.add(PathShape::closed_line(v, PathStroke::new(w * self.s.clamp(1.0, 2.0), c)));
+    }
     fn stroke(&self, pts: &[(f32, f32)], c: Color32) {
         self.line(pts, c, 1.15);
     }
@@ -210,17 +238,20 @@ impl G<'_> {
 }
 
 /// The colours an icon draws with besides its main colour: the paper inside documents and cells,
-/// and the category palette for its coloured parts.
+/// the category palette for its coloured parts, and the accent a button asked for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Palette {
     paper: Color32,
     cat: [Color32; 8],
     recording: Color32,
+    /// The accent colour: the coloured part of an icon that has one (a book's spine and glyph),
+    /// otherwise the icon's main colour. `None` draws the icon as it is.
+    accent: Option<Color32>,
 }
 
 impl Palette {
     fn of(t: &Tokens) -> Palette {
-        Palette { paper: t.paper, cat: t.cat, recording: t.recording }
+        Palette { paper: t.paper, cat: t.cat, recording: t.recording, accent: None }
     }
 
     fn cat(&self, c: Cat) -> Color32 {
@@ -244,9 +275,21 @@ pub fn fallback_for_symbol(c: char) -> Option<Icon> {
     }
 }
 
+/// Whether an icon has a part of its own for the accent colour (otherwise the accent recolours
+/// the whole icon).
+fn has_accent_part(icon: Icon) -> bool {
+    matches!(icon, Icon::FnBook(_))
+}
+
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
     paint_with(p, rect, icon, c, &Palette::of(&Tokens::get(p.ctx())));
+}
+
+/// Draws `icon` like [`paint`], with an accent colour: the icon's coloured part when it has one
+/// (the spine and glyph of [`Icon::FnBook`]), otherwise the whole icon. `None` is [`paint`].
+pub fn paint_accent(p: &Painter, rect: Rect, icon: Icon, c: Color32, accent: Option<Color32>) {
+    paint_with(p, rect, icon, c, &Palette { accent, ..Palette::of(&Tokens::get(p.ctx())) });
 }
 
 /// Draws `icon` on the sheet, which stays white in both themes, so with the light palette.
@@ -259,6 +302,10 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
     let side = rect.width().min(rect.height());
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
     let g = G { p, r, s: side / 16.0 };
+    let c = match pal.accent {
+        Some(a) if !has_accent_part(icon) => a,
+        _ => c,
+    };
     let light = c.gamma_multiply(0.45);
     let paper = pal.paper;
     let blue = pal.cat(Cat::Blue);
@@ -695,6 +742,46 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         }
         Icon::Folder => {
             g.poly(&[(1.5, 4.0), (6.0, 4.0), (7.5, 5.5), (14.5, 5.5), (14.5, 13.0), (1.5, 13.0)], yellow);
+        }
+        Icon::FnBook(glyph) => {
+            let spine = pal.accent.unwrap_or(c);
+            g.rect(3.0, 1.5, 10.5, 13.0, Some(paper), Some(c));
+            g.rect(3.0, 1.5, 2.5, 13.0, Some(spine), None);
+            let (x, y) = (9.5, 7.8);
+            match glyph {
+                FnGlyph::Star => {
+                    let pts: Vec<(f32, f32)> = (0..10)
+                        .map(|i| {
+                            let a = std::f32::consts::PI * (i as f32 / 5.0 - 0.5);
+                            let rad = if i % 2 == 0 { 3.4 } else { 1.4 };
+                            (x + rad * a.cos(), y + rad * a.sin())
+                        })
+                        .collect();
+                    g.closed(&pts, spine, 1.0);
+                }
+                FnGlyph::Coins => {
+                    for k in 0..3 {
+                        let top = y + 1.6 - k as f32 * 2.3;
+                        g.p.rect_filled(Rect::from_min_max(g.pt(x - 2.8, top), g.pt(x + 2.8, top + 1.7)), 0.9 * g.s, spine);
+                    }
+                }
+                FnGlyph::Question => g.text(x, y, "?", 8.5, spine, (true, false)),
+                FnGlyph::Letter => g.text(x, y, "A", 8.0, spine, (true, false)),
+                FnGlyph::Clock => {
+                    g.circle(x, y, 3.2, None, Some(spine));
+                    g.stroke(&[(x, y - 2.0), (x, y), (x + 1.6, y + 0.9)], spine);
+                }
+                FnGlyph::Magnifier => {
+                    g.circle(x - 0.6, y - 0.6, 2.3, None, Some(spine));
+                    g.line(&[(x + 1.0, y + 1.0), (x + 3.0, y + 3.0)], spine, 1.5);
+                }
+                FnGlyph::Theta => g.text(x, y, "θ", 8.5, spine, (false, false)),
+                FnGlyph::Dots => {
+                    for dx in [-2.4, 0.0, 2.4] {
+                        g.circle(x + dx, y, 0.9, Some(spine), None);
+                    }
+                }
+            }
         }
         Icon::Header | Icon::Footer => {
             g.rect(3.5, 1.5, 9.0, 13.0, None, Some(c));

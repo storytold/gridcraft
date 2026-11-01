@@ -768,3 +768,38 @@ fn border_keytips_without_a_command_stay_silent() {
         assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
     }
 }
+
+/// #2964: Alt, H, B opens the Borders menu (Excel shows it with each item's letter) instead of
+/// leaving nothing on screen; a letter then picks its item and the menu closes, and Esc backs out.
+#[test]
+fn borders_keytip_opens_the_borders_menu() {
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), Some("HB"));
+    assert!(egui::Popup::is_any_open(&h.ctx), "Alt, H, B opens the Borders menu");
+    assert!(h.query_by_label("All Borders").is_some(), "the menu's items show");
+    letter(&mut h, Key::A, false);
+    h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "picking an item closes the menu");
+    assert_eq!(h.state().keytips.prefix(), None);
+    assert!(sides(&h, "B2").iter().all(|s| *s != gridcraft_engine::model::BorderStyle::None), "A applied All Borders");
+
+    // Inside Borders, GridCraft's own item, has a letter too (J): only the inner edges.
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::J], false);
+    h.run_steps(2);
+    let (a1, b2) = (sides(&h, "A1"), sides(&h, "B2"));
+    use gridcraft_engine::model::BorderStyle::{None as N, Thin};
+    assert_eq!(a1, [N, Thin, N, Thin], "A1: right and bottom only");
+    assert_eq!(b2, [Thin, N, Thin, N], "B2: left and top only");
+
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    key(&mut h, Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), Some("H"), "Esc backs out to the Home letters");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "and closes the menu");
+}

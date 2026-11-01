@@ -46,7 +46,7 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use csv::{MAX_CSV_BYTES, read_csv, read_csv_with_report, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -84,7 +84,22 @@ impl ReadReport {
 /// Reads an `.xlsx` / `.xlsm` / `.xltx` / `.xltm` package (the workbook part is found through the
 /// package relationships, so every main-part content type is accepted).
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes)
+    read::read_xlsx(bytes, None)
+}
+
+/// [`read_xlsx`], and opens formulas from Google Sheets' XLSX export as the formulas written in
+/// Google Sheets (#2871).
+///
+/// Google writes a formula that uses a function it thinks Excel lacks as
+/// `IFERROR(__xludf.DUMMYFUNCTION("<formula, quotes doubled>"),<cached value>)`; Excel shows the
+/// cached value. A cell formula holding that wrapper, whole or inside a larger formula, is read
+/// as the formula inside when it parses and `known` says GridCraft calculates every function it
+/// calls. Otherwise (a Google-only function such as `GOOGLETRANSLATE`, inner text that doesn't
+/// parse, or nesting past the parser's limit) the wrapper stays, so the cell keeps showing the
+/// cached value as in Excel. `known` is passed in because this crate doesn't depend on the
+/// function library.
+pub fn read_xlsx_with(bytes: &[u8], known: &dyn Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, Some(known))
 }
 
 /// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:

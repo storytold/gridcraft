@@ -1,5 +1,5 @@
 use super::about::about;
-use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
+use super::analysis::{analysis_toolpak, cancel_solver_options, goal_seek, in_solver_options, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
@@ -182,7 +182,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -377,7 +377,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
-        open = false;
+        // In Solver Options, Escape (or closing the window) cancels the options only.
+        if in_solver_options(&d) {
+            cancel_solver_options(&mut d);
+        } else {
+            open = false;
+        }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
@@ -465,7 +470,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
 /// Enter sets the width, as in Excel.
 /// Keeps asking until the field really has focus: a new window's first frame is an invisible
 /// sizing pass where a focus request is ignored.
-fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
+pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     if !d.focus_first_field {
         return;
     }

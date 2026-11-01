@@ -192,6 +192,74 @@ fn set_values_can_store_strings_as_the_text_they_are() {
     assert!(d.wb.styles.get(sh.style_id(CellRef::parse("A9").unwrap())).align.wrap);
 }
 
+/// The result names the strings typed input read as something else, so a script notices without
+/// reading the file back (#2255). A formula and a leading apostrophe are not conversions.
+#[test]
+fn set_values_reports_the_strings_typed_input_read() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let row = json!(["05.04.2026", "02/11/2026", "2.500", "4.25 %", "=1+1", "'keep"]);
+    let r = s.execute("range.setValues", json!({"range": "A1", "values": [row.clone()]})).unwrap();
+    assert_eq!(r["cells"], 6, "{r}");
+    assert_eq!(r["convertedCount"], 4, "{r}");
+    assert_eq!(r["converted"][0], json!({"cell": "A1", "input": "05.04.2026", "stored": "5/4/2026"}), "{r}");
+    assert_eq!(r["converted"][1], json!({"cell": "B1", "input": "02/11/2026", "stored": "2/11/2026"}), "{r}");
+    assert_eq!(r["converted"][2], json!({"cell": "C1", "input": "2.500", "stored": "2.5"}), "{r}");
+    assert_eq!(r["converted"][3], json!({"cell": "D1", "input": "4.25 %", "stored": "4.25%"}), "{r}");
+    // The report is a diagnostic, not a second copy of the data: a long input is cut.
+    let long = s.execute("range.setValues", json!({"range": "J1", "values": [["9".repeat(100)]]})).unwrap();
+    assert_eq!(long["convertedCount"], 1, "{long}");
+    let input = long["converted"][0]["input"].as_str().unwrap_or_default();
+    assert_eq!(input.chars().count(), 33, "32 characters and the ellipsis: {input}");
+    assert!(input.ends_with('…'), "{input}");
+    // Nothing is read with `parse: false`, so nothing is reported.
+    let verbatim = s.execute("range.setValues", json!({"range": "A3", "parse": false, "values": [row]})).unwrap();
+    assert_eq!(verbatim["convertedCount"], 0, "{verbatim}");
+    assert_eq!(verbatim["converted"], json!([]), "{verbatim}");
+}
+
+/// An empty string clears the cell with `parse: false` too, as `null` and the default path do: a
+/// script clearing cells with "" must not leave cells `COUNTA` counts.
+#[test]
+fn set_values_parse_false_clears_an_empty_string() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B1", "values": [["keep", "keep"]]})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": [["", ""]]})).unwrap();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    assert_eq!(get(&mut s, "A1")["type"], "empty");
+    assert_eq!(get(&mut s, "B1")["type"], "empty");
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).font.bold, "clearing with \"\" keeps the formatting");
+    assert_eq!(s.execute("formulas.evaluate", json!({"formula": "=COUNTA(A1:B1)"})).unwrap(), json!(0.0));
+}
+
+/// The text `parse: false` stores is still text after the workbook is saved and reopened, and the
+/// default's reading of a date survives as a date (#2255).
+#[test]
+fn set_values_text_survives_an_xlsx_roundtrip() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let values = json!([["05.04.2026", "2.500", "4.25 %", "=1+1", 3, true]]);
+    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": values})).unwrap();
+    s.execute("range.setValues", json!({"range": "A3", "values": [["05.04.2026"]]})).unwrap();
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (wb, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    for (col, want) in [(0, "05.04.2026"), (1, "2.500"), (2, "4.25 %")] {
+        assert_eq!(sh.value(CellRef::new(0, col)), Value::text(want), "column {col} is the text it was given");
+    }
+    assert_eq!(sh.value(CellRef::new(0, 3)), Value::number(2.0), "=1+1 is still a formula");
+    assert_eq!(sh.value(CellRef::new(0, 4)), Value::number(3.0));
+    assert_eq!(sh.value(CellRef::new(0, 5)), Value::Bool(true));
+    // The default read the date, and the file keeps it as one.
+    let at = CellRef::new(2, 0);
+    assert_eq!(crate::display::cell_text(&wb, sh, at), "5/4/2026");
+    assert_eq!(wb.styles.get(sh.style_id(at)).num_fmt.as_str(), "m/d/yyyy");
+}
+
 #[test]
 fn legacy_array_entry() {
     let mut s = Session::new();

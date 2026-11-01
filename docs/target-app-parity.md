@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (insert objects: equations; earlier: chart resizing no longer listed as missing; earlier: automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (insert objects: equations; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -89,7 +89,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. Paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, ISO B4/B5/B6 stay reachable by name, and Japanese Postcard (はがき), Japanese Double Postcard (往復はがき), the chou/kaku envelopes and A6 are available. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag and axis titles; no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161). [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
-| What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (13 of 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer and Limits reports; no Sensitivity report or options dialog). Missing: Forecast Sheet, Analyze Data |
+| What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (13 of 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer and Limits reports; Load/Save Model, Reset All and Solver Options; no Sensitivity report), Forecast Sheet. Missing: Analyze Data |
 | Get & Transform, external data, data model | 5 | ~15% | ~10% | 60–100 | Import of CSV/TSV, JSON, HTML. No Power Query editor, no From Web, database or folder sources, no connections or refresh, no relationships or data model, no external workbook links (dropped with a warning) |
 | Insert objects | 3 | ~55% | ~45% | 25–40 | Pictures, 8 shape kinds (Excel has ~170), text boxes, own icon set, ink with Ink to Shape, hyperlinks, checkboxes, equations (LaTeX with a live preview, Office Math in xlsx, Symbol font in PDF). Missing: SmartArt, WordArt, signature line, objects, 3-D models, screenshot, pictures in cells (PR #105) |
 | Review, comments, protection, collaboration | 4 | ~55% | ~40% | 35–55 | Threaded comments, notes, spelling (system dictionary), thesaurus, sheet and workbook protection, Allow Edit Ranges with Excel-compatible password hashes (#307). Missing: comment navigation, Show Changes, notes-to-comments conversion, accessibility checker, co-authoring, opening password-encrypted files (refused with a message since #17) |
@@ -314,7 +314,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   galleries (cell styles, table styles, colour palettes, conditional formatting menus),
   contextual Table/Chart Design tabs, formula bar with Name Box, virtualised grid (smooth
   scrolling, zoom, frozen panes, text overflow), sheet tabs (rename, reorder, colour, hide),
-  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Formula Builder, Find and
+  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Insert Function, Find and
   Replace, Sort, Name Manager, Data Validation, Paste Special…), command palette, dark mode.
 - Agents: every action is an engine command; JSON control channel in the desktop app (pointer,
   keyboard, dialogs, screenshots); MCP server (headless or bridged); CLI (`info`, `convert`,
@@ -334,8 +334,11 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
-| 2026-10-31 | minor | Charts move and resize from eight handles like every floating object (#190): the Essentials chart work is polish only (5–8 h), and the chart rows and the interaction discount no longer list resizing as missing; the Mainstream chart row no longer lists trendlines as missing (no score change) |
+| 2026-11-01 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
+| 2026-11-01 | minor | Charts move and resize from eight handles like every floating object (#190): the Essentials chart work is polish only (5–8 h), and the chart rows and the interaction discount no longer list resizing as missing; the Mainstream chart row no longer lists trendlines as missing (no score change) |
+| 2026-10-31 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
+| 2026-10-31 | minor | What-if and analysis: Solver Options (no score change) |
+| 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |

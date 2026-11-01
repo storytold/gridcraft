@@ -664,19 +664,31 @@ impl Dialog {
                 d
             }
             "solver" => {
-                // Starts from the sheet's saved model, else the active cell as objective.
+                // Starts from the sheet's saved model, else the active cell as objective; fields
+                // given when opening it go over either.
                 let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet()));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
-                if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
-                    for (k, x) in m {
-                        v.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                for m in [saved.as_ref(), Some(&params)].into_iter().flatten().filter_map(Json::as_object) {
+                    if let Some(v) = values.as_object_mut() {
+                        for (k, x) in m {
+                            v.insert(
+                                k.clone(),
+                                if k == "value" { json!(x.as_str().map_or_else(|| x.to_string(), str::to_string)) } else { x.clone() },
+                            );
+                        }
                     }
                 }
                 if let Some(v) = values.as_object_mut() {
                     v.insert("newOp".into(), json!("<="));
                 }
+                let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
                 let mut d = Dialog::custom("solver", "Solver Parameters", values);
                 d.command = Some("data.solver");
+                // Straight into the Solver Options: the same setup as the Options button, so the
+                // fields show their defaults and Cancel restores what was there.
+                if options {
+                    analysis::open_solver_options(&mut d);
+                }
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
@@ -854,7 +866,13 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                let mut d = Dialog::custom("insertFunction", "Insert Function", json!({"category": category}));
+                d.focus_first_field = true;
+                d
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
