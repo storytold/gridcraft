@@ -136,6 +136,7 @@ impl DocWindows {
             let first = app.session.active_window().and_then(|w| self.find(w)).or_else(|| self.list.active());
             self.viewports.set_root(first);
         }
+        app.root_window = self.root_window();
         if self.list.is_empty() {
             if self.quit_with_last_window {
                 if !app.allow_close {

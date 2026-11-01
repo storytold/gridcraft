@@ -296,6 +296,10 @@ pub struct SheetApp {
     /// tests, embedding hosts) one window shows the active workbook window, and its close button
     /// quits.
     pub native_windows: bool,
+    /// With native windows, the engine window drawn in the root viewport (set by [`doc_windows`]).
+    /// Synthetic control input and screenshot captures reach only that window, so the control
+    /// channel refuses them while another window is active (#3036).
+    pub(crate) root_window: Option<u64>,
     /// View › Arrange All's layout and windows, waiting for the native windows to move.
     pub arrange_windows: Option<(String, Vec<u64>)>,
     /// The update check, the startup prompt and a running self-update (desktop only).

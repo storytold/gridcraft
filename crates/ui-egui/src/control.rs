@@ -155,6 +155,9 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "activeDocument": app.session.active_index(),
         "windows": app.session.window_list(),
         "activeWindow": app.session.active_window(),
+        // The window synthetic input and screenshots reach (#3036): with native windows, the one
+        // in the root viewport.
+        "inputWindow": if app.native_windows { app.root_window } else { app.session.active_window() },
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
 }
@@ -170,10 +173,49 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// The methods whose effect lands in a native window: synthetic input, screenshots and window
+/// control. They reach the root viewport's window only.
+const WINDOW_INPUT_METHODS: &[&str] =
+    &["ui.click", "ui.drag", "ui.move", "ui.cell.click", "ui.cell.drag", "ui.key", "ui.text", "ui.screenshot", "ui.resize", "ui.focus"];
+
+/// Refuses a [`WINDOW_INPUT_METHODS`] request that would land in another window than the one
+/// engine commands act on (#3036). Synthetic events are added to the root viewport's raw input and
+/// captures are issued in its pass, so with several native windows they reach the window drawn in
+/// the root viewport, while cell geometry and engine commands follow the active window: typing
+/// would silently go into another workbook. `window`/`doc` may name the active window; naming
+/// another one is refused too, since input cannot be routed there.
+fn check_input_window(app: &SheetApp, method: &str, p: &Json) -> Result<(), String> {
+    let active = app.session.active_window();
+    let target = gridcraft_engine::Target::from_json(p).map_err(|e| e.to_string())?;
+    if target != gridcraft_engine::Target::Active {
+        let named = app.session.target_window(target).map_err(|e| e.to_string())?;
+        if Some(named) != active {
+            return Err(format!(
+                "`{method}` acts on the active window only, and window {named} is not active: run `window.activate {{\"window\": {named}}}` first"
+            ));
+        }
+    }
+    let Some(active) = active else { return Ok(()) };
+    if !app.native_windows || app.root_window == Some(active) {
+        return Ok(());
+    }
+    Err(match app.root_window {
+        Some(root) => format!(
+            "`{method}` cannot reach window {active}: with several native windows, synthetic input and screenshots go only to the first native window (window {root}). Run `window.activate {{\"window\": {root}}}` to use it, or use engine commands, which act on the active window"
+        ),
+        None => format!("`{method}` cannot reach window {active}: it has no native window yet"),
+    })
+}
+
 /// Dispatches one control request: commands, inspection, UI state, dialogs, editing, synthetic input, open/save/quit and screenshots. Unknown methods (and unknown command ids) return an error. Immediate answers request a repaint; `ui.screenshot` is admitted asynchronously instead of being answered here.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
+    if WINDOW_INPUT_METHODS.contains(&method)
+        && let Err(e) = check_input_window(app, method, p)
+    {
+        return err(e);
+    }
     let out = match method {
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };

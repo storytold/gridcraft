@@ -420,3 +420,74 @@ fn arrange_all_lays_out_the_native_windows_active_first() {
     let r = |x, y, w, h| craft_window::Rect::new(x, y, w, h);
     assert_eq!(tiled, [r(0.0, 0.0, 500.0, 400.0), r(500.0, 0.0, 500.0, 400.0), r(0.0, 400.0, 1000.0, 400.0)]);
 }
+
+/// One control request handled as the control channel does, inside a frame.
+fn control(desk: &mut Desk, method: &str, params: serde_json::Value) -> serde_json::Value {
+    let mut reply = serde_json::Value::Null;
+    desk.frame_with(|app, ctx| {
+        reply = match gridcraft_ui_egui::control::handle(app, ctx, method, &params) {
+            gridcraft_ui_egui::control::Outcome::Done(v) => v,
+            gridcraft_ui_egui::control::Outcome::Screenshot { .. } => json!({"ok": true, "screenshot": true}),
+        };
+    });
+    reply
+}
+
+/// #3036: synthetic input and captures reach only the window in the root viewport. While another
+/// window is active (the one engine commands and cell geometry follow), they are refused with an
+/// error instead of typing into the other workbook or failing with "the document changed".
+#[test]
+fn control_input_and_screenshots_are_refused_outside_the_root_window() {
+    let mut desk = Desk::new(true);
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    assert_eq!(desk.windows.root_window(), Some(w1));
+    assert_eq!(desk.app.session.active_window(), Some(w2), "the new workbook's window is active");
+    let inspect = control(&mut desk, "ui.inspect", json!({}));
+    assert_eq!(inspect["result"]["inputWindow"], json!(w1));
+
+    let requests = [
+        ("ui.cell.click", json!({"cell": "B2"})),
+        ("ui.cell.drag", json!({"from": "B2", "to": "C3"})),
+        ("ui.click", json!({"x": 100.0, "y": 300.0})),
+        ("ui.drag", json!({"x": 100.0, "y": 300.0, "toX": 200.0, "toY": 300.0})),
+        ("ui.move", json!({"x": 100.0, "y": 300.0})),
+        ("ui.text", json!({"text": "typed"})),
+        ("ui.key", json!({"key": "Enter"})),
+        ("ui.screenshot", json!({})),
+        ("ui.screenshot", json!({"window": w2})),
+        ("ui.resize", json!({"width": 800.0, "height": 600.0})),
+        ("ui.focus", json!({})),
+    ];
+    for (method, params) in &requests {
+        let reply = control(&mut desk, method, params.clone());
+        assert_eq!(reply["ok"], false, "{method} {params} is refused: {reply}");
+        let error = reply["error"].as_str().unwrap_or_default();
+        assert!(error.contains(&format!("window {w2}")) && error.contains("window.activate"), "{method}: {error}");
+        assert!(desk.app.synthetic.is_empty(), "{method} queued no input");
+    }
+    desk.frames(2);
+    let b2 = CellRef::parse("B2").unwrap();
+    for doc in 0..2 {
+        let d = &desk.app.session.documents()[doc];
+        assert_eq!(d.wb.active().unwrap().value(b2), Value::Empty, "workbook {doc} was not typed into");
+    }
+
+    // Naming a window other than the active one is refused too: input can't be routed there.
+    let reply = control(&mut desk, "ui.text", json!({"text": "x", "window": w1}));
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(reply["error"].as_str().unwrap_or_default().contains(&format!("window {w1} is not active")), "{reply}");
+    assert!(desk.app.synthetic.is_empty());
+
+    // With the root viewport's window active, input and screenshots are admitted as before.
+    let reply = control(&mut desk, "engine.execute", json!({"command": "window.activate", "params": {"window": w1}}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    desk.frames(2);
+    assert_eq!(desk.app.session.active_window(), Some(w1));
+    let reply = control(&mut desk, "ui.text", json!({"text": "typed", "window": w1}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(!desk.app.synthetic.is_empty(), "the text is queued for the root window");
+    let reply = control(&mut desk, "ui.screenshot", json!({}));
+    assert_eq!(reply["screenshot"], true, "the capture is admitted: {reply}");
+}
