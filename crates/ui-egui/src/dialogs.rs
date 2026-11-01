@@ -865,7 +865,13 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                let mut d = Dialog::custom("insertFunction", "Insert Function", json!({"category": category}));
+                d.focus_first_field = true;
+                d
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
