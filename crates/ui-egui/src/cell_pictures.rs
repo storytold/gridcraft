@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex, Weak};
 
 use egui::{Color32, Painter, Rect, TextureHandle, pos2, vec2};
+use gridcraft_engine::core::PictureSizing;
 use gridcraft_engine::model::CellPicture;
 
 const MAX_ENCODED: usize = 16 * 1024 * 1024;
@@ -116,7 +117,21 @@ fn fitted_rect(cell: Rect, size: [usize; 2]) -> Option<Rect> {
     Some(Rect::from_center_size(cell.center(), source * scale))
 }
 
-/// Draws a cached cell picture fitted inside the cell and clipped to it, or paints the picture fallback icon when no texture is available.
+/// Where a picture of `size` pixels goes in `cell` for `sizing`. Original and custom sizes start at
+/// the cell's top-left and may run past it; the caller clips to the cell.
+fn placed_rect(cell: Rect, size: [usize; 2], sizing: PictureSizing) -> Option<Rect> {
+    if cell.width() <= 0.0 || cell.height() <= 0.0 || size.contains(&0) {
+        return None;
+    }
+    match sizing {
+        PictureSizing::Fit => fitted_rect(cell, size),
+        PictureSizing::Fill => Some(cell),
+        PictureSizing::Original => Some(Rect::from_min_size(cell.min, vec2(size[0] as f32, size[1] as f32))),
+        PictureSizing::Custom { width, height } => Some(Rect::from_min_size(cell.min, vec2(width as f32, height as f32))),
+    }
+}
+
+/// Draws a cached cell picture sized as its sizing says and clipped to the cell, or paints the picture fallback icon when no texture is available.
 pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
     if cell.width() <= 0.0 || cell.height() <= 0.0 || !cell.intersects(painter.clip_rect()) {
         return;
@@ -127,7 +142,7 @@ pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
     let texture = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(painter.ctx(), picture);
     let painter = painter.with_clip_rect(cell.intersect(painter.clip_rect()));
     if let Some(texture) = texture {
-        if let Some(rect) = fitted_rect(cell, texture.size()) {
+        if let Some(rect) = placed_rect(cell, texture.size(), picture.sizing) {
             painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     } else {
@@ -144,11 +159,26 @@ pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn placed_rect_follows_the_sizing() {
+        let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 50.0));
+        // Fit keeps the 2:1 aspect ratio inside the 100x50 cell, centred.
+        assert_eq!(placed_rect(cell, [200, 100], PictureSizing::Fit), Some(cell));
+        assert_eq!(placed_rect(cell, [400, 100], PictureSizing::Fit).map(|r| r.width()), Some(100.0));
+        assert_eq!(placed_rect(cell, [400, 100], PictureSizing::Fill), Some(cell));
+        assert_eq!(placed_rect(cell, [300, 200], PictureSizing::Original), Some(Rect::from_min_size(cell.min, vec2(300.0, 200.0))));
+        assert_eq!(
+            placed_rect(cell, [300, 200], PictureSizing::Custom { width: 40, height: 30 }),
+            Some(Rect::from_min_size(cell.min, vec2(40.0, 30.0)))
+        );
+        assert_eq!(placed_rect(cell, [0, 200], PictureSizing::Fill), None);
+    }
+
     fn picture(color: [u8; 4]) -> Result<Arc<CellPicture>, image::ImageError> {
         let image = image::RgbaImage::from_pixel(4, 2, image::Rgba(color));
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, image::ImageFormat::Png)?;
-        Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Test picture".into() }))
+        Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Test picture".into(), sizing: Default::default() }))
     }
 
     #[test]
@@ -182,7 +212,7 @@ mod tests {
         }
         assert!(cache.entries.len() <= MAX_CACHE_ITEMS);
         assert!(cache.bytes <= MAX_CACHE_BYTES);
-        assert!(decode(&CellPicture { data: vec![], mime: "image/png".into(), alt: String::new() }).is_none());
+        assert!(decode(&CellPicture { data: vec![], mime: "image/png".into(), alt: String::new(), sizing: Default::default() }).is_none());
         assert_eq!(decode(&red).ok_or("decode failed")?.pixels.first(), Some(&Color32::RED));
         Ok(())
     }

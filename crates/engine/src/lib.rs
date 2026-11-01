@@ -291,8 +291,20 @@ impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
     /// made in this session.
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+    pub fn new(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        Self::new_with_images(wb, path, title, trust, None)
+    }
+    /// As [`DocState::new`], with `images` answering IMAGE while the workbook is calculated, so the
+    /// pictures a file's IMAGE formulas fetch are kept when it opens.
+    pub fn new_with_images(
+        mut wb: Workbook,
+        path: Option<String>,
+        title: String,
+        trust: Trust,
+        images: Option<Arc<dyn calc::ImageFetcher>>,
+    ) -> DocState {
         let mut calc = Calc::new();
+        calc.set_image_fetcher(images);
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
@@ -457,6 +469,8 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Answers IMAGE in every workbook ([`Session::set_image_fetcher`]).
+    image_fetcher: Option<Arc<dyn calc::ImageFetcher>>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
     /// Windows on the open workbooks ([`windows`]); every workbook has at least one.
@@ -531,6 +545,19 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+    /// Lets IMAGE fetch pictures through `fetcher` in every open and future workbook (`None`: it is
+    /// `#BLOCKED!`, which is the default; a fetcher may also answer `#BLOCKED!` or `#CONNECT!`). Without a host that installs one, no workbook can make a
+    /// network request. Formulas already calculated keep their pictures until they recalculate.
+    pub fn set_image_fetcher(&mut self, fetcher: Option<Arc<dyn calc::ImageFetcher>>) {
+        for d in &mut self.docs {
+            d.calc.set_image_fetcher(fetcher.clone());
+        }
+        self.image_fetcher = fetcher;
+    }
+    /// The fetcher IMAGE uses in every workbook ([`Session::set_image_fetcher`]).
+    pub(crate) fn image_fetcher(&self) -> Option<Arc<dyn calc::ImageFetcher>> {
+        self.image_fetcher.clone()
+    }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }
@@ -576,8 +603,9 @@ impl Session {
         cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
         let uid = d.uid;
+        d.calc.set_image_fetcher(self.image_fetcher.clone());
         self.docs.push(d);
         let w = self.push_window(uid);
         self.activate_window(w);

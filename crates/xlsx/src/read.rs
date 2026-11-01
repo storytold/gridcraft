@@ -1,8 +1,9 @@
 //! Reading the workbook part and everything hanging off it.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use gridcraft_core::{DateSystem, RangeRef};
+use gridcraft_core::{DateSystem, PictureSizing, RangeRef};
 use gridcraft_model::{
     CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
 };
@@ -32,6 +33,12 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    /// Copies of `cell_pictures` entries with another sizing (IMAGE formulas), one per picture and
+    /// sizing, so cells that share a picture share its bytes. Keyed by the original's address,
+    /// which `cell_pictures` keeps alive for the whole read.
+    pub sized_pictures: HashMap<(usize, PictureSizing), Arc<CellPicture>>,
+    /// Bytes held by `sized_pictures`, against the same budget as the pictures themselves.
+    pub sized_bytes: usize,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
@@ -249,6 +256,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         next_id: 1,
         num_fmts: Default::default(),
         cell_pictures: vec![],
+        sized_pictures: HashMap::new(),
+        sized_bytes: 0,
         cf_ext_ids: vec![],
         known_function,
     };

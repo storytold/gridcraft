@@ -236,9 +236,6 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
-    if wb.sheets.iter().any(|sheet| sheet.cell_pictures.keys().any(|c| sheet.cell(*c).is_some_and(|cell| cell.formula.is_some()))) {
-        return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
-    }
     check_sheet_names(wb)?;
     let mut out = Out {
         parts: vec![],

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::{RangeRef, Value};
+use gridcraft_core::{PictureSizing, RangeRef, Value};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +56,9 @@ pub struct CellPicture {
     pub data: Vec<u8>,
     pub mime: String,
     pub alt: String,
+    /// How the picture fills its cell.
+    #[serde(default, skip_serializing_if = "PictureSizing::is_default")]
+    pub sizing: PictureSizing,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

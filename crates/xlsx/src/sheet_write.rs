@@ -704,6 +704,10 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
     let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    // A picture IMAGE fetched that the file cannot hold (GIF, BMP, too large, past the workbook's
+    // picture budget) is left out: the formula and its value are saved, and the picture is fetched
+    // again when the file opens.
+    let picture = picture.filter(|p| cell.and_then(|x| x.formula.as_ref()).is_none() || out.cell_pictures.can_add(p));
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
@@ -713,7 +717,11 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     }
     if let Some(picture) = picture {
         let vm = out.cell_pictures.index(picture);
-        let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
+        let _ = write!(s, " t=\"e\" vm=\"{vm}\">");
+        if let Some(f) = cell.and_then(|x| x.formula.as_ref()) {
+            let _ = write!(s, "<f>{}</f>", esc(&crate::fmla::to_file(f)));
+        }
+        s.push_str("<v>#VALUE!</v></c>");
         return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
@@ -728,9 +736,9 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     };
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
-        // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // #SPILL!, #CALC!, #CONNECT! and #BLOCKED! are not error codes of the file format (Excel
+        // refuses a file that caches them); Excel itself caches them as #VALUE!.
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Connect | CellError::Blocked) => Value::Error(CellError::Value),
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would

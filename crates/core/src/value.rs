@@ -19,12 +19,16 @@ pub enum CellError {
     GettingData,
     Spill,
     Calc,
+    /// A connection to an external source failed (IMAGE could not fetch its picture).
+    Connect,
+    /// Access to an external source is turned off (IMAGE with no picture fetcher installed).
+    Blocked,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 12] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +39,8 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Connect,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -48,6 +54,8 @@ impl CellError {
             CellError::GettingData => "#GETTING_DATA",
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
+            CellError::Connect => "#CONNECT!",
+            CellError::Blocked => "#BLOCKED!",
             CellError::Circ => "#CIRC!",
         }
     }
@@ -64,6 +72,8 @@ impl CellError {
             CellError::GettingData => 8,
             CellError::Spill => 9,
             CellError::Calc => 14,
+            CellError::Connect => 10,
+            CellError::Blocked => 11,
             CellError::Circ => 15,
         }
     }

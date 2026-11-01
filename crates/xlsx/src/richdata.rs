@@ -17,7 +17,7 @@ const NS_RICH: &str = "http://schemas.microsoft.com/office/spreadsheetml/2017/ri
 const NS_IMAGE_REL: &str = "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel";
 const RICH_EXT: &str = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}";
 const MAX_IMAGE: u64 = 16 * 1024 * 1024;
-const MAX_IMAGES_TOTAL: usize = 128 * 1024 * 1024;
+pub(crate) const MAX_IMAGES_TOTAL: usize = 128 * 1024 * 1024;
 const MAX_RECORDS: usize = 100_000;
 const MAX_XML: u64 = 16 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_000_000;
@@ -249,7 +249,7 @@ fn read_value(
         return Ok(None);
     }
     *total += data.len();
-    let picture = Arc::new(CellPicture { data, mime: mime.to_string(), alt });
+    let picture = Arc::new(CellPicture { data, mime: mime.to_string(), alt, sizing: Default::default() });
     cache.insert(key, picture.clone());
     Ok(Some(picture))
 }
@@ -259,11 +259,22 @@ fn read_value(
 pub struct PicturesOut {
     pictures: Vec<Arc<CellPicture>>,
     indices: HashMap<*const CellPicture, u32>,
+    /// Encoded bytes of `pictures`, against [`MAX_IMAGES_TOTAL`].
+    bytes: usize,
 }
 
 impl PicturesOut {
     pub fn is_empty(&self) -> bool {
         self.pictures.is_empty()
+    }
+    /// Whether `picture` can join the file without [`write`] refusing the workbook: already in it,
+    /// or a PNG/JPEG within the per-picture limits that still fits the record and byte budgets.
+    pub fn can_add(&self, picture: &Arc<CellPicture>) -> bool {
+        self.indices.contains_key(&Arc::as_ptr(picture))
+            || (image_type(&picture.data).is_some()
+                && picture.data.len() as u64 <= MAX_IMAGE
+                && self.bytes.saturating_add(picture.data.len()) <= MAX_IMAGES_TOTAL
+                && self.pictures.len() < MAX_RECORDS)
     }
     pub fn index(&mut self, picture: &Arc<CellPicture>) -> u32 {
         let key = Arc::as_ptr(picture);
@@ -271,6 +282,7 @@ impl PicturesOut {
             return *index;
         }
         let index = self.pictures.len().saturating_add(1) as u32;
+        self.bytes = self.bytes.saturating_add(picture.data.len());
         self.pictures.push(picture.clone());
         self.indices.insert(key, index);
         index

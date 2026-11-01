@@ -923,21 +923,32 @@ fn sheet1_xml(bytes: &[u8]) -> (String, bool) {
     (s, metadata)
 }
 
-/// Excel refuses to open a file whose cached values include `#SPILL!` or `#CALC!`.
+/// Excel refuses to open a file whose cached values include `#SPILL!`, `#CALC!`, `#CONNECT!` or
+/// `#BLOCKED!`.
 #[test]
-fn spill_and_calc_errors_are_cached_as_value_errors() {
+fn spill_calc_connect_and_blocked_errors_are_cached_as_value_errors() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
     s.set_value(at("A1"), Value::Number(1.0));
     s.cells.set(at("C1"), Cell { value: Value::Error(CellError::Spill), ..Cell::formula(Formula::new("A1:A3*2")) });
     s.cells.set(at("C2"), Cell { value: Value::Error(CellError::Calc), ..Cell::formula(Formula::new("FILTER(A1:A3,A1:A3>5)")) });
     s.cells.set(at("C3"), Cell { value: Value::Error(CellError::NA), ..Cell::formula(Formula::new("NA()")) });
+    s.cells.set(at("C4"), Cell { value: Value::Error(CellError::Connect), ..Cell::formula(Formula::new("A1")) });
+    s.cells.set(at("C5"), Cell { value: Value::Error(CellError::Blocked), ..Cell::formula(Formula::new("A1")) });
     let bytes = write_xlsx(&wb).unwrap();
     let (xml, _) = sheet1_xml(&bytes);
-    assert!(!xml.contains("#SPILL!") && !xml.contains("#CALC!"), "{xml}");
+    for error in ["#SPILL!", "#CALC!", "#CONNECT!", "#BLOCKED!"] {
+        assert!(!xml.contains(error), "{xml}");
+    }
     let mut pkg = Package::open(&bytes).unwrap();
     let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
-    for (address, text, value) in [("C1", "A1:A3*2", "#VALUE!"), ("C2", "_xlfn._xlws.FILTER(A1:A3,A1:A3>5)", "#VALUE!"), ("C3", "NA()", "#N/A")] {
+    for (address, text, value) in [
+        ("C1", "A1:A3*2", "#VALUE!"),
+        ("C2", "_xlfn._xlws.FILTER(A1:A3,A1:A3>5)", "#VALUE!"),
+        ("C3", "NA()", "#N/A"),
+        ("C4", "A1", "#VALUE!"),
+        ("C5", "A1", "#VALUE!"),
+    ] {
         let cell = sheet.child("sheetData").unwrap().kids("row").flat_map(|row| row.kids("c")).find(|cell| cell.attr("r") == Some(address)).unwrap();
         assert_eq!(cell.attr("t"), Some("e"));
         assert_eq!(cell.child("f").unwrap().text, text);

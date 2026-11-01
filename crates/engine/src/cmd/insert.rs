@@ -1027,7 +1027,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         if sh.is_protected() && d.wb.styles.get(style).protection.locked && locked_cell_error(sh, at, &d.unlocked_ranges).is_some() {
             return Err(EngineError::Other("The cell you're trying to change is on a protected sheet.".into()));
         }
-        let picture = CellPicture { data, mime: mime.into(), alt: str_param(p, "alt").unwrap_or("").into() };
+        let picture = CellPicture { data, mime: mime.into(), alt: str_param(p, "alt").unwrap_or("").into(), sizing: Default::default() };
         return edit(s, |cx| {
             cx.sheet_mut(sheet)?.set_picture(at, std::sync::Arc::new(picture));
             cx.touch(sheet, at);
