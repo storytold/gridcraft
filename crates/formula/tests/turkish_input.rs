@@ -255,6 +255,27 @@ fn turkish_case_folding_and_dotless_i() {
     ] {
         assert_eq!(input(src), expected, "input formula test failed for: {src}");
     }
+
+    // Full round-trip: parsed expression printed in TR locale displays standard Turkish uppercase,
+    // and re-parsing that display produces the identical canonical expression.
+    for (src, canonical_expected, tr_display_expected) in [
+        ("=ıserror(A1)", "ISERROR(A1)", "EHATALIYSA(A1)"),
+        ("=iserror(A1)", "ISERROR(A1)", "EHATALIYSA(A1)"),
+        ("=ehataliysa(A1)", "ISERROR(A1)", "EHATALIYSA(A1)"),
+        ("=ıferror(A1;0)", "IFERROR(A1,0)", "EĞERHATA(A1;0)"),
+        ("=mın(A1:A10)", "MIN(A1:A10)", "MİN(A1:A10)"),
+        ("=ındex(A1:B2;1;1)", "INDEX(A1:B2,1,1)", "İNDİS(A1:B2;1;1)"),
+        ("=ındıs(A1:B2;1;1)", "INDEX(A1:B2,1,1)", "İNDİS(A1:B2;1;1)"),
+        ("=eğersay(A1:A10;\">0\")", "COUNTIF(A1:A10,\">0\")", "EĞERSAY(A1:A10;\">0\")"),
+        ("=düşeyara(A2;D:E;2;yanlış)", "VLOOKUP(A2,D:E,2,FALSE)", "DÜŞEYARA(A2;D:E;2;YANLIŞ)"),
+    ] {
+        let parsed = parse_input(src, tr, |_| false).unwrap();
+        assert_eq!(print(&parsed), canonical_expected);
+        let shown = print_input(&parsed, tr, |_| false).unwrap();
+        assert_eq!(shown, tr_display_expected);
+        let reparsed = parse_input(&shown, tr, |_| false).unwrap();
+        assert_eq!(print(&reparsed), canonical_expected);
+    }
 }
 
 #[test]
@@ -282,5 +303,17 @@ fn turkish_translation_has_no_collisions_and_all_round_trip() {
         let localized = tr.function_name(en);
         let roundtrip = tr.canonical_name(localized);
         assert_eq!(roundtrip, en, "Round-trip failed for function: '{en}' -> '{localized}' -> '{roundtrip}'");
+
+        // Lowercase localized with Turkish locale (e.g. İ -> i, I -> ı)
+        let lower_tr = tr.lowercase(localized);
+        assert_eq!(tr.canonical_name(&lower_tr), en, "Lowercase TR round-trip failed: '{en}' -> '{localized}' -> '{lower_tr}'");
+
+        // Lowercase English with Turkish locale (e.g. I -> ı)
+        let lower_en_tr = tr.lowercase(en);
+        assert_eq!(tr.canonical_name(&lower_en_tr), en, "Lowercase EN (Turkish locale) round-trip failed: '{en}' -> '{lower_en_tr}'");
+
+        // Lowercase English with ASCII lowercase (e.g. I -> i)
+        let lower_en_ascii = en.to_ascii_lowercase();
+        assert_eq!(tr.canonical_name(&lower_en_ascii), en, "ASCII lowercase EN round-trip failed: '{en}' -> '{lower_en_ascii}'");
     }
 }
