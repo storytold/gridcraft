@@ -148,10 +148,9 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                         skipped += 1;
                         continue;
                     }
+                    // Its old spill is left to the recalculation, which removes it and
+                    // recalculates what read it.
                     let sh = cx.sheet_mut(si)?;
-                    if let Some(r) = sh.spill_ranges.remove(&c) {
-                        sh.clear_spill(r);
-                    }
                     let style = sh.style_id(c);
                     sh.set_cell(
                         c,

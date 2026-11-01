@@ -210,14 +210,29 @@ impl Calc {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
-            let python = wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.py.is_some());
+            let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
+            let python = py.is_some();
+            // A Python cell whose result (if any) is not an array spills nothing.
+            let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
-                None if python => self.graph.insert(k, Node { areas: Vec::new(), dynamic: false }),
+                None if python => {
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    // New code has no result yet: the spill the cell had (its old result's, or a
+                    // formula's) goes, and what read it is recalculated, as for a formula
+                    // replaced by a constant.
+                    if !spills
+                        && let Some(sh) = wb.sheet_mut(k.0)
+                        && let Some(r) = sh.spill_ranges.remove(&k.1)
+                    {
+                        sh.clear_spill(r);
+                        cleared.push((k.0, r));
+                    }
+                }
                 None => {
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.

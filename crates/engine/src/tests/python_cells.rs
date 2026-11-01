@@ -371,3 +371,62 @@ fn save_model_asks_before_it_writes_over_a_python_cell_that_shows_nothing() {
     assert!(e.contains(crate::cmd::analysis::OVERWRITE_ERROR) && e.contains("H2"), "{e}");
     assert_eq!(code(&s, 0, "H2").as_deref(), Some("None"), "nothing was written");
 }
+
+/// A1 is a Python cell whose kept result `[5, 6]` spills over A1:A2, and B1 reads A2.
+fn spill_with_a_reader() -> crate::Session {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = Arc::make_mut(&mut d.wb);
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("A1").unwrap()).unwrap();
+        let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, vec![Value::Number(5.0), Value::Number(6.0)]).unwrap()));
+        Arc::make_mut(cell.py.as_mut().unwrap()).output =
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    }
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A2)"})).unwrap();
+    assert_eq!(super::v(&s, "B1"), Value::Number(6.0));
+    s
+}
+
+#[test]
+fn new_python_code_recalculates_the_readers_of_its_old_spill() {
+    let mut s = spill_with_a_reader();
+    s.execute("python.set", json!({"cell": "A1", "code": "[7, 8]"})).unwrap();
+    assert_eq!(super::v(&s, "A2"), Value::Empty, "new code has no result yet");
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "B1 read the old spill");
+    // The same code again keeps its result, and its spill.
+    let mut s = spill_with_a_reader();
+    s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]"})).unwrap();
+    assert_eq!((super::v(&s, "A2"), super::v(&s, "B1")), (Value::Number(6.0), Value::Number(6.0)));
+}
+
+#[test]
+fn replace_in_python_code_recalculates_the_readers_of_its_old_spill() {
+    let mut s = spill_with_a_reader();
+    let r = s.execute("edit.replace", json!({"what": "[5,", "with": "[7,"})).unwrap();
+    assert_eq!(r["replaced"], 1);
+    assert_eq!(super::v(&s, "A2"), Value::Empty);
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "B1 read the old spill");
+}
+
+#[test]
+fn clearing_pasting_over_or_blocking_a_python_spill_recalculates_its_readers() {
+    let mut s = spill_with_a_reader();
+    s.execute("edit.clearContents", json!({"range": "A1"})).unwrap();
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "clear");
+    let mut s = spill_with_a_reader();
+    s.execute("cell.set", json!({"cell": "D1", "input": "9"})).unwrap();
+    s.execute("edit.copy", json!({"range": "D1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A1"})).unwrap();
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "paste");
+    let mut s = spill_with_a_reader();
+    s.execute("home.mergeCells", json!({"range": "A2:A3"})).unwrap();
+    assert_eq!(super::v(&s, "A1"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "merge");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(super::v(&s, "B1"), Value::Number(6.0), "undo");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "redo");
+}

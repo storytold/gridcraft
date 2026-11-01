@@ -82,10 +82,8 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = cx.sheet_mut(sheet)?;
         let style = sh.style_id(at);
         let value = value.unwrap_or_else(|| sh.cell(at).map(|c| c.value.clone()).unwrap_or(Value::Empty));
-        // A formula's spill (or the old result's) goes with what the cell held.
-        if let Some(r) = sh.spill_ranges.remove(&at) {
-            sh.clear_spill(r);
-        }
+        // A spill the cell had (a formula's, or the old result's) is left to the recalculation,
+        // which removes it and recalculates what read it.
         sh.set_cell(at, Cell { value, formula: None, style, py: Some(Arc::new(py)) });
         cx.touch(sheet, at);
         Ok(())
