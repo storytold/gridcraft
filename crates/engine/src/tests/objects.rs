@@ -311,3 +311,23 @@ fn object_ids_stay_unique_when_a_file_used_the_largest_id() {
     ids.dedup();
     assert_eq!(ids.len(), 6, "every shape id is distinct across both sheets");
 }
+
+/// A copied sheet's form controls take free ids like its other objects: a file's control can
+/// carry the largest id, and the ids the copy asks for count the controls.
+#[test]
+fn a_copied_sheets_form_controls_take_free_ids_too() {
+    let mut s = s();
+    let slider = id_of(&s.execute("insert.slider", json!({"at": "B2", "link": "$A$1"})).unwrap(), "control");
+    s.execute("insert.button", json!({"at": "B6"})).unwrap();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "D2"})).unwrap();
+    // The file's slider carries the largest id (set on the model, as a loaded file would).
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().controls.iter_mut().find(|o| o.id == slider).unwrap().id = u32::MAX;
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| sh.controls.iter().map(|o| o.id).chain(sh.shapes.iter().map(|o| o.id))).collect();
+    assert_eq!(ids.len(), 6);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "every control and shape id is distinct across both sheets: {ids:?}");
+    assert_eq!(ids.iter().filter(|&&i| i == u32::MAX).count(), 1, "only the file's slider keeps the largest id");
+}
