@@ -81,8 +81,9 @@ impl SheetApp {
         true
     }
 
-    /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, then asks
-    /// about each unsaved workbook in its window; Cancel on any of them stops the quit. A draft its
+    /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the
+    /// macro step editor ask about its unsaved steps, then asks about each unsaved workbook in its
+    /// window; Cancel on any of them stops the quit. A draft its
     /// workbook refuses stops the quit too, with its window in front and the reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
         while let Some(window) = self.parked_window_with_draft() {
@@ -92,6 +93,16 @@ impl SheetApp {
             }
         }
         if self.settle_drafts().is_err() {
+            return;
+        }
+        // The macro step editor asks about its own unsaved steps and debug run first, as for the
+        // window's close button, in the window it is shown in; once it has closed, the quit goes
+        // on, and Cancel stops it.
+        if let Some(window) = self.window_with_dialog("macroEditor") {
+            if self.ui_window() != Some(window) {
+                self.enter_window(window);
+            }
+            crate::macro_editor::request_close(self, true);
             return;
         }
         if let Some(d) = self.dialog.as_mut().filter(|d| d.name() == "saveChanges") {

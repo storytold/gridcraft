@@ -181,10 +181,16 @@ pub fn note_result(app: &mut SheetApp, id: &str, params: &Json, v: &Json) {
     app.toast = Some((text, crate::now_ms()));
 }
 
-/// Drops the step editor once its workbook is closed. The editor's dialog stays with its
-/// workbook's window, so it may not be drawn again to notice.
+/// Drops the step editor once its workbook is closed, or once no window shows it (the window it
+/// was shown in closed while the workbook stays open in another). The editor's dialog stays with
+/// its window, so it may not be drawn again to notice.
 pub fn forget_closed_editor(app: &mut SheetApp) {
-    if app.macros.editor.as_ref().is_some_and(|ed| !app.session.documents().iter().any(|d| d.uid == ed.doc)) {
+    if app
+        .macros
+        .editor
+        .as_ref()
+        .is_some_and(|ed| !app.session.documents().iter().any(|d| d.uid == ed.doc) || app.window_with_dialog("macroEditor").is_none())
+    {
         app.macros.editor = None;
         app.grid.macro_overlay = None;
     }
