@@ -1,4 +1,6 @@
-use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_basis, year_frac, ymd};
+use super::day_count::{
+    basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, period_day_count, shift_months, year_basis, year_frac, ymd,
+};
 use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, num_val, opt_bool};
 
 // ---------------------------------------------------------------------------------------------
@@ -56,7 +58,7 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
                 3 => 365.0 / freq,
                 _ => 360.0 / freq,
             };
-            sum += day_count(sys, from, to, basis)? / nl;
+            sum += period_day_count(sys, from, to, basis)? / nl;
         }
         j += 1;
         guard += 1;
@@ -328,7 +330,7 @@ fn normal_length(start: f64, end: f64, freq: f64, basis: u32) -> f64 {
 
 /// Days of `[from, to]` under a basis, or 0 when the span is empty.
 fn span(sys: DateSystem, from: f64, to: f64, basis: u32) -> R<f64> {
-    if to > from { day_count(sys, from, to, basis) } else { Ok(0.0) }
+    if to > from { period_day_count(sys, from, to, basis) } else { Ok(0.0) }
 }
 
 /// The odd-first-period terms that ODDFPRICE and ODDFYIELD share.

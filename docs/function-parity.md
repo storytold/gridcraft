@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-01 · **Change:** minor (basis-0 securities functions count the end of February to a 31st as 31 days; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -133,6 +133,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Basis 0 (US 30/360) in the coupon, discount-security, ACCRINTM, PRICEMAT/YIELDMAT and AMOR* functions counts the end of February to a 31st as 31 days, as YEARFRAC does (COUPDAYBS(31 Mar 2008, 28 Feb 2011, 1, 0) = 31, was 30); ACCRINT and the odd-period functions keep their period count |
 | 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
 | 2026-10-31 | minor | DEC2BIN, DEC2HEX and DEC2OCT validate `places` before returning negative two's-complement output, and Boolean places return `#VALUE!`, matching Excel |
 | 2026-10-31 | minor | BITLSHIFT and BITRSHIFT return `0` for zero operands shifted beyond 53 bits in either direction; nonzero operands retain the `#NUM!` limit, matching Excel |
