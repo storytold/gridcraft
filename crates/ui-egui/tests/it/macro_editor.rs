@@ -410,6 +410,55 @@ fn the_editor_works_only_on_the_workbook_it_opened_in() {
     assert!(h.state().dialog.as_ref().is_none_or(|d| d.name() != "macroEditor"));
 }
 
+#[test]
+fn a_deferred_close_acts_on_the_editors_window_whichever_window_is_active_meanwhile() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    // Another workbook in a window of its own.
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    let other = h.state().session.active_window().unwrap();
+    assert_ne!(other, home);
+    // Back in the editor's window, File › Close asks about the draft and waits.
+    h.state_mut().enter_window(home);
+    h.run_steps(2);
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    assert_eq!(h.state().macros.editor.as_ref().and_then(|e| e.then_close.as_ref()).map(|c| c.window), Some(home));
+    // The other window is the session's active one when the question is answered (a native
+    // window the person clicked on while the question stood), while the editor's window draws
+    // the question: the answer is given through the editor's own frame, as its button gives it.
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let mut d = app.dialog.take().expect("the editor is its window's dialog");
+    assert_eq!(d.name(), "macroEditor");
+    app.session.activate_window(other);
+    assert_eq!(app.session.active().map(|d| d.uid), Some(book2));
+    // Don't Save: the question's answer closes the editor without saving.
+    let ed = app.macros.editor.as_mut().unwrap();
+    ed.ask_close = false;
+    ed.dirty = false;
+    ed.close_requested = true;
+    let mut open = true;
+    let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| gridcraft_ui_egui::macro_editor::window(app, ctx, &mut d, &mut open));
+    out.textures_delta.clear(); // not painted
+    assert!(!open, "the editor closed");
+    // The close that was asked in the editor's window closes that workbook, not the other.
+    assert!(!is_open(&h, book1), "the editor's workbook closed");
+    assert!(is_open(&h, book2), "the workbook of the window activated meanwhile stays open");
+    assert!(h.state().session.window(other).is_some());
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+}
+
 /// Asks the window to close (the close button, Alt+F4, quitting) and returns the commands the
 /// app answered with over the next frames.
 fn request_window_close(h: &mut Harness) -> Vec<egui::ViewportCommand> {

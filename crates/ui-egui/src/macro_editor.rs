@@ -82,9 +82,9 @@ pub struct Editor {
     pub close_requested: bool,
     /// The window is quitting: once the editor has closed, the window close goes on.
     pub quit: bool,
-    /// The workbook is closing: once the editor has closed, this command (`file.close` or
-    /// `window.close` with its params) runs again.
-    pub then_close: Option<(String, Json)>,
+    /// The workbook (or the editor's window) is closing: once the editor has closed, this close
+    /// runs again, in the window it was asked in.
+    pub then_close: Option<PendingClose>,
     /// Asking whether to save before closing.
     pub ask_close: bool,
     /// Start debugging on the first frame (Macros › Step Into).
@@ -98,6 +98,17 @@ pub struct Editor {
     pub new_param: (String, String),
     /// The reference boxes' picking state.
     pub refs: RefPick,
+}
+
+/// A workbook or window close (`file.close` or `window.close`, with its params) waiting on the
+/// editor's question about its draft. Once the editor has closed, it runs again in the window it
+/// was asked in, whichever window became active meanwhile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingClose {
+    /// The editor's window, where the close was asked.
+    pub window: u64,
+    pub id: String,
+    pub params: Json,
 }
 
 /// Which reference box grid selections write into, and the selection to put back on closing.
@@ -631,10 +642,10 @@ impl Editor {
 
 /// Closing the editor's workbook (File › Close, Cmd+W, the Backstage Close, a window's close
 /// button) while the draft has unsaved changes: the editor asks about them first, as its own
-/// close button does, and the close (`id` with `params`) goes on once the editor has closed;
-/// Cancel keeps both. Closing the window that shows the editor asks too, even when the workbook
-/// stays open in another window. Returns whether the editor was asked. A close of another of the
-/// workbook's windows, or a forced one, goes ahead as before.
+/// close button does, and the close (`id` with `params`) goes on once the editor has closed, in
+/// the window it was asked in; Cancel keeps both. Closing the window that shows the editor asks
+/// too, even when the workbook stays open in another window. Returns whether the editor was
+/// asked. A close of another of the workbook's windows, or a forced one, goes ahead as before.
 pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> bool {
     let flag = |k: &str| params.get(k).and_then(Json::as_bool) == Some(true);
     if flag("force") {
@@ -659,7 +670,7 @@ pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> bool {
     }
     if let Some(ed) = app.macros.editor.as_mut() {
         ed.close_requested = true;
-        ed.then_close = Some((id.to_string(), params.clone()));
+        ed.then_close = Some(PendingClose { window: home, id: id.to_string(), params: params.clone() });
     }
     true
 }
@@ -944,8 +955,15 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        } else if let Some((id, params)) = ed.then_close.take() {
-            app.run_or_alert(&id, params);
+        } else if let Some(close) = ed.then_close.take() {
+            // The close runs in the window it was asked in, not in whichever window the person
+            // activated meanwhile: `file.close` acts on the active window and workbook.
+            if app.session.window(close.window).is_some() {
+                app.enter_window(close.window);
+                app.run_or_alert(&close.id, close.params);
+            } else {
+                app.message = Some(("Close".into(), "The window that was closing has closed already; nothing else was closed.".into()));
+            }
         }
     }
 }

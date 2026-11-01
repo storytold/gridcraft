@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-31 · **Change:** minor (closing a workbook or quitting asks about the step editor's unsaved draft first; earlier: recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-01 · **Change:** minor (a close that waits on the step editor's question runs in the editor's window; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -297,9 +297,10 @@ other macros open; a macro that was left out is not in the saved file.
   the editor. A draft with unsaved changes counts as unsaved work when its workbook closes (File >
   Close, Cmd+W, a window's close button), or the window that shows the editor closes while the
   workbook stays open in another: the editor first asks Save changes to the macro, even if the
-  workbook itself is saved; Save or Don't Save goes on with the close, and a workbook that closes
-  then asks about its own unsaved changes, and Cancel keeps both open. A new macro that has not
-  been edited does not ask. It keeps its window until it closes itself: another dialog asked for
+  workbook itself is saved; Save or Don't Save goes on with the close, in the window it was asked
+  in (whichever window was activated meanwhile), and a workbook that closes then asks about its
+  own unsaved changes, and Cancel keeps both open. A new macro that has not been edited does not
+  ask. It keeps its window until it closes itself: another dialog asked for
   meanwhile is refused with a message, and closing the app (its window's close button, Quit,
   Cmd+Q) first asks about the editor's debug run and unsaved steps, then about unsaved workbooks.
 - **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
