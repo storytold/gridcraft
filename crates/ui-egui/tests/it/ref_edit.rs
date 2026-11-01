@@ -765,3 +765,22 @@ fn enter_while_collapsed_only_expands_the_dialog() {
     assert!((b2(&h).unwrap() - 7.0).abs() < 1e-6);
     assert_eq!(undo_steps(&h), steps + 1);
 }
+
+#[test]
+fn a_successful_analysis_to_a_new_sheet_leaves_that_sheet_active() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    drag(&mut h, "B1", "B6");
+    assert_eq!(field(&h, "range"), "$B$1:$B$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(field(&h, "outputTo"), "newSheet", "New Worksheet Ply is the default output");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    // The command added the report sheet and showed it; closing the dialog must not go back to
+    // the sheet it was opened on, as Excel shows the new sheet.
+    assert_eq!(sheet_names(&h).len(), 2);
+    assert_eq!(selection(&h).0, 1, "the report sheet stays active");
+}

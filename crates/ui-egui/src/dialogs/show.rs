@@ -431,7 +431,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if confirm {
         open = false;
     }
-    if !open {
+    if !open && !confirm {
+        // Cancelled or closed: back to the sheet and selection from before picking. A confirmed
+        // OK went back before its command ran, and stays where the command left things (Data
+        // Analysis shows the report sheet it added).
         end_pick(app, &mut d);
     }
     if app.ui_window() != home {
