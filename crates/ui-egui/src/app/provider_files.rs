@@ -40,13 +40,16 @@ impl SheetApp {
             .iter()
             .map(|doc| {
                 json!({"id":doc.uid.to_string(), "title":doc.display_title(), "revision":doc.revision,
-            "dirty":doc.is_dirty(), "provider":host.bound(doc.uid), "pending":host.pending_for(doc.uid)})
+            "dirty":doc.is_dirty()||self.provider_drafts_for(doc.uid), "provider":host.bound(doc.uid), "pending":host.pending_for(doc.uid)})
             })
             .collect::<Vec<_>>();
         host.publish_documents(json!(documents), &ids);
     }
 
     fn provider_mark_saved(&mut self, id: u64, revision: u64) {
+        if self.provider_drafts_for(id) {
+            return;
+        }
         let _ = self.session.with_target(gridcraft_engine::Target::Doc(id), |session| {
             if let Some(doc) = session.active_mut()
                 && doc.revision == revision
@@ -57,6 +60,11 @@ impl SheetApp {
     }
     fn provider_save(&mut self, host: &Host, command: Command) {
         let Command::Save { request, doc, destination, name, save_as } = command else { return };
+        if let Err(error) = self.settle_provider_drafts(doc) {
+            host.failed(&request, &error);
+            self.alert(error);
+            return;
+        }
         let encoded = self
             .session
             .documents()
@@ -116,6 +124,7 @@ impl SheetApp {
                 let _ = self.session.with_target(gridcraft_engine::Target::Doc(id), |session| {
                     if let Some(doc) = session.active_mut() {
                         doc.saved = std::sync::Arc::new((*doc.saved).clone());
+                        doc.revision = doc.revision.wrapping_add(1);
                     }
                 });
             }
@@ -199,5 +208,66 @@ mod tests {
         host.result(request, "failed".into(), String::new()).unwrap();
         app.provider_tick();
         assert!(app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn newer_alias_overwrite_invalidates_the_revision_before_an_old_ack() {
+        let (mut app, host) = app();
+        let (request, bytes) = save(&mut app, &host);
+        host.result(request, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        let read = host.request_open("shared").unwrap();
+        host.open(read, "Workbook.xlsx".into(), bytes).unwrap();
+        app.provider_tick();
+        assert_eq!(app.session.documents().len(), 2);
+        app.session.set_active(0);
+        app.follow_active_window();
+        app.session.run("cell.set", json!({"cell":"A2","input":"First"})).unwrap();
+        let (old, _) = save(&mut app, &host);
+        app.session.set_active(1);
+        app.follow_active_window();
+        app.session.run("cell.set", json!({"cell":"A2","input":"Second"})).unwrap();
+        let (new, _) = save(&mut app, &host);
+        host.result(new, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        host.result(old, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        assert!(app.session.documents()[0].is_dirty());
+    }
+    #[test]
+    fn resolving_a_save_commits_only_its_parked_workbook_draft() {
+        let (mut app, host) = app();
+        app.follow_active_window();
+        let first = app.session.active().unwrap().uid;
+        assert!(app.choose_provider_save(false));
+        let events = host.take_events();
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        app.begin_edit(Some("Late first workbook draft".into()), false);
+        // An independent window can be active while the chooser waits.
+        app.session.run("file.new", json!({})).unwrap();
+        app.follow_active_window();
+        let second = app.session.active().unwrap().uid;
+        app.begin_edit(Some("Unrelated second draft".into()), false);
+        host.resolve_dialog(request, "provider", "First.xlsx").unwrap();
+        app.provider_tick();
+        assert_eq!(app.session.active().unwrap().uid, second);
+        assert_eq!(app.editor.as_ref().unwrap().text, "Unrelated second draft");
+        let event = host.take_events().into_iter().find(|event| event.metadata["type"] == "save").unwrap();
+        let (workbook, _) = gridcraft_engine::io::open_bytes("First.xlsx", event.bytes.as_ref().unwrap()).unwrap();
+        let cell = workbook.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 0)).unwrap();
+        assert_eq!(cell.input_text(), "Late first workbook draft");
+        let first_index = app.session.documents().iter().position(|doc| doc.uid == first).unwrap();
+        assert!(app.session.documents()[first_index].is_dirty());
+    }
+    #[test]
+    fn an_uncommitted_cell_after_capture_is_not_acknowledged_as_saved() {
+        let (mut app, host) = app();
+        let (request, _) = save(&mut app, &host);
+        app.begin_edit(Some("After capture".into()), false);
+        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+        app.provider_tick();
+        assert!(app.session.active().unwrap().is_dirty());
+        assert_eq!(app.editor.as_ref().unwrap().text, "After capture");
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
     }
 }

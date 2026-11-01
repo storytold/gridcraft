@@ -108,3 +108,9 @@ coalescing, choices, exact captures, cancellation, identity changes, aliases and
 reads. `crates/ui-egui/src/app/provider_files.rs` includes native package round-trip and
 late-edit/failure regressions. They are source fixtures; execution results belong in the PR's
 validation report after running the repository's checks.
+
+Resolving a destination commits that workbook's cell and text-box drafts again, including
+drafts parked in another window. The previously active window and unrelated workbook drafts
+are preserved. Validation refusals keep the original draft in front and abort the capture.
+ACKs leave later drafts dirty. Resource overwrites invalidate alias revisions before accepting
+any subsequently delivered acknowledgement.
