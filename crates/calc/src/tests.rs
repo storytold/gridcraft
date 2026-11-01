@@ -147,6 +147,78 @@ fn indexed_text_criteria_match_the_scan_after_edits() {
     compare(&t);
 }
 
+#[test]
+fn indexed_text_criteria_match_the_scan_over_random_ranges_criteria_and_edits() {
+    // A seeded differential check: random keys, sums and criteria (text in any case, Unicode,
+    // wildcards, tildes, operators, numbers and numeric text, booleans, blanks and errors), and
+    // random edits between calculations. `""&` forces the ordinary scan for the comparison.
+    let keys = ["apple", "Apple", "APPLE", "apple ", "pear", "Pear", "é", "É", "İ", "i", "ß", "SS", "a*c", "abc", "a?c", "~", "*", "12", "012", ""];
+    let criteria =
+        ["apple", "=Apple", "<>apple", "a*", "a?c", "~*", "~?", "~~", "*", "pear", "PEAR", "é", "ss", "12", ">10", "<=12", "", "=", "<>", "TRUE"];
+    let names = ["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MINIFS", "MAXIFS"];
+    const ROWS: u32 = 40;
+    const CRITERIA: u32 = 6;
+    for seed in 1..=16u64 {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = move |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        let key = |next: &mut dyn FnMut(usize) -> usize| match next(10) {
+            0 => Value::Number(next(20) as f64),
+            1 => Value::Bool(next(2) == 0),
+            2 => Value::Error(CellError::NA),
+            _ => Value::from(keys[next(keys.len())]),
+        };
+        let mut t = T::new();
+        for r in 0..ROWS {
+            let k = key(&mut next);
+            let n = if next(12) == 0 { Value::Error(CellError::Div0) } else { Value::Number(next(1_000) as f64 - 500.0) };
+            let sh = t.wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::new(r, 0), Cell::value(k));
+            sh.cells.set(CellRef::new(r, 1), Cell::value(n));
+        }
+        let mut pairs = Vec::new();
+        for r in 0..CRITERIA {
+            t.wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 3), Cell::value(Value::from(criteria[next(criteria.len())])));
+            for (col, name) in names.iter().enumerate() {
+                let criterion = format!("D{}", r + 1);
+                let args = |criterion: &str| match *name {
+                    "COUNTIF" | "COUNTIFS" => format!("A$1:A${ROWS},{criterion}"),
+                    "SUMIF" | "AVERAGEIF" => format!("A$1:A${ROWS},{criterion},B$1:B${ROWS}"),
+                    _ => format!("B$1:B${ROWS},A$1:A${ROWS},{criterion}"),
+                };
+                let indexed = CellRef::new(r, 5 + col as u32 * 2);
+                let scanned = CellRef::new(r, indexed.col + 1);
+                let sh = t.wb.sheet_mut(0).unwrap();
+                sh.cells.set(indexed, Cell::formula(Formula::new(&format!("={name}({})", args(&criterion)))));
+                sh.cells.set(scanned, Cell::formula(Formula::new(&format!("={name}({})", args(&format!("\"\"&{criterion}"))))));
+                pairs.push((indexed, scanned));
+            }
+        }
+        t.calc.recalc_all(&mut t.wb);
+        let compare = |t: &T, step: &str| {
+            for &(indexed, scanned) in &pairs {
+                let sh = t.wb.sheet(0).unwrap();
+                assert_eq!(sh.value(indexed), sh.value(scanned), "seed {seed}, {step}, {indexed:?}");
+            }
+        };
+        compare(&t, "first calculation");
+        for edit in 0..8 {
+            let (at, value) = match next(3) {
+                0 => (CellRef::new(next(ROWS as usize) as u32, 0), key(&mut next)),
+                1 => (CellRef::new(next(ROWS as usize) as u32, 1), Value::Number(next(100) as f64)),
+                _ => (CellRef::new(next(CRITERIA as usize) as u32, 3), Value::from(criteria[next(criteria.len())])),
+            };
+            t.wb.sheet_mut(0).unwrap().cells.set(at, Cell::value(value));
+            t.calc.cells_changed(&mut t.wb, &[(0, at)]);
+            compare(&t, &format!("edit {edit} at {at:?}"));
+        }
+    }
+}
+
 struct T {
     wb: Workbook,
     calc: Calc,
