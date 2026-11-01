@@ -164,7 +164,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Επικύρωση δεδομένων",
         "Data Validation…" => "Επικύρωση δεδομένων…",
         "Circle Invalid Data" => "Κύκλωση μη έγκυρων δεδομένων",
-        "Clear Validation" => "Κατάργηση επικύρωσης",
+        "Clear Validation Circles" => "Απαλοιφή κύκλων επικύρωσης",
         "Group" => "Ομαδοποίηση",
         "Ungroup" => "Κατάργηση ομαδοποίησης",
         "Show Detail" => "Εμφάνιση λεπτομερειών",

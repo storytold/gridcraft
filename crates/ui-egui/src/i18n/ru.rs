@@ -174,7 +174,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Проверка данных",
         "Data Validation…" => "Проверка данных…",
         "Circle Invalid Data" => "Обвести неверные данные",
-        "Clear Validation" => "Очистить проверку данных",
+        "Clear Validation Circles" => "Удалить обводку неверных данных",
         "Group" => "Группировать",
         "Ungroup" => "Разгруппировать",
         "Show Detail" => "Показать детали",

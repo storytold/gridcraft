@@ -174,7 +174,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "数据验证",
         "Data Validation…" => "数据验证…",
         "Circle Invalid Data" => "圈出无效数据",
-        "Clear Validation" => "清除验证",
+        "Clear Validation Circles" => "清除验证标识圈",
         "Group" => "组合",
         "Ungroup" => "取消组合",
         "Show Detail" => "显示明细数据",

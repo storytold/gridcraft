@@ -175,7 +175,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Validare date",
         "Data Validation…" => "Validare date…",
         "Circle Invalid Data" => "Încercuire date nevalide",
-        "Clear Validation" => "Golire validare",
+        "Clear Validation Circles" => "Golire cercuri de validare",
         "Group" => "Grupare",
         "Ungroup" => "Anulare grupare",
         "Show Detail" => "Afișare detalii",

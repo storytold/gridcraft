@@ -167,7 +167,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Veri Doğrulama",
         "Data Validation…" => "Veri Doğrulama…",
         "Circle Invalid Data" => "Geçersiz Verileri Daire İçine Al",
-        "Clear Validation" => "Doğrulamayı Temizle",
+        "Clear Validation Circles" => "Doğrulama Dairelerini Temizle",
         "Group" => "Gruplandır",
         "Ungroup" => "Grubu Çöz",
         "Show Detail" => "Ayrıntıyı Göster",

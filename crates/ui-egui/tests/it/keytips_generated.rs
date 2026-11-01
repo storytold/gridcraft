@@ -2300,10 +2300,7 @@ fn keytip_avi_() {
 fn keytip_avr_() {
     let mut h = harness(blank());
     sequence(&mut h, "AVR", false);
-    assert!(h.state().dialog.is_none(), "AVR must not open a dialog");
-    assert!(h.state().message.is_none(), "AVR must not open a message box");
-    assert!(h.state().toast.is_none(), "AVR must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "AVR must not journal");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.clearValidationCircles"), "AVR must journal data.clearValidationCircles");
 }
 
 #[test]

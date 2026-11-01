@@ -2148,9 +2148,8 @@
    "seq": "AVR",
    "kind": "command",
    "target": "data.clearValidationCircles",
-   "pending": true,
    "excel": "Clear Validation Circles",
-   "note": "reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "AVV",

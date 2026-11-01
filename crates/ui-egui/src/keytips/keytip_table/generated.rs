@@ -310,12 +310,12 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AUU", Entry::Finish(Action::Command("data.ungroup"))),      // Excel: Ungroup
     ("AV", Entry::Continue),                                      // Excel: Data Validation Menu; group level: containment(Data Validation)
     ("AVI", Entry::Finish(Action::Command("data.circleInvalid"))), // Excel: Circle Invalid Data
-    ("AVR", Entry::Finish(Action::Pending("data.clearValidationCircles"))), // pending; Excel: Clear Validation Circles; reserved until the command lands
-    ("AVV", Entry::Finish(Action::Command("data.validation"))),             // Excel: Data Validation
-    ("AW", Entry::Continue),                                                // group: group: What-If (goalSeek/scenarioManager/dataTable)
-    ("AWG", Entry::Finish(Action::Dialog("goalSeek"))),                     // Excel: Goal Seek
-    ("AWS", Entry::Finish(Action::Command("data.scenarioManager"))),        // Excel: Scenario Manager
-    ("AWT", Entry::Finish(Action::Command("data.dataTable"))),              // Excel: Data Table
+    ("AVR", Entry::Finish(Action::Command("data.clearValidationCircles"))), // Excel: Clear Validation Circles
+    ("AVV", Entry::Finish(Action::Command("data.validation"))),   // Excel: Data Validation
+    ("AW", Entry::Continue),                                      // group: group: What-If (goalSeek/scenarioManager/dataTable)
+    ("AWG", Entry::Finish(Action::Dialog("goalSeek"))),           // Excel: Goal Seek
+    ("AWS", Entry::Finish(Action::Command("data.scenarioManager"))), // Excel: Scenario Manager
+    ("AWT", Entry::Finish(Action::Command("data.dataTable"))),    // Excel: Data Table
     ("AX", Entry::Finish(Action::Pending("data.existingConnections"))), // pending; Excel: Existing Connections; gap #12; reserved until the command lands
     ("AY", Entry::Finish(Action::Command("data.reapply"))),             // Excel: Reapply Filter; containment(Reapply)
     ("RA1", Entry::Finish(Action::Dialog("accessibility"))),            // Excel: Check Accessibility

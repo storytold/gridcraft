@@ -179,7 +179,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Validation des données",
         "Data Validation…" => "Validation des données…",
         "Circle Invalid Data" => "Cerner les données non valides",
-        "Clear Validation" => "Effacer la validation",
+        "Clear Validation Circles" => "Effacer les cercles de validation",
         "Group" => "Grouper",
         "Ungroup" => "Dissocier",
         "Show Detail" => "Afficher le détail",

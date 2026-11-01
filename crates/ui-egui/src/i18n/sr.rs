@@ -169,7 +169,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "Provera podataka",
         "Data Validation…" => "Provera podataka…",
         "Circle Invalid Data" => "Zaokruži nevažeće podatke",
-        "Clear Validation" => "Ukloni proveru",
+        "Clear Validation Circles" => "Ukloni krugove provere",
         "Group" => "Grupiši",
         "Ungroup" => "Razgrupiši",
         "Show Detail" => "Prikaži detalje",

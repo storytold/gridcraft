@@ -174,7 +174,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Validation" => "데이터 유효성 검사",
         "Data Validation…" => "데이터 유효성 검사…",
         "Circle Invalid Data" => "잘못된 데이터 표시",
-        "Clear Validation" => "유효성 검사 지우기",
+        "Clear Validation Circles" => "유효성 표시 지우기",
         "Group" => "그룹",
         "Ungroup" => "그룹 해제",
         "Show Detail" => "세부 정보 표시",
