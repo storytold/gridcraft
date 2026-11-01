@@ -126,6 +126,9 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// A text field had keyboard focus at the end of the last frame. egui drops the focus on Esc
+    /// before the page is drawn, so the frame carrying the Esc can't ask the field itself.
+    typing: bool,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -144,6 +147,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            typing: false,
         }
     }
 }
@@ -159,8 +163,10 @@ struct Outcome {
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(mut bs) = app.backstage.take() else { return };
     let ctx = ui.ctx().clone();
-    // Esc inside a text field leaves the field; it closes the view only from outside one.
-    let typing = ctx.text_edit_focused();
+    // Esc inside a text field leaves the field; it closes the view only from outside one. egui has
+    // already dropped the field's focus in the frame that carries the Esc, so this also asks
+    // whether a field had it at the end of the last frame (#3035).
+    let typing = ctx.text_edit_focused() || bs.typing;
     let t = Tokens::get(&ctx);
     let lang = app.ui.language;
     let mut out = Outcome::default();
@@ -237,6 +243,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     {
         out.close = true;
     }
+    bs.typing = ctx.text_edit_focused();
     if let Some(page) = out.page {
         bs.page = page;
     }
@@ -658,7 +665,8 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
                 draft.clone_from(saved);
             }
             let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label.id);
-            if resp.lost_focus() && draft != saved {
+            // Esc leaves the field and drops what was typed; the next frame shows the saved value.
+            if resp.lost_focus() && draft != saved && !ui.input(|i| i.key_pressed(Key::Escape)) {
                 let mut params = serde_json::Map::new();
                 params.insert((*key).to_string(), json!(draft.clone()));
                 app.run_or_alert("file.properties", Json::Object(params));

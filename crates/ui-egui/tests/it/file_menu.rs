@@ -647,3 +647,32 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// Esc with the caret in a File view text field leaves the field and drops what was typed; only a
+/// second Esc closes the view (issue #3035). egui drops the field's focus on Esc before the page
+/// is drawn, so the view must not decide from the focus in that frame.
+#[test]
+fn esc_in_a_file_view_field_leaves_the_field_then_closes_the_view() {
+    use egui::accesskit::Role;
+    let mut h = harness(Services::default());
+    h.state_mut().session.execute("formulas.calculationOptions", serde_json::json!({"iterative": true})).unwrap();
+    for (id, field) in [("info", "Title"), ("options", "Maximum Iterations:")] {
+        h.state_mut().run("ui.backstage", serde_json::json!({"page": id})).unwrap();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::TextInput, field).click();
+        h.run_steps(2);
+        assert!(h.ctx.text_edit_focused(), "{id}: clicking {field} puts the caret in it");
+        h.get_by_role_and_label(Role::TextInput, field).type_text("7");
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), Some(id), "{id}: Esc in {field} leaves the field, not the File view");
+        assert!(!h.ctx.text_edit_focused(), "{id}: Esc leaves {field}");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), None, "{id}: a second Esc closes the File view");
+    }
+    assert_eq!(h.state().session.active().unwrap().wb.props.title, "", "Esc drops the typed title");
+    let calc = h.state_mut().session.run("file.options", serde_json::json!({})).unwrap();
+    assert_eq!(calc["calculation"]["maxIterations"], 100, "Esc drops the typed iteration count: {calc}");
+}
