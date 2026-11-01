@@ -631,3 +631,33 @@ fn arrow_keys_with_shift_select_a_range_into_the_collapsed_box() {
     assert_eq!(selection(&h), before);
     assert_eq!(field(&h, "changing"), "B3");
 }
+
+#[test]
+fn f4_cycles_the_reference_between_absolute_and_relative() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2");
+    for expected in ["B$2", "$B2", "B2", "$B$2"] {
+        key(&mut h, Key::F4, Modifiers::NONE);
+        assert_eq!(field(&h, "changing"), expected);
+    }
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"), "F4 doesn't expand the dialog");
+    // Expanded, F4 still works in the focused box, on a typed range with a sheet name.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let changing = dialog_boxes(&h)[2];
+    click_at(&mut h, changing.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "'Rates Table'!A2:A4");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4");
+    // A field that is not a reference box leaves F4 alone.
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(field(&h, "to"), "25");
+    assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4");
+}

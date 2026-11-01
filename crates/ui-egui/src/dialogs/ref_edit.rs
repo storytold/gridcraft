@@ -280,6 +280,10 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             RefLabel::By(label) => r.labelled_by(label),
             RefLabel::Named(name) => r.accessible_name(lang.tr(name)),
         };
+        // F4 cycles the anchors of the reference in the box, as in Excel's reference boxes.
+        if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F4)) {
+            s = cycle_anchors(&s);
+        }
         if r.gained_focus() {
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
@@ -315,4 +319,112 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         }
     });
     d.values.insert(key.into(), json!(s));
+}
+
+/// The anchors of one part of a reference (`$A$1`, `A`, `$3`): its column letters and row digits,
+/// and whether each carries a `$`.
+struct Anchors {
+    letters: String,
+    digits: String,
+    col_abs: bool,
+    row_abs: bool,
+}
+
+/// Reads `part` as a cell (`A1`), a column (`A`) or a row (`3`) with its anchors: at most three
+/// letters and seven digits, nothing else. A `$` alone before the digits of a row anchors the row.
+fn anchors(part: &str) -> Option<Anchors> {
+    let (col_abs, rest) = match part.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, part),
+    };
+    let letters: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+    let rest = rest.get(letters.len()..)?;
+    let (row_abs, rest) = match rest.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, rest),
+    };
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if !rest.get(digits.len()..)?.is_empty() || letters.len() > 3 || digits.len() > 7 || (letters.is_empty() && digits.is_empty()) {
+        return None;
+    }
+    if letters.is_empty() {
+        // `$3`: the one `$` belongs to the row; `$$3` is not a reference.
+        if col_abs && row_abs {
+            return None;
+        }
+        return Some(Anchors { letters, digits, col_abs: false, row_abs: col_abs || row_abs });
+    }
+    Some(Anchors { letters, digits, col_abs, row_abs })
+}
+
+/// Excel's F4 in a reference box: `A1` → `$A$1` → `A$1` → `$A1` → `A1`, every part of every
+/// area moving together from the first part's anchors (`A1:B2,D4` → `$A$1:$B$2,$D$4`), sheet
+/// names kept; whole columns and rows have one anchor each (`A:A` → `$A:$A` → `A:A`). Text that
+/// isn't a reference comes back as it is.
+pub(crate) fn cycle_anchors(reference: &str) -> String {
+    let mut areas: Vec<(&str, Vec<Anchors>)> = Vec::new();
+    for area in reference.split(',') {
+        let area = area.trim();
+        let (prefix, body) = match area.rsplit_once('!') {
+            Some((sheet, body)) => (area.get(..sheet.len() + 1).unwrap_or_default(), body),
+            None => ("", area),
+        };
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() > 2 {
+            return reference.to_string();
+        }
+        let Some(parts) = parts.iter().map(|p| anchors(p)).collect::<Option<Vec<_>>>() else { return reference.to_string() };
+        areas.push((prefix, parts));
+    }
+    let Some(first) = areas.first().and_then(|(_, parts)| parts.first()) else { return reference.to_string() };
+    let (col_abs, row_abs) = if first.letters.is_empty() {
+        (!first.row_abs, !first.row_abs)
+    } else if first.digits.is_empty() {
+        (!first.col_abs, !first.col_abs)
+    } else {
+        match (first.col_abs, first.row_abs) {
+            (false, false) => (true, true),
+            (true, true) => (false, true),
+            (false, true) => (true, false),
+            (true, false) => (false, false),
+        }
+    };
+    let anchor = |on: bool, text: &str| if on && !text.is_empty() { format!("${text}") } else { text.to_string() };
+    areas
+        .iter()
+        .map(|(prefix, parts)| {
+            let body: Vec<String> = parts.iter().map(|a| format!("{}{}", anchor(col_abs, &a.letters), anchor(row_abs, &a.digits))).collect();
+            format!("{prefix}{}", body.join(":"))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cycle_anchors;
+
+    #[test]
+    fn f4_cycles_cells_ranges_columns_and_rows() {
+        assert_eq!(cycle_anchors("A1"), "$A$1");
+        assert_eq!(cycle_anchors("$A$1"), "A$1");
+        assert_eq!(cycle_anchors("A$1"), "$A1");
+        assert_eq!(cycle_anchors("$A1"), "A1");
+        assert_eq!(cycle_anchors("A1:B2"), "$A$1:$B$2");
+        assert_eq!(cycle_anchors("$A$1:$B$2"), "A$1:B$2");
+        // Every area follows the first part, and sheet names stay as typed.
+        assert_eq!(cycle_anchors("'O''Brien Rates'!A2:A4, D4"), "'O''Brien Rates'!$A$2:$A$4,$D$4");
+        assert_eq!(cycle_anchors("Sheet1!$A$1:B2"), "Sheet1!A$1:B$2");
+        assert_eq!(cycle_anchors("A:A"), "$A:$A");
+        assert_eq!(cycle_anchors("$A:$A"), "A:A");
+        assert_eq!(cycle_anchors("1:3"), "$1:$3");
+        assert_eq!(cycle_anchors("$1:$3"), "1:3");
+    }
+
+    #[test]
+    fn f4_leaves_text_that_is_not_a_reference() {
+        for text in ["", "hello", "A1:hello", "ABCD1", "A12345678", "$$1", "$$A1", "A1:B2:C3", "Sheet1!", "A1,", "=A1"] {
+            assert_eq!(cycle_anchors(text), text);
+        }
+    }
 }
