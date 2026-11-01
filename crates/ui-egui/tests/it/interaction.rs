@@ -1,7 +1,7 @@
 //! UI interaction tests: real egui input through the whole app (no GPU needed).
 
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_ui_egui::i18n::Language;
@@ -814,6 +814,41 @@ fn solver_results_skip_the_sensitivity_report_for_integer_models() {
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
     assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+}
+
+#[test]
+fn solver_results_offer_sensitivity_only_after_an_optimum() {
+    // Rosenbrock's function with 60 evaluations stops at the limit with a solution that is not
+    // an optimum: Sensitivity is disabled, and Answer with Sensitivity ticked writes the Answer
+    // report.
+    let mut s = blank();
+    for (c, v) in [("A1", "-1.2"), ("A2", "1"), ("B1", "=(1-A1)^2+100*(A2-A1^2)^2")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r = s
+        .execute("data.solver", json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "maxEvaluations": 60}))
+        .unwrap();
+    assert_eq!(r["status"], "iterationLimit", "{r}");
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solverResults", r.clone());
+    h.run_steps(2);
+    assert!(h.get_by_label("Sensitivity").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Answer").accesskit_node().is_disabled());
+    for key in ["answerReport", "sensitivityReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+    // The same model after an optimum offers it.
+    let mut ok = r;
+    ok["status"] = json!("converged");
+    h.state_mut().open_dialog("solverResults", ok);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Sensitivity").accesskit_node().is_disabled());
 }
 
 #[test]

@@ -291,6 +291,13 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p) })
 }
 
+/// Whether a `data.solver` result status is a solution the Sensitivity report can describe: an
+/// optimum (Simplex LP) or a converged local optimum (GRG Nonlinear). A run that stopped at its
+/// evaluation limit, or an Evolutionary run, has none.
+pub fn sensitivity_status(status: &str) -> bool {
+    matches!(status, "optimal" | "converged")
+}
+
 /// Whether `data.solver` params (such as the `model` of its result) describe a model that can
 /// have a Sensitivity report: Simplex LP or GRG Nonlinear, a Max or Min objective and no
 /// integer or binary constraints.

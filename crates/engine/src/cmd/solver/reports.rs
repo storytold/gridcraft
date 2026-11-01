@@ -1,10 +1,10 @@
 use super::lp::Outcome;
 use super::model::{Constraint, Goal, Method, Model, Rel, Rhs, parse_model, saved_model};
 use super::problem::{Evaluator, Problem, as_num, build_problem};
-use super::sensitivity::sensitivity_report;
+use super::sensitivity::{sensitivity_refusal, sensitivity_report};
 use super::{
     Cell, CellRef, Ctx, DEFAULT_EVALS, DocState, EngineError, Json, MAX_EVALS, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad,
-    edit, json, optimise, str_param,
+    bool_param, edit, json, optimise, str_param,
 };
 
 // ---------------------------------------------------------------- reports
@@ -259,19 +259,56 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
 }
 
 /// Builds every report before the solution or saved model can change.
-pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportInput) -> Result<Vec<(String, Lines)>> {
+/// What happens to a Sensitivity report the model allows but the solution doesn't: `Refuse`
+/// fails the call before anything changes; `Skip` leaves the report out, with its reason, and
+/// writes the others. `optimum` is false when the solve stopped before an optimum, so the
+/// report isn't attempted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum NotOptimal {
+    Refuse,
+    Skip { optimum: bool },
+}
+
+/// The reports left out under [`NotOptimal::Skip`], as `{report, reason}`.
+pub(super) type Skipped = Vec<Json>;
+
+pub(super) fn prepare_reports(
+    d: &DocState,
+    kinds: &[ReportKind],
+    inp: &ReportInput,
+    not_optimal: NotOptimal,
+) -> Result<(Vec<(String, Lines)>, Skipped)> {
     if kinds.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     if d.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
     let mut built = Vec::new();
+    let mut skipped = Vec::new();
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
-            ReportKind::Sensitivity => sensitivity_report(d, sh, inp)?,
+            // A model that has no Sensitivity report (integer, Evolutionary, Value Of) is refused
+            // in both modes.
+            ReportKind::Sensitivity => match (not_optimal, sensitivity_refusal(inp.model, inp.prob)) {
+                (NotOptimal::Skip { optimum }, None) => {
+                    let got = if optimum {
+                        sensitivity_report(d, sh, inp).map_err(|e| e.to_string())
+                    } else {
+                        Err("Solver did not reach an optimal solution, so the Sensitivity report was not written.".to_string())
+                    };
+                    match got {
+                        Ok(lines) => lines,
+                        Err(reason) => {
+                            skipped.push(json!({"report": "sensitivity", "reason": reason}));
+                            continue;
+                        }
+                    }
+                }
+                _ => sensitivity_report(d, sh, inp)?,
+            },
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
         let name = (1..=10_000u32)
@@ -280,7 +317,7 @@ pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportIn
             .ok_or_else(|| EngineError::Other("Too many report sheets.".into()))?;
         built.push((name, lines));
     }
-    Ok(built)
+    Ok((built, skipped))
 }
 
 /// Inserts prepared reports before the model's sheet, which stays active.
@@ -374,8 +411,14 @@ pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
         .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
     let message = str_param(p, "message").unwrap_or("").chars().take(500).collect();
     let inp = ReportInput { model: &model, prob: &prob, original, solution, message, budget };
-    let built = prepare_reports(s.doc()?, &kinds, &inp)?;
-    let sheets = edit(s, |cx| Ok(write_reports(cx, model.sheet, built)))?;
+    let not_optimal = if bool_param(p, "skipNotOptimal").unwrap_or(false) { NotOptimal::Skip { optimum: true } } else { NotOptimal::Refuse };
+    let (built, skipped) = prepare_reports(s.doc()?, &kinds, &inp, not_optimal)?;
+    // Nothing left to write (every report skipped): no edit, so no Undo step.
+    let sheets = if built.is_empty() { Vec::new() } else { edit(s, |cx| Ok(write_reports(cx, model.sheet, built)))? };
     insert_report_selections(s, model.sheet, sheets.len());
-    Ok(json!({"sheets": sheets}))
+    let mut out = json!({"sheets": sheets});
+    if !skipped.is_empty() {
+        out["skippedReports"] = json!(skipped);
+    }
+    Ok(out)
 }

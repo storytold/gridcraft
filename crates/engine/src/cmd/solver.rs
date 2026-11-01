@@ -44,10 +44,10 @@ mod sensitivity;
 use evolutionary::{EvoEnd, evolutionary};
 use lp::{Outcome, branch_and_bound, linear_program, linearize, solve_lp};
 use model::{Goal, Method, Model, model_params, parse_model, save_model};
-pub use model::{saved_model, sensitivity_applies};
+pub use model::{saved_model, sensitivity_applies, sensitivity_status};
 use nlp::{nlp, project};
 use problem::{Evaluator, as_num, build_problem};
-use reports::{ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};
+use reports::{NotOptimal, ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};
 
 const CMD: &str = "data.solver";
 const REPORT_CMD: &str = "data.solverReport";
@@ -75,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver…",
             ["Data", "Analysis"],
             None,
-            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden solver_* names), maxEvaluations?: 20000, integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|sensitivity|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names]}. No `objective` → {model: the saved model} (the menu opens the dialog).",
+            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden solver_* names), maxEvaluations?: 20000, integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|sensitivity|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names], skippedReports?: [{report: \"sensitivity\", reason}] (a Sensitivity report left out because the run did not reach an optimum or the values are not one; the solve and the other reports still apply)}. No `objective` → {model: the saved model} (the menu opens the dialog).",
             has_doc,
             run
         ),
@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver Reports",
             [],
             None,
-            "{reports: [answer|sensitivity|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names]}. Writes Answer, Sensitivity and Limits reports on new sheets before the model's sheet; Sensitivity and Limits need Simplex LP or GRG Nonlinear and no integer constraints, and Sensitivity a Max or Min objective. data.solver's result can be passed as is.",
+            "{reports: [answer|sensitivity|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), skipNotOptimal?: bool (default false: a Sensitivity report for values that are not optimal refuses the call; true leaves it out and writes the others), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names], skippedReports?: [{report, reason}]}. Writes Answer, Sensitivity and Limits reports on new sheets before the model's sheet; Sensitivity and Limits need Simplex LP or GRG Nonlinear and no integer constraints, and Sensitivity a Max or Min objective. data.solver's result can be passed as is.",
             has_doc,
             report
         ),
@@ -244,12 +244,14 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let original: serde_json::Map<String, Json> = model.vars.iter().zip(&x0).map(|(c, v)| (c.a1(), json!(v))).collect();
     let changed = keep && solution.is_some();
-    let built = match (&reports, &solution) {
+    // A Sensitivity report the solution doesn't support is left out (with its reason), so the
+    // solve and the other reports still apply.
+    let (built, skipped) = match (&reports, &solution) {
         (Some(kinds), Some(x)) => {
             let inp = ReportInput { model: &model, prob: &prob, original: x0, solution: x.clone(), message: message.to_string(), budget };
-            prepare_reports(s.doc()?, kinds, &inp)?
+            prepare_reports(s.doc()?, kinds, &inp, NotOptimal::Skip { optimum: sensitivity_status(status) })?
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), Vec::new()),
     };
     let count = built.len();
     let before = s.doc()?.wb.clone();
@@ -291,6 +293,9 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     insert_report_selections(s, model.sheet, count);
     if reports.is_some() && solution.is_some() {
         out["reports"] = json!(names);
+    }
+    if !skipped.is_empty() {
+        out["skippedReports"] = json!(skipped);
     }
     Ok(out)
 }

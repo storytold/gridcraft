@@ -602,6 +602,63 @@ fn nonlinear_sensitivity_report_needs_an_optimal_point() {
 }
 
 #[test]
+fn solver_writes_the_other_reports_when_the_run_stops_before_an_optimum() {
+    // Rosenbrock's function from (-1.2, 1) with 60 evaluations: the run stops at the limit with
+    // a solution that is not the optimum (1, 1). The solve applies and the Answer report is
+    // written; the Sensitivity report is left out with its reason.
+    let mut s = s();
+    set(&mut s, &[("A1", "-1.2"), ("A2", "1"), ("B1", "=(1-A1)^2+100*(A2-A1^2)^2")]);
+    let undo = s.doc().unwrap().undo.len();
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "maxEvaluations": 60, "reports": ["answer", "sensitivity"]}),
+        )
+        .unwrap();
+    assert_eq!(r["status"], "iterationLimit", "{r}");
+    assert_eq!(r["changed"], true);
+    assert_eq!(n(&s, "A1"), r["values"]["A1"].as_f64().unwrap());
+    assert_eq!(r["reports"], json!(["Answer Report 1"]), "{r}");
+    assert_eq!(r["skippedReports"][0]["report"], "sensitivity", "{r}");
+    assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("optimal"), "{r}");
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    // A solve that reaches the optimum still writes the Sensitivity report and skips nothing.
+    let r = s
+        .execute("data.solver", json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "reports": ["sensitivity"]}))
+        .unwrap();
+    assert_eq!(r["status"], "converged", "{r}");
+    assert_eq!(r["reports"], json!(["Sensitivity Report 1"]), "{r}");
+    assert!(r.get("skippedReports").is_none(), "{r}");
+}
+
+#[test]
+fn solver_report_can_skip_a_sensitivity_report_the_values_do_not_support() {
+    // min A1² at A1 = 1 is not an optimum. Called directly, data.solverReport refuses it; with
+    // skipNotOptimal (as Solver Results passes) the Answer report is still written.
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=A1^2")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"]});
+    let p = |reports: serde_json::Value, skip: bool| json!({"reports": reports, "model": model, "values": {"A1": 1}, "skipNotOptimal": skip});
+    let err = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), false)).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    let undo = s.doc().unwrap().undo.len();
+    let r = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), true)).unwrap();
+    assert_eq!(r["sheets"], json!(["Answer Report 1"]), "{r}");
+    assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("not optimal"), "{r}");
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    // With nothing left to write, nothing changes and no Undo step is added.
+    let before = s.doc().unwrap().clone();
+    let r = s.execute("data.solverReport", p(json!(["sensitivity"]), true)).unwrap();
+    assert_eq!(r["sheets"], json!([]), "{r}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    // A model with no Sensitivity report is still refused, skipNotOptimal or not.
+    let err = s.execute("data.solverReport", json!({"reports": ["answer", "sensitivity"], "model": {"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"]}, "skipNotOptimal": true})).unwrap_err();
+    assert!(err.to_string().contains("integer or binary"), "{err}");
+}
+
+#[test]
 fn nonlinear_sensitivity_with_too_many_binding_constraints_is_refused_without_change() {
     // 80 binding rows on two free variables pass the work limit (lowered in tests); 40 don't.
     let mut s = s();
