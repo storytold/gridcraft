@@ -64,7 +64,12 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
     let sel = &mut d.selection;
     // Extension moves the far corner, not the active cell.
-    let from = if extend { sel.moving_end() } else { sel.active };
+    let mut from = if extend { sel.moving_end() } else { sel.active };
+    // A whole column/row's far corner is the sheet edge, so a jump along it starts from the active cell.
+    let cur = sel.current();
+    if extend && jmp && ((cur.is_full_cols() && dr != 0) || (cur.is_full_rows() && dc != 0)) {
+        from = sel.active;
+    }
     // Skip hidden rows/columns and step over merged areas.
     let mut to = if jmp {
         jump(sheet, from, dr.signum(), dc.signum())
