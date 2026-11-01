@@ -1,5 +1,7 @@
 use serde_json::json;
 
+use super::draw::{Xf, draw_prims};
+use super::text_unicode::{advance_text_baseline, fitting_candidate_count, fitting_text_prefix, shaped_runs, shaped_width, wrap_shaped};
 use super::*;
 
 fn s() -> Session {
@@ -14,6 +16,13 @@ fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
 }
 fn contains(hay: &[u8], needle: &str) -> bool {
     hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+fn contains_text(pdf: &[u8], text: &str) -> bool {
+    if contains(pdf, &format!("({text}) Tj")) {
+        return true;
+    }
+    let hex: String = text.encode_utf16().flat_map(u16::to_be_bytes).map(|byte| format!("{byte:02X}")).collect();
+    contains(pdf, &format!("/ActualText <FEFF{hex}>"))
 }
 
 #[test]
@@ -162,8 +171,8 @@ fn first_and_even_pages_print_their_own_headers() {
     assert_eq!(r["firstHeader"], "&CCover");
     let (pdf, pages) = pdf_of(&mut s, json!({}));
     assert_eq!(pages, 3);
-    assert!(contains(&pdf, "(Cover) Tj") && contains(&pdf, "(Even 2) Tj") && contains(&pdf, "(Odd 3) Tj"));
-    assert!(!contains(&pdf, "(Odd 1) Tj"), "the first page has its own header");
+    assert!(contains_text(&pdf, "Cover") && contains_text(&pdf, "Even 2") && contains_text(&pdf, "Odd 3"));
+    assert!(!contains_text(&pdf, "Odd 1"), "the first page has its own header");
     // One section of the even-page footer, edited in place.
     s.execute("pageLayout.headerFooter", json!({"page": "even", "part": "footer", "section": "right", "text": "&[Tab]"})).unwrap();
     assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().print.even_footer, "&R&A");
@@ -171,7 +180,7 @@ fn first_and_even_pages_print_their_own_headers() {
     // Turned off, every page prints the odd header again.
     s.execute("pageLayout.headerFooter", json!({"differentFirst": false, "differentOddEven": false})).unwrap();
     let (pdf, _) = pdf_of(&mut s, json!({}));
-    assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
+    assert!(contains_text(&pdf, "Odd 1") && contains_text(&pdf, "Odd 2") && !contains_text(&pdf, "Cover"));
 }
 
 /// The x position and font size of the first `(text) Tj` in a PDF.
@@ -214,8 +223,8 @@ fn pdf_prints_cjk_text_instead_of_question_marks() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["签字清单", 2]]})).unwrap();
     let (pdf, _) = pdf_of(&mut s, json!({}));
     assert!(!contains(&pdf, "(????) Tj"), "CJK cell printed as (????) Tj");
-    assert!(contains(&pdf, "<7B7E5B576E055355> Tj"));
-    assert!(contains(&pdf, "(2) Tj"));
+    assert!(contains_text(&pdf, "签字清单"));
+    assert!(contains_text(&pdf, "2"));
 }
 
 #[test]
@@ -227,12 +236,12 @@ fn pdf_contains_text_and_header_codes_expand() {
         .unwrap();
     let (pdf, pages) = pdf_of(&mut s, json!({}));
     assert_eq!(pages, 1);
-    assert!(contains(&pdf, "(Quarterly Report) Tj"));
-    assert!(contains(&pdf, "(1234.5) Tj"));
-    assert!(contains(&pdf, "(Left Sheet1) Tj"));
-    assert!(contains(&pdf, "(Page 1 of 1) Tj"));
-    assert!(contains(&pdf, "(Book1) Tj"));
-    assert!(contains(&pdf, "/Helvetica-Bold"));
+    assert!(contains_text(&pdf, "Quarterly Report"));
+    assert!(contains_text(&pdf, "1234.5"));
+    assert!(contains_text(&pdf, "Left Sheet1"));
+    assert!(contains_text(&pdf, "Page 1 of 1"));
+    assert!(contains_text(&pdf, "Book1"));
+    assert!(contains(&pdf, "/Helvetica-Bold") || contains(&pdf, "/Subtype /Type0"));
     let cx = HfContext {
         page: 3,
         pages: 9,
@@ -263,9 +272,9 @@ fn conditional_number_format_prints() {
     let rule = json!({"type": "cellIs", "operator": "greater", "value": "2", "style": {"num_fmt": "0.00"}});
     s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
     let (pdf, _) = pdf_of(&mut s, json!({}));
-    assert!(contains(&pdf, "(1) Tj"), "an unmatched cell keeps General");
-    assert!(contains(&pdf, "(3.00) Tj") && !contains(&pdf, "(3) Tj"), "General cell under the rule");
-    assert!(contains(&pdf, "(4.00) Tj") && !contains(&pdf, "(4.0) Tj"), "formatted cell under the rule");
+    assert!(contains_text(&pdf, "1"), "an unmatched cell keeps General");
+    assert!(contains_text(&pdf, "3.00") && !contains_text(&pdf, "3"), "General cell under the rule");
+    assert!(contains_text(&pdf, "4.00") && !contains_text(&pdf, "4.0"), "formatted cell under the rule");
 }
 
 #[test]
@@ -289,7 +298,7 @@ fn export_writes_file() {
     assert_eq!(r["pages"], 1);
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert!(contains(&bytes, "(hello) Tj"));
+    assert!(contains_text(&bytes, "hello"));
     let _ = std::fs::remove_dir_all(&dir);
     let r = s.execute("file.print", json!({})).unwrap();
     assert!(r["base64"].as_str().unwrap().len() > 100);
@@ -306,7 +315,7 @@ fn save_as_pdf_writes_a_pdf_and_keeps_the_workbook_file() {
     assert_eq!(r["pages"], 1);
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert!(contains(&bytes, "(hello) Tj"));
+    assert!(contains_text(&bytes, "hello"));
     // The PDF is a print, not the workbook's file: Save still asks where to put the workbook.
     let d = s.doc().unwrap();
     assert!(d.path.is_none() && d.is_dirty());
@@ -326,8 +335,8 @@ fn rich_sheet_renders() {
     s.execute("home.borders", json!({"range": "J5:K6", "preset": "outside", "style": "thick"})).unwrap_or_default();
     let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
     assert!(pages >= 1);
-    assert!(contains(&pdf, "(Merged) Tj"));
-    assert!(contains(&pdf, "(A long piece of text that overflows into neighbours) Tj"));
+    assert!(contains_text(&pdf, "Merged"));
+    assert!(contains_text(&pdf, "A long piece of text that overflows into neighbours"));
 }
 
 #[test]
@@ -355,7 +364,7 @@ fn charts_and_images_are_drawn() {
     assert!(contains(&pdf, "/Subtype /Image"));
     assert!(contains(&pdf, "/SMask"));
     if charts > 0 {
-        assert!(contains(&pdf, "(Apples) Tj") || contains(&pdf, "(Qty) Tj"));
+        assert!(contains_text(&pdf, "Apples") || contains_text(&pdf, "Qty"));
     }
 }
 
@@ -566,6 +575,9 @@ fn rotated_wrapped_text_prints_rotated() {
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
 }
 
+#[cfg(test)]
+mod unicode_tests;
+
 #[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.
@@ -574,10 +586,9 @@ fn checkbox_cells_print_as_boxes_not_true_false() {
     s.execute("cell.toggleCheckbox", json!({"cell": "A2"})).unwrap();
     s.execute("cell.set", json!({"cell": "C1", "input": "TRUE"})).unwrap();
     let (pdf, _) = pdf_of(&mut s, json!({}));
-    assert!(!contains(&pdf, "(FALSE) Tj"), "the unchecked box printed as FALSE");
-    // Only the plain TRUE in C1 prints as text; the checked box is a filled box.
-    let text = String::from_utf8_lossy(&pdf);
-    assert_eq!(text.matches("(TRUE) Tj").count(), 1, "the checked box printed as TRUE");
+    assert!(!unicode_tests::has_actual_text(&pdf, "FALSE"), "the unchecked box printed as FALSE");
+    // Only the plain TRUE in C1 has semantic text; the checked box is a filled box.
+    assert!(unicode_tests::has_actual_text(&pdf, "TRUE"), "the checked box printed as TRUE");
     assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
     assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
 }

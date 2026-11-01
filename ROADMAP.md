@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (PDF font subsetting; AutoSum over selections; macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -136,6 +136,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
+| 2026-10-24 | PDF export embeds each font as a subset of the glyphs the document draws: one Thai cell went from 221 kB to 4.6 kB, and a header with one arrow from 513 kB to 8.8 kB |
+| 2026-10-24 | PDF export keeps Latin text on stable Standard-14 aliases when the workbook family is unavailable, wraps at whitespace while preserving interior spacing and newlines, degrades when a script face is missing and loads optional fonts from the manifest. CI exercises an embeddable Noto Sans Thai face; WASM PDF fonts are supplied per export rather than baked into the binary |
 | 2026-10-24 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-24 | Status bar: a right-click opens a menu that sets which selection statistics show (Average, Count and Sum by default; Numerical Count, Minimum and Maximum are new), kept with the preferences (`view.statusBar`) |
@@ -245,6 +247,11 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
+| 2026-10-24 | minor | Progress log: PDF font subsetting |
+| 2026-10-24 | minor | PDF bundle reduced from 41.9 MB to 450.6 kB at the font pin; exact Latin styles fall back to Standard-14, and unspaced wrapping measures line-sized prefixes |
+| 2026-10-24 | minor | PDF catalog keeps bounded missing-scalar coverage after eviction; portable Thai styles, accurate font size errors, typographic family names and Unicode drawing paths |
+| 2026-10-24 | minor | PDF regression coverage for words, Thai, mixed text, whitespace and font fallback; pinned Thai CI font and zero baked PDF font bytes on WASM |
+| 2026-10-24 | minor | Progress log: PDF font fallback, whitespace wrapping and manifest fonts |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |

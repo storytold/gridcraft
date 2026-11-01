@@ -1,9 +1,10 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
+use super::text_unicode::{draw_shaped_text, needs_unicode_text, shaped_width};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
-    Workbook, split_sheet,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, FontCatalog, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline,
+    Value, Workbook, split_sheet,
 };
 
 // ---------------------------------------------------------------- drawing
@@ -75,11 +76,18 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
 }
 
 /// PDF measurement for chart layout.
-pub(super) struct PdfMeasure;
+pub(super) struct PdfMeasure<'a> {
+    pub(super) catalog: &'a FontCatalog,
+}
 
-impl gridcraft_chart::Measure for PdfMeasure {
+impl gridcraft_chart::Measure for PdfMeasure<'_> {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32 {
-        gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
+        if needs_unicode_text(text) {
+            shaped_width(self.catalog, "Arial", bold, false, text, size)
+                .unwrap_or_else(|_| gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text))
+        } else {
+            gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
+        }
     }
 }
 
@@ -101,7 +109,7 @@ impl Xf {
 }
 
 /// Draws chart primitives onto a page.
-pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
+pub(super) fn draw_prims(pg: &mut Page, catalog: &FontCatalog, prims: &[gridcraft_chart::Prim], xf: Xf) -> Result<(), String> {
     use gridcraft_chart::{HAlign as H, Prim, VAlign as V};
     let k = xf.k;
     for p in prims {
@@ -141,7 +149,8 @@ pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf)
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
                 let font = if *bold { Font::HelveticaBold } else { Font::Helvetica };
                 let size = size * k;
-                let w = gridcraft_pdf::text_width(font, size, text);
+                let unicode = needs_unicode_text(text);
+                let w = if unicode { shaped_width(catalog, "Arial", *bold, false, text, size)? } else { gridcraft_pdf::text_width(font, size, text) };
                 let dx = match align {
                     H::Left => 0.0,
                     H::Center => -w / 2.0,
@@ -154,10 +163,27 @@ pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf)
                 };
                 let (sn, cs) = if rotation.is_finite() { rotation.sin_cos() } else { (0.0, 1.0) };
                 let (ax, ay) = xf.p(*x, *y);
-                pg.text_rotated(Point::new(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs), size, font, blend(*color), text, *rotation);
+                if unicode {
+                    draw_shaped_text(
+                        pg,
+                        catalog,
+                        ax + dx * cs - dy * sn,
+                        ay + dx * sn + dy * cs,
+                        size,
+                        "Arial",
+                        *bold,
+                        false,
+                        blend(*color),
+                        text,
+                        *rotation,
+                    )?;
+                } else {
+                    pg.text_rotated(Point::new(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs), size, font, blend(*color), text, *rotation);
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Everything needed to draw one page block (a run of rows × a run of columns).
@@ -229,11 +255,17 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, start: Point, end: 
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+pub(super) fn draw_block(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    b: &Block,
+    gridlines: bool,
+    cf: &mut Option<crate::cf::CfCache>,
+) -> Result<(), String> {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
-        return;
+        return Ok(());
     }
     let block = b.range();
     let sh = b.sh;
@@ -347,10 +379,11 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
             draw_checkbox(pg, (x, y, w, h), b.k, on);
         } else {
-            draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
+            draw_text(pg, catalog, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) })?;
         }
     }
     pg.restore();
+    Ok(())
 }
 
 /// A checkbox cell prints TRUE/FALSE (and empty) as a box, as on screen (#2972); other values
