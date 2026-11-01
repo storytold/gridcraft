@@ -12,7 +12,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
@@ -256,7 +256,7 @@ fn main() -> eframe::Result<()> {
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
-    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::GRIDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         if let Err(e) = done {
             eprintln!("GridCraft update helper failed: {e}");
             std::process::exit(1);
@@ -311,15 +311,16 @@ fn main() -> eframe::Result<()> {
     {
         log::warn!("sample {s}: {e}");
     }
-    if session.documents().is_empty() {
-        session.new_workbook();
-    }
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
     app.start_update_check();
-    app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    // Stamp the startup workbook's author from the persisted user name.
+    if app.session.documents().is_empty() {
+        app.session.new_workbook();
+    }
+    app.after_engine(); // Show warnings from the sample.
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
@@ -340,8 +341,11 @@ fn main() -> eframe::Result<()> {
     }
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     let mut options = options;
+    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
+    #[cfg(target_os = "macos")]
+    graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
     // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
     // keeps the native Wayland backend.

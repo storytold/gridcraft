@@ -8,6 +8,7 @@ mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
+pub mod macros;
 pub mod password;
 pub mod preserved;
 pub mod python;
@@ -18,6 +19,7 @@ pub mod workbook;
 
 pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
+pub use macros::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
 pub use python::{PyCode, PyOutput};
