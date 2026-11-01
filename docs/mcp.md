@@ -44,7 +44,7 @@ with a file open.
 | `list_windows` | — | Open windows: window id, workbook (`doc`) id, title ("Book1", or "Book1:2" for a workbook's second window), unsaved changes, active, hidden. |
 | `inspect_workbook` | — | Sheets, used ranges, tables, charts, names, selection, history. |
 | `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?` | Rows of values (default: the used range). |
-| `write_range` | `range`, `values` (2-D) | `range.setValues`; strings starting with `=` are formulas. |
+| `write_range` | `range`, `values` (2-D), `parse?` | `range.setValues`; strings starting with `=` are formulas, other strings are read like typed input unless `parse: false` stores them as text. `converted` in the result lists the strings read as a number, date, time, boolean or error. |
 | `set_cell` / `get_cell` | `cell`, `input` / `cell` | Enter one cell / read value, formula, display text, style. |
 | `evaluate_formula` | `formula`, `cell?` | Evaluates without changing the sheet. A formula that couldn't be entered in a cell (it doesn't parse, or a function gets the wrong number of arguments) is an error saying why. |
 | `select` | `range`, `active?` | Sets the selection. |
