@@ -1,7 +1,7 @@
 use crate::common;
 
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::grid;
@@ -39,7 +39,7 @@ fn a_header_only_tables_popup_has_no_value_choices() {
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
     assert_eq!(sh.tables[0].range.height(), 1);
     assert_eq!(sh.autofilter.as_ref().unwrap().range.a1(), "B3:C3");
-    assert_eq!(h.ctx.data(|d| d.get_temp::<Vec<(String, bool)>>(egui::Id::unique(("filter_sel", 1u32)))), Some(vec![]));
+    assert_eq!(h.state().grid.filter_checks, Some(vec![]));
     assert!(h.query_by_label("(Blanks)").is_none());
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert!(h.state().grid.filter_menu.is_none());
@@ -63,16 +63,15 @@ fn switching_filter_columns_discards_old_edits_and_recomputes_eligible_choices()
     key(&mut h, Key::ArrowDown, Modifiers::ALT);
     h.get_by_label("Other").click();
     h.run_steps(2);
-    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique(("filter_search", 1u32)))).as_deref(), Some(""));
+    assert!(h.state().grid.filter_search.is_empty());
 
     click_filter(&mut h, "A1");
     assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(0));
-    h.ctx.data(|d| {
-        assert!(d.get_temp::<Vec<(String, bool)>>(egui::Id::unique(("filter_sel", 1u32))).is_none(), "old checkbox edits must be discarded");
-        assert!(d.get_temp::<String>(egui::Id::unique(("filter_search", 1u32))).is_none(), "old search must be discarded");
-        assert!(d.get_temp::<Vec<egui::Id>>(egui::Id::unique(("filter_buttons", 1u32))).is_none(), "old button focus IDs must be discarded");
-    });
+    assert!(h.state().grid.filter_search.is_empty(), "the new column starts without the old search");
     assert!(h.query_by_label("East").is_some(), "the new column's choices must remain available");
+    click_filter(&mut h, "B1");
+    assert_eq!(h.get_by_label("Other").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "old checkbox edits are discarded");
+    click_filter(&mut h, "A1");
     h.get_by_label("West").click();
     h.run_steps(2);
     h.get_by_label("Apply").click();
@@ -81,6 +80,58 @@ fn switching_filter_columns_discards_old_edits_and_recomputes_eligible_choices()
     assert!(h.query_by_label("Alpha").is_some());
     assert!(h.query_by_label("Beta").is_some(), "eligible alternatives must remain available");
     assert!(h.query_by_label("Other").is_none(), "the other column's new criterion must narrow the reopened list");
+}
+
+#[test]
+fn switching_filter_columns_keeps_another_windows_pending_choices() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [
+                ["Company", "Job"], ["East", "Alpha"], ["East", "Beta"], ["West", "Other"]
+            ]}),
+        )
+        .unwrap();
+    session.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    let image = std::env::var("GRIDCRAFT_FILTER_WINDOW_SNAPSHOT").ok();
+    let builder = common::builder().with_os(egui::os::OperatingSystem::Windows).with_size(egui::vec2(1200.0, 800.0));
+    let builder = if image.is_some() { builder.wgpu() } else { builder };
+    let mut h = common::harness_with(builder, common::app(session), 4);
+    let first = h.state().session.active_window().unwrap();
+    key(&mut h, Key::ArrowDown, Modifiers::ALT);
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let second = h.state().session.active_window().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(h.state().session.documents().len(), 1, "two windows on the same workbook");
+    click_filter(&mut h, "B1");
+    h.input_mut().events.push(Event::Text("Bet".into()));
+    h.run_steps(2);
+    h.get_by_label("Beta").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Alpha").is_none());
+    assert_eq!(h.get_by_label("Beta").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    if let Some(path) = &image {
+        h.render().unwrap().save(std::path::Path::new(path).with_extension("before.png")).unwrap();
+    }
+
+    h.state_mut().enter_window(first);
+    h.run_steps(2);
+    assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(1));
+    click_filter(&mut h, "A1");
+    assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(0));
+    h.state_mut().enter_window(second);
+    h.run_steps(3);
+    assert_eq!(h.state().grid.filter_menu.map(|(col, _, _)| col), Some(1));
+    assert!(h.query_by_label("Alpha").is_none(), "switching the other window's column must keep this search");
+    assert_eq!(h.get_by_label("Beta").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "its unsaved checkbox stays unchecked");
+    if let Some(path) = image {
+        h.render().unwrap().save(path).unwrap();
+    }
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().autofilter.as_ref().unwrap().criteria.is_empty(), "no filter was applied");
 }
 
 #[test]
@@ -160,7 +211,7 @@ fn search_apply_excludes_hidden_nonmatches_and_keeps_hidden_matches() {
             assert!(h.query_by_label("Alphonse").is_none());
             h.input_mut().events.push(Event::Text("Alph".into()));
             h.run_steps(2);
-            assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique(("filter_search", 1u32)))).as_deref(), Some("Alph"));
+            assert_eq!(h.state().grid.filter_search, "Alph");
             assert!(h.query_by_label("Alpha").is_some());
             assert!(h.query_by_label("Beta").is_none());
             if click {

@@ -5,8 +5,7 @@ signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates o
 **draft** GitHub Release named `GridCraft v<version>`. Nobody sees a draft until a maintainer
 publishes it.
 
-This is GridCraft's implementation of the shared [release playbook](release-playbook.md)
-(craftrules `release/playbook.md`), copied from DesignCraft and renamed. User-facing names say
+This process was copied from DesignCraft and renamed. User-facing names say
 **GridCraft**. Files, binaries and ids stay lowercase
 (`gridcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.gridcraft`).
 
@@ -223,7 +222,7 @@ shows a `::warning::`. Never store these as org- or repo-level Actions secrets (
 
 `GITHUB_TOKEN` creates the release; only the final job gets `contents: write`.
 
-The exact commands (from craftrules `release/signing-setup.md`, steps 1–3), run by an org
+The repository setup commands, run by an org
 admin. Done for storytold/gridcraft on 2026-10-07; the `release-managers` team also has write
 access to the repo, which its ruleset bypass needs.
 
@@ -273,8 +272,7 @@ the publisher.
 ## Icons
 
 `assets/app-icon/gridcraft.svg` is a **placeholder** (an original ledger-page drawing on
-GridCraft green) until the owner makes GridCraft's engraved creature portrait (craftrules
-`standards/icon-design.md`). `packaging/icons.sh` regenerates the 1024 px PNG, the macOS 512 px
+GridCraft green) until the owner makes GridCraft's engraved creature portrait. `packaging/icons.sh` regenerates the 1024 px PNG, the macOS 512 px
 PNG, the `.icns` (iconutil), the `.ico` (`cargo xtask ico`) and the hicolor PNGs from it; it
 needs `resvg`. The outputs are committed, so packaging never needs those tools. Every file has a
 row in `ATTRIBUTION.md` (`cargo xtask assets`).

@@ -164,7 +164,7 @@ fn alt_down_opens_autofilter_headers_without_changing_the_workbook() {
             // Opening focuses the existing search box; typing must not edit the header.
             h.input_mut().events.push(Event::Text("1".into()));
             h.run_steps(2);
-            assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::unique(("filter_search", column)))).as_deref(), Some("1"));
+            assert_eq!(h.state().grid.filter_search, "1");
             assert!(h.state().editor.is_none());
             assert_eq!(h.state().session.active().unwrap().wb, before);
             key(&mut h, Key::Escape, Modifiers::NONE);
