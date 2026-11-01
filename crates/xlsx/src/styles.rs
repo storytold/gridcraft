@@ -277,9 +277,10 @@ fn read_protection(p: &El) -> Protection {
     Protection { locked: p.flag("locked", true), hidden: p.flag("hidden", false) }
 }
 
+/// Resolve a style format ID, marking explicit custom codes so short-date aliases remain literal.
 fn num_fmt_code(id: u32, custom: &HashMap<u32, String>) -> NumFmt {
     if let Some(c) = custom.get(&id) {
-        return NumFmt::new(c);
+        return NumFmt::custom(c);
     }
     NumFmt::new(builtin_format(id).unwrap_or("General"))
 }
@@ -387,7 +388,12 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = NumFmt::new(code);
+            s.num_fmt = match n.attr_u32("numFmtId") {
+                Some(14) if code.eq_ignore_ascii_case("mm-dd-yy") || code.eq_ignore_ascii_case("m/d/yyyy") => NumFmt::new("m/d/yyyy"),
+                Some(22) if code.eq_ignore_ascii_case("m/d/yy h:mm") || code.eq_ignore_ascii_case("m/d/yyyy h:mm") => NumFmt::new("m/d/yyyy h:mm"),
+                Some(id) if id < 164 => NumFmt::new(code),
+                _ => NumFmt::custom(code),
+            };
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
@@ -604,10 +610,19 @@ struct NumFmts {
 }
 
 impl NumFmts {
+    /// Reuse a recognized built-in ID or allocate a custom ID for an ordinary format code.
     fn id(&mut self, code: &str) -> u32 {
         if let Some(id) = builtin_id(code) {
             return id;
         }
+        self.custom_id(code)
+    }
+    /// Force marked literal short-date aliases to custom IDs even when their code matches a built-in.
+    fn format_id(&mut self, fmt: &NumFmt) -> u32 {
+        if fmt.is_literal_short_date() { self.custom_id(fmt.as_str()) } else { self.id(fmt.as_str()) }
+    }
+    /// Intern an exact custom code, reusing its assigned ID or allocating one from 164.
+    fn custom_id(&mut self, code: &str) -> u32 {
         if let Some(&id) = self.map.get(code) {
             return id;
         }
@@ -641,7 +656,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         let border = intern(&mut borders, &mut border_map, &st.borders);
         // A checkbox is General plus the feature-property-bag complement (see `feature_bags`).
         let checkbox = st.num_fmt.as_str() == "checkbox";
-        let fmt = if checkbox { 0 } else { nf.id(st.num_fmt.as_str()) };
+        let fmt = if checkbox { 0 } else { nf.format_id(&st.num_fmt) };
         let _ = write!(xfs, "<xf numFmtId=\"{fmt}\" fontId=\"{font}\" fillId=\"{fill}\" borderId=\"{border}\" xfId=\"0\"");
         if fmt != 0 {
             xfs.push_str(" applyNumberFormat=\"1\"");
@@ -688,7 +703,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         let font = intern(&mut fonts, &mut font_map, &st.font);
         let fill = intern(&mut fills, &mut fill_map, &st.fill);
         let border = intern(&mut borders, &mut border_map, &st.borders);
-        let fmt = nf.id(st.num_fmt.as_str());
+        let fmt = nf.format_id(&st.num_fmt);
         let _ = write!(style_xfs, "<xf numFmtId=\"{fmt}\" fontId=\"{font}\" fillId=\"{fill}\" borderId=\"{border}\"");
         let al = alignment_xml(&st.align);
         let pr = protection_xml(&st.protection);
@@ -725,7 +740,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
             dx.push_str(&font_xml(&d.font, Some(st), false));
         }
         if d.num_fmt != def.num_fmt {
-            let id = nf.id(d.num_fmt.as_str());
+            let id = nf.format_id(&d.num_fmt);
             let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
         }
         if d.fill != def.fill {

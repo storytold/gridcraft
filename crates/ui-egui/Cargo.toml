@@ -42,6 +42,14 @@ craft-update = { workspace = true }
 sys-locale = { workspace = true }
 craft-window = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Safe GetUserDefaultLocaleName wrapper: number/date formats, not preferred UI languages.
+current_locale = "=0.1.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The Region setting (NSLocale.currentLocale), for the grid's number and date formats.
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSLocale", "NSString", "NSDateFormatter", "NSFormatter"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.
 web-sys = { version = "0.3", features = ["Window", "Navigator", "Performance"] }

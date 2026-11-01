@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
 
@@ -203,10 +201,11 @@ fn axis_labels_use_number_format() {
     assert!(t.contains(&"$40,000"));
 }
 
+/// Chart resolution reads series, categories and formatted labels from workbook cells.
 #[test]
 fn resolve_from_workbook() {
     let mut wb = Workbook::new();
-    let cur = wb.styles.intern(Style { num_fmt: gridcraft_model::NumFmt(Arc::from("$#,##0")), ..Style::default() });
+    let cur = wb.styles.intern(Style { num_fmt: gridcraft_model::NumFmt::new("$#,##0"), ..Style::default() });
     {
         let s = wb.sheet_mut(0).unwrap();
         s.name = "Sales".into();

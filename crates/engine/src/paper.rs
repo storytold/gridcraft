@@ -1,6 +1,6 @@
 //! Page Layout view geometry: a sheet shown as printed pages side by side.
 //!
-//! The view uses the print pagination ([`crate::cmd::print::split_bands`]) over the sheet from
+//! The view uses the print pagination (`crate::cmd::print::split_bands`) over the sheet from
 //! A1, so its page edges are the printed ones whenever the print area starts at A1. Pages keep
 //! going right and down past the data ("Click to add data" pages), as far as the view needs.
 //!
