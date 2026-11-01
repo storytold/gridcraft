@@ -1,4 +1,4 @@
-use super::{SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
+use super::{Json, SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
@@ -42,6 +42,7 @@ impl SheetApp {
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar);
+        ed.code_edit = !replace && sh.cell(at).is_some_and(|c| c.py.is_some());
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -99,11 +100,12 @@ impl SheetApp {
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
-            Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+            // A code edit commits the code as typed, whatever a completion holds.
+            Some(full) if !ed.code_edit && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
-        if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
+        if (ed.code_edit || (!fill_selection && !array)) && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
             }
@@ -115,6 +117,11 @@ impl SheetApp {
         if let Some(m) = self.session.locked_cell_message(ed.sheet, ed.cell) {
             self.message = Some(("GridCraft".into(), m));
             return true;
+        }
+        // All the code deleted: the cell is cleared through cell.set, as an empty entry clears any
+        // other cell. Code of spaces is still code.
+        if ed.code_edit && !text.is_empty() {
+            return self.commit_code_edit(ed, text, dr, dc);
         }
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
@@ -153,11 +160,9 @@ impl SheetApp {
         let unchanged = !fill_selection
             && !array
             && text.is_empty()
-            && self
-                .session
-                .active()
-                .and_then(|d| d.wb.sheet(ed.sheet))
-                .is_some_and(|sh| sh.cell(ed.cell).is_none_or(|c| c.formula.is_none() && c.value == gridcraft_engine::core::Value::Empty));
+            && self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).is_some_and(|sh| {
+                sh.cell(ed.cell).is_none_or(|c| c.formula.is_none() && c.py.is_none() && c.value == gridcraft_engine::core::Value::Empty)
+            });
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
@@ -165,6 +170,34 @@ impl SheetApp {
         } else {
             self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
+        match r {
+            Ok(_) => {
+                if dr != 0 || dc != 0 {
+                    self.move_after_enter(dr, dc);
+                }
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
+    }
+
+    /// Commits a changed edit of a Python cell's code through `python.set`, which keeps the cell's
+    /// return type; `cell.set` would replace the Python cell with an ordinary one holding the code
+    /// as text. When the command refuses the code, its message shows and the edit stays open.
+    fn commit_code_edit(&mut self, ed: editor::EditState, code: String, dr: i64, dc: i64) -> bool {
+        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
+        let r = if self.session.active().is_some_and(|d| d.wb.active_sheet() != ed.sheet) {
+            self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
+        } else {
+            Ok(Json::Null)
+        };
+        let r = r.and_then(|_| self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": code})));
         match r {
             Ok(_) => {
                 if dr != 0 || dc != 0 {

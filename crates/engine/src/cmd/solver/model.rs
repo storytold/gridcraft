@@ -263,7 +263,8 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     }
     let mut seen = std::collections::HashSet::new();
     vars.retain(|c| seen.insert(*c));
-    if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some())) {
+    // Python cells count as formulas: a solution written over one would lose its code.
+    if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
         return Err(EngineError::Other("Variable cells must hold constants, not formulas.".into()));
     }
     let mut cons = Vec::new();

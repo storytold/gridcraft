@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::rewrite_all_formulas;
+pub(crate) use paste_special::{rewrite_all_formulas, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -129,7 +129,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook}",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),
@@ -264,6 +264,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 for (_, cell) in cells.iter_mut() {
                     let checkbox = cx.wb.styles.get(cell.style).num_fmt.as_str() == "checkbox";
                     cell.formula = None;
+                    cell.py = None;
                     if checkbox && uncheck_only {
                         cell.value = Value::Bool(false);
                     } else {

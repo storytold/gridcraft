@@ -128,6 +128,8 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// The code of the Python cells written so far, in order: script `i` of the Python part.
+    pub python_scripts: Vec<String>,
 }
 
 impl Out {
@@ -259,6 +261,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
@@ -339,6 +342,12 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
+    if !out.python_scripts.is_empty() {
+        use crate::python_part as py;
+        let part = py::write(&out.python_scripts);
+        out.part(py::PART, Some(py::CONTENT_TYPE), part.into_bytes());
+        wb_rels.add_uri(py::REL, "python.xml");
+    }
     if wb.styles.iter().any(|(_, st)| st.num_fmt.as_str() == "checkbox") {
         use crate::feature_bags as fpb;
         out.part(fpb::PART, Some(fpb::CONTENT_TYPE), fpb::checkbox_part().into_bytes());

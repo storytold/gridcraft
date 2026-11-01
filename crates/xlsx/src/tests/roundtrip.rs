@@ -64,7 +64,7 @@ fn sample() -> Workbook {
     };
 
     let mut s = Sheet::new("Data & Stuff");
-    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style });
+    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style, py: None });
     set(&mut s, "A1", Value::text("Region"), bold);
     set(&mut s, "B1", Value::text("Amount"), bold);
     set(&mut s, "C1", Value::text("  spaced\nline _x0041_ \u{1} "), StyleId::DEFAULT);
@@ -854,7 +854,7 @@ fn writing_repairs_invalid_models() {
         table_type: None,
         connection_id: None,
     });
-    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
+    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999), py: None });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     let s = back.sheet(0).unwrap();
     assert_eq!(s.visibility, Visibility::Visible, "at least one sheet stays visible");

@@ -135,6 +135,10 @@ impl Calc {
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
+                } else if cell.py.is_some() {
+                    // A Python cell lays out its kept result, so it is calculated like a formula
+                    // that reads nothing: its spill is blocked and unblocked like a formula's.
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
                 }
             }
         }
@@ -206,10 +210,28 @@ impl Calc {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
+            let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
+            let python = py.is_some();
+            // A Python cell whose result (if any) is not an array spills nothing.
+            let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
+                }
+                // See `rebuild`: its spill is laid out again from its result when it is calculated.
+                None if python => {
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    // New code has no result yet: the spill the cell had (its old result's, or a
+                    // formula's) goes, and what read it is recalculated, as for a formula
+                    // replaced by a constant.
+                    if !spills
+                        && let Some(sh) = wb.sheet_mut(k.0)
+                        && let Some(r) = sh.spill_ranges.remove(&k.1)
+                    {
+                        sh.clear_spill(r);
+                        cleared.push((k.0, r));
+                    }
                 }
                 None => {
                     self.graph.remove(k);
@@ -338,11 +360,15 @@ impl Calc {
                     exprs.insert(*k, e);
                 }
             }
+            let python: HashMap<Key, Value> = dirty
+                .iter()
+                .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
+                .collect();
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
             let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now);
+                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);
@@ -545,6 +571,48 @@ pub(crate) mod tests {
         iv.query(a, b, &mut |t| v.push(*t));
         v.sort_unstable();
         v
+    }
+
+    /// A 1,000 x 1,000 Python result laid out from A1 in a pass, with the same values already
+    /// spilled on the sheet from the last calculation, as a full recalculation finds them.
+    fn big_python_spill() -> (Workbook, HashMap<Key, Value>) {
+        let n = 1_000usize;
+        let data: Vec<Value> = (0..n * n).map(|i| Value::Number(i as f64)).collect();
+        let array = gridcraft_core::Array::new(n, n, data.clone()).unwrap();
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        let anchor = CellRef::new(0, 0);
+        let py = gridcraft_model::PyCode::new("big");
+        sh.set_cell(anchor, Cell { value: Value::Number(0.0), py: Some(std::sync::Arc::new(py)), ..Cell::default() });
+        let area = RangeRef::new(anchor, CellRef::new(n as u32 - 1, n as u32 - 1));
+        sh.spill_ranges.insert(anchor, area);
+        for (i, c) in area.iter().enumerate().skip(1) {
+            sh.spill.insert(c, data[i].clone());
+        }
+        let mut python = HashMap::default();
+        python.insert((0, anchor), Value::Array(std::sync::Arc::new(array)));
+        (wb, python)
+    }
+
+    #[test]
+    fn a_read_beside_a_large_spill_walks_none_of_it() {
+        let (wb, python) = big_python_spill();
+        let exprs = HashMap::default();
+        let mut rng = 1u64;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+        assert_eq!(host.cell_value(0, CellRef::new(0, 0)), Value::Number(0.0));
+        // Beside the spill (column ALM, the 1,001st), over the rows it covers.
+        let beside = RangeRef::parse("ALM1:ALM1000").unwrap();
+        host.spill_visits = 0;
+        assert!(host.range_values(0, beside).iter().all(Value::is_empty));
+        assert!(host.visit_range(0, beside, &mut |_| true), "a disjoint read takes the fast path");
+        assert_eq!(host.spill_visits, 0, "nothing of the spill is walked");
+        // A read inside it still sees the spilled values, walking only the cells it reads.
+        let inside = RangeRef::parse("B2:C3").unwrap();
+        host.spill_visits = 0;
+        assert_eq!(host.range_values(0, inside), [1_001.0, 1_002.0, 2_001.0, 2_002.0].map(Value::Number).to_vec());
+        assert!(host.spill_visits <= 8, "{}", host.spill_visits);
+        assert!(!host.visit_range(0, inside, &mut |_| true), "an overlapping read leaves the block to range_values");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-01 · **Change:** minor (the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -97,7 +97,8 @@ This improves series preparation; it does not change the model-fitting or season
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Long flat operator chains (`=A1+A2+…`, `-`, `*`, `/`, `^`, `&`, comparisons) | done: no operand limit below Excel's 8,192-character formula limit (Excel, observed: `=1+1+…` with 4,096 operands is exactly 8,192 characters with the `=` and calculates; one more character is refused). Evaluated (#484), printed (#628), stored, copied, adjusted, saved and reopened without recursing once per operand, on a 1 MiB stack (#916); written to XLSX as plain formulas, not dynamic arrays; Spanish entry accepts them |
-| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
+| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA`, and the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!` done; `#FIELD!`, `#CONNECT!`, `#UNKNOWN!` missing (minor: they come from data types and cloud features). `ERROR.TYPE` gives 11 for `#BLOCKED!` as Excel does; Microsoft documents no number for `#PYTHON!`, `#BUSY!` or `#TIMEOUT!`, and GridCraft gives them 19, 20 and 21 |
+| Python in cells | partial: Python cells are stored, edited (`python.set`), copied, moved and saved, and Excel's `_xlfn._xlws.PY` cells open with their cached results; the code doesn't run, so new or changed code shows `#BLOCKED!`. Typing `=PY(` is refused with a pointer to `python.set`, so `PY` stays counted as missing above |
 
 ## Depth (estimated)
 
@@ -133,6 +134,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
 | 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
 | 2026-10-31 | minor | DEC2BIN, DEC2HEX and DEC2OCT validate `places` before returning negative two's-complement output, and Boolean places return `#VALUE!`, matching Excel |
 | 2026-10-31 | minor | BITLSHIFT and BITRSHIFT return `0` for zero operands shifted beyond 53 bits in either direction; nonzero operands retain the `#NUM!` limit, matching Excel |

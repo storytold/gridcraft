@@ -449,7 +449,7 @@ impl SheetState<'_> {
             return Ok(Some(pos));
         }
         budget.cell()?;
-        self.sheet.cells.set(pos, Cell { value, formula: None, style });
+        self.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
         Ok(Some(pos))
     }
 
@@ -467,7 +467,7 @@ impl SheetState<'_> {
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));
                 } else {
-                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT });
+                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT, py: None });
                 }
             }
             Err(Unsupported(why)) => self.unsupported(why),
@@ -526,7 +526,7 @@ fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
         let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
         if p.pos != p.anchor && filled {
             let style = st.sheet.style_id(p.pos);
-            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
+            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style, py: None });
         }
     }
 }
@@ -672,7 +672,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 if let Some(cell) = st.sheet.cells.get_mut(pos) {
                     cell.value = Value::from(s);
                 } else {
-                    st.sheet.cells.set(pos, Cell { value: Value::from(s), formula: None, style });
+                    st.sheet.cells.set(pos, Cell { value: Value::from(s), formula: None, style, py: None });
                 }
             }
         }
@@ -827,7 +827,7 @@ fn formula_cell(c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Bu
     let Some(pos) = st.pos(r, col) else { return Ok(()) };
     budget.cell()?;
     let style = st.style(x);
-    st.sheet.cells.set(pos, Cell { value, formula: None, style });
+    st.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
     st.last_formula = Some(pos);
     if string_result {
         st.pending_string = Some((pos, style));

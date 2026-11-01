@@ -14,7 +14,7 @@ use crate::cell::Cell;
 const BAND: u32 = 64;
 
 fn has_value(cell: &Cell) -> bool {
-    !cell.value.is_empty() || cell.formula.is_some()
+    cell.has_content()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

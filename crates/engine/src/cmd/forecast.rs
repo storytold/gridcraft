@@ -315,7 +315,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let vstyle = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = vfmt.clone());
         let mut sheet = Sheet::new(sheet_name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         let formula = |sheet: &mut Sheet, row: u32, col: u32, text: String, style: StyleId| {
             let mut cell = Cell::formula(Formula::new(&text));

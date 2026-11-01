@@ -82,6 +82,7 @@ mod pivot_show_details_menu;
 mod popup_dismissal;
 mod protect_password;
 mod protected_cell;
+mod python_cell_edit;
 mod ribbon_layout;
 mod right_to_left;
 mod scroll_position;
