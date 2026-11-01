@@ -113,13 +113,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, From Database/folder sources, relationships or data model
+- No Power Query editor, From Database/folder sources, relationships or data model
   (`data.fromDatabase`, `data.relationships` missing). From Web (`data.fromWeb`) fetches an https
   page, lists its detected tables in a Navigator dialog and loads the selected one into a new
   table sheet, saving the connection; `data.webRefresh` re-fetches and rewrites the table in
-  place, with Excel's "Refresh data when opening the file" per connection (`data.webQuerySet`,
-  only for a workbook the session or the host trusts — a file from elsewhere never fetches on
-  open) (desktop and CLI). **Estimate:** 45–85 h.
+  place, with Excel's "Refresh data when opening the file" per connection (`data.webQuerySet`).
+  Refresh on open is opt-in per connection and still trust-gated: only a workbook the session
+  saved, or a file the host explicitly opened for the user (the app's File ▸ Open/Recent
+  flows, the CLI's `--refresh` flag), fetches on open — a file that arrived any other way
+  (a shared workbook, a programmatic open) never does (desktop and CLI).
+  **Estimate:** 45–85 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the

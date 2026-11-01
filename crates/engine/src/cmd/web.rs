@@ -381,7 +381,7 @@ fn web_query_set(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         // Connections are identified by their (sheet, name) pair everywhere else; a bare name
         // matches the first, like the pane's selected entry when it does not say the sheet.
-        let found = cx.wb.web_queries.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&name) && sheet.as_ref().is_none_or(|sh| q.sheet.eq_ignore_ascii_case(sh)));
+        let found = cx.wb.web_queries.iter_mut().find(|q| q.name.eq_ignore_ascii_case(name) && sheet.is_none_or(|sh| q.sheet.eq_ignore_ascii_case(sh)));
         let Some(q) = found else { return Err(EngineError::Other(format!("No saved connection named `{name}`."))) };
         q.refresh_on_open = on;
         cx.structural = true;
