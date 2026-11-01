@@ -81,7 +81,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
 
 // ---------------------------------------------------------------- legend
 
-fn swatch_w(sw: Swatch, s: f32) -> f32 {
+pub(super) fn swatch_w(sw: Swatch, s: f32) -> f32 {
     if sw == Swatch::Box { s } else { s * 2.0 }
 }
 
@@ -145,7 +145,16 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
             if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
         }
         LegendPos::Left | LegendPos::Right => {
-            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * 0.35);
+            // Widest entry, capped at 35% of the area: once the cap is reached the rest cannot change it.
+            let cap = area.w * 0.35;
+            let mut colw = 0.0f32;
+            for e in entries {
+                if colw >= cap {
+                    break;
+                }
+                colw = colw.max(item_w(ctx, e));
+            }
+            let colw = colw.min(cap);
             let max_rows = ((area.h / row_h).floor() as usize).max(1);
             let n = entries.len().min(max_rows);
             let lh = n as f32 * row_h;

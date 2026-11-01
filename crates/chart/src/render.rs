@@ -49,25 +49,47 @@ struct Ctx<'a> {
     m: &'a dyn Measure,
 }
 
+#[cfg(test)]
+#[path = "render_perf_tests.rs"]
+mod perf_tests;
+
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
         let w = self.m.text_width(s, size, false);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
+    /// `s` shortened with an ellipsis to fit `maxw`; empty when not even one character fits.
+    ///
+    /// Binary search over the number of kept characters (at most 400 are tried), about nine
+    /// `Measure` calls instead of one per character. It assumes the width of `prefix + "…"` does not
+    /// shrink as the prefix grows, which holds for per-character advance sums (`ApproxMeasure`, the
+    /// PDF metrics) and for the UI's text layout up to kerning of a few hundredths of a point; with
+    /// such a non-monotone measure the result may differ from the old linear scan by a character.
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
         if self.tw(s, size) <= maxw {
             return s.to_string();
         }
-        let chars: Vec<char> = s.chars().collect();
-        let mut n = chars.len().min(400);
-        while n > 0 {
-            n -= 1;
-            let t: String = chars.iter().take(n).collect::<String>() + "…";
-            if self.tw(&t, size) <= maxw {
-                return if n == 0 { String::new() } else { t };
+        // Byte offset where each of the first 400 characters starts; a prefix of `k` characters
+        // (k < number of characters, so the offset exists) ends at `starts[k]`.
+        let starts: Vec<usize> = s.char_indices().map(|(i, _)| i).take(400).collect();
+        let top = starts.len().saturating_sub(1);
+        let fits = |k: usize| -> bool {
+            let end = starts.get(k).copied().unwrap_or(s.len());
+            let mut t = String::with_capacity(end + 3);
+            t.push_str(s.get(..end).unwrap_or(""));
+            t.push('…');
+            self.tw(&t, size) <= maxw
+        };
+        let (mut lo, mut hi) = (0usize, top);
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
             }
         }
-        String::new()
+        if lo == 0 { String::new() } else { format!("{}…", s.get(..starts.get(lo).copied().unwrap_or(s.len())).unwrap_or("")) }
     }
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
