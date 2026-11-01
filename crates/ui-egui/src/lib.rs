@@ -27,6 +27,8 @@ pub mod dialogs;
 pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod doc_tabs;
 pub mod editor;
 mod floating_pictures;
 pub mod fonts;
@@ -204,6 +206,9 @@ pub struct SheetApp {
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
     pub chrome: Chrome,
+    /// The document tab strip, when the desktop shell shows open workbooks as tabs.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub doc_tabs: Option<doc_tabs::DocTabs>,
     /// Scroll position per (window id, sheet index).
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,

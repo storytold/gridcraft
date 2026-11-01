@@ -17,6 +17,7 @@ fn main() {
     let mut cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
+    let mut tabs = false;
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
@@ -55,6 +56,7 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--tabs" => tabs = true,
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -113,6 +115,9 @@ fn main() {
                 }
                 if let Some(t) = tab {
                     app.ui.ribbon_tab = t;
+                }
+                if tabs {
+                    app.doc_tabs = Some(gridcraft_ui_egui::doc_tabs::DocTabs::from_app(&app));
                 }
                 app.grid.pane = pane;
                 app.selected_chart = chart;

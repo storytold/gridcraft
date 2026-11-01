@@ -32,6 +32,8 @@ pub struct DocWindows {
     base: egui::ViewportBuilder,
     /// Quit when the last window closes (Windows, Linux); macOS keeps running without a window.
     quit_with_last_window: bool,
+    /// Draw every window as a tab in the root window instead of one native window each.
+    tabs: bool,
     /// The root viewport is hidden because no window is open.
     root_hidden: bool,
 }
@@ -41,7 +43,7 @@ impl DocWindows {
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
         // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, root_hidden: false }
+        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, tabs: true, root_hidden: false }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -158,7 +160,9 @@ impl DocWindows {
             && self.list.active() != Some(id)
         {
             self.list.focus(id);
-            self.viewports.focus(ctx, id);
+            if !self.tabs {
+                self.viewports.focus(ctx, id);
+            }
         }
     }
 
@@ -167,6 +171,10 @@ impl DocWindows {
     pub fn show(&mut self, app: &mut SheetApp, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.sync(app, &ctx);
+        if self.tabs {
+            self.show_as_tabs(app, ui, &ctx);
+            return;
+        }
         let focused = self.list.active().and_then(|id| self.list.get(id).copied());
         let titles: std::collections::HashMap<u64, String> = self.list.iter().map(|(_, w)| (*w, window_title(app, *w))).collect();
         let base = &self.base;
@@ -215,6 +223,39 @@ impl DocWindows {
             app.enter_window(target);
         }
         self.sync(app, &ctx);
+    }
+
+    /// Draws every window as a tab in the root window: the strip on top, then the active
+    /// workbook's UI. Clicking a tab enters that window (settling the previous one's draft
+    /// first, as moving to a native window does); `×` closes it through `window.close`, so the
+    /// unsaved-changes question and the last-window rules stay in the engine.
+    fn show_as_tabs(&mut self, app: &mut SheetApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+        app.doc_tabs = Some(crate::doc_tabs::DocTabs::from_app(app));
+        app.ui(ui);
+        let (picked, closed) = match app.doc_tabs.take() {
+            Some(t) => (t.picked, t.closed),
+            None => (None, None),
+        };
+        if let Some(w) = closed {
+            let _ = app.run_or_alert("window.close", json!({"window": w}));
+        }
+        let active = app.session.active_window();
+        if let Some(w) = picked.filter(|w| Some(*w) != active) {
+            if let Some(previous) = active.filter(|p| app.session.window(*p).is_some()) {
+                // The user left this window: its draft is entered there, as Enter would.
+                app.enter_window(previous);
+                let _ = app.settle_drafts();
+            }
+            app.enter_window(w);
+            if let Some(id) = self.find(w) {
+                self.list.focus(id);
+            }
+        }
+        self.sync(app, ctx);
+        // The native title follows the tab the user picked.
+        if let Some(w) = app.session.active_window() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(app, w)));
+        }
     }
 
     /// A window's close button. Returns the window to bring forward when the close needs an

@@ -30,6 +30,8 @@ impl SheetApp {
             session,
             ui: UiState::default(),
             chrome: Chrome::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            doc_tabs: None,
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
@@ -213,6 +215,13 @@ impl SheetApp {
         }
         if self.chrome.title_bar {
             ribbon::title_bar(self, ui);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.doc_tabs.is_some() {
+            let close = self.ui.language.tr("Close").to_string();
+            if let Some(tabs) = &mut self.doc_tabs {
+                super::doc_tabs::show(ui, tabs, &close);
+            }
         }
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
