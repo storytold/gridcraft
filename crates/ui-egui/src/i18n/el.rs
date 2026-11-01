@@ -879,6 +879,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stacked Bar" => "Σωρευμένες ράβδοι",
         "100% Stacked Bar" => "Σωρευμένες ράβδοι 100%",
         "Line" => "Γραμμή",
+        "Shapes|Line" => "Γραμμή",
         "Line with Markers" => "Γραμμή με δείκτες",
         "Stacked Line" => "Σωρευμένες γραμμές",
         "Pie" => "Πίτα",

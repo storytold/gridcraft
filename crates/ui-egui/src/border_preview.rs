@@ -53,9 +53,10 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 /// and explicit border colors faithful in both light and dark application themes.
 pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
     ui.add_space(8.0);
-    ui.label("Preview");
+    ui.label(crate::i18n::current(ui.ctx()).tr("Preview"));
     let (area, response) = ui.allocate_exact_size(vec2(248.0, 104.0), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Border preview"));
+    let name = crate::i18n::current(ui.ctx()).tr("Border preview");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, name));
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(area, 4.0, t.grid_bg);
     ui.painter().rect_stroke(area, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
