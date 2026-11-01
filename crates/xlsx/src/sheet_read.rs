@@ -79,6 +79,20 @@ fn push_dynamic(st: &mut RowState, range: RangeRef) {
     st.dynamic.push(range);
 }
 
+/// Forgets the range anchored at `pos` (a Python cell whose code the file doesn't hold, which
+/// keeps only its cached value): the cached values over the rest of its spill are kept as plain
+/// values too, as the file shows them, rather than left for a result that won't come. Charged
+/// like [`dynamic_range`]'s scans.
+fn forget_dynamic(st: &mut RowState, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    if let Some(i) = st.dynamic.iter().rposition(|r| r.start == pos) {
+        st.dynamic.remove(i);
+    }
+}
+
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
@@ -527,7 +541,8 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
     // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
-    // line breaks in the code. A formula naming a script the part lacks keeps only its value.
+    // line breaks in the code. A formula naming a script the part lacks keeps only its cached
+    // values, its own and its spill's, as plain values.
     let py = match (&formula, c.child("f")) {
         (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
         _ => crate::python_part::PyFormula::Not,
@@ -535,7 +550,10 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let (formula, py) = match py {
         crate::python_part::PyFormula::Not => (formula, None),
         crate::python_part::PyFormula::Code(py) => (None, Some(Arc::new(py))),
-        crate::python_part::PyFormula::Missing => (None, None),
+        crate::python_part::PyFormula::Missing => {
+            forget_dynamic(st, pos);
+            (None, None)
+        }
     };
     let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
     let value = match spilled_from {

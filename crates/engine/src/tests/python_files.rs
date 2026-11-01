@@ -293,6 +293,31 @@ fn a_damaged_python_part_is_a_warning_and_the_workbook_opens_with_its_values() {
 }
 
 #[test]
+fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
+    // A1's cached result spills over A1:A3; C1 is an ordinary dynamic array with a stale cache.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c>\
+                <c r=\"C1\" cm=\"1\"><f t=\"array\" ref=\"C1:C3\">SEQUENCE(3)</f><v>1</v></c></row>\
+                <row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"C2\"><v>9</v></c></row>\
+                <row r=\"3\"><c r=\"A3\"><v>3</v></c><c r=\"C3\"><v>9</v></c></row></sheetData>";
+    let missing = excel_shaped(data, None);
+    let damaged = with_damaged_part(&excel_shaped(data, Some(&["[1, 2, 3]"])), "xl/python/python1.xml", "<pythonScripts>");
+    for (name, bytes) in [("missing.xlsx", missing), ("damaged.xlsx", damaged)] {
+        let mut s = s();
+        open(&mut s, name, &bytes);
+        assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "A3")), (Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)), "{name}");
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        for a in ["A1", "A2", "A3"] {
+            let cell = sh.cell(CellRef::parse(a).unwrap()).unwrap_or_else(|| panic!("{name}: {a} is stored"));
+            assert!(cell.py.is_none() && cell.formula.is_none(), "{name}: {a} is a plain value");
+        }
+        assert!(!sh.spill_ranges.contains_key(&CellRef::new(0, 0)), "{name}: no live spill");
+        // The ordinary formula fills its spill again, over the stale cached values.
+        assert_eq!((v(&s, "C2"), v(&s, "C3")), (Value::Number(2.0), Value::Number(3.0)), "{name}");
+        assert!(sh.cell(CellRef::parse("C2").unwrap()).is_none(), "{name}: C2 is the formula's spill, not a cell");
+    }
+}
+
+#[test]
 fn many_cells_naming_one_long_script_take_from_one_budget() {
     // 20,000 cells name one script of 8,000 characters: 160 MB of code if each took a copy.
     let long = "x".repeat(8_000);
