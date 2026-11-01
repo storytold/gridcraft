@@ -116,7 +116,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
-    let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
+    // The end of the sheet: the last row / column reaches the bottom / right edge of the scrolled
+    // pane (the cells below / right of the frozen panes), whatever the zoom and window size.
+    let (mut max_x, mut max_y) = {
+        let g = make_geo(app, view.scroll);
+        let width = (g.cells.width() - g.frozen_w).max(0.0) / g.z;
+        let height = (g.cells.height() - g.frozen_h).max(0.0) / g.z;
+        (((sh.col_left(MAX_COLS) - sh.col_left(g.fc)) as f32 - width).max(0.0), ((sh.row_top(MAX_ROWS) - sh.row_top(g.fr)) as f32 - height).max(0.0))
+    };
     if paper {
         // Page layout units run past sheet units (margins and gaps); the end is known once the
         // pages reach the last row / column.
