@@ -367,7 +367,7 @@ fn split_path(path: &str) -> (String, String) {
 /// Width of the column that tells when a recent workbook was last changed.
 const MODIFIED_W: f32 = 150.0;
 
-fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui) {
+fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui, limit: usize) {
     let Some((label, resources)) = app.services.file_providers.as_ref().and_then(|host| host.recent_entries()) else { return };
     let lang = app.ui.language;
     let t = Tokens::get(ui.ctx());
@@ -375,7 +375,7 @@ fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui) {
     if resources.is_empty() {
         dim(ui, lang.tr("No recent provider files."));
     }
-    for resource in resources {
+    for resource in resources.into_iter().take(limit) {
         if ui.button(RichText::new(&resource.name).color(t.text)).on_hover_text(&resource.updated_at).clicked() {
             app.run_or_alert("file.openProviderResource", json!({"resource":resource.id}));
         }
@@ -387,7 +387,7 @@ fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui) {
 /// Recent workbooks, newest first, each with when it was last changed. Opening one is the user's
 /// explicit choice.
 fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize) {
-    provider_recent_list(app, ui);
+    provider_recent_list(app, ui, limit);
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     if app.ui.recent.is_empty() {
@@ -844,6 +844,62 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// Render the actual Backstage pages with the largest accepted provider list.
+    fn recent_page_text(page: Page, height: f32) -> Vec<String> {
+        let host = crate::file_providers::Host::default();
+        host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+        let connection = host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+        let resources = (0..100)
+            .map(|index| crate::file_providers::Resource {
+                id: format!("resource-{index:03}"),
+                name: format!("Provider{index:03}.xlsx"),
+                updated_at: String::new(),
+            })
+            .collect();
+        host.set_resources(&connection, resources).unwrap();
+        let services = crate::Services { file_providers: Some(host), ..Default::default() };
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+        app.ui.language = Language::En;
+        app.ui.recent.push("Device-only.xlsx".into());
+        app.backstage = Some(Backstage::new(page));
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, height))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| show(&mut app, ui));
+        output.textures_delta.clear(); // No renderer consumes texture uploads in this test.
+        fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(shape) => text.push(shape.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, text)),
+                _ => {}
+            }
+        }
+        let mut text = Vec::new();
+        for shape in &output.shapes {
+            collect_text(&shape.shape, &mut text);
+        }
+        text
+    }
+
+    #[test]
+    fn home_limits_provider_recents_and_keeps_device_history_visible() {
+        let text = recent_page_text(Page::Home, 900.0);
+        assert_eq!(text.iter().filter(|text| text.starts_with("Provider")).count(), 8);
+        assert!(text.iter().any(|text| text == "Provider000.xlsx"));
+        assert!(text.iter().any(|text| text == "Provider007.xlsx"));
+        assert!(!text.iter().any(|text| text == "Provider008.xlsx"));
+        assert!(text.iter().any(|text| text == "Recent on this device"));
+        assert!(text.iter().any(|text| text == "Device-only.xlsx"));
+    }
+
+    #[test]
+    fn open_page_keeps_the_complete_provider_recent_list() {
+        let text = recent_page_text(Page::Open, 6000.0);
+        assert_eq!(text.iter().filter(|text| text.starts_with("Provider")).count(), 100);
+        assert!(text.iter().any(|text| text == "Provider099.xlsx"));
+        assert!(text.iter().any(|text| text == "Device-only.xlsx"));
+    }
 
     #[test]
     fn ages_are_told_in_words() {
