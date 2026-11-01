@@ -333,11 +333,14 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 label = false;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
-                p.line_segment([r.left_top(), r.right_bottom()], Stroke::new(2.0, line));
+                // From the start to the end the flips choose (#2904), not always top-left to
+                // bottom-right; the arrowhead sits at the end.
+                let (a, b) = sp.line_ends();
+                let (from, tip) = (r.min + vec2(a[0], a[1]) * geo.z, r.min + vec2(b[0], b[1]) * geo.z);
+                p.line_segment([from, tip], Stroke::new(2.0, line));
                 if sp.kind == ShapeKind::Arrow {
-                    let d = (r.right_bottom() - r.left_top()).normalized();
+                    let d = (tip - from).normalized();
                     let n = vec2(-d.y, d.x);
-                    let tip = r.right_bottom();
                     p.add(PathShape::convex_polygon(vec![tip, tip - d * 10.0 + n * 5.0, tip - d * 10.0 - n * 5.0], line, Stroke::NONE));
                 }
             }

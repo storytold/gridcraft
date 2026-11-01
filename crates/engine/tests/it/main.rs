@@ -16,6 +16,7 @@ mod format_as_table_restyle;
 mod hidden_sheet_navigation;
 mod ink_roundtrip;
 mod line_count_overflow;
+mod line_shape_direction;
 mod long_operator_chains;
 mod offset_overflow;
 mod percent_entry;

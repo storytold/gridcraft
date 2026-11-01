@@ -10,6 +10,7 @@ mod csv_tests;
 mod encrypted_tests;
 mod fixtures;
 mod ink_roundtrip;
+mod line_direction;
 mod literal_category_roundtrip;
 mod locale_numfmt;
 mod malformed;

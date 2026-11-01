@@ -230,7 +230,10 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         .unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format })
+    let xf = sp.child("xfrm");
+    let flip_h = xf.is_some_and(|x| x.flag("flipH", false));
+    let flip_v = xf.is_some_and(|x| x.flag("flipV", false));
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, flip_h, flip_v })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -304,8 +307,15 @@ fn anchor_open(sheet: &Sheet, a: &Anchor) -> (String, &'static str) {
 }
 
 fn xfrm(a: &Anchor, tag: &str) -> String {
+    xfrm_flipped(a, tag, false, false)
+}
+
+/// `xfrm` with a shape's mirroring (`flipH`, `flipV`), which gives a line its direction.
+fn xfrm_flipped(a: &Anchor, tag: &str, flip_h: bool, flip_v: bool) -> String {
     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
-    format!("<{tag}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
+    let h = if flip_h { " flipH=\"1\"" } else { "" };
+    let v = if flip_v { " flipV=\"1\"" } else { "" };
+    format!("<{tag}{h}{v}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
 }
 
 pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
@@ -390,7 +400,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
                     id - 1,
                     if tx { " txBox=\"1\"" } else { "" },
-                    xfrm(&sh.anchor, "a:xfrm")
+                    xfrm_flipped(&sh.anchor, "a:xfrm", sh.flip_h, sh.flip_v)
                 );
                 if let Some(c) = srgb(&sh.fill, theme) {
                     let _ = write!(s, "<a:solidFill>{c}</a:solidFill>");
