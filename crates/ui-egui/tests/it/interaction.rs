@@ -981,6 +981,29 @@ fn solver_options_go_with_the_solve() {
 }
 
 #[test]
+fn solver_reset_all_resets_the_options() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let options = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "maxEvaluations": "7", "integerOptimality": "5", "randomSeed": "11", "requireBounds": false});
+    h.state_mut().open_dialog("solver", options);
+    h.run_steps(2);
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    for key in ["maxEvaluations", "integerOptimality", "randomSeed", "requireBounds"] {
+        assert_eq!(d.values.get(key), None, "{key}");
+    }
+    // Options shows the defaults again.
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.values.get("maxEvaluations"), d.values.get("randomSeed")), (Some(&json!("20000")), Some(&json!("0"))));
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
