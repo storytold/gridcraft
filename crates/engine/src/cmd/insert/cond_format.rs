@@ -1,7 +1,9 @@
 use super::{
-    Anchor, BorderLine, BorderStyle, Borders, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, Result, Session, Shape,
-    ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, BorderLine, BorderStyle, Borders, CellRef, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, RangeRef, Result,
+    Session, Shape, ShapeKind, Style, Underline, Workbook, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, split_sheet,
+    str_param, target_ranges, target_sheet, u32_param,
 };
+use crate::cf::icon_count;
 use gridcraft_model::{PatternType, Theme};
 
 // ---------------------------------------------------------------- conditional formatting
