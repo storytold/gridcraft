@@ -28,6 +28,9 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let mut removed = 0;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
+        if start <= r.end.row {
+            check_moving_arrays(sh, RangeRef::new(CellRef::new(start, r.start.col), r.end), false)?;
+        }
         let mut seen = std::collections::HashSet::new();
         let mut keep: Vec<u32> = Vec::new();
         // Cells are compared by the text they show, as in Excel: the same date in two formats
@@ -67,8 +70,19 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     .filter_map(move |col| sh.hyperlinks.get(&CellRef::new(*row, col)).map(|h| (CellRef::new(start + i as u32, col), h.clone())))
             })
             .collect();
+        // A kept row's one-row legacy arrays move up with it (check_moving_arrays refused the rest).
+        let moved = |row: u32, to: u32, c: u32| {
+            let mut cell = sh.cell(CellRef::new(row, c)).cloned()?;
+            if let Some(f) = cell.formula.as_mut()
+                && f.array.is_some()
+            {
+                let array = moved_array(f.array, to as i64 - row as i64, 0);
+                Arc::make_mut(f).array = array;
+            }
+            Some(cell)
+        };
         let rows: Vec<Vec<Option<Cell>>> =
-            keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
+            keep.iter().enumerate().map(|(i, row)| (r.start.col..=r.end.col).map(|c| moved(*row, start + i as u32, c)).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
         for row in start..=r.end.row {
             for c in r.start.col..=r.end.col {
@@ -98,6 +112,10 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         }
         for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
             cx.changed.push((sheet, c));
+        }
+        if removed > 0 {
+            // Rows moved up: like Sort, request a full recalculation.
+            cx.structural = true;
         }
         Ok(())
     })?;

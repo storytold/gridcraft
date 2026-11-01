@@ -95,6 +95,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         if sh.merges.iter().any(|m| m.intersects(&body) && !m.is_single()) {
             return Err(EngineError::Other("To do this, all the merged cells need to be the same size.".into()));
         }
+        check_moving_arrays(sh, body, by_cols)?;
         let n = if by_cols { body.width() } else { body.height() };
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
@@ -165,11 +166,19 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 let dst = line(dst_i as u32, k);
                 let mut cell = sh.cell(src).cloned();
                 if let Some(c) = cell.as_mut()
-                    && let Some(f) = &c.formula
-                    && let Some(e) = f.expr()
+                    && let Some(f) = c.formula.as_mut()
                 {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
-                    c.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                    let (dr, dc) = (dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
+                    if let Some(e) = f.expr() {
+                        let mut moved = Formula::from_expr(gridcraft_formula::adjust::shift_relative(e, dr, dc));
+                        moved.array = f.array;
+                        *f = Arc::new(moved);
+                    }
+                    // A legacy array keeps its Ctrl+Shift+Enter range, moved with its line.
+                    if f.array.is_some() {
+                        let array = moved_array(f.array, dr, dc);
+                        Arc::make_mut(f).array = array;
+                    }
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
