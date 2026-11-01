@@ -595,3 +595,39 @@ fn another_dialog_opened_while_picking_puts_the_selection_back() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goTo"));
     assert_eq!(selection(&h), (0, "B5".into()));
 }
+
+#[test]
+fn arrow_keys_with_shift_select_a_range_into_the_collapsed_box() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // Shift+arrow first: a plain-key match would take it as a move and lose the extension.
+    key(&mut h, Key::ArrowDown, Modifiers::SHIFT);
+    assert_eq!(selection(&h), (0, "B5:B6".into()));
+    assert_eq!(field(&h, "changing"), "$B$5:$B$6");
+    key(&mut h, Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(field(&h, "changing"), "$B$5:$C$6");
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$B$4", "an arrow without Shift moves the active cell");
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$A$4");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    // Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data: up from B4 (empty) to B2 (1).
+    key(&mut h, Key::ArrowUp, Modifiers::COMMAND);
+    assert_eq!(field(&h, "changing"), "$B$2");
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"), "the dialog stays collapsed");
+    // The box keeps the keyboard: typing still replaces the reference.
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "B3");
+    assert_eq!(field(&h, "changing"), "B3");
+    // Expanded, the arrows edit the box (they move its caret), not the selection.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None);
+    let changing = dialog_boxes(&h)[2];
+    click_at(&mut h, changing.center());
+    let before = selection(&h);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::ArrowLeft, Modifiers::SHIFT);
+    assert_eq!(selection(&h), before);
+    assert_eq!(field(&h, "changing"), "B3");
+}

@@ -130,20 +130,23 @@ fn selection_ref(app: &SheetApp, home: Option<&Home>, several: bool) -> String {
 
 /// Places the dialog's window before it is drawn, and returns the reference box the dialog is
 /// collapsed to. Escape or Enter expands a collapsed dialog again, rather than closing it or
-/// pressing OK. Collapsed, the dialog shrinks to the box where its top-left corner was, leaving
-/// the sheet free for selecting; expanded again, it comes back where it was.
+/// pressing OK, and the arrow keys select on the grid. Collapsed, the dialog shrinks to the box
+/// where its top-left corner was, leaving the sheet free for selecting; expanded again, it comes
+/// back where it was.
 pub(super) fn place_window<'a>(
-    app: &SheetApp,
+    app: &mut SheetApp,
     ctx: &egui::Context,
     d: &mut Dialog,
     window: egui::Window<'a>,
     window_id: egui::Id,
 ) -> (egui::Window<'a>, Option<String>) {
     follow_home(app, &mut d.refs);
-    if d.refs.collapsed.is_some()
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-    {
-        d.refs.collapsed = None;
+    if d.refs.collapsed.is_some() {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            d.refs.collapsed = None;
+        } else {
+            arrows_move_selection(app, ctx);
+        }
     }
     let collapsed = d.refs.collapsed.clone();
     if collapsed.is_none()
@@ -162,6 +165,43 @@ pub(super) fn place_window<'a>(
         _ => window,
     };
     (window, collapsed)
+}
+
+/// While the dialog is collapsed, the arrow keys move the selection on the grid, Shift+arrow
+/// extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, as they do with no
+/// dialog open: the box follows the selection as it does for the mouse. The keys are taken out
+/// of the frame's input before the box's text field reads them, so they don't move its caret
+/// instead; expanded, they edit the box.
+fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
+    use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
+    let mut moves = Vec::new();
+    ctx.input_mut(|i| {
+        i.events.retain(|e| match e {
+            egui::Event::Key { key: key @ (ArrowUp | ArrowDown | ArrowLeft | ArrowRight), pressed: true, modifiers, .. } => {
+                moves.push((*key, *modifiers));
+                false
+            }
+            _ => true,
+        });
+    });
+    if moves.is_empty() {
+        return;
+    }
+    // Arrows follow the screen: on a right-to-left sheet Left goes to the next column.
+    let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.right_to_left);
+    for (key, m) in moves {
+        let (dr, dc) = match key {
+            ArrowUp => (-1, 0),
+            ArrowDown => (1, 0),
+            ArrowLeft => (0, if rtl { 1 } else { -1 }),
+            _ => (0, if rtl { -1 } else { 1 }),
+        };
+        let from = app.session.active().map(|d| if m.shift { d.selection.moving_end() } else { d.selection.active });
+        let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": m.shift, "jump": m.command}));
+        app.grid.ensure_visible = true;
+        app.grid.reveal_moving_end = m.shift;
+        app.grid.reveal_from = from;
+    }
 }
 
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
