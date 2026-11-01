@@ -161,9 +161,18 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let border_line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
             let border_line_color_open = ui.data(|d| d.get_temp::<bool>(border_line_color_id)).unwrap_or(false);
             let border_line_color_forced = app.ui.keytip_invoke == Some("home.borderLineColor");
-            ui.data_mut(|d| d.insert_temp(border_line_color_id, border_line_color_open || border_line_color_forced));
+
+            ui.data_mut(|d| {
+                d.insert_temp(border_line_color_id, border_line_color_open || border_line_color_forced);
+            });
+
+            // Alt+H,B support (#2964)
+            let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
+            let keyed = keytip_table::opens_menu(&prefix, "home.borders");
+
             let border_keytip =
-                app.keytips.prefix().is_some_and(|prefix| prefix.starts_with("HB")) || border_line_color_open || border_line_color_forced;
+                keyed || app.keytips.prefix().is_some_and(|prefix| prefix.starts_with("HB")) || border_line_color_open || border_line_color_forced;
+
             egui::Popup::menu(&ba)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .open_memory(if border_keytip { Some(egui::SetOpenCommand::Bool(true)) } else { popup_command(false, ba.clicked()) })
@@ -184,29 +193,63 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                         ("Top and Double Bottom Border", "topDoubleBottom"),
                         ("Inside Borders", "inside"),
                     ] {
-                        if crate::border_preview::preset_button(ui, label, preset).clicked() {
+                        let item = crate::border_preview::preset_button(ui, label, preset);
+
+                        if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
+                            keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
+                        }
+
+                        if item.clicked() {
                             app.grid.last_border = preset.to_string();
-                            act(app, "home.borders", json!({"preset": preset, "color": app.grid.last_border_color.clone()}));
+                            act(
+                                app,
+                                "home.borders",
+                                json!({
+                                    "preset": preset,
+                                    "color": app.grid.last_border_color.clone()
+                                }),
+                            );
                         }
                     }
+
                     ui.separator();
+
                     let forced = invoke(app, "home.borderLineColor");
                     let (line_color, _) = egui::containers::menu::SubMenuButton::new("Line Color").ui(ui, |ui| {
                         if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme_colors(app), "Automatic") {
                             let c = if c == "none" { "auto".to_string() } else { c };
+
                             app.grid.last_border_color = c.clone();
-                            act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": c}));
+
+                            act(
+                                app,
+                                "home.borders",
+                                json!({
+                                    "preset": app.grid.last_border.clone(),
+                                    "color": c
+                                }),
+                            );
+
                             ui.close();
                         }
                     });
+
                     if forced {
                         let menu_id = egui::containers::menu::find_menu_root(ui).unique_id;
                         let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(line_color.id);
+
                         egui::containers::menu::MenuState::from_id(ui.ctx(), menu_id, |state| {
                             state.open_item = Some(submenu_id);
                         });
                     }
-                    if ui.button("More Borders…").clicked() {
+
+                    let more = ui.button("More Borders…");
+
+                    if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
+                        keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
+                    }
+
+                    if more.clicked() {
                         app.open_dialog("formatCells", json!({"tab": "Border"}));
                     }
                 });
@@ -493,7 +536,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
+            egui::Popup::menu(&sa).show(|ui| crate::function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -584,20 +627,6 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-}
-
-/// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
-/// Function dialog.
-pub(super) fn autosum_menu(app: &mut SheetApp, ui: &mut Ui) {
-    for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-        if ui.button(f).clicked() {
-            act(app, "formulas.autoSum", json!({"function": f}));
-        }
-    }
-    ui.separator();
-    if ui.button("More Functions…").clicked() {
-        app.open_dialog("insertFunction", json!({}));
-    }
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
