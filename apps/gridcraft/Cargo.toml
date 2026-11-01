@@ -30,7 +30,7 @@ winit = { version = "0.30", default-features = false, features = ["x11"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
 # Cargo.toml).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }
@@ -52,6 +52,10 @@ muda = { version = "0.21", default-features = false }
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
+# apple_events.rs brings the app forward for a Dock quit's question. Already in Cargo.lock (muda,
+# winit); pinned exactly to the same versions.
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
 # pinned exactly to the same versions.

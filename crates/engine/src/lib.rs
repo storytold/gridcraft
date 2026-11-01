@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod recent;
 pub mod record;
 pub mod sample;
 pub mod selection;
@@ -390,6 +391,10 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+    /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
+    #[serde(deserialize_with = "recent::lenient")]
+    pub recent_functions: Vec<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -424,6 +429,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            recent_functions: recent::defaults(),
         }
     }
 }
@@ -558,6 +564,17 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
+    /// The warning an edit of `at` on `sheet` gets from sheet protection, or `None` when the edit
+    /// is allowed. Front ends ask before opening an editor, so typing into a locked cell never
+    /// leaves a draft that can't be entered (and so blocks saving).
+    pub fn locked_cell_message(&self, sheet: usize, at: CellRef) -> Option<String> {
+        let d = self.active()?;
+        let sh = d.wb.sheet(sheet)?;
+        if !sh.is_protected() || !d.wb.styles.get(sh.style_id(at)).protection.locked {
+            return None;
+        }
+        cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
+    }
     /// Opens a workbook in a new window, which becomes the active one.
     pub fn add_document(&mut self, d: DocState) -> usize {
         let uid = d.uid;
@@ -587,6 +604,7 @@ impl Session {
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        wb.props.author = self.prefs.user_name.clone();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
@@ -789,6 +807,7 @@ impl Session {
             }
             if self.journal_paused == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
+                recent::note(&mut self.prefs.recent_functions, id, &params);
             }
         }
         // Inside an undo group the group owns the step. A command that ended a group open before

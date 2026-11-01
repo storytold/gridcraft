@@ -332,6 +332,43 @@ fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
 }
 
 #[test]
+fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
+    // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
+    // at the whole column of data, as the same keys select it outside an edit.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1:B5", "values": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "D1"})).unwrap();
+    let mut h = harness(s);
+    text(&mut h, "=COUNTIF(");
+    click_cell(&mut h, "A1");
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1"));
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND | Modifiers::SHIFT));
+    key(&mut h, Key::ArrowDown, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1:A5"), "Ctrl+Shift+Down extends to the last filled cell");
+    key(&mut h, Key::ArrowRight, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A1:B5"), "Ctrl+Shift+Right extends the moving end across the data");
+    key(&mut h, Key::ArrowDown, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(A:B"), "past the data, Ctrl+Shift+Down reaches the sheet edge (written as whole columns)");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    key(&mut h, Key::ArrowUp, Modifiers::COMMAND);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B5"), "Ctrl+Up without Shift points at the next filled cell");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B4"), "a plain arrow still moves one cell");
+    // An automation tool (osascript `key code`) presses and releases within one frame, so by the
+    // time the frame runs `i.modifiers` is already empty: the modifiers that count are the ones on
+    // the press event.
+    h.input_mut().events.extend([
+        Event::Key { key: Key::ArrowUp, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND },
+        Event::ModifiersChanged(Modifiers::NONE),
+        Event::Key { key: Key::ArrowUp, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(2);
+    assert_eq!(edited(&h).as_deref(), Some("=COUNTIF(B1"), "Command released in the same frame as the press still jumps");
+}
+
+#[test]
 fn shortcuts_format_and_extend() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
