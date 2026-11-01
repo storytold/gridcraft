@@ -1923,6 +1923,26 @@ fn offset_extreme_arguments_return_ref() {
 }
 
 #[test]
+fn power_operator_takes_odd_roots_of_negative_numbers() {
+    let mut t = T::new();
+    t.set("A1", "-8");
+    t.set("B1", "=A1^(1/3)");
+    t.set("B2", "=(A1/1)^(1/3)-1");
+    t.set("B3", "=A1^(2/3)");
+    t.set("B4", "=A1^(1/2)");
+    t.set("B5", "=A1^-(1/3)");
+    t.set("B6", "=0^-1");
+    t.set("B7", "=0^0");
+    assert_eq!(t.num("B1"), -2.0);
+    assert_eq!(t.num("B2"), -3.0);
+    assert_eq!(t.get("B3"), Value::Error(CellError::Num));
+    assert_eq!(t.get("B4"), Value::Error(CellError::Num));
+    assert_eq!(t.num("B5"), -0.5);
+    assert_eq!(t.get("B6"), Value::Error(CellError::Div0));
+    assert_eq!(t.get("B7"), Value::Error(CellError::Num));
+}
+
+#[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
     // than one cell, however the reference is formed, and lift array constants and computed arrays.
