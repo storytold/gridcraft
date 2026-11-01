@@ -31,7 +31,7 @@ const MAX_BINS: usize = 100_000;
 const MAX_FOURIER: usize = 4096;
 /// Most numbers Random Number Generation or Sampling writes in one run.
 const MAX_RANDOM: usize = 1_000_000;
-/// Most outcomes tabulated for binomial and Poisson draws (trials, or the Poisson tail).
+/// Most trials of a binomial draw, and the farthest Poisson outcome considered.
 const MAX_OUTCOMES: f64 = 1_000_000.0;
 /// Largest seed: seeds are whole numbers that a JSON number holds exactly.
 const MAX_SEED: u64 = (1 << 53) - 1;
@@ -1499,28 +1499,77 @@ fn probability(p: &Json) -> Result<f64> {
     }
 }
 
-/// The cumulative distribution of a distribution on 0, 1, 2 … `last`, from its probabilities
-/// (BINOM.DIST or POISSON.DIST), ending once it reaches 1.
-fn cdf_table(last: f64, pmf: impl Fn(f64) -> f64) -> Vec<f64> {
-    let mut cdf = Vec::new();
-    let mut acc = 0.0;
-    let mut k = 0.0;
-    while k <= last {
-        acc += pmf(k);
-        cdf.push(acc);
-        if acc >= 1.0 - 1e-15 {
+/// The probabilities of a distribution on 0, 1, 2 … `last`, as (first outcome, probabilities of
+/// first, first + 1, …), from its probability `at_mode` at `mode`, its most likely outcome, and
+/// `ratio`(k) = pmf(k + 1) / pmf(k). Each term is one multiplication of its neighbour towards the
+/// mode, so no worksheet function runs per outcome, and the terms only shrink away from the mode,
+/// so nothing underflows before the terms that matter. The left tail ends where its terms vanish,
+/// the right tail once the cumulative probability reaches 1 within f64 resolution (every later
+/// draw would map to the last outcome). The table is as wide as the distribution's effective
+/// support, not as `last`: Binomial(1,000,000, 0.5) takes about 23,000 entries, not 1,000,001.
+fn pmf_table(last: f64, mode: f64, at_mode: f64, ratio: impl Fn(f64) -> f64) -> Result<(f64, Vec<f64>)> {
+    if !at_mode.is_finite() || at_mode <= 0.0 || !(0.0..=last).contains(&mode) || mode.fract() != 0.0 {
+        return Err(EngineError::Other("The distribution could not be tabulated.".into()));
+    }
+    let mut left = Vec::new();
+    let (mut k, mut v) = (mode, at_mode);
+    while k > 0.0 {
+        v /= ratio(k - 1.0);
+        if v.is_nan() || v < f64::MIN_POSITIVE {
             break;
         }
+        left.push(v);
+        k -= 1.0;
+    }
+    let first = k;
+    let mut pmf: Vec<f64> = left.into_iter().rev().collect();
+    let mut acc = pmf.iter().sum::<f64>() + at_mode;
+    pmf.push(at_mode);
+    let (mut k, mut v) = (mode, at_mode);
+    while k < last && acc < 1.0 - 1e-15 {
+        v *= ratio(k);
+        if v.is_nan() || v < f64::MIN_POSITIVE {
+            break;
+        }
+        pmf.push(v);
+        acc += v;
         k += 1.0;
     }
-    cdf
+    Ok((first, pmf))
 }
 
-/// A draw from a tabulated distribution: the first outcome whose cumulative probability exceeds
-/// a uniform number (inversion).
-fn draw_table(cdf: &[f64], r: &mut Rng) -> f64 {
-    let u = r.uniform() * cdf.last().copied().unwrap_or(1.0);
-    cdf.partition_point(|c| *c <= u).min(cdf.len().saturating_sub(1)) as f64
+/// A distribution on whole numbers tabulated for inversion sampling: the cumulative
+/// probabilities of `first`, `first + 1`, … up to the last outcome that matters.
+struct Table {
+    first: f64,
+    cdf: Vec<f64>,
+}
+
+impl Table {
+    /// The distribution on 0, 1, 2 … `last` that `pmf_table` describes.
+    fn from_mode(last: f64, mode: f64, at_mode: f64, ratio: impl Fn(f64) -> f64) -> Result<Table> {
+        let (first, pmf) = pmf_table(last, mode, at_mode, ratio)?;
+        let mut acc = 0.0;
+        let cdf = pmf
+            .into_iter()
+            .map(|p| {
+                acc += p;
+                acc
+            })
+            .collect();
+        Ok(Table { first, cdf })
+    }
+
+    /// All the probability on one outcome.
+    fn point(value: f64) -> Table {
+        Table { first: value, cdf: vec![1.0] }
+    }
+
+    /// A draw: the first outcome whose cumulative probability exceeds a uniform number (inversion).
+    fn draw(&self, r: &mut Rng) -> f64 {
+        let u = r.uniform() * self.cdf.last().copied().unwrap_or(1.0);
+        self.first + self.cdf.partition_point(|c| *c <= u).min(self.cdf.len().saturating_sub(1)) as f64
+    }
 }
 
 /// The numbers of a patterned sequence: `from` to `to` in steps, each number repeated, the whole
@@ -1586,17 +1635,31 @@ fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
             if n > MAX_OUTCOMES {
                 return Err(EngineError::Other(format!("The number of trials must be at most {MAX_OUTCOMES}.")));
             }
-            let cdf = cdf_table(n, |k| f64_of(&call("BINOM.DIST", &[Value::Number(k), Value::Number(n), Value::Number(pr), Value::Bool(false)])));
-            Box::new(move |r| draw_table(&cdf, r))
+            // p = 0 and p = 1 are exact: every draw is 0 or n. Otherwise one BINOM.DIST value at
+            // the mode ⌊(n + 1)p⌋ anchors pmf(k + 1) = pmf(k) · (n − k)/(k + 1) · p/(1 − p).
+            let table = if pr == 0.0 {
+                Table::point(0.0)
+            } else if pr == 1.0 {
+                Table::point(n)
+            } else {
+                let mode = ((n + 1.0) * pr).floor().min(n);
+                let at_mode = f64_of(&call("BINOM.DIST", &[Value::Number(mode), Value::Number(n), Value::Number(pr), Value::Bool(false)]));
+                let odds = pr / (1.0 - pr);
+                Table::from_mode(n, mode, at_mode, |k| (n - k) / (k + 1.0) * odds)?
+            };
+            Box::new(move |r| table.draw(r))
         }
         "poisson" => {
             let lambda = num_or(p, "lambda", 1.0)?;
             if lambda <= 0.0 || lambda > 100_000.0 {
                 return Err(EngineError::Other("Lambda must be greater than 0 and at most 100000.".into()));
             }
+            // One POISSON.DIST value at the mode ⌊λ⌋ anchors pmf(k + 1) = pmf(k) · λ/(k + 1).
             let last = (lambda + 40.0 * lambda.sqrt() + 100.0).min(MAX_OUTCOMES);
-            let cdf = cdf_table(last, |k| f64_of(&call("POISSON.DIST", &[Value::Number(k), Value::Number(lambda), Value::Bool(false)])));
-            Box::new(move |r| draw_table(&cdf, r))
+            let mode = lambda.floor();
+            let at_mode = f64_of(&call("POISSON.DIST", &[Value::Number(mode), Value::Number(lambda), Value::Bool(false)]));
+            let table = Table::from_mode(last, mode, at_mode, |k| lambda / (k + 1.0))?;
+            Box::new(move |r| table.draw(r))
         }
         "discrete" => {
             let (si, r) = input_range(s, p, &["valueRange", "values"])?;
@@ -1618,7 +1681,8 @@ fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
                     Some(*acc)
                 })
                 .collect();
-            Box::new(move |r| values.get(draw_table(&cdf, r) as usize).copied().unwrap_or(f64::NAN))
+            let table = Table { first: 0.0, cdf };
+            Box::new(move |r| values.get(table.draw(r) as usize).copied().unwrap_or(f64::NAN))
         }
         other => return Err(bad(CMD, format!("unknown distribution `{other}`"))),
     };
@@ -1822,6 +1886,7 @@ mod tests {
     use gridcraft_core::{CellRef, Value};
     use serde_json::{Value as Json, json};
 
+    use super::{MAX_OUTCOMES, call, f64_of, pmf_table};
     use crate::Session;
 
     fn s() -> Session {
@@ -2291,6 +2356,84 @@ mod tests {
         let p =
             json!({"tool": "randomNumberGeneration", "count": 1, "distribution": "discrete", "valueRange": "Sheet1!A1:B2", "output": "Sheet1!H1"});
         assert!(s.execute("data.analysisToolPak", p).is_err(), "probabilities must add up to 1");
+    }
+
+    #[test]
+    fn binomial_and_poisson_tables_agree_with_the_worksheet_functions() {
+        // The recurrence outward from the mode reproduces BINOM.DIST and POISSON.DIST at every
+        // tabulated outcome, the table carries the whole distribution, and it is only as wide as
+        // the outcomes that matter. The worksheet functions themselves are accurate to about
+        // n · ε for n trials (their logarithms are of that size), hence the moderate n and λ.
+        let binom = |k: f64, n: f64, p: f64| f64_of(&call("BINOM.DIST", &[Value::Number(k), Value::Number(n), Value::Number(p), Value::Bool(false)]));
+        for (n, p) in [(20.0f64, 0.3f64), (100.0, 0.5), (50.0, 0.9), (30.0, 0.01), (7.0, 0.999), (1.0, 0.5)] {
+            let mode = ((n + 1.0) * p).floor().min(n);
+            let odds = p / (1.0 - p);
+            let (first, pmf) = pmf_table(n, mode, binom(mode, n, p), |k| (n - k) / (k + 1.0) * odds).unwrap();
+            assert!(first >= 0.0 && first + pmf.len() as f64 - 1.0 <= n, "n={n} p={p}: {first} + {}", pmf.len());
+            for (i, got) in pmf.iter().enumerate() {
+                let k = first + i as f64;
+                let want = binom(k, n, p);
+                assert!(((got - want) / want).abs() < 1e-12, "n={n} p={p} k={k}: {got} vs {want}");
+            }
+            assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-12, "n={n} p={p}");
+        }
+        let poisson = |k: f64, lambda: f64| f64_of(&call("POISSON.DIST", &[Value::Number(k), Value::Number(lambda), Value::Bool(false)]));
+        for lambda in [0.2f64, 3.5, 50.0] {
+            let mode = lambda.floor();
+            let (first, pmf) = pmf_table(MAX_OUTCOMES, mode, poisson(mode, lambda), |k| lambda / (k + 1.0)).unwrap();
+            assert_eq!(first, 0.0);
+            for (i, got) in pmf.iter().enumerate() {
+                let want = poisson(i as f64, lambda);
+                assert!(((got - want) / want).abs() < 1e-12, "lambda={lambda} k={i}: {got} vs {want}");
+            }
+            assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-12, "lambda={lambda}");
+        }
+        // Binomial(1e6, 0.5): standard deviation 500, so the terms vanish within about 38
+        // standard deviations below the mode and the sum reaches 1 within about 8 above it:
+        // roughly 23,000 entries starting near 481,000, not 1,000,001 starting at 0.
+        let (n, p) = (1_000_000.0, 0.5);
+        let (first, pmf) = pmf_table(n, 500_000.0, binom(500_000.0, n, p), |k| (n - k) / (k + 1.0)).unwrap();
+        assert!((470_000.0..=490_000.0).contains(&first) && pmf.len() < 40_000, "{first} + {}", pmf.len());
+        // The anchor BINOM.DIST(500000, 1e6, 0.5) carries that function's error of about n · ε
+        // (its logarithms are near 7e5), which scales the whole table; draws divide by the total.
+        assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-8);
+        // A bad anchor or mode is refused rather than tabulated.
+        assert!(pmf_table(10.0, 5.0, f64::NAN, |_| 1.0).is_err());
+        assert!(pmf_table(10.0, 5.0, 0.0, |_| 1.0).is_err());
+        assert!(pmf_table(10.0, 11.0, 0.5, |_| 1.0).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn binomial_and_poisson_draws_at_the_limits_are_tabulated_quickly() {
+        let mut s = s();
+        // The tables cover the outcomes around the mode, not every one of the 1,000,001 for a
+        // million trials, so the largest inputs cost milliseconds. Binomial(1e6, 0.5) has mean
+        // 500000 and standard deviation 500: 1000 draws put the sample mean within 500/√1000 ≈ 16
+        // of it, so 100 is six standard errors. Poisson(1e5) has mean 1e5 and standard deviation
+        // 316: 1000 draws put the mean within 10, so 60 is six standard errors. With p = 1 every
+        // draw is exactly 1e6, with p = 0 exactly 0.
+        let mut draw = |sheet: &str, dist: Json| {
+            let mut dist = dist;
+            dist["tool"] = json!("randomNumberGeneration");
+            dist["count"] = json!(1000);
+            dist["seed"] = json!(3);
+            dist["newSheet"] = json!(sheet);
+            s.execute("data.analysisToolPak", dist).unwrap();
+        };
+        let start = std::time::Instant::now();
+        draw("Half", json!({"distribution": "binomial", "p": 0.5, "trials": 1_000_000}));
+        draw("Sure", json!({"distribution": "binomial", "p": 1, "trials": 1_000_000}));
+        draw("Never", json!({"distribution": "binomial", "p": 0, "trials": 1_000_000}));
+        draw("Pois", json!({"distribution": "poisson", "lambda": 100_000}));
+        let elapsed = start.elapsed();
+        let (m, _) = mean_var(&numbers_of(&s, "Half", "A", 1000));
+        assert!((m - 500_000.0).abs() < 100.0, "{m}");
+        assert!(numbers_of(&s, "Sure", "A", 1000).iter().all(|v| *v == 1_000_000.0));
+        assert!(numbers_of(&s, "Never", "A", 1000).iter().all(|v| *v == 0.0));
+        let (m, _) = mean_var(&numbers_of(&s, "Pois", "A", 1000));
+        assert!((m - 100_000.0).abs() < 60.0, "{m}");
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
     }
 
     #[test]
