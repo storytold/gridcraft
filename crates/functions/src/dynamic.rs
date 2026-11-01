@@ -1122,6 +1122,21 @@ mod tests {
         is_err(ev("SORTBY", vec![av(col(&[1.0, 2.0])), av(col(&[1.0, 2.0])), n(0.0)]), CellError::Value);
     }
 
+    /// SORT and SORTBY order numbers exactly, not at 15 digits (observed in Excel 365).
+    #[test]
+    fn sort_orders_numbers_exactly() {
+        for (t, e) in [(0.3, 0.1 + 0.2), (100.0, 100.0 + 1e-14), (3.3, 1.1 * 3.0)] {
+            for input in [[e, t], [t, e]] {
+                let asc = vec![vec![nv(t)], vec![nv(e)]];
+                let desc = vec![vec![nv(e)], vec![nv(t)]];
+                assert_eq!(rows_of(&ev("SORT", vec![av(col(&input))])), asc);
+                assert_eq!(rows_of(&ev("SORT", vec![av(col(&input)), n(1.0), n(-1.0)])), desc);
+                assert_eq!(rows_of(&ev("SORTBY", vec![av(col(&input)), av(col(&input))])), asc);
+                assert_eq!(rows_of(&ev("SORTBY", vec![av(col(&input)), av(col(&input)), n(-1.0)])), desc);
+            }
+        }
+    }
+
     #[test]
     fn unique_keeps_rows_containing_separator_apart() {
         let m = arr(vec![vec![tv("a"), tv("b\u{1}tc")], vec![tv("a\u{1}tb"), tv("c")]]);

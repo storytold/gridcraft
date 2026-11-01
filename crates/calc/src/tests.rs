@@ -1903,6 +1903,65 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// Sorting and ranking compare numbers exactly while `=` and COUNTIF compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004): 0.3 sorts first whatever the input order.
+#[test]
+fn sorts_and_ranks_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        // The noisy value first, then the exact one first.
+        ("A1", "=0.1+0.2"),
+        ("B1", "e"),
+        ("A2", "0.3"),
+        ("B2", "t"),
+        ("D1", "0.3"),
+        ("E1", "t"),
+        ("D2", "=0.1+0.2"),
+        ("E2", "e"),
+        ("G1", "=100+1E-14"),
+        ("H1", "e"),
+        ("G2", "100"),
+        ("H2", "t"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let cases: Vec<(&str, Value)> = vec![
+        ("=A1=A2", Value::Bool(true)),
+        ("=COUNTIF(A1:A2,0.3)", n(2.0)),
+        ("=INDEX(SORT(A1:B2),1,2)", s("t")),
+        ("=INDEX(SORT(D1:E2),1,2)", s("t")),
+        ("=INDEX(SORT(A1:B2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(D1:E2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(G1:H2),1,2)", s("t")),
+        ("=INDEX(SORT(G1:H2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2),1,1)", s("t")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2),1,1)", s("t")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2,-1),1,1)", s("e")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2,-1),1,1)", s("e")),
+        // Already exact: UNIQUE, RANK, LARGE/SMALL, MODE.
+        ("=ROWS(UNIQUE(A1:A2))", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2,1)", n(1.0)),
+        ("=RANK.AVG(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1)", Value::Error(CellError::NA)),
+        ("=LARGE(A1:A2,1)", n(e)),
+        ("=SMALL(A1:A2,1)", n(0.3)),
+        ("=MODE.SNGL(A1:A2,5)", Value::Error(CellError::NA)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
