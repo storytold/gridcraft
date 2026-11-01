@@ -58,12 +58,35 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     let locale = language.formula_locale();
     // The names and descriptions searched are the ones shown, so in the interface language.
     let q = locale.lowercase(d.search.trim());
+    let tr_fold = |s: &str| -> String {
+        s.chars()
+            .map(|c| match c {
+                'i' | 'İ' | 'ı' | 'I' => 'i',
+                'ç' | 'Ç' => 'ç',
+                'ğ' | 'Ğ' => 'ğ',
+                'ö' | 'Ö' => 'ö',
+                'ş' | 'Ş' => 'ş',
+                'ü' | 'Ü' => 'ü',
+                other => other.to_ascii_lowercase(),
+            })
+            .collect()
+    };
+    let q_tr = tr_fold(d.search.trim());
     let matches = |f: &lib::FnEntry| {
-        q.is_empty()
-            || locale.lowercase(locale.function_name(&f.name)).contains(&q)
-            || f.name.to_lowercase().contains(&q)
-            || locale.lowercase(language.function_description(&f.description).unwrap_or(&f.description)).contains(&q)
-            || f.description.to_lowercase().contains(&q)
+        if q.is_empty() {
+            return true;
+        }
+        if locale == gridcraft_engine::formula::FormulaLocale::Tr {
+            tr_fold(locale.function_name(&f.name)).contains(&q_tr)
+                || tr_fold(&f.name).contains(&q_tr)
+                || tr_fold(language.function_description(&f.description).unwrap_or(&f.description)).contains(&q_tr)
+                || tr_fold(&f.description).contains(&q_tr)
+        } else {
+            locale.lowercase(locale.function_name(&f.name)).contains(&q)
+                || f.name.to_lowercase().contains(&q)
+                || locale.lowercase(language.function_description(&f.description).unwrap_or(&f.description)).contains(&q)
+                || f.description.to_lowercase().contains(&q)
+        }
     };
     let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
         lib::recent(app).iter().filter_map(|n| lib::find(n)).filter(|f| matches(f)).collect()

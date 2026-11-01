@@ -1,4 +1,5 @@
 //! Language selection must affect UI entry, never the canonical engine/file boundary.
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{
     Session,
     core::{CellError, CellRef, Value},
@@ -326,4 +327,38 @@ fn turkish_error_messages_and_error_codes_localized() {
     assert_eq!(app.ui.language.tr("Spill range is not empty"), "Taşma aralığı boş değil, formülün yayılacağı hücreleri temizleyin.");
     assert_eq!(app.ui.language.tr("The name you entered is not valid."), "Girdiğiniz ad geçerli değil.");
     assert_eq!(app.ui.language.tr("Reference is not valid."), "Başvuru geçerli değil.");
+}
+
+#[test]
+fn insert_function_search_in_turkish_locale_matches_casing_and_dotless_i() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
+    assert_eq!(app.ui.language, Language::Tr);
+
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 700.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.state_mut().run("formulas.insertFunction", json!({})).unwrap();
+    h.run_steps(2);
+
+    // 1. Search with dotless "mın" matches "MİN"
+    h.state_mut().dialog.as_mut().unwrap().search = "mın".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("MİN (İstatistiksel)").is_some(), "MİN should be found when searching 'mın'");
+
+    // 2. Search with ASCII "sirala" matches "SIRALA" (SORT)
+    h.state_mut().dialog.as_mut().unwrap().search = "sirala".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("SIRALA (Arama ve Başvuru)").is_some(), "SIRALA should be found when searching 'sirala'");
+
+    // 3. Search with dotless "ındex" matches "İNDİS" (INDEX)
+    h.state_mut().dialog.as_mut().unwrap().search = "ındex".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("İNDİS (Arama ve Başvuru)").is_some(), "İNDİS should be found when searching 'ındex'");
 }
