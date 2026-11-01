@@ -32,6 +32,7 @@ web-time = { workspace = true }
 zbus = "=5.19.0"
 
 [dev-dependencies]
+sha2 = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 epaint_default_fonts = { workspace = true }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
