@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use gridcraft_model::CellPicture;
+use gridcraft_model::{CellPicture, LinkedField, LinkedRecord};
 
 use crate::IoError;
 use crate::package::{Rel, normalize};
 use crate::read::Ctx;
 use crate::write::{NS_MAIN, NS_REL, Out, Rels, XML_DECL};
-use crate::xml::{self, El, esc};
+use crate::xml::{self, El, esc, esc_attr};
 
 const NS_RICH: &str = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata";
 const NS_IMAGE_REL: &str = "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel";
@@ -133,15 +133,24 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
         return Ok(vec![]);
     };
     rels.extend(cx.pkg.rels(&data_path)?);
-    let (Some(structure_path), Some(image_rels_path)) = (part(cx, &rels, "rdRichValueStructure"), part(cx, &rels, "richValueRel")) else {
+    let image_rels_path = part(cx, &rels, "richValueRel");
+    let Some(structure_path) = part(cx, &rels, "rdRichValueStructure") else {
+        cx.warn("missing rich-value structure or image relationships; cell pictures were not loaded");
+        return Ok(vec![]);
+    };
+    let Some(structures) = read_xml(cx, &structure_path, "rvStructures")? else { return Ok(vec![]) };
+    let structures = entries(cx, &structures, "s")?;
+    // A workbook with only linked data type records has no image relationships.
+    if image_rels_path.is_none() && structures.iter().any(|s| is_linked(s)) && !structures.iter().any(|s| s.attr("t") == Some("_localImage")) {
+        return Ok(vec![]);
+    }
+    let Some(image_rels_path) = image_rels_path else {
         cx.warn("missing rich-value structure or image relationships; cell pictures were not loaded");
         return Ok(vec![]);
     };
     let Some(data) = read_xml(cx, &data_path, "rvData")? else { return Ok(vec![]) };
-    let Some(structures) = read_xml(cx, &structure_path, "rvStructures")? else { return Ok(vec![]) };
     let Some(image_rel_list) = read_xml(cx, &image_rels_path, "richValueRels")? else { return Ok(vec![]) };
     let image_rels = cx.pkg.rels(&image_rels_path)?;
-    let structures = entries(cx, &structures, "s")?;
     let image_rel_list = entries(cx, &image_rel_list, "rel")?;
     let values = entries(cx, &data, "rv")?;
     let mut pictures = Vec::with_capacity(values.len());
@@ -149,7 +158,8 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
     let mut total = 0usize;
     for value in values {
         let picture = read_value(cx, value, &structures, &image_rel_list, &image_rels, &mut cache, &mut total)?;
-        if picture.is_none() {
+        let linked = value.attr_u32("s").and_then(|n| structures.get(n as usize)).is_some_and(|s| is_linked(s));
+        if picture.is_none() && !linked {
             cx.warn("some rich values are unsupported or malformed; their scalar fallbacks were retained (cell pictures may be missing)");
         }
         pictures.push(picture);
@@ -158,6 +168,12 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
         cx.warn("missing XLRICHVALUE future metadata; cell pictures were not loaded");
         return Ok(vec![]);
     };
+    let indices = block_indices(cx, &metadata, type_id, future)?;
+    Ok(indices.into_iter().map(|index| index.and_then(|n| pictures.get(n)).cloned().flatten()).collect())
+}
+
+/// The rich-value index of each value-metadata block (the worksheet's one-based `vm`).
+fn block_indices(cx: &mut Ctx<'_>, metadata: &El, type_id: usize, future: &El) -> Result<Vec<Option<usize>>, IoError> {
     let future: Vec<_> = entries(cx, future, "bk")?
         .into_iter()
         .map(|block| {
@@ -181,11 +197,80 @@ pub fn read(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<Ce
                 .and_then(|n| future.get(n as usize))
                 .copied()
                 .flatten()
-                .and_then(|n| pictures.get(n))
-                .cloned()
-                .flatten()
         })
         .collect())
+}
+
+fn is_linked(structure: &El) -> bool {
+    matches!(structure.attr("t"), Some("_linkedentity" | "_linkedentitycore"))
+}
+
+/// Linked data type records (Excel's Stocks, Currencies…) by the worksheet's one-based `vm`
+/// block. Fields of a type other than number, text or boolean (icons, hyperlinks, format bags)
+/// are not kept.
+pub fn read_linked(cx: &mut Ctx<'_>, workbook_rels: &[Rel]) -> Result<Vec<Option<Arc<LinkedRecord>>>, IoError> {
+    let Some(metadata_path) = part(cx, workbook_rels, "sheetMetadata") else { return Ok(vec![]) };
+    let mut rels = workbook_rels.to_vec();
+    rels.extend(cx.pkg.rels(&metadata_path)?);
+    let Some(data_path) = part(cx, &rels, "rdRichValue") else { return Ok(vec![]) };
+    rels.extend(cx.pkg.rels(&data_path)?);
+    let Some(structure_path) = part(cx, &rels, "rdRichValueStructure") else { return Ok(vec![]) };
+    let Some(structures) = read_xml(cx, &structure_path, "rvStructures")? else { return Ok(vec![]) };
+    let structures = entries(cx, &structures, "s")?;
+    if !structures.iter().any(|s| is_linked(s)) {
+        return Ok(vec![]);
+    }
+    let Some(metadata) = read_xml(cx, &metadata_path, "metadata")? else { return Ok(vec![]) };
+    let Some(types) = metadata.child("metadataTypes") else { return Ok(vec![]) };
+    let types = entries(cx, types, "metadataType")?;
+    let Some(type_id) = types.iter().position(|el| el.attr("name") == Some("XLRICHVALUE")).map(|n| n + 1) else { return Ok(vec![]) };
+    let Some(future) = metadata.kids("futureMetadata").find(|el| el.attr("name") == Some("XLRICHVALUE")) else { return Ok(vec![]) };
+    let Some(data) = read_xml(cx, &data_path, "rvData")? else { return Ok(vec![]) };
+    let values = entries(cx, &data, "rv")?;
+    let cores: Vec<Option<Arc<LinkedRecord>>> = values
+        .iter()
+        .map(|value| {
+            let structure = value.attr_u32("s").and_then(|n| structures.get(n as usize))?;
+            if structure.attr("t") == Some("_linkedentitycore") { linked_core(structure, value).map(Arc::new) } else { None }
+        })
+        .collect();
+    let resolved: Vec<Option<Arc<LinkedRecord>>> = values
+        .iter()
+        .zip(&cores)
+        .map(|(value, core)| {
+            let structure = value.attr_u32("s").and_then(|n| structures.get(n as usize))?;
+            match structure.attr("t") {
+                Some("_linkedentitycore") => core.clone(),
+                // The wrapper's `%cvi` points at the rich value holding the record.
+                Some("_linkedentity") => {
+                    let at = structure.kids("k").position(|k| k.attr("n") == Some("%cvi"))?;
+                    let n = value.kids("v").nth(at)?.text.trim().parse::<usize>().ok()?;
+                    cores.get(n).cloned().flatten()
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    let indices = block_indices(cx, &metadata, type_id, future)?;
+    let blocks = indices.into_iter().map(|index| index.and_then(|n| resolved.get(n)).cloned().flatten()).collect();
+    Ok(blocks)
+}
+
+fn linked_core(structure: &El, value: &El) -> Option<LinkedRecord> {
+    let keys: Vec<_> = structure.kids("k").collect();
+    let values: Vec<_> = value.kids("v").collect();
+    if keys.len() != values.len() {
+        return None;
+    }
+    let mut fields = Vec::new();
+    for (key, value) in keys.iter().zip(&values) {
+        let (Some(name), Some(kind)) = (key.attr("n"), key.attr("t")) else { continue };
+        if matches!(kind, "d" | "i" | "s" | "b") {
+            fields.push(LinkedField { name: name.to_string(), kind: kind.to_string(), value: value.text.clone() });
+        }
+    }
+    let display = fields.iter().find(|f| f.name == "_DisplayString" && f.kind == "s").map(|f| f.value.clone()).unwrap_or_default();
+    Some(LinkedRecord { display, fields })
 }
 
 fn read_value(
@@ -254,59 +339,118 @@ fn read_value(
     Ok(Some(picture))
 }
 
+enum Item {
+    Picture(Arc<CellPicture>),
+    Linked(Arc<LinkedRecord>),
+}
+
 /// One rich value per shared model payload; copied cells can reuse a metadata block.
 #[derive(Default)]
 pub struct PicturesOut {
-    pictures: Vec<Arc<CellPicture>>,
-    indices: HashMap<*const CellPicture, u32>,
+    items: Vec<Item>,
+    indices: HashMap<*const (), u32>,
 }
 
 impl PicturesOut {
     pub fn is_empty(&self) -> bool {
-        self.pictures.is_empty()
+        self.items.is_empty()
     }
     pub fn index(&mut self, picture: &Arc<CellPicture>) -> u32 {
-        let key = Arc::as_ptr(picture);
+        self.push(Arc::as_ptr(picture).cast(), Item::Picture(picture.clone()))
+    }
+    pub fn index_linked(&mut self, record: &Arc<LinkedRecord>) -> u32 {
+        self.push(Arc::as_ptr(record).cast(), Item::Linked(record.clone()))
+    }
+    fn push(&mut self, key: *const (), item: Item) -> u32 {
         if let Some(index) = self.indices.get(&key) {
             return *index;
         }
-        let index = self.pictures.len().saturating_add(1) as u32;
-        self.pictures.push(picture.clone());
+        let index = self.items.len().saturating_add(1) as u32;
+        self.items.push(item);
         self.indices.insert(key, index);
         index
     }
 }
 
+/// The structure element for a linked record's fields.
+fn core_structure(record: &LinkedRecord) -> String {
+    let mut xml = String::from("<s t=\"_linkedentitycore\">");
+    for field in &record.fields {
+        let _ = write!(xml, "<k n=\"{}\" t=\"{}\"/>", esc_attr(&field.name), esc_attr(&field.kind));
+    }
+    xml.push_str("</s>");
+    xml
+}
+
 pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
-    let pictures = std::mem::take(&mut out.cell_pictures).pictures;
-    if pictures.len() > MAX_RECORDS {
+    let items = std::mem::take(&mut out.cell_pictures).items;
+    // A linked record emits two `rv` elements (its core and its wrapper), so count what is written.
+    let emitted = items.iter().fold(0usize, |n, item| n.saturating_add(if matches!(item, Item::Linked(_)) { 2 } else { 1 }));
+    if emitted > MAX_RECORDS {
         return Err(IoError::TooLarge("too many cell pictures".into()));
     }
-    let count = pictures.len();
-    let mut data = format!("{XML_DECL}<rvData xmlns=\"{NS_RICH}\" count=\"{count}\">");
+    let has_pictures = items.iter().any(|item| matches!(item, Item::Picture(_)));
     let mut rel_list = format!("{XML_DECL}<richValueRels xmlns=\"{NS_IMAGE_REL}\" xmlns:r=\"{NS_REL}\">");
     let mut image_rels = Rels::default();
     let mut total = 0usize;
-    for (i, picture) in pictures.iter().enumerate() {
-        total = total.saturating_add(picture.data.len());
-        if picture.data.len() as u64 > MAX_IMAGE || total > MAX_IMAGES_TOTAL {
-            return Err(IoError::TooLarge("cell pictures exceed the 16 MiB image or 128 MiB workbook limit".into()));
-        }
-        let (mime, ext) = image_type(&picture.data)
-            .ok_or_else(|| IoError::Format("cell pictures must be PNG/JPEG with at most 8192 pixels per side and 16 million pixels".into()))?;
-        let image_name = format!("cellImage{}.{}", i + 1, ext);
-        out.default_type(ext, mime);
-        out.part(&format!("xl/media/{image_name}"), None, picture.data.clone());
-        let rid = image_rels.add("image", &format!("../media/{image_name}"));
-        let _ = write!(rel_list, "<rel r:id=\"{rid}\"/>");
-        let _ = write!(data, "<rv s=\"0\"><v>{i}</v><v>5</v><v>{}</v></rv>", esc(&picture.alt));
+    let mut pictures = 0usize;
+    let mut structures: Vec<String> = vec![];
+    if has_pictures {
+        structures.push(
+            "<s t=\"_localImage\"><k n=\"_rvRel:LocalImageIdentifier\" t=\"i\"/><k n=\"CalcOrigin\" t=\"i\"/><k n=\"Text\" t=\"s\"/></s>".into(),
+        );
     }
-    data.push_str("</rvData>");
+    // `_linkedentity` wraps the `_linkedentitycore` record, which has one structure per key set.
+    let mut wrapper: Option<usize> = None;
+    let mut cores: HashMap<String, usize> = HashMap::new();
+    let mut values = String::new();
+    let mut rv_count = 0usize;
+    // The rich value each item's cell points at (a linked record's wrapper, after its core).
+    let mut cell_values = Vec::with_capacity(items.len());
+    for item in &items {
+        match item {
+            Item::Picture(picture) => {
+                total = total.saturating_add(picture.data.len());
+                if picture.data.len() as u64 > MAX_IMAGE || total > MAX_IMAGES_TOTAL {
+                    return Err(IoError::TooLarge("cell pictures exceed the 16 MiB image or 128 MiB workbook limit".into()));
+                }
+                let (mime, ext) = image_type(&picture.data).ok_or_else(|| {
+                    IoError::Format("cell pictures must be PNG/JPEG with at most 8192 pixels per side and 16 million pixels".into())
+                })?;
+                pictures += 1;
+                let image_name = format!("cellImage{pictures}.{ext}");
+                out.default_type(ext, mime);
+                out.part(&format!("xl/media/{image_name}"), None, picture.data.clone());
+                let rid = image_rels.add("image", &format!("../media/{image_name}"));
+                let _ = write!(rel_list, "<rel r:id=\"{rid}\"/>");
+                let _ = write!(values, "<rv s=\"0\"><v>{}</v><v>5</v><v>{}</v></rv>", pictures - 1, esc(&picture.alt));
+                cell_values.push(rv_count);
+                rv_count += 1;
+            }
+            Item::Linked(record) => {
+                let core = core_structure(record);
+                let core_index = *cores.entry(core.clone()).or_insert_with(|| {
+                    structures.push(core);
+                    structures.len() - 1
+                });
+                let wrapper_index = *wrapper.get_or_insert_with(|| {
+                    structures.push("<s t=\"_linkedentity\"><k n=\"%cvi\" t=\"r\"/></s>".into());
+                    structures.len() - 1
+                });
+                let _ = write!(values, "<rv s=\"{core_index}\">");
+                for field in &record.fields {
+                    let _ = write!(values, "<v>{}</v>", esc(&field.value));
+                }
+                let _ = write!(values, "</rv><rv s=\"{wrapper_index}\"><v>{rv_count}</v></rv>");
+                cell_values.push(rv_count + 1);
+                rv_count += 2;
+            }
+        }
+    }
+    let data = format!("{XML_DECL}<rvData xmlns=\"{NS_RICH}\" count=\"{rv_count}\">{values}</rvData>");
     rel_list.push_str("</richValueRels>");
-    let structures = format!(
-        "{XML_DECL}<rvStructures xmlns=\"{NS_RICH}\" count=\"1\"><s t=\"_localImage\"><k n=\"_rvRel:LocalImageIdentifier\" t=\"i\"/><k n=\"CalcOrigin\" t=\"i\"/><k n=\"Text\" t=\"s\"/></s></rvStructures>"
-    );
-    for (name, content_type, relation, bytes) in [
+    let structures = format!("{XML_DECL}<rvStructures xmlns=\"{NS_RICH}\" count=\"{}\">{}</rvStructures>", structures.len(), structures.concat());
+    let mut parts = vec![
         (
             "rdrichvalue.xml",
             "application/vnd.ms-excel.rdRichValue+xml",
@@ -319,27 +463,34 @@ pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
             "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure",
             structures.into_bytes(),
         ),
-        (
+    ];
+    if has_pictures {
+        parts.push((
             "richValueRel.xml",
             "application/vnd.ms-excel.richvaluerel+xml",
             "http://schemas.microsoft.com/office/2022/10/relationships/richValueRel",
             rel_list.into_bytes(),
-        ),
-    ] {
+        ));
+    }
+    for (name, content_type, relation, bytes) in parts {
         out.part(&format!("xl/richData/{name}"), Some(content_type), bytes);
         workbook_rels.add_uri(relation, &format!("richData/{name}"));
     }
-    out.part("xl/richData/_rels/richValueRel.xml.rels", None, image_rels.xml().into_bytes());
+    if has_pictures {
+        out.part("xl/richData/_rels/richValueRel.xml.rels", None, image_rels.xml().into_bytes());
+    }
     out.part(
         "xl/metadata.xml",
         Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"),
-        metadata(count, out.dynamic_arrays).into_bytes(),
+        metadata(&cell_values, out.dynamic_arrays).into_bytes(),
     );
     workbook_rels.add("sheetMetadata", "metadata.xml");
     Ok(())
 }
 
-fn metadata(count: usize, dynamic: bool) -> String {
+/// `rich_values[i]` is the rich value that value-metadata block `i` (the cell's `vm`, minus one) holds.
+fn metadata(rich_values: &[usize], dynamic: bool) -> String {
+    let count = rich_values.len();
     let type_id = if dynamic { 2 } else { 1 };
     let mut xml = format!(
         "{XML_DECL}<metadata xmlns=\"{NS_MAIN}\" xmlns:rv=\"{NS_RICH}\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"{type_id}\">"
@@ -349,11 +500,11 @@ fn metadata(count: usize, dynamic: bool) -> String {
     }
     xml.push_str("<metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" cellMeta=\"0\"/></metadataTypes>");
     if dynamic {
-        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{BDBB8CDC-FA1E-496E-A857-3C3F30C029C3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
+        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
     }
     let _ = write!(xml, "<futureMetadata name=\"XLRICHVALUE\" count=\"{count}\">");
-    for i in 0..count {
-        let _ = write!(xml, "<bk><extLst><ext uri=\"{RICH_EXT}\"><rv:rvb i=\"{i}\"/></ext></extLst></bk>");
+    for rich_value in rich_values {
+        let _ = write!(xml, "<bk><extLst><ext uri=\"{RICH_EXT}\"><rv:rvb i=\"{rich_value}\"/></ext></extLst></bk>");
     }
     xml.push_str("</futureMetadata>");
     if dynamic {

@@ -221,6 +221,7 @@ struct CellWriteInput<'a> {
     reference: CellRef,
     cell: Option<&'a Cell>,
     picture: Option<&'a std::sync::Arc<gridcraft_model::CellPicture>>,
+    linked: Option<&'a std::sync::Arc<gridcraft_model::LinkedRecord>>,
     header_override: Option<&'a String>,
     spill_value: Option<&'a Value>,
     dynamic_range: Option<&'a RangeRef>,
@@ -555,9 +556,15 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
     // Cell storage is already row-major; sort only when extra cells need merging.
     let mut keys: Vec<(CellRef, Option<&Cell>)> = Vec::with_capacity(sheet.cells.len());
     keys.extend(sheet.cells.iter().map(|(c, cell)| (c, Some(cell))));
-    if !sheet.cell_pictures.is_empty() || !extra.is_empty() || !overrides.is_empty() || !keys.is_sorted_by_key(|(c, _)| *c) {
+    if !sheet.cell_pictures.is_empty()
+        || !sheet.linked_records.is_empty()
+        || !extra.is_empty()
+        || !overrides.is_empty()
+        || !keys.is_sorted_by_key(|(c, _)| *c)
+    {
         let mut all: BTreeSet<CellRef> = keys.iter().map(|(c, _)| *c).collect();
         all.extend(sheet.cell_pictures.keys().copied());
+        all.extend(sheet.linked_records.keys().copied());
         all.extend(extra.keys().copied());
         all.extend(overrides.keys().copied());
         keys = all.into_iter().map(|c| (c, sheet.cells.get(c))).collect();
@@ -623,6 +630,7 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                     reference: cell_ref,
                     cell,
                     picture: sheet.cell_pictures.get(&cell_ref),
+                    linked: sheet.linked_records.get(&cell_ref).filter(|_| cell.is_some_and(|x| x.formula.is_none())),
                     header_override: ov,
                     spill_value: ex,
                     dynamic_range: array.as_ref(),
@@ -703,7 +711,7 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
 }
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { reference: c, cell, picture, linked, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
@@ -711,8 +719,12 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     if style != 0 {
         let _ = write!(s, " s=\"{style}\"");
     }
-    if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture);
+    let rich = picture.map(Rich::Picture).or(linked.map(Rich::Linked));
+    if let Some(rich) = rich {
+        let vm = match rich {
+            Rich::Picture(picture) => out.cell_pictures.index(picture),
+            Rich::Linked(record) => out.cell_pictures.index_linked(record),
+        };
         let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
         return;
     }
@@ -797,6 +809,11 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
             let _ = write!(s, " t=\"e\"><v>{}</v></c>", e.as_str());
         }
     }
+}
+
+enum Rich<'a> {
+    Picture(&'a std::sync::Arc<gridcraft_model::CellPicture>),
+    Linked(&'a std::sync::Arc<gridcraft_model::LinkedRecord>),
 }
 
 const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";

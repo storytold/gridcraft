@@ -2293,3 +2293,35 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn fieldvalue_reads_a_linked_record_and_the_dot_syntax_means_the_same() {
+    use gridcraft_model::{LinkedField, LinkedRecord};
+    let field = |name: &str, kind: &str, value: &str| LinkedField { name: name.into(), kind: kind.into(), value: value.into() };
+    let mut t = T::new();
+    t.set("A1", "EUR/USD");
+    let record = LinkedRecord {
+        display: "EUR/USD".into(),
+        fields: vec![field("Price", "d", "1.0842"), field("Name", "s", "Euro / US dollar"), field("Open", "b", "1"), field("Icon", "r", "0")],
+    };
+    t.wb.sheet_mut(0).unwrap().linked_records.insert(c("A1"), std::sync::Arc::new(record));
+    t.set("B1", "=A1.Price");
+    t.set("B2", "=FIELDVALUE(A1,\"price\")*2");
+    t.set("B3", "=FIELDVALUE(A1,\"Name\")");
+    t.set("B4", "=A1.Open");
+    assert_eq!((t.num("B1"), t.num("B2")), (1.0842, 2.1684));
+    assert_eq!(t.get("B3"), Value::text("Euro / US dollar"));
+    assert_eq!(t.get("B4"), Value::Bool(true));
+    // An unknown field, a field that is not a scalar and a cell without a record are errors.
+    for (at, input) in [("C1", "=A1.Volume"), ("C2", "=A1.Icon"), ("C3", "=A2.Price"), ("C4", "=FIELDVALUE(1,\"Price\")")] {
+        t.set(at, input);
+        assert!(matches!(t.get(at), Value::Error(_)), "{input}");
+    }
+    // An error in the first argument (a deleted record cell) comes through as itself.
+    t.set("C5", "=FIELDVALUE(#REF!,\"Price\")");
+    assert_eq!(t.get("C5"), Value::Error(CellError::Ref));
+    // Overwriting the cell drops the record.
+    t.wb.sheet_mut(0).unwrap().set_value(c("A1"), Value::text("x"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert!(matches!(t.get("B1"), Value::Error(_)));
+}

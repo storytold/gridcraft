@@ -58,6 +58,36 @@ pub struct CellPicture {
     pub alt: String,
 }
 
+/// One saved field of a linked data type record: the structure key, its type code and value text.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkedField {
+    pub name: String,
+    /// The file's key type: `d` (number), `i` (integer), `s` (text) or `b` (boolean).
+    pub kind: String,
+    pub value: String,
+}
+
+/// A linked data type record (Excel's Stocks, Currencies…) kept as saved: the cell shows `display`,
+/// and `FIELDVALUE` reads `fields`. Nothing is refreshed from a provider.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkedRecord {
+    pub display: String,
+    pub fields: Vec<LinkedField>,
+}
+
+impl LinkedRecord {
+    /// A field's value, by name (case-insensitive); `None` for an unknown field.
+    pub fn field(&self, name: &str) -> Option<Value> {
+        let f = self.fields.iter().find(|f| f.name.eq_ignore_ascii_case(name))?;
+        match f.kind.as_str() {
+            "d" | "i" => f.value.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map(Value::Number),
+            "b" => Some(Value::Bool(matches!(f.value.trim(), "1" | "true"))),
+            "s" => Some(Value::text(f.value.as_str())),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     /// Constant value, or the cached result of the formula.
