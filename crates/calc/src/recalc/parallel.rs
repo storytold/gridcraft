@@ -199,7 +199,16 @@ fn call_always_scalar(name: &str) -> bool {
             | "MEDIAN"
             | "AGGREGATE"
             | "SUBTOTAL"
+            | "VLOOKUP"
+            | "HLOOKUP"
+            | "LOOKUP"
+            | "MATCH"
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn call_spill_follows_args(name: &str) -> bool {
+    matches!(name, "IF" | "IFS" | "IFERROR" | "IFNA" | "SWITCH")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -236,8 +245,13 @@ pub(super) fn expr_might_spill(expr: &Expr) -> bool {
                     stack.push(b);
                 }
             },
-            Expr::Call(name, _) => {
-                if !call_always_scalar(name) {
+            Expr::Call(name, args) => {
+                if call_always_scalar(name) {
+                } else if call_spill_follows_args(name) {
+                    for arg in args {
+                        stack.push(arg);
+                    }
+                } else {
                     return true;
                 }
             }
@@ -811,31 +825,34 @@ fn eval_independent_native(
             }
         }
     }
-    for &r in dirty {
-        if heavy.contains(&r) {
-            continue;
-        }
-        let Some(rnode) = graph.nodes.get(&r) else { continue };
-        for &s in dirty {
-            if s == r {
+    let spillers: Vec<Key> = dirty.iter().filter_map(|&s| graph.nodes.get(&s).and_then(|n| spill_kind(n).map(|_| s))).collect();
+    if !spillers.is_empty() {
+        for &r in dirty {
+            if heavy.contains(&r) {
                 continue;
             }
-            let Some(snode) = graph.nodes.get(&s) else { continue };
-            let Some(skind) = spill_kind(snode) else { continue };
-            if !rnode.areas.iter().any(|a| area_meets_spill(a, s, &skind)) {
-                continue;
-            }
-            if heavy.contains(&s) || !left.contains_key(&s) {
-                heavy.insert(r);
-                left.remove(&r);
-                break;
-            }
-            let already = static_preds.get(&r).is_some_and(|p| p.contains(&s));
-            if !already {
-                if let Some(n) = left.get_mut(&r) {
-                    *n = n.saturating_add(1);
+            let Some(rnode) = graph.nodes.get(&r) else { continue };
+            for &s in &spillers {
+                if s == r {
+                    continue;
                 }
-                succs.entry(s).or_default().push(r);
+                let Some(snode) = graph.nodes.get(&s) else { continue };
+                let Some(skind) = spill_kind(snode) else { continue };
+                if !rnode.areas.iter().any(|a| area_meets_spill(a, s, &skind)) {
+                    continue;
+                }
+                if heavy.contains(&s) || !left.contains_key(&s) {
+                    heavy.insert(r);
+                    left.remove(&r);
+                    break;
+                }
+                let already = static_preds.get(&r).is_some_and(|p| p.contains(&s));
+                if !already {
+                    if let Some(n) = left.get_mut(&r) {
+                        *n = n.saturating_add(1);
+                    }
+                    succs.entry(s).or_default().push(r);
+                }
             }
         }
     }
