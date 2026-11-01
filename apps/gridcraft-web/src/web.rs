@@ -72,14 +72,17 @@ pub fn start() {
                             _ => {}
                         }
                     }
-                    // Follow the browser's language, except a CJK one. CJK coverage comes from
-                    // optional craft-fonts input, not a guaranteed web font set, so a CJK browser
-                    // cannot be assumed to render localized labels without tofu. Users can still
-                    // choose a language explicitly.
+                    // Follow the browser's language, except a CJK or Georgian one. Their coverage comes
+                    // from optional craft-fonts input, not a guaranteed web font set, so such a
+                    // browser cannot be assumed to render localized labels without tofu. Users can
+                    // still choose a language explicitly.
                     let browser = gridcraft_ui_egui::i18n::Language::system();
                     if !matches!(
                         browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
+                        gridcraft_ui_egui::i18n::Language::Zh
+                            | gridcraft_ui_egui::i18n::Language::Ja
+                            | gridcraft_ui_egui::i18n::Language::Ko
+                            | gridcraft_ui_egui::i18n::Language::Ka
                     ) {
                         app.ui.language = browser;
                     }
