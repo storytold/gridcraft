@@ -51,6 +51,10 @@ const USAGE: &str = "usage:
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
+fn print_usage() {
+    outln!("{USAGE}");
+}
+
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
 fn stdout_failed(e: std::io::Error) -> ! {
@@ -102,15 +106,20 @@ struct Args {
     positional: Vec<String>,
     opts: Vec<(String, String)>,
     switches: Vec<String>,
+    help: bool,
 }
 
 impl Args {
     /// `with_value` lists the options that take a value; `switches` the boolean ones. Anything
     /// else starting with `--` is an error.
     fn parse(args: &[String], with_value: &[&str], switches: &[&str]) -> Result<Args, String> {
-        let mut out = Args { positional: vec![], opts: vec![], switches: vec![] };
+        let mut out = Args { positional: vec![], opts: vec![], switches: vec![], help: false };
         let mut it = args.iter();
         while let Some(a) = it.next() {
+            if a == "-h" || a == "--help" {
+                out.help = true;
+                continue;
+            }
             if let Some(name) = a.strip_prefix("--").filter(|n| !n.is_empty()) {
                 let (name, inline) = match name.split_once('=') {
                     Some((n, v)) => (n, Some(v.to_string())),
@@ -240,6 +249,10 @@ fn csv_field(s: &str, delim: char) -> String {
 
 fn info(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &[], &["json"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
     let mut s = open(path)?;
@@ -281,6 +294,10 @@ fn info(args: &[String]) -> Result<(), String> {
 
 fn convert(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["sheet"], &[])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -304,6 +321,10 @@ fn convert(args: &[String]) -> Result<(), String> {
 
 fn eval(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
@@ -374,6 +395,10 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
 
 fn cat(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
     let mut s = open(path)?;
@@ -413,6 +438,10 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     a.no_extra(0)?;
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
@@ -464,6 +493,10 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search"], &["json"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let q = a.opt("search").or(a.positional.first().map(String::as_str)).map(str::to_ascii_lowercase);
     let s = Session::new();
     let list: Vec<_> = s
@@ -497,6 +530,10 @@ fn commands(args: &[String]) -> Result<(), String> {
 
 fn functions(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search", "category"], &["json"])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let mut p = json!({});
     if let Some(q) = a.opt("search").or(a.positional.first().map(String::as_str)) {
         p["search"] = json!(q);
@@ -527,6 +564,10 @@ fn functions(args: &[String]) -> Result<(), String> {
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
     let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    if a.help {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
@@ -558,6 +599,10 @@ fn mcp(args: &[String]) -> Result<(), String> {
 /// `send PORT METHOD [JSON]`: one control-channel request to a running app.
 fn send(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Remote, control_addr};
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        outln!("{USAGE}");
+        return Ok(());
+    }
     let port = args.first().ok_or_else(|| format!("missing <port>\n{USAGE}"))?;
     let method = args.get(1).ok_or_else(|| format!("missing <method>\n{USAGE}"))?;
     let params: Value = match args.get(2) {
@@ -635,6 +680,11 @@ mod tests {
         assert_eq!(a.opt("range"), Some("A1"));
         assert_eq!(a.opt("sheet"), Some("S"));
         assert!(a.has("csv"));
+        let value_flag = Args::parse(&["--sheet".to_string(), "-h".to_string()], &["sheet"], &[]).unwrap();
+        assert!(!value_flag.help);
+        assert_eq!(value_flag.opt("sheet"), Some("-h"));
+        let help = Args::parse(&["--help".to_string()], &[], &[]).unwrap();
+        assert!(help.help);
         assert!(Args::parse(&["--nope".to_string()], &[], &[]).is_err());
         assert!(Args::parse(&["--range".to_string()], &["range"], &[]).is_err());
     }
