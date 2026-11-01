@@ -24,6 +24,7 @@ pub const REQUIRED_FACES: &[(&str, &str, &[&str])] = &[
     ("NanumGothic", "Regular", &["Hang", "Kore"]),
     ("Noto Sans Symbols", "Regular", &["Zsym"]),
     ("Noto Sans Symbols 2", "Regular", &["Zsym"]),
+    ("Noto Sans Thai", "Regular", &["Thai"]),
 ];
 
 /// The native-only Simplified Chinese face from craft-fonts' separate
@@ -35,12 +36,15 @@ pub const CHINESE_FACES: &[(&str, &str, &[&str])] = &[("LXGW WenKai Lite", "Regu
 /// The explicit web allowlist. Browser builds embed only these faces; the Noto CJK collection and
 /// the document-only faces stay off the wasm bundle. `Noto Sans Symbols` supplies `⌃`, and
 /// `Noto Sans Symbols 2` supplies `✕`, `◀` and `✓`; `📋` still comes from egui's bundled emoji.
+/// `Noto Sans Thai` (about 210 KB) draws Thai cell text and input; the browser has no system font
+/// fallback for egui, so without it Thai workbooks show tofu boxes on the web.
 pub const WEB_ALLOWED: &[(&str, &str)] = &[
     ("BIZ UDPGothic", "Regular"),
     ("BIZ UDPGothic", "Bold"),
     ("NanumGothic", "Regular"),
     ("Noto Sans Symbols", "Regular"),
     ("Noto Sans Symbols 2", "Regular"),
+    ("Noto Sans Thai", "Regular"),
 ];
 
 /// One validated `fonts/manifest.txt` row. Only the fields GridCraft consumes are kept.
@@ -172,6 +176,7 @@ mod tests {
                 ("NanumGothic", "Regular"),
                 ("Noto Sans Symbols", "Regular"),
                 ("Noto Sans Symbols 2", "Regular"),
+                ("Noto Sans Thai", "Regular"),
             ]
         );
         for (family, _) in WEB_ALLOWED {
