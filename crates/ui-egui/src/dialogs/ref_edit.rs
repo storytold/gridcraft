@@ -197,7 +197,7 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
             _ => (0, if rtl { -1 } else { 1 }),
         };
         let from = app.session.active().map(|d| if m.shift { d.selection.moving_end() } else { d.selection.active });
-        let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": m.shift, "jump": m.command}));
+        let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": m.shift, "jump": m.command}));
         app.grid.ensure_visible = true;
         app.grid.reveal_moving_end = m.shift;
         app.grid.reveal_from = from;
@@ -252,18 +252,24 @@ fn active_sheet_name(app: &SheetApp) -> String {
 /// Stops picking and goes back to the dialog's own sheet, putting back the selection from before
 /// picking began (once), unless that sheet was deleted: the selection is then left where it is.
 /// The sheet itself is kept until the dialog closes.
+///
+/// The commands go through [`SheetApp::run`], as the ribbon's do: showing the sheet first saves
+/// a text-box draft left open on the sheet picked on, and the UI's after-command pass runs.
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
     d.refs.target = None;
     d.refs.collapsed = None;
     follow_home(app, &mut d.refs);
     let Some(home) = d.refs.home.as_mut() else { return };
     let Some(sheet) = home.sheet.clone() else { return };
+    // After an OK that failed, the selection is already back and only the sheet is shown again,
+    // so references without a sheet name mean it.
+    if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) && app.run("sheet.activate", json!({"sheet": sheet})).is_err() {
+        // The draft could not be saved (its message is shown): the person stays with their text,
+        // and the selection waits for the next time the dialog lets go.
+        return;
+    }
     if let Some((range, active)) = home.selection.take() {
-        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": range, "active": active}));
-    } else if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
-        // Already put back by an earlier OK that failed: only the sheet is shown again, so
-        // references without a sheet name mean it.
-        let _ = app.session.run("sheet.activate", json!({"sheet": sheet}));
+        let _ = app.run("selection.set", json!({"range": range, "active": active}));
     }
 }
 

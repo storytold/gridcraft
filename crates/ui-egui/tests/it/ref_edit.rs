@@ -5,8 +5,8 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
-use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use gridcraft_ui_egui::control::{Outcome, handle};
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
 type H = egui_kittest::Harness<'static, SheetApp>;
@@ -843,4 +843,37 @@ fn a_scripted_cancel_or_ok_goes_back_to_the_dialogs_sheet_like_the_buttons() {
     assert_eq!(r["ok"], json!(false), "{r}");
     assert!(r["error"].as_str().unwrap_or("").contains("was deleted"), "{r}");
     assert!(h.state().dialog.is_some(), "the dialog stays open");
+}
+
+#[test]
+fn a_text_box_draft_is_saved_before_a_scripted_cancel_leaves_the_picked_sheet() {
+    let mut s = two_sheets();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    let id =
+        s.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": "Rate note"})).unwrap()["shape"].as_u64().unwrap() as u32;
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    // The person starts editing the text box on the picked sheet (what its double-click does)
+    // and types a new note.
+    assert!(h.state_mut().begin_text_box_edit(id), "the text box is being edited");
+    h.run_steps(3);
+    assert!(h.state().text_box_editor.is_some());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "Picked note");
+    assert_eq!(h.state().text_box_editor.as_ref().map(|ed| ed.text.as_str()), Some("Picked note"));
+    let shape_text =
+        |h: &H, sheet: usize| h.state().session.active().unwrap().wb.sheets[sheet].shapes.iter().find(|s| s.id == id).unwrap().text.clone();
+    assert_eq!(shape_text(&h, 1), "Rate note", "not saved yet");
+    // A scripted cancel leaves the sheet: the draft is saved first, as the ribbon's sheet switch
+    // saves it, instead of being stranded on a sheet that is no longer shown.
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().text_box_editor.is_none(), "the draft was committed: {:?}", h.state().text_box_editor);
+    assert_eq!(shape_text(&h, 1), "Picked note");
+    assert_eq!(selection(&h), (0, "B5".into()));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
 }
