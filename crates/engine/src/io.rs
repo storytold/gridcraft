@@ -698,6 +698,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         opts.mode(p.mode());
     }
+    // A brand-new file gets the restrictive default: no group/other write, whatever the umask.
+    #[cfg(unix)]
+    if prior.is_none() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o644);
+    }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
