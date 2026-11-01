@@ -507,3 +507,60 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+/// Excel AutoFilter ignores surrounding spaces when matching text values.
+#[test]
+fn autofilter_value_lists_and_equality_ignore_surrounding_spaces() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Name"],
+                ["Card"],
+                ["Card "],
+                [" Card"],
+                ["  Card  "],
+                ["card"],
+                ["CARD"],
+                ["Cardx"],
+                ["Ca rd"],
+                [" "],
+                [""]
+            ]
+        }),
+    )
+    .unwrap();
+    s.execute("data.filter", json!({"range": "A1:A11"})).unwrap();
+
+    let assert_rows = |session: &Session| {
+        let sh = session.doc().unwrap().wb.active().unwrap();
+        for row in 1..=6 {
+            assert!(!sh.is_row_hidden(row), "row {row} should be visible");
+        }
+        for row in 7..=10 {
+            assert!(sh.is_row_hidden(row), "row {row} should be hidden");
+        }
+    };
+
+    for value in ["Card", " Card"] {
+        let result = s.execute("data.filterBy", json!({"column": "A", "values": [value]})).unwrap();
+        assert_eq!(result["hiddenRows"], json!(4), "{value:?}");
+        assert_rows(&s);
+
+        let choices = filter_values(&s.doc().unwrap().wb, 0, 0);
+        let card_entries: Vec<_> = choices.iter().filter(|(text, _)| text.trim().eq_ignore_ascii_case("Card")).collect();
+        assert_eq!(card_entries.len(), 1, "{choices:?}");
+        assert!(card_entries[0].1, "{choices:?}");
+        assert!(choices.iter().any(|(text, on)| text == " " && !on), "{choices:?}");
+        assert!(choices.iter().any(|(text, on)| text == "(Blanks)" && !on), "{choices:?}");
+    }
+
+    for value in ["Card", " Card"] {
+        let result = s.execute("data.filterBy", json!({"column": "A", "custom": {"op": "=", "value": value}})).unwrap();
+        assert_eq!(result["hiddenRows"], json!(4));
+        assert_rows(&s);
+    }
+}
