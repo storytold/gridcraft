@@ -155,7 +155,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
             control_keytip(app, ui, &ba, "home.borders");
             if b {
-                act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
+                act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": app.grid.last_border_color.clone()}));
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
             let border_line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
