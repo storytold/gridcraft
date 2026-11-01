@@ -231,8 +231,12 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             let col = tab.ident.get(i).copied().unwrap_or(usize::MAX);
             let dir: Vec<(f64, f64)> =
                 (0..tab.t.len()).filter(|r| real_basic(&tab, *r)).map(|r| (entry(&tab, r, tab.width), flip(&tab, i) * entry(&tab, r, col))).collect();
-            let increase = min_ratio(dir.iter().map(|(v, d)| (*v, -d)));
-            let decrease = min_ratio(dir.iter().map(|(v, d)| (*v, *d)));
+            // An artificial still basic after phase one stands for a row the others make
+            // redundant, and it is zero there. When this right side moves it, any change alone
+            // leaves no solution, so both ranges are 0.
+            let pinned = (0..tab.t.len()).any(|r| !real_basic(&tab, r) && entry(&tab, r, col).abs() > EPS);
+            let (increase, decrease) =
+                if pinned { (0.0, 0.0) } else { (min_ratio(dir.iter().map(|(v, d)| (*v, -d))), min_ratio(dir.iter().map(|(v, d)| (*v, *d)))) };
             let b = at.finals.get(i).map_or(f64::NAN, |f| f.1);
             let mut row = at.row_head(i, r);
             row.extend([sens_num(shadow.get(i).copied().unwrap_or(0.0), at.scale), num(b), sens_num(increase, 1.0), sens_num(decrease, 1.0)]);

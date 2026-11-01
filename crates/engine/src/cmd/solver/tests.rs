@@ -491,6 +491,36 @@ fn sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges() {
 }
 
 #[test]
+fn simplex_sensitivity_ranges_of_a_redundant_equality_are_zero() {
+    // max x with x = 2 and 2x = 4: the second row repeats the first, so any change to either
+    // right side alone has no solution, and both ranges of each row are 0. With x = 2 alone the
+    // right side may rise without limit and fall by 2 (to x = 0).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=A1"), ("C1", "=A1"), ("C2", "=2*A1")]);
+    let cols = ["D", "F", "G", "H"];
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "variables": "A1", "constraints": ["C1 = 2", "C2 = 4"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &cols), &[2.0, 2.0, 0.0, 0.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$1", &cols));
+    assert!(close(&report_row(&s, &rep, "$C$2", &cols), &[4.0, 4.0, 0.0, 0.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$2", &cols));
+    // The redundant row doesn't restrict the objective coefficient: x = 2 stays the only
+    // solution whatever its profit.
+    assert!(close(&report_row(&s, &rep, "$A$1", &["D", "F", "G", "H"]), &[2.0, 1.0, 1e30, 1e30], 1e-9));
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "variables": "A1", "constraints": ["C1 = 2"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &cols), &[2.0, 2.0, 1e30, 2.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$1", &cols));
+}
+
+#[test]
 fn simplex_sensitivity_report_needs_an_optimal_point() {
     // Wyndor Glass: (2, 6) is the optimum (36). (0, 0) is feasible but not optimal; (4, 4.8)
     // reaches 36 but breaks plant 3's hours (21.6 > 18).
