@@ -64,7 +64,22 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
     let sel = &mut d.selection;
     // Extension moves the far corner, not the active cell.
-    let from = if extend { sel.moving_end() } else { sel.active };
+    let mut from = if extend { sel.moving_end() } else { sel.active };
+    // A whole column/row's far corner is the sheet edge, so a jump along it starts from the active cell.
+    // The extent across the jump is kept, and the active cell becomes the anchor along it.
+    let cur = sel.current();
+    let mut keep_end = None;
+    if extend && jmp {
+        if cur.is_full_cols() && dr != 0 {
+            keep_end = Some((from.col, false));
+            from = CellRef::new(sel.active.row, sel.active.col);
+            sel.anchor.row = sel.active.row;
+        } else if cur.is_full_rows() && dc != 0 {
+            keep_end = Some((from.row, true));
+            from = CellRef::new(sel.active.row, sel.active.col);
+            sel.anchor.col = sel.active.col;
+        }
+    }
     // Skip hidden rows/columns and step over merged areas.
     let mut to = if jmp {
         jump(sheet, from, dr.signum(), dc.signum())
@@ -89,6 +104,9 @@ pub(super) fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
         }
         t
     };
+    if let Some((far, by_row)) = keep_end {
+        to = if by_row { CellRef::new(far, to.col) } else { CellRef::new(to.row, far) };
+    }
     if let Some(m) = sheet.merge_at(to)
         && !extend
     {
