@@ -1,8 +1,9 @@
 //! Rendering a value with a parsed section.
 
 use gridcraft_core::DateSystem;
-use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, max_serial};
+use gridcraft_core::date::{datetime_from_serial, max_serial};
 
+use crate::calendar::Calendar;
 use crate::decimal::{decimal_digits, fixed, fixed_from_digits, format_general_fit};
 use crate::parse::{DatePart, Section, Tok};
 
@@ -72,6 +73,15 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
         day += 1;
     }
     let total_ms = day.saturating_mul(86_400_000).saturating_add(ms);
+    // Under `B2`, Excel shows the 1900 system's fictitious 29 February (serial 60) as `#VALUE!`
+    // whenever a clock or calendar part is shown, even for `hh:mm` (`[h]` alone still works).
+    if sec.calendar == Calendar::Hijri
+        && sys == DateSystem::D1900
+        && day == 60
+        && sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if !d.is_elapsed()))
+    {
+        return None;
+    }
     let needs_date = sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
     let dt = if needs_date { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
     let ampm = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
@@ -80,8 +90,8 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
     let pad = |n: i64, w: u8| if w >= 2 { format!("{:0w$}", n, w = w.min(20) as usize) } else { n.to_string() };
-    let month_name = MONTHS.get((dt.month as usize).wrapping_sub(1)).copied().unwrap_or("");
-    let day_name = WEEKDAYS.get(dt.weekday as usize).copied().unwrap_or("");
+    // No date in the section's calendar (serial 60 under `B2`): shown like an out-of-range date.
+    let date = sec.calendar.date(&dt)?;
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
@@ -89,21 +99,21 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                 let s = match *d {
                     DatePart::Year(n) => {
                         if n <= 2 {
-                            format!("{:02}", dt.year.rem_euclid(100))
+                            format!("{:02}", date.year.rem_euclid(100))
                         } else {
-                            format!("{:04}", dt.year)
+                            format!("{:04}", date.year)
                         }
                     }
                     DatePart::Month(n) => match n {
-                        1 | 2 => pad(dt.month as i64, n),
-                        3 => month_name.chars().take(3).collect(),
-                        5 => month_name.chars().take(1).collect(),
-                        _ => month_name.to_string(),
+                        1 | 2 => pad(date.month as i64, n),
+                        3 => date.month_short.to_string(),
+                        5 => date.month_name.chars().take(1).collect(),
+                        _ => date.month_name.to_string(),
                     },
                     DatePart::Day(n) => match n {
-                        1 | 2 => pad(dt.day as i64, n),
-                        3 => day_name.chars().take(3).collect(),
-                        _ => day_name.to_string(),
+                        1 | 2 => pad(date.day as i64, n),
+                        3 => date.day_short.to_string(),
+                        _ => date.day_name.to_string(),
                     },
                     DatePart::Hour(n) => {
                         let h = if ampm {
