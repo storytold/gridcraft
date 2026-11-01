@@ -235,9 +235,12 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
         .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
         .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
         .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    let has_kept_exts = !crate::extlist::sheet_exts(sheet, "").is_empty();
+    let has_exts = !solid_bars.is_empty() || !sheet.sparklines.is_empty() || has_kept_exts;
+    if has_exts {
         s.push_str("<extLst>");
     }
+    let exts_start = s.len();
     if !solid_bars.is_empty() {
         let _ = write!(
             s,
@@ -273,7 +276,9 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if has_exts {
+        let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
+        s.push_str(&kept_exts);
         s.push_str("</extLst>");
     }
 }

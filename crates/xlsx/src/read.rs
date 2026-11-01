@@ -32,6 +32,10 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
+    pub sheet_exts: Vec<(String, String)>,
+    /// URIs of the current sheet's extensions that were dropped.
+    pub sheet_exts_dropped: Vec<String>,
 }
 
 impl Ctx<'_> {
@@ -238,6 +242,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        sheet_exts: vec![],
+        sheet_exts_dropped: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -307,6 +313,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name);
+        sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
