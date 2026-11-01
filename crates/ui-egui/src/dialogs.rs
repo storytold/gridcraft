@@ -681,8 +681,13 @@ impl Dialog {
                     v.insert("newOp".into(), json!("<="));
                 }
                 let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
-                let mut d = Dialog::custom("solver", if options { "Solver Options" } else { "Solver Parameters" }, values);
+                let mut d = Dialog::custom("solver", "Solver Parameters", values);
                 d.command = Some("data.solver");
+                // Straight into the Solver Options: the same setup as the Options button, so the
+                // fields show their defaults and Cancel restores what was there.
+                if options {
+                    analysis::open_solver_options(&mut d);
+                }
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),

@@ -233,6 +233,21 @@ pub(super) fn cancel_solver_options(d: &mut Dialog) {
     close_solver_options(d);
 }
 
+/// Solver Parameters › Options (also opening the dialog with `optionsView`): shows the Solver
+/// Options, each field with its value or its default, and keeps the values for Cancel.
+pub(super) fn open_solver_options(d: &mut Dialog) {
+    let mut backup = serde_json::Map::new();
+    for (key, _, default) in SOLVER_OPTIONS {
+        let v = d.values.get(key).cloned().unwrap_or_else(|| json!(default));
+        backup.insert(key.into(), v.clone());
+        d.values.insert(key.into(), v);
+    }
+    backup.insert("requireBounds".into(), d.values.get("requireBounds").cloned().unwrap_or(json!(true)));
+    d.values.insert("optionsBackup".into(), Json::Object(backup));
+    d.values.insert("optionsView".into(), json!(true));
+    d.title = "Solver Options".into();
+}
+
 fn close_solver_options(d: &mut Dialog) {
     d.values.insert("optionsView".into(), json!(false));
     d.values.remove("optionsBackup");
@@ -416,16 +431,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             d.values.insert("modelArea".into(), json!(!shown));
         }
         if ui.button("Options").clicked() {
-            let mut backup = serde_json::Map::new();
-            for (key, _, default) in SOLVER_OPTIONS {
-                let v = d.values.get(key).cloned().unwrap_or_else(|| json!(default));
-                backup.insert(key.into(), v.clone());
-                d.values.insert(key.into(), v);
-            }
-            backup.insert("requireBounds".into(), d.values.get("requireBounds").cloned().unwrap_or(json!(true)));
-            d.values.insert("optionsBackup".into(), Json::Object(backup));
-            d.values.insert("optionsView".into(), json!(true));
-            d.title = "Solver Options".into();
+            open_solver_options(d);
         }
     });
     if d.values.get("modelArea").and_then(Json::as_bool) == Some(true) {

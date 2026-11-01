@@ -1029,6 +1029,55 @@ fn escape_in_solver_options_cancels_the_options_only() {
 }
 
 #[test]
+fn solver_dialog_opened_in_its_options_shows_the_defaults_and_cancel_restores_them() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let params =
+        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 10"], "method": "evolutionary", "optionsView": true});
+    let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), v);
+    };
+    let get = |h: &egui_kittest::Harness<'_, SheetApp>, k: &str| h.state().dialog.as_ref().unwrap().values.get(k).cloned();
+    // With no saved model, the fields show the defaults, as after the Options button.
+    h.state_mut().open_dialog("solver", params.clone());
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
+    assert!(h.query_all_by_label("Max Evaluations:").next().is_some());
+    assert_eq!(
+        (get(&h, "maxEvaluations"), get(&h, "randomSeed"), get(&h, "integerOptimality")),
+        (Some(json!("20000")), Some(json!("0")), Some(json!("0")))
+    );
+    // Cancel restores them.
+    put(&mut h, "randomSeed", json!("11"));
+    put(&mut h, "requireBounds", json!(false));
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Parameters");
+    assert_eq!((get(&h, "randomSeed"), get(&h, "requireBounds")), (Some(json!("0")), Some(json!(true))));
+    // So does Escape.
+    h.state_mut().dialog = None;
+    h.state_mut().open_dialog("solver", params);
+    h.run_steps(4);
+    put(&mut h, "maxEvaluations", json!("7"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog.as_ref().unwrap().title.as_str(), get(&h, "maxEvaluations")), ("Solver Parameters", Some(json!("20000"))));
+    // The next Solve uses the defaults.
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!(
+        (saved["maxEvaluations"].as_f64(), saved["randomSeed"].as_f64(), saved["requireBounds"].as_bool()),
+        (Some(20000.0), Some(0.0), Some(true)),
+        "{saved}"
+    );
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
