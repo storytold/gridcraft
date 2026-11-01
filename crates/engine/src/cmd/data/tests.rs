@@ -481,6 +481,91 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 }
 
 #[test]
+fn circle_invalid_data_finds_blank_cells_and_cells_under_a_rule_with_the_alert_off() {
+    // #3103: blank cells under a rule with Ignore blank off, and cells under a rule whose error
+    // alert is off, were left out. Excel circles both, and the cells of a Warning rule.
+    let mut s = Session::new();
+    s.new_workbook();
+    let values = json!([
+        ["Qty", "Code", "NoAlert", "Warn", "Any", "Blank ok"],
+        [5, "x", 5, 5, "x", "x"],
+        [20, "z", 50, 60, "z", null],
+        ["abc", null, 7, 7, null, null],
+        [0, "y", null, null, 1e9, null],
+        [7, "x", null, null, null, null]
+    ]);
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    let whole = |range: &str, style: &str| json!({"range": range, "type": "whole", "operator": "between", "formula1": "1", "formula2": "10", "errorStyle": style});
+    for rule in [
+        whole("A2:A6", "stop"),
+        json!({"range": "B2:B6", "type": "list", "formula1": "x,y", "ignoreBlank": false}),
+        whole("C2:C4", "stop"),
+        whole("D2:D4", "warning"),
+        json!({"range": "E2:E6", "type": "any"}),
+        // Ignore blank on: F3:F6 are blank and valid.
+        json!({"range": "F2:F6", "type": "list", "formula1": "x,y"}),
+        // Beyond the used range (A1:F6) blank cells stay out, also with Ignore blank off.
+        json!({"range": "H1:H3", "type": "list", "formula1": "x,y", "ignoreBlank": false}),
+    ] {
+        s.execute("data.validation", rule).unwrap();
+    }
+    let invalid = |s: &mut Session| s.execute("data.circleInvalid", json!({})).unwrap()["invalid"].clone();
+    assert_eq!(invalid(&mut s), json!(["A3", "A4", "A5", "B3", "B4", "C3", "D3"]));
+    assert_eq!(s.execute("data.validate", json!({"cell": "B4", "input": ""})).unwrap()["ok"], json!(false));
+
+    // A file without `showErrorMessage` on the C2:C4 rule: its error alert is off.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut data = String::new();
+        std::io::Read::read_to_string(&mut f, &mut data).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            let alert = r#" showErrorMessage="1" sqref="C2:C4""#;
+            assert!(data.contains(alert), "{data}");
+            data = data.replace(alert, r#" sqref="C2:C4""#);
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut out, data.as_bytes()).unwrap();
+    }
+    let bytes = out.finish().unwrap().into_inner();
+    s.execute("file.open", json!({"name": "dv_noalert.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let c3 = CellRef::parse("C3").unwrap();
+    assert!(sh.validations.iter().any(|dv| dv.ranges.iter().any(|r| r.contains(c3)) && !dv.show_error));
+
+    // C3 = 50 is circled, while typing 50 there stays allowed: with the alert off any entry goes.
+    assert_eq!(invalid(&mut s), json!(["A3", "A4", "A5", "B3", "B4", "C3", "D3"]));
+    assert_eq!(s.execute("data.validate", json!({"cell": "C3", "input": "50"})).unwrap()["ok"], json!(true));
+    assert_eq!(s.execute("data.validate", json!({"cell": "D3", "input": "60"})).unwrap()["style"], json!("Warning"));
+    s.execute("cell.set", json!({"cell": "C4", "input": "50"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("C4").unwrap()), Value::Number(50.0));
+    assert_eq!(invalid(&mut s), json!(["A3", "A4", "A5", "B3", "B4", "C3", "C4", "D3"]));
+}
+
+#[test]
+fn circle_invalid_data_checks_a_cell_under_overlapping_rules_once_against_the_first() {
+    // A file can hold rules whose ranges overlap; typing uses the first rule holding the cell,
+    // and Circle Invalid Data checks the cell against that rule only, and lists it once.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[50], [5]]})).unwrap();
+    let whole = |range: &str, min: &str, max: &str| json!({"range": range, "type": "whole", "operator": "between", "formula1": min, "formula2": max});
+    s.execute("data.validation", whole("A1:A2", "1", "10")).unwrap();
+    s.execute("data.validation", whole("B1", "1", "10")).unwrap();
+    // The second rule, written over A1:A2 as a file could hold it, refuses everything.
+    let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.validations[1].ranges = vec![RangeRef::parse("A1:A2").unwrap()];
+    sh.validations[1].f1 = "100".into();
+    sh.validations[1].f2 = Some("200".into());
+    assert_eq!(s.execute("data.validate", json!({"cell": "A2", "input": "5"})).unwrap()["ok"], json!(true));
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A1"]));
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.

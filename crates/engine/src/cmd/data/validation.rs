@@ -168,7 +168,18 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
-    if dv.kind == ValidationKind::Any || !dv.show_error {
+    // With the error alert off, any entry is accepted.
+    if !dv.show_error {
+        return None;
+    }
+    check_rule(wb, sheet, at, dv, input)
+}
+
+/// Checks `input` at `at` against the rule `dv`, also when its error alert is off (Circle
+/// Invalid Data circles such cells). `None` = valid.
+fn check_rule(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation, input: &str) -> Option<(Validation, String)> {
+    let sh = wb.sheet(sheet)?;
+    if dv.kind == ValidationKind::Any {
         return None;
     }
     if input.is_empty() && dv.allow_blank {
@@ -283,7 +294,17 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
+                // A blank cell breaks a rule with Ignore blank off. A spilled value or a picture in
+                // the cell has no text of its own and stays out.
+                if text.is_empty() && !sh.value(c).is_empty() {
+                    continue;
+                }
+                // Where a file's rules overlap, a cell is checked once, against the rule typing
+                // uses (the first one holding it).
+                if !sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).is_some_and(|d| std::ptr::eq(d, dv)) {
+                    continue;
+                }
+                if check_rule(&d.wb, sheet, c, dv, &text).is_some() {
                     bad_cells.push(c.a1());
                 }
             }
