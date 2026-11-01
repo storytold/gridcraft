@@ -249,7 +249,7 @@ pub const SHAPETYPE: &str = "<v:shapetype id=\"_x0000_t201\" coordsize=\"21600,2
 // ---------------------------------------------------------------- reading
 
 /// What a control's properties say, from `formControlPr` or VML `x:ClientData`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Props {
     kind: Option<ControlKind>,
     link: Option<String>,
@@ -420,6 +420,11 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels
     for r in rels {
         rel_by_id.entry(r.id.as_str()).or_insert(r);
     }
+    // Each properties part is read and parsed once, however many controls name it: every read is
+    // charged to the package's budget, so a file whose controls all point at one part would
+    // otherwise spend it on that part alone. A part that fails to read, or isn't a
+    // `formControlPr`, is remembered as nothing and not read again.
+    let mut props_by_part: HashMap<&str, Option<Props>> = HashMap::new();
     // Every shape the sheet lists, read here or not.
     let mut listed: HashSet<u64> = HashSet::new();
     for ctl in controls.map(controls_in).unwrap_or_default() {
@@ -430,9 +435,12 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels
         }
         let shape = shape_of(n);
         let vml_props = shape.and_then(props_from_vml);
-        let prop_part = ctl.attr("id").and_then(|id| rel_by_id.get(id)).map(|r| r.target.clone());
+        let prop_part = ctl.attr("id").and_then(|id| rel_by_id.get(id)).map(|r| r.target.as_str());
         let file_props = match prop_part {
-            Some(t) => cx.pkg.read_xml(&t).ok().flatten().filter(|e| e.name == "formControlPr").map(|e| props_from_ctrl_prop(&e)),
+            Some(t) => props_by_part
+                .entry(t)
+                .or_insert_with(|| cx.pkg.read_xml(t).ok().flatten().filter(|e| e.name == "formControlPr").map(|e| props_from_ctrl_prop(&e)))
+                .clone(),
             None => None,
         };
         let pr = ctl.child("controlPr");

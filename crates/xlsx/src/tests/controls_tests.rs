@@ -333,3 +333,44 @@ fn controls_come_from_the_legacy_drawing_not_the_header_and_footer_drawing() {
     assert_eq!(c.len(), 3, "{c:?}");
     assert_eq!(c[2].text, "Go");
 }
+
+/// Every listed control that names the same properties part shares one read of it. Each read is
+/// charged to the package's 1 GB budget, so 10,000 reads of a 200 KB part would spend it, drop the
+/// controls after that, and fail the parts read after the controls (here the sheet's notes). A
+/// hostile file can list that many controls against one part.
+#[test]
+fn controls_naming_one_properties_part_read_it_once() {
+    let n = 13_000;
+    let mut controls = String::from(r#"<controls xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">"#);
+    for i in 0..n {
+        let _ = std::fmt::Write::write_fmt(
+            &mut controls,
+            format_args!(
+                r#"<control shapeId="{}" r:id="rIdA" name="c{i}"><controlPr><anchor><from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{i}</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></controlPr></control>"#,
+                2000 + i,
+                i + 1
+            ),
+        );
+    }
+    controls.push_str("</controls>");
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/a.xml"/><Relationship Id="rIdN" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/></Relationships>"#;
+    // 200 KB of attribute whitespace: read once per control, 10,000 reads would be 2 GB.
+    let prop_a = format!(
+        r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Scroll" fmlaLink="$B$1"{}min="0" max="200" inc="5" page="20" val="45"/>"#,
+        " ".repeat(200 * 1024)
+    );
+    let notes = r#"<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Ann</author></authors><commentList><comment ref="A1" authorId="0"><text><t>read after the controls</t></text></comment></commentList></comments>"#;
+    let bytes = minimal(
+        &format!("<sheetData/>{controls}"),
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/ctrlProps/a.xml", &prop_a), ("xl/comments1.xml", notes)],
+        "",
+        "",
+    );
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 10_000, "the cap of one sheet, every control read from the one part");
+    assert!(sh.controls.iter().all(|c| {
+        c.kind == ControlKind::Slider && c.link.as_deref() == Some("$B$1") && (c.min, c.max, c.step, c.page, c.value) == (0, 200, 5, 20, 45)
+    }));
+    assert_eq!(sh.comments.len(), 1, "a part read after the controls still reads: {:?}", report.warnings);
+}
