@@ -127,3 +127,15 @@ fn the_editor_backdrop_is_the_fill_the_cell_shows() {
     assert!(backdrop, "the editor paints the conditional fill behind the text");
     assert!(!colors.is_empty() && colors.iter().all(|&c| c == Color32::WHITE), "{colors:?}");
 }
+
+#[test]
+fn a_formula_keeps_the_font_colour_and_colours_its_references() {
+    // #3011 review: in a formula, the references take their highlight colours and the rest of
+    // the text (`=`, operators, numbers) the cell's font colour.
+    let (colors, _) = editor_paint(&white_on_black, "=B2+1", Color32::BLACK);
+    assert!(colors.contains(&Color32::WHITE), "`=` and `+1` in the font colour: {colors:?}");
+    assert!(colors.iter().any(|&c| c != Color32::WHITE && c != Color32::BLACK), "`B2` in a reference colour: {colors:?}");
+    // On an automatic-colour cell the reference is coloured too.
+    let (plain, _) = editor_paint(&|_| {}, "=B2+1", Color32::WHITE);
+    assert!(plain.contains(&Color32::BLACK) && plain.iter().any(|&c| c != Color32::BLACK), "{plain:?}");
+}
