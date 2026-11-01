@@ -302,47 +302,60 @@ fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
 
 #[test]
 fn save_changes_shortcuts_save_before_closing() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-close-y-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Book.xlsx");
-    let mut h = harness(Services::default());
-    h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
-    request_window_close(&mut h);
-    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("quit"), Some(&serde_json::json!(true)));
-    h.key_press(egui::Key::Y);
-    let sent = step_commands(&mut h);
-    assert!(sent.contains(&egui::ViewportCommand::Close), "Y saves and continues quitting: {sent:?}");
-    assert!(h.state().dialog.is_none());
-    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
-    std::fs::remove_dir_all(dir).unwrap();
+    for language in [Language::En, Language::Fr] {
+        let dir = std::env::temp_dir().join(format!("gridcraft-close-y-{}-{}", std::process::id(), language.code()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Book.xlsx");
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.run_steps(2);
+        assert_eq!(gridcraft_ui_egui::i18n::current(&h.ctx), language);
+        h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        request_window_close(&mut h);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("quit"), Some(&serde_json::json!(true)));
+        if let Ok(prefix) = std::env::var("GRIDCRAFT_SAVE_LANGUAGE_SNAPSHOT") {
+            h.render().unwrap().save(format!("{prefix}-{}.png", language.code())).unwrap();
+        }
+        h.key_press(egui::Key::Y);
+        let sent = step_commands(&mut h);
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Y saves and continues quitting: {sent:?}");
+        assert!(h.state().dialog.is_none());
+        let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
 fn save_changes_shortcuts_cancel_or_discard_only_the_requested_workbook() {
-    let mut h = harness(Services::default());
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
-    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
-    let kept = h.state().session.doc().unwrap().uid;
-    // File Close asks about this workbook without starting an application quit.
-    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
-    h.run_steps(3);
-    h.key_press(egui::Key::Escape);
-    let sent = step_commands(&mut h);
-    assert!(!sent.contains(&egui::ViewportCommand::Close));
-    assert!(h.state().dialog.is_none());
-    assert_eq!(h.state().session.documents().len(), 2);
-    assert_eq!(h.state().session.doc().unwrap().uid, kept);
-    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
-    h.run_steps(3);
-    h.key_press(egui::Key::N);
-    let sent = step_commands(&mut h);
-    assert!(!sent.contains(&egui::ViewportCommand::Close));
-    assert_eq!(h.state().session.documents().len(), 1);
-    assert_ne!(h.state().session.doc().unwrap().uid, kept);
-    assert!(h.state().dialog.is_none());
+    for language in [Language::En, Language::Fr] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.run_steps(2);
+        assert_eq!(gridcraft_ui_egui::i18n::current(&h.ctx), language);
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+        let kept = h.state().session.doc().unwrap().uid;
+        // File Close asks about this workbook without starting an application quit.
+        h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.doc().unwrap().uid, kept);
+        h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+        h.run_steps(3);
+        h.key_press(egui::Key::N);
+        let sent = step_commands(&mut h);
+        assert!(!sent.contains(&egui::ViewportCommand::Close));
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_ne!(h.state().session.doc().unwrap().uid, kept);
+        assert!(h.state().dialog.is_none());
+    }
 }
 
 #[test]

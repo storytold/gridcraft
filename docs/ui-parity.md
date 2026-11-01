@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Save Changes keyboard ownership under manual update results; earlier: startup update prompt, checkbox printing, formula-reference Ctrl+arrow, hyperlink editing, AutoSum selected-row totals and macro interface; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Save Changes fixed answer bindings across UI languages; keyboard ownership under manual update results; earlier: startup update prompt, checkbox printing, formula-reference Ctrl+arrow, hyperlink editing, AutoSum selected-row totals and macro interface; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -104,7 +104,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 |---|---|---|---|
 | Ctrl+C / X / V, Ctrl+Z / Y, Ctrl+A, Ctrl+B / I / U | same with Cmd | clipboard, undo/redo, select all, bold/italic/underline | present |
 | Ctrl+S, Ctrl+Shift+S, Ctrl+O, Ctrl+N, Ctrl+W | Cmd | save, save as, open, new, close | present |
-| Y / N / Esc in Save Changes | same | Save / Don't Save / Cancel | added (#2572); Y/N require no modifiers and answer on release; Save/Don't Save waits for all held Y/N keys, including mouse/key mixtures; native and browser repeats cannot arm a question after focus switches or returns; a covering macro question, message, startup update prompt or manual-check result card owns the keys and cancels any armed/pending workbook answer, including the pass that dismisses either update card; focus loss cancels pending answers, Esc cancels immediately and overrides other answers in the same input batch; a cancelled or failed save keeps the workbook open |
+| Y / N / Esc in Save Changes | same | Save / Don't Save / Cancel | added (#2572); Y/N/Esc are the explicit answer bindings across UI languages, not inferred button-label mnemonics; Y/N require no modifiers and answer on release; Save/Don't Save waits for all held Y/N keys, including mouse/key mixtures; native and browser repeats cannot arm a question after focus switches or returns; a covering macro question, message, startup update prompt or manual-check result card owns the keys and cancels any armed/pending workbook answer, including the pass that dismisses either update card; focus loss cancels pending answers, Esc cancels immediately and overrides other answers in the same input batch; a cancelled or failed save keeps the workbook open |
 | Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+K, Ctrl+T | Cmd (Ctrl+H) | find, replace, go to, hyperlink, table | present |
 | Ctrl+D, Ctrl+R, Ctrl+E, Ctrl+1, Ctrl+9 / 0, Ctrl+Shift+9 / 0 | Cmd (Ctrl+E on Mac: see below) | fill down/right, Flash Fill, Format Cells, hide/unhide | present |
 | Ctrl+- , Ctrl+Shift+= , Ctrl+numpad + | Cmd | Delete / Insert cells dialog | present |
@@ -195,6 +195,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Save Changes retains the requested Y/N/Esc answer bindings when the UI language changes; locale-specific button mnemonics are not inferred (#2572) |
 | 2026-10-31 | minor | Save Changes yields its keyboard answers to manual-update checking, newest-version and failed-result cards, clears armed/pending answers through their first and dismissal passes, and accepts fresh input after they close (#2572) |
 | 2026-10-30 | minor | Save Changes yields its keyboard answers to the desktop update prompt, clears armed/pending answers while covered and ignores stale releases even in the frame that Escape or Later dismisses the update prompt (#2572) |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
