@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-25 · **Change:** minor (recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-01 · **Change:** minor (options commands such as `options.newWorkbooks` change the app and never run in a macro)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -101,8 +101,9 @@ refused rather than read as the header.
 `macro.run {name, inputs?, onConflict?, overwrite?, approve?, timeLimit?}`:
 
 1. **Policy.** File commands other than Properties, exports and printing (such as Open, Save
-   and Close), app, window (including New Window, Hide and Unhide), automate and macro commands,
-   and Undo and Redo, never run in a macro. File › Properties runs, and so do exports and
+   and Close), app and options commands (such as `options.newWorkbooks`), window (including
+   New Window, Hide and Unhide), automate and macro commands, and Undo and Redo, never run in
+   a macro. File › Properties runs, and so do exports and
    printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a

@@ -1,7 +1,7 @@
 //! Formatting: Home › Font, Alignment, Number, Styles, Cells › Format.
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, NumFmt, Style, StyleId, Theme, Underline, VAlign, VertAlign};
+use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, NumFmt, Style, StyleId, Underline, VAlign, VertAlign};
 use serde_json::{Value as Json, json};
 
 use super::{

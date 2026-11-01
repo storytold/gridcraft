@@ -1177,6 +1177,7 @@ fn the_policy_keeps_macros_away_from_files_and_the_app() {
         ("file.saveAs", json!({"path": "/tmp/x.xlsx"})),
         ("file.close", json!({})),
         ("app.language.set", json!({"language": "de"})),
+        ("options.newWorkbooks", json!({"font": "Arial"})),
         ("automate.runScript", json!({"name": "Script 1"})),
         ("edit.undo", json!({})),
         ("macro.run", json!({"name": "Self"})),

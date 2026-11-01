@@ -26,6 +26,7 @@ pub enum Policy {
 const DENIED_PREFIXES: &[(&str, &str)] = &[
     ("file.", "macros don't open, save, close or create workbooks"),
     ("app.", "macros don't change the app"),
+    ("options.", "macros don't change the app"),
     ("window.", "macros don't switch windows"),
     ("automate.", "macros don't record or run scripts or other macros"),
     ("macro.", "macros don't record or run other macros"),
@@ -102,6 +103,7 @@ mod tests {
             "file.close",
             "file.new",
             "app.commands",
+            "options.newWorkbooks",
             "window.activate",
             "automate.runScript",
             "automate.recordActions",
