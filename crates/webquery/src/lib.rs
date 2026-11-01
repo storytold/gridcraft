@@ -51,6 +51,23 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     // The same gate every caller applies (https, no userinfo), kept here so the provider never
     // forwards an embedded credential even if a caller skipped its own validation.
     gridcraft_engine::webquery::validate_url(&req.url)?;
+    // SSRF: the host must resolve off the user's own network. A spreadsheet command that
+    // fetches a URL lets a shared workbook (or an agent) point the app at the machine it runs
+    // on \u{2014} localhost, the link-local cloud-metadata endpoint, a private or loopback
+    // range \u{2014} and import the response into a cell, a data-exfiltration channel. The
+    // resolved addresses are checked, not the name: `https://attacker.example` pointing at
+    // `192.168.0.5` is refused, not just a literal `192.168.0.5`. Every resolved address must
+    // be a public one; a name with mixed records (one public, one private) is refused too.
+    // Redirects are not followed (max_redirects(0) below), so this one resolution is the only
+    // place a connection can be made to.
+    let host = host_of(&req.url);
+    let mut addrs = std::net::ToSocketAddrs::to_socket_addrs(&*host).map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?;
+    if addrs.any(|a| {
+        let ip = a.ip();
+        ip.is_loopback() || ip.is_unspecified() || is_private_or_shared(&ip)
+    }) {
+        return Err(format!("\u{2018}{host}\u{2019} is an address on this machine or its network, and can\u{2019}t be imported from."));
+    }
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .max_redirects(0)
@@ -133,6 +150,38 @@ fn meta_charset(bytes: &[u8]) -> Option<String> {
     None
 }
 
+/// The URL's `host:port`, as `to_socket_addrs` takes it: the authority without userinfo,
+/// resolved here so the SSRF gate can check where the name actually points.
+fn host_of(url: &str) -> String {
+    let authority = url.trim_start().trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    // A bare hostname resolves on the default https port; bracketed IPv6 keeps its brackets,
+    // which `to_socket_addrs` accepts, and an explicit port is passed through.
+    if host.starts_with('[') || host.contains(':') && !host.split(':').nth(1).is_some_and(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty()) {
+        host.to_string()
+    } else if let Some((h, port)) = host.rsplit_once(':') {
+        format!("{h}:{port}")
+    } else {
+        host.to_string()
+    }
+}
+
+/// The private and shared ranges the SSRF gate refuses: RFC 1918 (10/8, 172.16/12, 192.168/16),
+/// the CGNAT and benchmarking ranges, the `0.0.0.0/8` "this host" block, and IPv6's `fc00::/7`
+/// (unique local) and `fe80::/10` (link-local).
+fn is_private_or_shared(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            o[0] == 0 || o[0] == 10 || o[0] == 127 || (o[0] == 169 && o[1] == 254) || (o[0] == 172 && (16..32).contains(&o[1])) || (o[0] == 192 && o[1] == 168) || (o[0] == 100 && (64..128).contains(&o[1])) || (o[0] == 198 && (18..20).contains(&o[1]))
+        }
+        std::net::IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80 || v6.is_loopback()
+        }
+    }
+}
+
 /// The `Content-Type` header's `charset` value, if it names one: parameter names match
 /// case-insensitively and a quoted value loses its quotes, both of which ureq's own
 /// `Body::charset()` leaves as-is (exact lowercase `charset=`, quotes kept), so a quoted or
@@ -180,6 +229,32 @@ mod tests {
         );
         assert_eq!(meta_charset(b"<html><head><title>x</title></head>"), None);
         assert_eq!(meta_charset(b"<p>charset= is not a tag</p>"), None);
+    }
+
+    #[test]
+    /// The SSRF gate refuses every address on the user's own machine or network: the loopback
+    /// and "this host" blocks, the link-local cloud-metadata range, the RFC 1918 private
+    /// ranges, and their IPv6 counterparts. A public address passes.
+    fn the_ssrf_gate_refuses_local_and_private_addresses() {
+        for ip in ["127.0.0.1", "127.8.8.8", "0.0.0.0", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.5", "169.254.169.254", "100.64.0.1", "198.18.0.1", "::1", "fc00::1", "fe80::1"] {
+            let addr: std::net::IpAddr = ip.parse().expect("valid address");
+            assert!(is_private_or_shared(&addr) || addr.is_loopback() || addr.is_unspecified(), "{ip} must be refused");
+        }
+        for ip in ["93.184.216.34", "172.32.0.1", "172.15.0.1", "192.169.0.1", "8.8.8.8", "2606:2800:220:1::1"] {
+            let addr: std::net::IpAddr = ip.parse().expect("valid address");
+            assert!(!is_private_or_shared(&addr) && !addr.is_loopback() && !addr.is_unspecified(), "{ip} must pass");
+        }
+    }
+
+    #[test]
+    /// The host a URL is resolved against: the authority without userinfo, with an explicit
+    /// port kept and a bare name left to the default https port.
+    fn the_host_is_the_authority_without_userinfo() {
+        assert_eq!(host_of("https://example.com/table.html"), "example.com");
+        assert_eq!(host_of("https://example.com:8443/x"), "example.com:8443");
+        assert_eq!(host_of("https://user:pass@example.com/x"), "example.com");
+        assert_eq!(host_of("https://[2001:db8::1]/x"), "[2001:db8::1]");
+        assert_eq!(host_of("https://[2001:db8::1]:9443/x"), "[2001:db8::1]:9443");
     }
 
     #[test]
