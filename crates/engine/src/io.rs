@@ -168,6 +168,11 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
         for (anchor, range) in spills {
             let Some(left) = budget.checked_sub(range.count()) else {
                 skipped += 1;
+                // The cell keeps only its own value, so its cached spill goes too: the sheet would
+                // otherwise show spilled values that no result holds.
+                if let Some(r) = sh.spill_ranges.remove(&anchor) {
+                    sh.clear_spill(r);
+                }
                 continue;
             };
             budget = left;

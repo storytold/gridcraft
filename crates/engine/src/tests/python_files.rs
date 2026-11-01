@@ -261,6 +261,40 @@ fn many_cells_naming_one_long_script_take_from_one_budget() {
 }
 
 #[test]
+fn a_result_cut_by_the_budget_takes_its_cached_spill_with_it() {
+    // Five Python cells each with a cached 1,000 x 1,000 spill: the budget rebuilds four results;
+    // the fifth cell keeps only its own value, and its spilled values no longer show.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for i in 0..5u32 {
+        let anchor = CellRef::new(0, i * 1_000);
+        sh.set_cell(anchor, Cell { py: Some(Arc::new(PyCode::new("x"))), ..Cell::value(Value::Number(1.0)) });
+        sh.spill_ranges.insert(anchor, RangeRef::new(anchor, CellRef::new(999, i * 1_000 + 999)));
+        sh.spill.insert(CellRef::new(1, i * 1_000), Value::Number(7.0));
+        sh.spill.insert(CellRef::new(999, i * 1_000 + 999), Value::Number(8.0));
+    }
+    let warnings = crate::io::adopt_python(&mut wb);
+    assert!(warnings.iter().any(|w| w.contains("Python")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    let mut cut = 0;
+    for i in 0..5u32 {
+        let anchor = CellRef::new(0, i * 1_000);
+        let rebuilt = sh.cell(anchor).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_some());
+        let (below, corner) = (sh.value(CellRef::new(1, i * 1_000)), sh.value(CellRef::new(999, i * 1_000 + 999)));
+        if rebuilt {
+            assert_eq!((below, corner), (Value::Number(7.0), Value::Number(8.0)), "a result within the budget keeps its spill");
+            assert!(sh.spill_ranges.contains_key(&anchor));
+        } else {
+            cut += 1;
+            assert_eq!((below, corner), (Value::Empty, Value::Empty), "no stale spilled values beyond the anchor");
+            assert!(!sh.spill_ranges.contains_key(&anchor));
+            assert_eq!(sh.value(anchor), Value::Number(1.0), "the cell keeps its own cached value");
+        }
+    }
+    assert_eq!(cut, 1);
+}
+
+#[test]
 fn native_json_keeps_python_cells_and_their_results() {
     let (mut s, long) = build();
     let bytes = save(&mut s, "json");
