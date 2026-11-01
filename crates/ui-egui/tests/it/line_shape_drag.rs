@@ -331,3 +331,21 @@ fn the_shape_tool_command_arms_validates_and_is_listed() {
     let entry = listed["result"].as_array().unwrap().iter().find(|c| c["id"] == "ui.shapeTool").expect("ui.shapeTool is listed").clone();
     assert_eq!(entry["ui"], true);
 }
+
+/// Alt, N, S, H opens the Shapes gallery rather than inserting a rectangle (a key tip can't drag),
+/// and picking a shape there arms the pointer like a click does (PR #3078 review).
+#[test]
+fn the_shapes_keytip_opens_the_gallery_and_the_pick_arms_the_pointer() {
+    let mut h = harness();
+    for k in [egui::Key::F10, egui::Key::N, egui::Key::S, egui::Key::H] {
+        let ev = |pressed| Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([ev(true), ev(false)]);
+        h.run_steps(2);
+    }
+    h.run_steps(2);
+    assert!(h.state().session.doc().unwrap().wb.active().unwrap().shapes.is_empty(), "the key tip inserts nothing by itself");
+    assert!(h.query_by_label("Line").is_some(), "the Shapes gallery is open");
+    h.get_by_label("Line").click();
+    h.run_steps(4);
+    assert_eq!(h.state().grid.shape_tool.as_deref(), Some("line"), "the picked shape arms the pointer");
+}

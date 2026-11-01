@@ -26,8 +26,10 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     let shapes = big_button(ui, Icon::Shapes, "Shapes", "Shapes", true);
-    anchor_keytip(app, ui, &shapes, &["insert.shape"]);
-    egui::Popup::menu(&shapes).show(|ui| {
+    control_keytip(app, ui, &shapes, "ui.shapeTool");
+    // Alt, N, S, H opens the gallery (a key tip can't pick a drag), as clicking the button does.
+    let forced = invoke(app, "ui.shapeTool");
+    egui::Popup::menu(&shapes).open_memory(popup_command(forced, shapes.clicked())).show(|ui| {
         for (label, kind) in [
             ("Rectangle", "rectangle"),
             ("Rounded Rectangle", "roundedRectangle"),

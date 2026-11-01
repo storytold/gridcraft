@@ -1330,7 +1330,8 @@ fn keytip_nsf_() {
 fn keytip_nsh_() {
     let mut h = harness(blank());
     sequence(&mut h, "NSH", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.shape"), "NSH must journal insert.shape");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NSH must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
