@@ -864,6 +864,52 @@ mod tests {
     }
 
     #[test]
+    fn arabic_vowel_and_direction_marks_add_no_width() {
+        let plain = approx_text_width("محمد يدرس في المدرسة", 11.0, false);
+        assert_eq!(approx_text_width("مُحَمَّد يَدْرُسُ فِي الْمَدْرَسَةِ", 11.0, false), plain);
+        assert_eq!(approx_text_width("\u{200F}محمد يدرس في المدرسة\u{200C}", 11.0, false), plain);
+        assert_eq!(approx_text_width("ب\u{0897}\u{0898}\u{089F}", 11.0, false), approx_text_width("ب", 11.0, false));
+        assert!(approx_text_width("\u{08E2}", 11.0, false) > 0.0, "the disputed end of ayah is a visible sign");
+    }
+
+    #[test]
+    fn arabic_text_fits_a_column_about_as_wide_as_latin_text_of_the_same_length() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["مُحَمَّد يَدْرُسُ فِي الْمَدْرَسَةِ", "Hello there in school"]]})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:B"})).unwrap();
+        let doc = s.doc().unwrap();
+        let width = |c: u32| doc.wb.active().and_then(|sh| sh.cols.get(&c)).and_then(|e| e.size).unwrap();
+        let ratio = width(0) / width(1);
+        assert!((0.75..=1.15).contains(&ratio), "Arabic {} vs Latin {}", width(0), width(1));
+    }
+
+    #[test]
+    fn arabic_word_ligatures_are_wider_than_letters() {
+        let em = |t: &str| approx_text_width(t, 72.0, false) / 96.0;
+        assert!(em("\u{FDFD}") > 8.0);
+        assert!(em("\u{FDFA}") > 1.0);
+        let honorifics = ['\u{FD40}', '\u{FD4B}', '\u{FD4C}', '\u{FD4F}', '\u{FDC8}', '\u{FDCF}', '\u{FDFE}', '\u{FDFF}'];
+        for honorific in honorifics.into_iter().chain(['\u{FBC3}', '\u{FBD2}', '\u{FD90}', '\u{FD91}']) {
+            assert!(em(&honorific.to_string()) > 1.0, "U+{:04X}", u32::from(honorific));
+        }
+        assert!(em("ب") < 0.6);
+    }
+
+    #[test]
+    fn arabic_digits_are_as_wide_as_ascii_digits_and_punctuation_as_a_letter() {
+        let width = |t: &str| approx_text_width(t, 11.0, false);
+        assert_eq!(width("١٢٣"), width("123"));
+        assert_eq!(width("۴۵۶"), width("456"));
+        assert_eq!(width("،؟"), width("بب"));
+    }
+
+    #[test]
+    fn cjk_text_keeps_a_full_em_per_character() {
+        assert_eq!(approx_text_width("中文", 12.0, false), 2.0 * 12.0 * 96.0 / 72.0);
+    }
+
+    #[test]
     fn width_units() {
         assert_eq!(chars_to_points(8.43), 64.0);
         assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
