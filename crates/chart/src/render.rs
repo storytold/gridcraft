@@ -2,7 +2,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -25,16 +25,18 @@ pub use trend::supports_trendline;
 
 pub(crate) const TEXT: Rgba = [0x59, 0x59, 0x59, 0xFF];
 const DARK_TEXT: Rgba = [0x26, 0x26, 0x26, 0xFF];
-const GRID: Rgba = [0xD9, 0xD9, 0xD9, 0xFF];
+const GRID: Rgba = [0xE6, 0xE8, 0xE6, 0xFF];
+/// The chart card's outline.
+const FRAME: Rgba = [0xE3, 0xE5, 0xE3, 0xFF];
 const AXIS: Rgba = [0xBF, 0xBF, 0xBF, 0xFF];
 const WHITE: Rgba = [0xFF, 0xFF, 0xFF, 0xFF];
 const STOCK: Rgba = [0x40, 0x40, 0x40, 0xFF];
 pub(crate) const UP: Rgba = [0x3E, 0x9B, 0x5F, 0xFF];
 pub(crate) const DOWN: Rgba = [0xD6, 0x4F, 0x45, 0xFF];
 
-const TITLE_SIZE: f32 = 14.0;
-const LABEL_SIZE: f32 = 9.0;
-const AXIS_TITLE_SIZE: f32 = 10.0;
+const TITLE_SIZE: f32 = 16.0;
+const LABEL_SIZE: f32 = 12.0;
+const AXIS_TITLE_SIZE: f32 = 12.0;
 /// Most categories drawn by category-axis charts.
 const MAX_CATS: usize = 20_000;
 /// Lines with more points than this are decimated (min/max per pixel column).
@@ -127,19 +129,40 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     }
     let data = sanitize(data);
     let mut ctx = Ctx { out: Vec::new(), m };
-    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
-    let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
+    // A white card with softly rounded corners and a hairline outline.
+    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((FRAME, 1.0)), radius: (w.min(h) * 0.04).clamp(0.0, 10.0) });
+    let pad = (w.min(h) * 0.05).clamp(2.0, 14.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
+    let entries = legend_entries(chart, &data);
+    let mut legend_done = false;
     if let Some(t) = chart_title(chart, &data) {
+        // The title sits at the top left in semibold; a top legend shares its line on the right
+        // when both fit.
         let size = TITLE_SIZE.min(h * 0.12).max(4.0);
-        let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
-        let used = size * 1.3 + 4.0;
+        let legend_w = legend::inline_width(&ctx, &entries);
+        let beside = chart.legend == LegendPos::Top && !entries.is_empty() && ctx.tw(&t, size) + legend_w + 24.0 <= area.w;
+        let room = if beside { area.w - legend_w - 24.0 } else { area.w };
+        let t = ctx.fit(&t, size, room);
+        ctx.out.push(Prim::Text {
+            x: area.x,
+            y: area.y,
+            text: t,
+            size,
+            color: DARK_TEXT,
+            bold: true,
+            align: HAlign::Left,
+            valign: VAlign::Top,
+            rotation: 0.0,
+        });
+        if beside {
+            legend::draw_inline(&mut ctx, &entries, area.right() - legend_w, area.y + size * 0.55);
+            legend_done = true;
+        }
+        let used = size * 1.3 + 10.0;
         area.y += used;
         area.h -= used;
     }
-    let entries = legend_entries(chart, &data);
-    if !entries.is_empty() && area.ok() {
+    if !legend_done && !entries.is_empty() && area.ok() {
         area = draw_legend(&mut ctx, &entries, chart.legend, area);
     }
     if area.ok() && !data.series.is_empty() {

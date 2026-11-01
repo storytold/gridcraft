@@ -27,9 +27,9 @@ use options::{options, platform};
 use print::print;
 
 /// Width of the navigation column.
-const NAV_W: f32 = 196.0;
+const NAV_W: f32 = 212.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
-const CONTENT_W: f32 = 760.0;
+const CONTENT_W: f32 = 1160.0;
 
 /// A Backstage page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,12 +164,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(&ctx);
     let lang = app.ui.language;
     let mut out = Outcome::default();
-    let (nav_bg, nav_text, nav_sel) =
-        if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
+    // A calm column on the window colour; the open page is a white pill with an accent bar.
+    let (nav_bg, nav_text, nav_sel) = (t.window, t.text, t.ribbon);
     egui::Panel::left("backstage_nav")
+        .show_separator_line(false)
         .exact_size(NAV_W)
         .resizable(false)
-        .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 12 }))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
@@ -209,26 +211,51 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
-                ui.set_max_width(CONTENT_W);
-                ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
-                ui.add_space(18.0);
-                match bs.page {
-                    Page::Home => home(app, ui, &mut bs, &mut out),
-                    Page::New => new_page(app, ui, &mut out),
-                    Page::Open => open_page(app, ui, &mut bs, &mut out),
-                    Page::Info => info(app, ui, &mut bs),
-                    Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
-                    Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
-                    Page::Options => options(app, ui),
-                    Page::Account => account(app, ui),
-                }
+    // The page sits on a white card with window-coloured gutters, its content centred.
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 0, right: 8, top: 0, bottom: 8 })).show(
+        ui,
+        |ui| {
+            let card = ui.max_rect();
+            ui.painter().rect_filled(card, 12.0, t.ribbon);
+            ui.painter().rect_stroke(card, 12.0, Stroke::new(1.0, t.ribbon_border), egui::StrokeKind::Inside);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                // The left gutter is a layout offset, not a `Margin` (whose i8 would cap it at
+                // 127 px and pull the column off centre in wide windows).
+                let side = ((ui.available_width() - CONTENT_W) / 2.0).max(40.0);
+                let mut column = ui.available_rect_before_wrap();
+                column.min.x += side;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                    egui::Frame::NONE.inner_margin(egui::Margin { left: 0, right: 32, top: 40, bottom: 40 }).show(ui, |ui| {
+                        ui.set_max_width(CONTENT_W);
+                        let title = if bs.page == Page::Home { greeting(lang) } else { lang.tr(bs.page.label()).to_string() };
+                        ui.label(RichText::new(title).font(theme::ui_bold(26.0)).color(t.text));
+                        if bs.page == Page::Home {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(lang.tr("Start a new workbook or pick up where you left off."))
+                                    .font(theme::ui_font(13.5))
+                                    .color(t.text_dim),
+                            );
+                            ui.add_space(10.0);
+                            tip_line(ui, lang);
+                        }
+                        ui.add_space(22.0);
+                        match bs.page {
+                            Page::Home => home(app, ui, &mut bs, &mut out),
+                            Page::New => new_page(app, ui, &mut out),
+                            Page::Open => open_page(app, ui, &mut bs, &mut out),
+                            Page::Info => info(app, ui, &mut bs),
+                            Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
+                            Page::Print => print(app, ui, &mut bs, &mut out),
+                            Page::Export => export(app, ui, &mut out),
+                            Page::Options => options(app, ui),
+                            Page::Account => account(app, ui),
+                        }
+                    });
+                });
             });
-        });
-    });
+        },
+    );
     if !typing
         && app.dialog.is_none()
         && app.message.is_none()
@@ -266,24 +293,44 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
 
 /// Allocates and paints one Backstage navigation row: selected or hover fill, icon, label and button semantics. Returns the row's click response.
 fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, 38.0), Sense::click());
+    let t = Tokens::get(ui.ctx());
+    let (slot, resp) = ui.allocate_exact_size(vec2(NAV_W, 36.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    let rect = Rect::from_min_max(pos2(slot.left() + 10.0, slot.top() + 1.0), pos2(slot.right() - 10.0, slot.bottom() - 1.0));
     let p = ui.painter();
     if selected {
-        p.rect_filled(rect, 0.0, sel);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
-    } else if resp.hovered() {
-        p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
+        p.rect_filled(rect, 8.0, sel);
+        p.rect_stroke(rect, 8.0, Stroke::new(1.0, t.ribbon_border), egui::StrokeKind::Inside);
+        p.rect_filled(Rect::from_min_size(pos2(slot.left() + 2.0, rect.top() + 8.0), vec2(3.0, rect.height() - 16.0)), 1.5, t.accent);
+    } else if let Some(fill) = crate::widgets::hover_fill(ui, resp.id, resp.hovered(), t.hover) {
+        p.rect_filled(rect, 8.0, fill);
     }
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
-    p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
+    let icon_color = if selected { t.accent } else { text };
+    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(16.0, 16.0)), icon, icon_color);
+    let font = if selected { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
+    p.text(pos2(rect.left() + 36.0, rect.center().y), Align2::LEFT_CENTER, label, font, text);
     resp
 }
 
-fn nav_separator(ui: &mut Ui, text: Color32) {
+fn nav_separator(ui: &mut Ui, _text: Color32) {
+    let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(NAV_W, 17.0), Sense::hover());
     let y = rect.center().y;
-    ui.painter().line_segment([pos2(rect.left() + 20.0, y), pos2(rect.right() - 20.0, y)], Stroke::new(1.0, text.gamma_multiply(0.35)));
+    ui.painter().line_segment([pos2(rect.left() + 20.0, y), pos2(rect.right() - 20.0, y)], Stroke::new(1.0, t.ribbon_border));
+}
+
+/// "Good morning / afternoon / evening" for the Home page, by the local hour.
+fn greeting(lang: Language) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    let hour = chrono::Timelike::hour(&chrono::Local::now());
+    #[cfg(target_arch = "wasm32")]
+    let hour = 12;
+    lang.tr(match hour {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        _ => "Good evening",
+    })
+    .to_string()
 }
 
 // ---------------------------------------------------------------- shared pieces
@@ -300,20 +347,90 @@ fn dim(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
 }
 
-/// A new-workbook tile: a small sheet drawn in code over its name.
-fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
+/// Seconds each sheet shows while a thumbnail flips through a workbook's sheets on hover, and the
+/// cross-fade between them.
+const FLIP_SECONDS: f64 = 1.1;
+const FADE_SECONDS: f64 = 0.25;
+
+/// Paints a workbook's sheet thumbnails into `rect`: the first sheet at rest; while `hovered`,
+/// each sheet in turn with a cross-fade, its name in a small label at the bottom left.
+fn paint_pages(ui: &Ui, id: egui::Id, rect: Rect, radius: f32, pages: &[crate::thumbnail::Page], hovered: bool, label: bool) {
+    let Some(first) = pages.first() else { return };
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(150.0, 140.0), Sense::click());
+    let now = ui.input(|i| i.time);
+    let start_id = id.with("flip_start");
+    let start: Option<f64> = ui.ctx().data(|d| d.get_temp(start_id));
+    let (shown, next, fade) = if hovered && pages.len() > 1 {
+        let start = start.unwrap_or_else(|| {
+            ui.ctx().data_mut(|d| d.insert_temp(start_id, now));
+            now
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
+        // The first sheet stays for a moment before the flipping starts.
+        let elapsed = (now - start - 0.35).max(0.0);
+        let step = (elapsed / FLIP_SECONDS) as usize;
+        let into = elapsed - step as f64 * FLIP_SECONDS;
+        let fade = if crate::widgets::animations_on(ui.ctx()) {
+            ((into - (FLIP_SECONDS - FADE_SECONDS)) / FADE_SECONDS).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        (step % pages.len(), (step + 1) % pages.len(), fade)
+    } else {
+        if start.is_some() {
+            ui.ctx().data_mut(|d| d.remove::<f64>(start_id));
+        }
+        (0, 0, 0.0)
+    };
+    let draw = |page: &crate::thumbnail::Page, alpha: f32| {
+        egui::Image::from_texture(egui::load::SizedTexture::new(page.texture, rect.size()))
+            .corner_radius(radius)
+            .tint(Color32::WHITE.gamma_multiply(alpha))
+            .paint_at(ui, rect);
+    };
+    let current = pages.get(shown).unwrap_or(first);
+    draw(current, 1.0);
+    if fade > 0.0
+        && let Some(n) = pages.get(next)
+    {
+        draw(n, fade);
+    }
+    if label && hovered && pages.len() > 1 {
+        let name = if fade > 0.5 { pages.get(next).unwrap_or(current) } else { current };
+        let text = format!("{}  {}/{}", name.name, if fade > 0.5 { next + 1 } else { shown + 1 }, pages.len());
+        let galley = ui.painter().layout_no_wrap(text, theme::ui_font(11.0), t.text);
+        let pill = Rect::from_min_size(pos2(rect.left() + 8.0, rect.bottom() - 8.0 - 20.0), vec2(galley.size().x + 16.0, 20.0));
+        ui.painter().rect_filled(pill, 10.0, t.window);
+        ui.painter().rect_stroke(pill, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+        ui.painter().galley(pos2(pill.left() + 8.0, pill.center().y - galley.size().y / 2.0), galley, t.text);
+    }
+}
+
+/// A new-workbook tile: the workbook's thumbnails (flipping through its sheets on hover), or for a
+/// blank book or while they are being drawn, a small empty sheet, over its name.
+fn tile(ui: &mut Ui, label: &str, sample: Option<usize>, pages: &[crate::thumbnail::Page]) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(208.0, 186.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
-    let thumb = Rect::from_min_size(rect.min, vec2(rect.width(), 104.0));
-    p.rect_filled(thumb, 4.0, t.grid_bg);
-    let edge = if resp.hovered() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.ribbon_border) };
-    let inner = thumb.shrink(10.0);
+    let thumb = Rect::from_min_size(rect.min, vec2(rect.width(), 140.0));
+    // The empty sheet follows the theme, as the drawn thumbnails do.
+    p.rect_filled(thumb, 8.0, t.sheet_bg(true));
+    let edge = if resp.hovered() { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.ribbon_border) };
+    if !pages.is_empty() {
+        paint_pages(ui, resp.id, thumb, 8.0, pages, resp.hovered(), true);
+        let edge = if resp.hovered() { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.ribbon_border) };
+        ui.painter().rect_stroke(thumb, 8.0, edge, StrokeKind::Inside);
+        let galley = ui.painter().layout(label.to_string(), theme::ui_font(13.0), t.text, rect.width());
+        ui.painter().galley(pos2(rect.left() + 2.0, thumb.bottom() + 8.0), galley, t.text);
+        return resp;
+    }
+    let inner = thumb.shrink(12.0);
     let (rows, cols) = (7, 4);
     let (rh, cw) = (inner.height() / rows as f32, inner.width() / cols as f32);
     if let Some(i) = sample {
-        // A header band and a few "values" so each sample reads differently from a blank book.
+        // Until its thumbnail arrives: a header band and a few "values", so the sample reads
+        // differently from a blank book.
         p.rect_filled(Rect::from_min_size(inner.min, vec2(inner.width(), rh)), 0.0, t.accent_soft);
         for r in 1..rows {
             let len = ((r * (i + 2) * 7 + i * 3) % 10) as f32 / 10.0;
@@ -326,15 +443,15 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
     }
     for r in 0..=rows {
         let y = inner.top() + r as f32 * rh;
-        p.line_segment([pos2(inner.left(), y), pos2(inner.right(), y)], Stroke::new(1.0, t.gridline));
+        p.line_segment([pos2(inner.left(), y), pos2(inner.right(), y)], Stroke::new(1.0, if t.dark { t.separator } else { t.gridline }));
     }
     for c in 0..=cols {
         let x = inner.left() + c as f32 * cw;
-        p.line_segment([pos2(x, inner.top()), pos2(x, inner.bottom())], Stroke::new(1.0, t.gridline));
+        p.line_segment([pos2(x, inner.top()), pos2(x, inner.bottom())], Stroke::new(1.0, if t.dark { t.separator } else { t.gridline }));
     }
-    p.rect_stroke(thumb, 4.0, edge, StrokeKind::Inside);
-    let galley = p.layout(label.to_string(), theme::ui_font(12.5), t.text, rect.width());
-    p.galley(pos2(rect.left(), thumb.bottom() + 6.0), galley, t.text);
+    p.rect_stroke(thumb, 8.0, edge, StrokeKind::Inside);
+    let galley = p.layout(label.to_string(), theme::ui_font(13.0), t.text, rect.width());
+    p.galley(pos2(rect.left() + 2.0, thumb.bottom() + 8.0), galley, t.text);
     resp
 }
 
@@ -342,13 +459,15 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
 fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     let lang = app.ui.language;
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(18.0, 14.0);
-        if tile(ui, lang.tr("Blank workbook"), None).clicked() {
+        ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
+        if tile(ui, lang.tr("Blank workbook"), None, &[]).clicked() {
             app.run_or_alert("file.new", json!({}));
             out.close = true;
         }
+        let dark = Tokens::get(ui.ctx()).dark && app.ui.dark_sheet;
         for (i, (name, title)) in gridcraft_engine::sample::SAMPLES.iter().enumerate() {
-            if tile(ui, title, Some(i)).clicked() {
+            let pages = app.thumbnails.pages(ui.ctx(), &crate::thumbnail::Source::Sample((*name).to_string()), dark);
+            if tile(ui, title, Some(i), &pages).clicked() {
                 app.run_or_alert("file.new", json!({"sample": name}));
                 out.close = true;
             }
@@ -363,6 +482,9 @@ fn split_path(path: &str) -> (String, String) {
     let folder = p.parent().and_then(std::path::Path::to_str).unwrap_or("").to_string();
     (name, folder)
 }
+
+/// Where a recent workbook's name starts, after its thumbnail.
+const THUMB_X: f32 = 88.0;
 
 /// Width of the column that tells when a recent workbook was last changed.
 const MODIFIED_W: f32 = 150.0;
@@ -381,31 +503,65 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
     let known = bs.recent.known(ui.ctx(), &app.ui.recent);
     // The web build has no files to ask about, and a narrow window leaves the names their room.
     let modified_w = if cfg!(target_arch = "wasm32") || width < 420.0 { 0.0 } else { MODIFIED_W };
-    if modified_w > 0.0 {
-        let (head, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
-        ui.painter().text(
-            pos2(head.right() - modified_w, head.center().y),
-            Align2::LEFT_CENTER,
-            lang.tr("Modified"),
-            theme::ui_font(11.5),
-            t.text_dim,
-        );
+    // Column heads over a hairline: Name, Location, Modified.
+    let location_x = (width * 0.52).max(260.0);
+    let show_location = width >= 560.0;
+    {
+        let (head, _) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
+        let p = ui.painter();
+        p.text(pos2(head.left() + THUMB_X, head.center().y), Align2::LEFT_CENTER, lang.tr("Name"), theme::ui_font(12.0), t.text_dim);
+        if show_location {
+            p.text(pos2(head.left() + location_x, head.center().y), Align2::LEFT_CENTER, lang.tr("Location"), theme::ui_font(12.0), t.text_dim);
+        }
+        if modified_w > 0.0 {
+            p.text(pos2(head.right() - modified_w, head.center().y), Align2::LEFT_CENTER, lang.tr("Modified"), theme::ui_font(12.0), t.text_dim);
+        }
+        p.line_segment([pos2(head.left(), head.bottom() - 0.5), pos2(head.right(), head.bottom() - 0.5)], Stroke::new(1.0, t.separator));
+        ui.add_space(4.0);
     }
     let now = crate::now_ms() / 1000.0;
+    let dark = t.dark && app.ui.dark_sheet;
     for path in app.ui.recent.iter().take(limit).cloned().collect::<Vec<_>>() {
         let (name, folder) = split_path(&path);
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, 58.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let p = ui.painter();
-        if resp.hovered() {
-            p.rect_filled(rect, 4.0, t.hover);
+        if let Some(fill) = crate::widgets::hover_fill(ui, resp.id, resp.hovered(), t.window) {
+            p.rect_filled(rect, 8.0, fill);
         }
-        icons::paint(p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(20.0, 20.0)), Icon::Book, t.text);
-        // A long name or folder stops short of the column instead of running under it.
-        let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
-        let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(room, rect.bottom())).intersect(p.clip_rect()));
-        text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
-        text.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+        // The workbook's thumbnail, once drawn (from the file as saved, so an edited file
+        // gets a new one); the sheet icon until then, or when the file cannot be read.
+        let thumb = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 23.0), vec2(68.0, 46.0));
+        let pages = app.thumbnails.pages(ui.ctx(), &crate::thumbnail::Source::File(path.clone()), dark);
+        match pages.is_empty() {
+            false => {
+                paint_pages(ui, resp.id, thumb, 5.0, &pages, resp.hovered(), false);
+                p.rect_stroke(thumb, 5.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+            }
+            true => {
+                let csv = name.to_ascii_lowercase().ends_with(".csv");
+                icons::paint(p, Rect::from_center_size(thumb.center(), vec2(18.0, 18.0)), Icon::Sheet, if csv { t.text_dim } else { t.accent });
+            }
+        }
+        // A long name or folder stops short of the next column instead of running under it.
+        let name_room = if show_location {
+            rect.left() + location_x - 12.0
+        } else if modified_w > 0.0 {
+            rect.right() - modified_w - 14.0
+        } else {
+            rect.right()
+        };
+        let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(name_room, rect.bottom())).intersect(p.clip_rect()));
+        if show_location {
+            text.text(pos2(rect.left() + THUMB_X, rect.center().y), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
+            let folder = tilde_home(&folder, &std::env::var("HOME").unwrap_or_default());
+            let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
+            p.with_clip_rect(Rect::from_min_max(pos2(rect.left() + location_x, rect.top()), pos2(room, rect.bottom())).intersect(p.clip_rect()))
+                .text(pos2(rect.left() + location_x, rect.center().y), Align2::LEFT_CENTER, folder, theme::ui_font(12.5), t.text_dim);
+        } else {
+            text.text(pos2(rect.left() + THUMB_X, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
+            text.text(pos2(rect.left() + THUMB_X, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+        }
         if modified_w > 0.0 {
             let (words, color) = match known.get(&path) {
                 Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),
@@ -426,6 +582,7 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
 
 /// What the file system said about a recent workbook.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // only the native metadata thread answers
 enum Modified {
     /// When it was last changed, in seconds since 1970.
     At(f64),
@@ -547,6 +704,61 @@ fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
 }
 
 // ---------------------------------------------------------------- pages
+
+/// Where a tip holds: everywhere, or only off macOS (or only on it) where the keys differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TipOn {
+    All,
+    NotMac,
+    Mac,
+}
+
+/// Short tips about features GridCraft has, one shown a day on Home.
+const TIPS: [(&str, TipOn); 19] = [
+    ("Search commands with the magnifier in the title bar to run any command by name.", TipOn::All),
+    ("Tap Alt to show key tips, then type the letters to reach any ribbon button.", TipOn::NotMac),
+    ("Double-click Format Painter to keep it on while you paint several ranges.", TipOn::All),
+    ("Press F2 to edit the active cell without retyping it.", TipOn::All),
+    ("Ctrl+Shift+U expands or collapses the formula bar.", TipOn::All),
+    ("While typing a reference, F4 cycles it through $A$1, A$1, $A1 and A1.", TipOn::All),
+    ("Alt+= inserts an AutoSum for the selection.", TipOn::NotMac),
+    ("Double-click a sheet tab to rename it in place.", TipOn::All),
+    ("Hold Ctrl while dragging a sheet tab to drop a copy of the sheet.", TipOn::NotMac),
+    ("Hold Cmd or Option while dragging a sheet tab to drop a copy of the sheet.", TipOn::Mac),
+    ("Click a statistic in the status bar to copy it; right-click to choose which ones show.", TipOn::All),
+    ("Click the zoom percentage in the status bar to set an exact zoom.", TipOn::All),
+    ("Shift+F11 inserts a new sheet.", TipOn::All),
+    ("Ctrl+; enters today's date in the active cell.", TipOn::All),
+    ("Pick a display theme in View, Omarchy and Dark Green included.", TipOn::All),
+    ("In a dark theme, View › Dark sheet turns the cells and charts dark too.", TipOn::All),
+    ("Turn off View › Animations to make the selection jump instead of glide.", TipOn::All),
+    ("Hover over a sample tile here to flip through its sheets.", TipOn::All),
+    ("Click the view button in the status bar to cycle Normal, Page Layout and Page Break Preview.", TipOn::All),
+];
+
+/// The tip for day `day` (days since 1970), on macOS when `mac`.
+fn tip_of_the_day(day: i64, mac: bool) -> &'static str {
+    let tips: Vec<&str> = TIPS.iter().filter(|(_, on)| *on == TipOn::All || (*on == TipOn::Mac) == mac).map(|(tip, _)| *tip).collect();
+    let n = tips.len().max(1) as i64;
+    tips.get(day.rem_euclid(n) as usize).copied().unwrap_or("")
+}
+
+/// The one-line tip under Home's heading: an accent dot, a "Tip" label and the day's tip, dim.
+fn tip_line(ui: &mut Ui, lang: Language) {
+    let t = Tokens::get(ui.ctx());
+    let day = (crate::now_ms() / 86_400_000.0).floor();
+    let day = if day.is_finite() { day as i64 } else { 0 };
+    let tip = lang.tr(tip_of_the_day(day, ui.ctx().os() == egui::os::OperatingSystem::Mac));
+    let width = ui.available_width().min(CONTENT_W);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{}: {tip}", lang.tr("Tip"))));
+    let p = ui.painter();
+    let y = rect.center().y;
+    p.circle_filled(pos2(rect.left() + 3.0, y), 3.0, t.accent);
+    let label = p.text(pos2(rect.left() + 12.0, y), Align2::LEFT_CENTER, lang.tr("Tip"), theme::ui_bold(12.5), t.text);
+    let text = p.with_clip_rect(rect.intersect(p.clip_rect()));
+    text.text(pos2(label.right() + 8.0, y), Align2::LEFT_CENTER, tip, theme::ui_font(12.5), t.text_dim);
+}
 
 fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
@@ -892,6 +1104,18 @@ mod tests {
     }
 
     #[test]
+    fn the_tip_changes_daily_and_fits_the_platform() {
+        for mac in [false, true] {
+            let tips: Vec<&str> = (0..30).map(|day| tip_of_the_day(day, mac)).collect();
+            assert!(tips.iter().all(|tip| !tip.is_empty() && tip.len() < 100), "{tips:?}");
+            assert!(tips.windows(2).all(|w| w[0] != w[1]), "consecutive days show different tips");
+            assert_eq!(tips.iter().any(|tip| tip.contains("Alt")), !mac, "Alt tips are for Windows and Linux");
+            assert_eq!(tips.iter().any(|tip| tip.contains("Cmd")), mac);
+        }
+        assert!(!tip_of_the_day(-3, false).is_empty() && !tip_of_the_day(i64::MAX, true).is_empty());
+    }
+
+    #[test]
     fn page_ids_round_trip_and_unknown_ids_are_refused() {
         for page in Page::ALL {
             assert_eq!(Page::parse(page.id()), Some(page));
@@ -905,5 +1129,28 @@ mod tests {
     fn recent_paths_split_without_touching_the_disk() {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+    }
+}
+
+/// `folder` with the home folder `home` shown as `~`, only as a whole leading path component;
+/// an empty `home` (no HOME on Windows or the web) leaves the path as it is.
+fn tilde_home(folder: &str, home: &str) -> String {
+    folder
+        .strip_prefix(home)
+        .filter(|rest| !home.is_empty() && (rest.is_empty() || rest.starts_with(['/', '\\'])))
+        .map_or_else(|| folder.to_string(), |rest| format!("~{rest}"))
+}
+
+#[cfg(test)]
+mod tilde_tests {
+    use super::tilde_home;
+
+    #[test]
+    fn only_a_leading_home_folder_becomes_a_tilde() {
+        assert_eq!(tilde_home("/home/me/Docs", "/home/me"), "~/Docs");
+        assert_eq!(tilde_home("/home/me", "/home/me"), "~");
+        assert_eq!(tilde_home("/home/meg/Docs", "/home/me"), "/home/meg/Docs");
+        assert_eq!(tilde_home("/srv/home/me/Docs", "/home/me"), "/srv/home/me/Docs");
+        assert_eq!(tilde_home("C:\\Users\\me\\Docs", ""), "C:\\Users\\me\\Docs");
     }
 }

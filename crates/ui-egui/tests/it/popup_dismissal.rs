@@ -102,7 +102,8 @@ fn filter_closes_when_clicking_another_table_or_sheet() {
     for sheet in [false, true] {
         let mut h = harness();
         open(&mut h, Menu::Filter);
-        let outside = if sheet { pos2(44.0, h.state().grid.rect.unwrap().bottom() + 16.0) } else { cell_pos(&h, "H2") };
+        // The Next sheet arrow in the sheet-tab strip below the grid.
+        let outside = if sheet { h.get_by_label("Next sheet").rect().center() } else { cell_pos(&h, "H2") };
         click(&mut h, outside, PointerButton::Primary);
         assert!(!is_open(&h, Menu::Filter), "filter stayed open after switching table/sheet");
         if sheet {

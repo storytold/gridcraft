@@ -278,8 +278,26 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
     let lin = ["/usr/share/fonts/truetype", "/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/TTF", "/usr/share/fonts/chromeos"];
     let mut v: Vec<(String, u32)> = Vec::new();
     let mut add = |s: String, i: u32| v.push((s, i));
+    // Inter, when the system has it, is the refreshed interface face on every platform (it is
+    // not bundled: this only finds an installed copy).
+    let home = std::env::var("HOME").unwrap_or_default();
+    let inter = |file: &str| -> Vec<String> {
+        vec![
+            format!("{home}/.local/share/fonts/inter/{file}"),
+            format!("{home}/.local/share/fonts/Inter/{file}"),
+            format!("{home}/.fonts/{file}"),
+            format!("{home}/Library/Fonts/{file}"),
+            format!("/usr/share/fonts/inter/{file}"),
+            format!("/usr/share/fonts/TTF/{file}"),
+            format!("/usr/local/share/fonts/{file}"),
+            format!("{win}\\{file}"),
+        ]
+    };
     match role {
         "ui" => {
+            for p in inter("Inter-Regular.ttf") {
+                add(p, 0);
+            }
             add(format!("{mac_sys}/SFNS.ttf"), 0);
             add(format!("{mac_sys}/HelveticaNeue.ttc"), 0);
             add(format!("{win}\\segoeui.ttf"), 0);
@@ -296,6 +314,9 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
             add("/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf".into(), 0);
         }
         "ui-bold" => {
+            for p in inter("Inter-SemiBold.ttf") {
+                add(p, 0);
+            }
             add(format!("{mac_sys}/HelveticaNeue.ttc"), 1);
             add(format!("{win}\\segoeuib.ttf"), 0);
             for p in in_dirs(&lin, &["noto/NotoSans-Bold.ttf", "dejavu/DejaVuSans-Bold.ttf", "liberation/LiberationSans-Bold.ttf"]) {
@@ -366,6 +387,13 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
             add("/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf".into(), 0);
         }
         "mono" => {
+            // JetBrains Mono, when installed (Omarchy ships its Nerd Font build), for formulas.
+            for p in inter("JetBrainsMono-Regular.ttf").into_iter().chain(inter("JetBrainsMonoNerdFont-Regular.ttf")) {
+                add(p, 0);
+            }
+            add(format!("{home}/.local/share/fonts/JetBrainsMono-Regular.ttf"), 0);
+            add("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf".into(), 0);
+            add("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf".into(), 0);
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
             add(format!("{mac_sys}/Menlo.ttc"), 0);
             add(format!("{win}\\consola.ttf"), 0);

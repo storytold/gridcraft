@@ -2083,6 +2083,7 @@ version = "0.14.2"
 name = "gridcraft-ui-egui"
 version = "0.14.2"
 dependencies = [
+ "chrono",
  "craft-ui",
  "craft-update",
  "craft-window",

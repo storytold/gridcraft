@@ -304,3 +304,87 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+#[test]
+fn scrollbars_fade_when_idle_and_wake_on_scroll_or_a_near_pointer() {
+    let place = (1, 0);
+    let mut f = ScrollbarFade::default();
+    let at = |y: f32| vec2(0.0, y);
+    // First frame: shown, and a repaint asked for when the linger ends.
+    assert_eq!(f.frame(place, at(0.0), false, 10.0, true), Some(SCROLLBAR_LINGER));
+    assert_eq!(f.alpha, 1.0);
+    // Mid-fade, then gone (and no more repaints needed).
+    assert_eq!(f.frame(place, at(0.0), false, 10.0 + SCROLLBAR_LINGER + SCROLLBAR_FADE / 2.0, true), Some(0.0));
+    assert!(f.alpha > 0.0 && f.alpha < 1.0, "{}", f.alpha);
+    assert_eq!(f.frame(place, at(0.0), false, 20.0, true), None);
+    assert_eq!(f.alpha, 0.0);
+    // A scroll wakes them; so does the pointer near a bar; so does another sheet.
+    f.frame(place, at(5.0), false, 30.0, true);
+    assert_eq!(f.alpha, 1.0);
+    f.frame(place, at(5.0), false, 40.0, true);
+    f.frame(place, at(5.0), true, 41.0, true);
+    assert_eq!(f.alpha, 1.0);
+    f.frame(place, at(5.0), false, 50.0, true);
+    f.frame((1, 1), at(5.0), false, 51.0, true);
+    assert_eq!(f.alpha, 1.0);
+    // Animations off: always shown, never a repaint for them.
+    f.frame((1, 1), at(5.0), false, 90.0, true);
+    assert_eq!(f.frame((1, 1), at(5.0), false, 99.0, false), None);
+    assert_eq!(f.alpha, 1.0);
+    // A clock that goes backwards doesn't leave them hidden.
+    f.frame((1, 1), at(5.0), false, 1.0, true);
+    assert_eq!(f.alpha, 1.0);
+}
+
+#[test]
+fn the_freeze_shadow_fades_away_from_the_frozen_panes() {
+    let band = Rect::from_min_max(pos2(10.0, 100.0), pos2(500.0, 106.0));
+    let egui::Shape::Mesh(mesh) = show::freeze_shadow(band, false, Color32::from_black_alpha(90)) else { panic!("a mesh") };
+    let first = mesh.vertices.first().unwrap();
+    let last = mesh.vertices.last().unwrap();
+    assert_eq!(first.pos.y, 100.0);
+    assert_eq!(last.pos.y, 106.0);
+    assert!(first.color.a() > 0 && last.color.a() == 0);
+    assert!(mesh.is_valid());
+    // Nothing for a band that makes no sense.
+    for bad in [Rect::NOTHING, Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0))] {
+        assert!(matches!(show::freeze_shadow(bad, true, Color32::BLACK), egui::Shape::Noop));
+    }
+}
+
+#[test]
+fn heading_edges_are_easy_to_grab() {
+    let sh = Sheet::new("S");
+    let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), vec2(0.0, 0.0));
+    let edge = geo.x(&sh, 3);
+    for dx in [-4.9, -2.5, 0.0, 2.5, 4.9] {
+        assert_eq!(interact::col_edge(&geo, &sh, edge + dx).map(|(c, _)| c), Some(2), "{dx}");
+    }
+    assert_eq!(interact::col_edge(&geo, &sh, edge + 6.0), None);
+    let y = geo.y(&sh, 4);
+    assert_eq!(interact::row_edge(&geo, &sh, y + 4.0).map(|(r, _)| r), Some(3));
+    assert_eq!(interact::row_edge(&geo, &sh, y + 5.0), None);
+}
+
+#[test]
+fn a_new_blank_workbook_shows_the_empty_hint_until_anything_is_in_it() {
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    let mut app = SheetApp::new(s, Default::default());
+    let shows = |app: &SheetApp| {
+        let wb = app.session.active().unwrap().wb.clone();
+        show::shows_empty_hint(app, &wb, wb.active().unwrap())
+    };
+    assert!(shows(&app));
+    // A value on any sheet hides it; clearing it brings it back.
+    app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+    assert!(shows(&app));
+    app.run("cell.set", json!({"sheet": "Two", "cell": "C3", "input": "x"})).unwrap();
+    assert!(!shows(&app));
+    app.run("cell.set", json!({"sheet": "Two", "cell": "C3", "input": ""})).unwrap();
+    assert!(shows(&app));
+    // Typing hides it at once, before anything is committed.
+    let (doc, sheet) = app.session.active().map(|d| (d.uid, d.wb.active_sheet())).unwrap();
+    app.editor = Some(crate::editor::EditState::new(doc, sheet, CellRef::new(0, 0), "a".into(), true, false));
+    assert!(!shows(&app));
+}

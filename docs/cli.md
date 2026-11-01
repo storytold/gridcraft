@@ -37,7 +37,7 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 ## `run`
 
 ```sh
-gridcraft-cli run [--in FILE | --sample budget|sales|grades] \
+gridcraft-cli run [--in FILE | --sample showcase|budget|sales|grades] \
     [--cmd 'id={json}']... [--script steps.jsonl] \
     [--out FILE] [--print RANGE|used] [--sheet S] [--csv] [--formulas] [--quiet]
 ```

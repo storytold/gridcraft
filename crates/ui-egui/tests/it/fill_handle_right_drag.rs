@@ -191,7 +191,7 @@ fn series_opens_the_series_dialog_on_the_dragged_cells_in_their_direction() {
     assert_eq!(selection(&h), "B1:E1");
     let dialog = h.state().dialog.as_ref().map(|d| (d.name().to_string(), d.values.get("direction").cloned()));
     assert_eq!(dialog, Some(("series".into(), Some(json!("rows")))));
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(values(&h, &["C1", "D1", "E1"]), [n(2.0), n(3.0), n(4.0)]);
 }

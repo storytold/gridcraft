@@ -6,7 +6,7 @@ use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::Sheet;
 use gridcraft_ui_egui::SheetApp;
-use gridcraft_ui_egui::grid::{Geo, heading_table, table_headings};
+use gridcraft_ui_egui::grid::{Geo, heading_table, table_field_hints, table_headings};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -163,4 +163,18 @@ fn the_button_in_a_replaced_heading_opens_that_columns_filter_menu() {
     click(&mut h, pos2(amount.rect.left() + 6.0, amount.rect.center().y));
     assert_eq!(h.state().grid.filter_menu, None);
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "D:D");
+}
+
+#[test]
+fn field_names_sit_beside_the_letters_while_the_header_row_is_in_view() {
+    let s = session("C20");
+    let sh = sheet(&s);
+    let hints = |row: u32, active: &str| table_field_hints(&geo_at(&sh, row), &sh, CellRef::parse(active).unwrap());
+    let all = owned(&[(0, "Bank"), (1, "Date"), (2, "Type"), (3, "Amount"), (4, "Ref")]);
+    assert_eq!(hints(0, "C20"), all, "header row on screen: letters and names");
+    assert_eq!(hints(0, "A3"), all, "the header row itself is in the table");
+    assert!(hints(0, "G20").is_empty(), "outside the table: letters only");
+    // Scrolled past the header row, the names replace the letters instead.
+    assert!(hints(10, "C20").is_empty());
+    assert_eq!(names(&geo_at(&sh, 10), &sh, "C20").len(), 5);
 }

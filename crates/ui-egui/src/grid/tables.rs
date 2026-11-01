@@ -6,7 +6,8 @@ pub fn filter_button_rect(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     // Keep the button within the same header slot that AutoFit reserves.
     let pad = 2.0 * geo.z;
     let s = (rect.height() - 4.0).clamp(10.0, 18.0).min((sh.filter_button_space(c) * geo.z - pad).max(0.0));
-    Rect::from_min_size(pos2(rect.right() - s - pad, rect.bottom() - s - pad), vec2(s, s))
+    // Centred in the header row, beside the name (the refreshed grid centres header text too).
+    Rect::from_min_size(pos2(rect.right() - s - pad, (rect.center().y - s / 2.0).max(rect.top())), vec2(s, s))
 }
 
 /// A Table column heading that shows the column's header name in place of its letters.
@@ -55,7 +56,7 @@ pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeadin
             continue;
         }
         let rect = Rect::from_min_size(pos2(geo.x(sh, col), geo.head_top()), vec2(w, geo.header_h));
-        // Clear of the 4-point column resize edge, and never wider than the column.
+        // Mostly clear of the column resize edge, and never wider than the column.
         let s = (rect.height() - 6.0).clamp(10.0, 16.0).min(w - 7.0);
         let button = (tb.filter_button && s > 0.0).then(|| Rect::from_min_size(pos2(rect.right() - s - 5.0, rect.center().y - s / 2.0), vec2(s, s)));
         let filtered = tb.filter.iter().any(|(o, _)| *o == off) || af.is_some_and(|af| af.criteria.iter().any(|(o, _)| *o == off));
@@ -64,15 +65,34 @@ pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeadin
     out
 }
 
+/// The field names shown beside the column letters while the active cell is in a Table whose
+/// header row is on screen: (column, name) for each of the table's columns. When the header row
+/// has scrolled out of view, [`table_headings`] replaces the letters instead.
+pub fn table_field_hints(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<(u32, String)> {
+    if geo.paper.is_some() || geo.header_h <= 0.0 || heading_table(geo, sh, active).is_some() {
+        return Vec::new();
+    }
+    let Some(tb) = sh.tables.iter().find(|t| t.header_row && t.range.contains(active)) else { return Vec::new() };
+    (tb.range.start.col..=tb.range.end.col)
+        .zip(tb.columns.iter())
+        .filter(|(_, column)| !column.name.trim().is_empty())
+        .map(|(col, column)| (col, column.name.clone()))
+        .collect()
+}
+
 pub(super) fn paint_filter_button(p: &Painter, r: Rect, filtered: bool) {
     let t = Tokens::get(p.ctx());
-    p.rect_filled(r, 2.0, t.sheet_control_bg);
-    p.rect_stroke(r, 2.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+    // A bare chevron in the header, as quiet as the header text; a filtered column gets a framed
+    // funnel so the state stands out.
+    if filtered {
+        p.rect_filled(r, 3.0, t.sheet_control_bg);
+        p.rect_stroke(r, 3.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+    }
     crate::icons::paint_on_sheet(
         p,
-        r.shrink(1.5),
+        r.shrink(if filtered { 2.0 } else { 3.0 }),
         if filtered { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron },
-        t.sheet_control_text,
+        t.sheet_control_text.gamma_multiply(0.75),
     );
 }
 

@@ -23,7 +23,9 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
 mod cell_paint;
+pub(crate) use cell_paint::shown_text;
 mod cursor;
+mod dark_sheet;
 mod editor;
 mod geo;
 mod interact;
@@ -51,9 +53,9 @@ pub(crate) use show::horizontal_scrollbar;
 pub use show::show;
 #[cfg(test)]
 use tables::filter_table_range;
-pub use tables::{TableHeading, filter_button_rect, heading_table, table_headings};
+pub use tables::{TableHeading, filter_button_rect, heading_table, table_field_hints, table_headings};
 
-pub const COL_HEADER_H: f32 = 21.0;
+pub const COL_HEADER_H: f32 = 24.0;
 /// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
 /// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
 pub const DISPLAY_SCALE: f32 = 0.8;
@@ -250,6 +252,60 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// The active cell of the last frame: a drag extends a range only while it stays put.
+    pub last_active: Option<CellRef>,
+    /// The scrollbars' fade (see [`ScrollbarFade`]).
+    pub scrollbars: ScrollbarFade,
+}
+
+/// With View > Animations on, the scrollbar thumbs fade out when the sheet is idle and come back
+/// while it scrolls or the pointer is near a scrollbar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarFade {
+    /// The document, sheet and scroll position of the last frame.
+    pub last: Option<((u64, usize), egui::Vec2)>,
+    /// When the scrollbars were last woken (egui's clock, seconds).
+    pub woke: f64,
+    /// How visible the thumbs are this frame, 0 to 1.
+    pub alpha: f32,
+}
+
+/// Seconds the scrollbars stay fully visible after the last scroll or nearby pointer.
+pub const SCROLLBAR_LINGER: f64 = 1.2;
+/// Seconds they then take to fade out.
+pub const SCROLLBAR_FADE: f64 = 0.4;
+
+impl Default for ScrollbarFade {
+    fn default() -> Self {
+        ScrollbarFade { last: None, woke: 0.0, alpha: 1.0 }
+    }
+}
+
+impl ScrollbarFade {
+    /// Advance to this frame. `scroll` is where `place` is scrolled to; `near` that the pointer is
+    /// on or near a scrollbar; `animate` that fading is allowed (otherwise they always show).
+    /// Returns how long until the next change worth a repaint, if any.
+    pub fn frame(&mut self, place: (u64, usize), scroll: egui::Vec2, near: bool, now: f64, animate: bool) -> Option<f64> {
+        let moved = self.last.is_none_or(|(p, s)| p != place || s != scroll);
+        self.last = Some((place, scroll));
+        if moved || near || now < self.woke {
+            self.woke = now;
+        }
+        if !animate {
+            self.alpha = 1.0;
+            return None;
+        }
+        let idle = now - self.woke;
+        let fade = ((idle - SCROLLBAR_LINGER) / SCROLLBAR_FADE).clamp(0.0, 1.0) as f32;
+        self.alpha = 1.0 - fade * fade * (3.0 - 2.0 * fade);
+        if idle < SCROLLBAR_LINGER {
+            Some(SCROLLBAR_LINGER - idle)
+        } else if fade < 1.0 {
+            Some(0.0)
+        } else {
+            None
+        }
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -276,6 +332,12 @@ impl WheelZoom {
         }
         w
     }
+}
+
+/// Whether grid chrome may animate this frame: View > Animations is on, egui's animations are
+/// (the headless harness turns them off) and no control-channel screenshot is on its way.
+pub(crate) fn animating(app: &SheetApp, ctx: &egui::Context) -> bool {
+    app.ui.animations && ctx.global_style().animation_time > 0.0 && !app.shots.in_flight()
 }
 
 /// Row and column heading labels grow with the zoom as the cells do, as in Excel (at 400% the

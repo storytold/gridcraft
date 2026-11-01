@@ -30,6 +30,7 @@ mod zoom;
 
 use analysis::toolpak_defaults;
 use charts::select_chart;
+pub use command_search::recent as palette_recent;
 use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
 pub(crate) use names::insert_name;

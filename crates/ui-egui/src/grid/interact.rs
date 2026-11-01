@@ -927,9 +927,18 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
 /// Paints the freeze handles and, while one is dragged, where the freeze line will go.
 pub(super) fn paint_freeze_handles(p: &Painter, geo: &Geo, sh: &Sheet, drag: &Drag, t: &Tokens) {
     let (cols, rows) = freeze_handles(geo);
-    let bar = Color32::from_gray(150);
-    p.rect_filled(Rect::from_center_size(cols.center(), vec2(3.0, cols.height())), 1.0, bar);
-    p.rect_filled(Rect::from_center_size(rows.center(), vec2(rows.width(), 3.0)), 1.0, bar);
+    // The handles show only under the pointer (or while one is dragged): the corner stays quiet.
+    // The handles are in logical (left-to-right) coordinates; mirror the pointer to match.
+    let at = p.ctx().input(|i| i.pointer.hover_pos()).map(|q| geo.mirror_pos(q));
+    let near = |r: Rect| at.is_some_and(|q| r.expand(6.0).contains(q));
+    let dragging = matches!(drag, Drag::Freeze { .. });
+    let bar = t.text_disabled;
+    if near(cols) || dragging {
+        p.rect_filled(Rect::from_center_size(cols.center(), vec2(3.0, cols.height())), 1.0, bar);
+    }
+    if near(rows) || dragging {
+        p.rect_filled(Rect::from_center_size(rows.center(), vec2(rows.width(), 3.0)), 1.0, bar);
+    }
     if let Drag::Freeze { cols, to: Some(to) } = *drag {
         let stroke = Stroke::new(2.0, t.accent);
         if cols {
@@ -942,11 +951,17 @@ pub(super) fn paint_freeze_handles(p: &Painter, geo: &Geo, sh: &Sheet, drag: &Dr
     }
 }
 
+/// How far either side of a column heading's edge still grabs it for resizing (points): wider
+/// than the 1-point divider, so the edge is easy to hit.
+pub(super) const COL_EDGE_GRAB: f32 = 5.0;
+/// The same for a row heading's edge (rows are shorter, so it is a little narrower).
+pub(super) const ROW_EDGE_GRAB: f32 = 4.0;
+
 pub(super) fn col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<(u32, f32)> {
     let c = geo.col_at(sh, x);
     for cc in [c, c.saturating_sub(1)] {
         let edge = geo.x(sh, cc) + sh.col_width(cc) * geo.z;
-        if (x - edge).abs() <= 4.0 {
+        if (x - edge).abs() <= COL_EDGE_GRAB {
             return Some((cc, edge));
         }
     }
@@ -957,7 +972,7 @@ pub(super) fn row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<(u32, f32)> {
     let r = geo.row_at(sh, y);
     for rr in [r, r.saturating_sub(1)] {
         let edge = geo.y(sh, rr) + sh.row_height(rr) * geo.z;
-        if (y - edge).abs() <= 3.0 {
+        if (y - edge).abs() <= ROW_EDGE_GRAB {
             return Some((rr, edge));
         }
     }

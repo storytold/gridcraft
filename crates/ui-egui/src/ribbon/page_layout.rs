@@ -11,13 +11,13 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                     ui.painter().rect_filled(r, 1.0, Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8));
                 }
-                if ui.button(name).clicked() {
+                if crate::widgets::menu_row(ui, None, name, None).clicked() {
                     act(app, "pageLayout.theme", json!({"name": name}));
                 }
             });
         }
     });
-    sep(ui);
+    sep(ui, "Themes");
     let m = big_button(ui, Icon::Margins, "Margins", "Margins", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.margins", "dialog:pageSetup"]) {
         keytip(app, ui, sequence, m.rect.center_bottom());
@@ -46,7 +46,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let s = big_button(ui, Icon::Paper, "Size", "Paper Size", true);
+    let s = big_button(ui, Icon::PaperSize, "Size", "Paper Size", true);
     control_keytip(app, ui, &s, "pageLayout.size");
     egui::Popup::menu(&s).show(|ui| {
         // B4/B5/B6 are the JIS sizes Japanese Excel uses; the ISO ones stay selectable by name.
@@ -72,7 +72,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             "B5 (ISO)",
             "B6 (ISO)",
         ] {
-            if ui.button(p).clicked() {
+            if crate::widgets::menu_row(ui, None, p, None).clicked() {
                 act(app, "pageLayout.size", json!({"paper": p}));
             }
         }
@@ -86,7 +86,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             &[("Set Print Area", "pageLayout.printArea", json!({})), ("Clear Print Area", "pageLayout.printArea", json!({"clear": true}))],
         );
     });
-    let br = big_button(ui, Icon::PageBreak, "Breaks", "Page Breaks", true);
+    let br = big_button(ui, Icon::Breaks, "Breaks", "Page Breaks", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.breaks"]) {
         keytip(app, ui, sequence, br.rect.center_bottom());
     }
@@ -101,12 +101,12 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let __k = big_button(ui, Icon::Sheet, "Print\nTitles", "Print Titles", false);
+    let __k = big_button(ui, Icon::PrintTitles, "Print\nTitles", "Print Titles", false);
     control_keytip(app, ui, &__k, "pageLayout.printTitles");
     if __k.clicked() {
         app.open_dialog("pageSetup", json!({"tab": "Sheet"}));
     }
-    sep(ui);
+    sep(ui, "Page Setup");
     let sh = app
         .session
         .active()
@@ -119,13 +119,13 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Gridlines")).strong().small());
         let mut v = sh.0;
-        let resp = ui.checkbox(&mut v, screen);
+        let resp = crate::widgets::checkbox(ui, &mut v, screen);
         control_keytip(app, ui, &resp, "view.gridlines");
         if resp.changed() || invoke(app, "view.gridlines") {
             act(app, "view.gridlines", json!({"on": checkbox_on(resp.changed(), v)}));
         }
         let mut p = sh.2;
-        let resp = ui.checkbox(&mut p, print);
+        let resp = crate::widgets::checkbox(ui, &mut p, print);
         control_keytip(app, ui, &resp, "pageLayout.printGridlines");
         if resp.changed() || invoke(app, "pageLayout.printGridlines") {
             act(app, "pageLayout.printGridlines", json!({"on": checkbox_on(resp.changed(), p)}));
@@ -134,13 +134,13 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Headings")).strong().small());
         let mut v = sh.1;
-        let resp = ui.checkbox(&mut v, screen);
+        let resp = crate::widgets::checkbox(ui, &mut v, screen);
         control_keytip(app, ui, &resp, "view.headings");
         if resp.changed() || invoke(app, "view.headings") {
             act(app, "view.headings", json!({"on": checkbox_on(resp.changed(), v)}));
         }
         let mut p = sh.3;
-        let resp = ui.checkbox(&mut p, print);
+        let resp = crate::widgets::checkbox(ui, &mut p, print);
         control_keytip(app, ui, &resp, "pageLayout.printHeadings");
         if resp.changed() || invoke(app, "pageLayout.printHeadings") {
             act(app, "pageLayout.printHeadings", json!({"on": checkbox_on(resp.changed(), p)}));

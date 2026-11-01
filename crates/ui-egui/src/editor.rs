@@ -457,6 +457,16 @@ mod tests {
     }
 
     #[test]
+    fn function_names_are_not_references() {
+        // IF, LOG10 and friends look like column letters or cells; before "(" they are functions.
+        for f in ["=IF(A1>0,1,2)", "=LOG10(B2)", "=ATAN2(1,2)", "=DAYS(C3,C4)"] {
+            let refs = formula_refs(f);
+            let texts: Vec<&str> = refs.iter().map(|r| &f[r.0..r.1]).collect();
+            assert!(!texts.iter().any(|t| ["IF", "LOG10", "ATAN2", "DAYS"].contains(t)), "{f}: {texts:?}");
+        }
+    }
+
+    #[test]
     fn whole_row_and_column_ref_spans() {
         let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
         assert_eq!(refs.len(), 4);
