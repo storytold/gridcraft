@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; earlier: Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; earlier: editing a hyperlink loads its existing fields; earlier: AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -18,6 +18,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
+| Formulas › Function Library | Insert Function, AutoSum, Recently Used and a menu per function category | yes (10-24): a big Insert Function button and three columns of labelled small buttons, the layout Excel uses when the window is not wide enough for a big button per category; each category's book icon has its own colour; a category menu shows each function's description on hover and ends with Insert Function…, which opens the dialog on that category; More Functions cascades into Statistical, Engineering, Cube, Information, Compatibility and Web; AutoSum is a split button whose menu (Sum, Average, Count Numbers, Max, Min, More Functions…) Home › Editing shares; Recently Used has the MR key tip | the wide layout with a big button per category is not offered; a function counts as recently used once its formula is entered, not when Insert Function's OK is pressed |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
@@ -156,7 +157,8 @@ Insert Hyperlink loads an existing cell link's address, display text and ScreenT
 (#2876). Keeping the display text unchanged preserves the cell's number or formula; Cancel
 keeps the original link and an edit can be undone in one step.
 
-Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
+Format Cells, Insert Function (search, Most Recently Used, All and each category), Find and
+Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
 Seek, Scenario Manager, Data Analysis, Forecast Sheet, Macros (macros, Automate scripts and a
 note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
@@ -195,6 +197,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
+| 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
+| 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
