@@ -1170,3 +1170,80 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }
+
+#[test]
+/// File › Options › "After pressing Enter, move selection" sets where Enter goes (#2930).
+fn enter_follows_the_after_pressing_enter_option() {
+    let mut h = harness(blank());
+    let active = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().selection.active.a1();
+    h.state_mut().session.run("selection.set", json!({"cell": "B2"})).unwrap();
+    h.state_mut().session.run("options.enterDirection", json!({"direction": "right"})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C2", "Enter moves right");
+    key(&mut h, Key::Enter, Modifiers::SHIFT);
+    assert_eq!(active(&h), "B2", "Shift+Enter goes the other way");
+    text(&mut h, "5");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::Number(5.0));
+    assert_eq!(active(&h), "C2", "entering a cell moves right too");
+
+    h.state_mut().session.run("options.enterDirection", json!({"move": false})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C2", "with the move off Enter stays put");
+    text(&mut h, "7");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "C2"), Value::Number(7.0));
+    assert_eq!(active(&h), "C2", "and enters the cell without moving");
+    assert!(h.state().editor.is_none());
+}
+
+#[test]
+/// Enter set to move right is not a Tab: a later Enter down stays in its column, typing or not.
+fn sideways_enter_does_not_start_a_tab_run() {
+    let mut h = harness(blank());
+    let active = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().selection.active.a1();
+    let direction = |h: &mut egui_kittest::Harness<'static, SheetApp>, d: &str| {
+        h.state_mut().session.run("options.enterDirection", json!({"direction": d})).unwrap();
+        h.run_steps(2);
+    };
+    h.state_mut().session.run("selection.set", json!({"cell": "B2"})).unwrap();
+    direction(&mut h, "right");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C2");
+    direction(&mut h, "down");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "C3", "not back to B, where no Tab started");
+
+    direction(&mut h, "right");
+    text(&mut h, "1");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "D3");
+    direction(&mut h, "down");
+    text(&mut h, "2");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "D3"), Value::Number(2.0));
+    assert_eq!(active(&h), "D4", "the same while typing");
+}
+
+#[test]
+/// Entering a cell with the move off is not a Tab either: a later Enter down must not return to the Tab run's column.
+fn stay_put_enter_ends_a_tab_run() {
+    let mut h = harness(blank());
+    let active = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().selection.active.a1();
+    h.state_mut().session.run("selection.set", json!({"cell": "B2"})).unwrap();
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(active(&h), "D2");
+    h.state_mut().session.run("options.enterDirection", json!({"move": false})).unwrap();
+    h.run_steps(2);
+    text(&mut h, "1");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "D2");
+    h.state_mut().session.run("options.enterDirection", json!({"direction": "down"})).unwrap();
+    h.run_steps(2);
+    text(&mut h, "2");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(active(&h), "D3", "not back to B, where the Tabs started");
+}

@@ -1,7 +1,7 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
+/// Editing (AutoComplete, and where Enter moves the selection) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
 /// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
@@ -20,6 +20,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
+    enter_options(app, ui, lang);
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.ui.autosave;
@@ -72,6 +73,40 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+    });
+}
+
+/// "After pressing Enter, move selection" and its Direction, as in Excel's Advanced options. The
+/// direction stays shown, greyed, while the move is off.
+fn enter_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let (dr, dc) = app.session.prefs.enter_step();
+    let mut moves = (dr, dc) != (0, 0);
+    if ui.checkbox(&mut moves, lang.tr("After pressing Enter, move selection")).changed() {
+        app.run_or_alert("options.enterDirection", json!({"move": moves}));
+    }
+    let current = match (dr, dc) {
+        (0, 1) => "Right",
+        (-1, 0) => "Up",
+        (0, -1) => "Left",
+        _ => "Down",
+    };
+    ui.add_enabled_ui(moves, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            let label = ui.label(lang.tr("Direction"));
+            craft_ui::ComboBox::from_id_salt("backstage_enter_direction")
+                .width(120.0)
+                .selected_text(lang.tr(current))
+                .show_ui(ui, |ui| {
+                    for (value, label) in [("down", "Down"), ("right", "Right"), ("up", "Up"), ("left", "Left")] {
+                        if ui.selectable_label(current == label, lang.tr(label)).clicked() {
+                            app.run_or_alert("options.enterDirection", json!({"direction": value}));
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
     });
 }
 

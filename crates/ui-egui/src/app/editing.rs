@@ -99,6 +99,8 @@ impl SheetApp {
         if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
+            } else {
+                self.tab_run = None;
             }
             return true;
         }
@@ -155,6 +157,8 @@ impl SheetApp {
             Ok(_) => {
                 if dr != 0 || dc != 0 {
                     self.move_after_enter(dr, dc);
+                } else {
+                    self.tab_run = None;
                 }
                 self.after_engine();
                 true
@@ -168,8 +172,9 @@ impl SheetApp {
         }
     }
 
-    /// Commits the edit with an arrow key. The arrow is an ordinary move, so it ends a run of Tabs
-    /// instead of continuing it (Right) or going back to its column like Enter (Down), as in Excel.
+    /// Commits the edit with an arrow key, or with Enter set to move sideways. Either is an ordinary
+    /// move, so it ends a run of Tabs instead of continuing it (Right) or going back to its column
+    /// like Enter (Down), as in Excel.
     pub fn commit_edit_arrow(&mut self, dr: i64, dc: i64) -> bool {
         let run = self.tab_run.take();
         let ok = self.commit_edit(dr, dc, false, false);
@@ -182,8 +187,21 @@ impl SheetApp {
         self.session.mode = gridcraft_engine::Mode::Ready;
     }
 
+    /// Enter on the grid, in the File › Options direction. Set to move sideways it is not a Tab: it
+    /// ends a run of Tabs instead of starting one, so a later Enter down stays in its column.
+    pub fn move_after_enter_key(&mut self, dr: i64, dc: i64) {
+        self.move_after_enter(dr, dc);
+        if dr == 0 {
+            self.tab_run = None;
+        }
+    }
+
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
+    /// (0, 0) stays put: Enter with "After pressing Enter, move selection" turned off.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
+        if dr == 0 && dc == 0 {
+            return;
+        }
         let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());
         // Any other move (arrows, clicks, another sheet) leaves the selection off the cell the
         // last Tab landed on, which ends the run.
