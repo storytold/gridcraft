@@ -1,7 +1,7 @@
 //! Floating objects of every kind: found, moved, listed, stacked and deleted by `{kind, id}`.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::{AnchorMode, ObjKind, ObjRef, Sheet};
+use gridcraft_model::{Anchor, AnchorMode, ObjKind, ObjRef, Sheet};
 use serde_json::json;
 
 use super::s;
@@ -131,6 +131,80 @@ fn every_kind_follows_row_and_column_edits_and_sorts() {
     assert_eq!(cell_of(&s, pic), "T4", "the row holding 3 sorts last");
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(cell_of(&s, pic), "T2");
+}
+
+/// A picture at `cell` with anchor `mode`, offset `(dx, dy)` and size `(width, height)`, added
+/// straight to the model like `add_image`, so a sort that follows is the only step to undo.
+fn picture(s: &mut Session, cell: &str, mode: AnchorMode, dx: f32, dy: f32, width: f32, height: f32) -> ObjRef {
+    let id = super::add_image(s, cell, mode);
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    if let Some(img) = wb.sheet_mut(0).unwrap().images.iter_mut().find(|i| i.id == id) {
+        img.anchor = Anchor { dx, dy, width, height, ..img.anchor };
+    }
+    ObjRef::new(ObjKind::Image, id)
+}
+
+/// The anchor of `o` as (cell, dx, dy, width, height).
+fn anchor_of(s: &Session, o: ObjRef) -> (String, f32, f32, f32, f32) {
+    let a = sheet(s, 0).object_anchor(o).unwrap();
+    (a.cell.a1(), a.dx, a.dy, a.width, a.height)
+}
+
+/// Sorting rows under a picture follows its anchor mode, as Excel's "Move and size with cells",
+/// "Move but don't size with cells" and "Don't move or size with cells" do.
+#[test]
+fn sorting_rows_under_a_picture_follows_its_anchor_mode() {
+    let mut s = s();
+    // Rows 2..5 hold 3, 1, 4, 2; sorted ascending they read 1, 2, 3, 4, so row 2 moves to row 4,
+    // row 3 to row 2, row 4 to row 5 and row 5 to row 3. Default rows are 20 pt tall.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], [3], [1], [4], [2]]})).unwrap();
+    // Three pictures inside one row each (3 pt down, 12 pt tall), one per anchor mode.
+    let sized = picture(&mut s, "A2", AnchorMode::MoveAndSize, 5.0, 3.0, 30.0, 12.0);
+    let moved = picture(&mut s, "A3", AnchorMode::MoveOnly, 5.0, 3.0, 30.0, 12.0);
+    let pinned = picture(&mut s, "A4", AnchorMode::Absolute, 5.0, 3.0, 30.0, 12.0);
+    // A "move and size" picture spanning rows 2 and 3: its top is 10 pt into row 2 (y 30) and
+    // its bottom 15 pt into row 3 (y 55). The sort puts row 3 above row 2.
+    let tall = picture(&mut s, "A2", AnchorMode::MoveAndSize, 5.0, 10.0, 30.0, 25.0);
+    let before: Vec<_> = [sized, moved, pinned, tall].iter().map(|&o| anchor_of(&s, o)).collect();
+    s.execute("selection.set", json!({"range": "A1:A5"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    assert_eq!(
+        anchor_of(&s, sized),
+        ("A4".into(), 5.0, 3.0, 30.0, 12.0),
+        "move and size: travels with row 2 to row 4, re-fitted to the same 20 pt row"
+    );
+    assert_eq!(anchor_of(&s, moved), ("A2".into(), 5.0, 3.0, 30.0, 12.0), "move only: travels with row 3 to row 2 at its own size");
+    assert_eq!(anchor_of(&s, pinned), ("A4".into(), 5.0, 3.0, 30.0, 12.0), "absolute: stays while the cells move under it");
+    // The tall picture's bottom row now sorts above its top row, so there is nothing to stretch
+    // it between: it travels with its top-left row and keeps its size instead of collapsing.
+    assert_eq!(anchor_of(&s, tall), ("A4".into(), 5.0, 10.0, 30.0, 25.0), "two rows swapped: moves with its top row at its old size");
+    s.execute("edit.undo", json!({})).unwrap();
+    let after: Vec<_> = [sized, moved, pinned, tall].iter().map(|&o| anchor_of(&s, o)).collect();
+    assert_eq!(after, before, "undo restores every anchor");
+}
+
+/// A sort by columns follows the anchor mode the same way.
+#[test]
+fn sorting_columns_under_a_picture_follows_its_anchor_mode() {
+    let mut s = s();
+    // Row 10 holds a header in A and 3, 1, 2 in B..D; sorted ascending, column B moves to D,
+    // C to B and D to C. Default columns are 64 pt wide.
+    s.execute("range.setValues", json!({"range": "A10", "values": [["k", 3, 1, 2]]})).unwrap();
+    let sized = picture(&mut s, "B10", AnchorMode::MoveAndSize, 5.0, 3.0, 30.0, 12.0);
+    let moved = picture(&mut s, "C10", AnchorMode::MoveOnly, 5.0, 3.0, 30.0, 12.0);
+    let pinned = picture(&mut s, "D10", AnchorMode::Absolute, 5.0, 3.0, 30.0, 12.0);
+    // A "move and size" picture spanning columns B and C: from x 104 (40 pt into B) to x 154
+    // (26 pt into C). The sort puts column C before column B.
+    let wide = picture(&mut s, "B10", AnchorMode::MoveAndSize, 40.0, 3.0, 50.0, 12.0);
+    let before: Vec<_> = [sized, moved, pinned, wide].iter().map(|&o| anchor_of(&s, o)).collect();
+    s.execute("data.sort", json!({"range": "A10:D10", "header": true, "orientation": "columns", "keys": [{"row": 10}]})).unwrap();
+    assert_eq!(anchor_of(&s, sized), ("D10".into(), 5.0, 3.0, 30.0, 12.0), "move and size: travels with column B to D at the same width");
+    assert_eq!(anchor_of(&s, moved), ("B10".into(), 5.0, 3.0, 30.0, 12.0), "move only: travels with column C to B at its own size");
+    assert_eq!(anchor_of(&s, pinned), ("D10".into(), 5.0, 3.0, 30.0, 12.0), "absolute: stays");
+    assert_eq!(anchor_of(&s, wide), ("D10".into(), 40.0, 3.0, 50.0, 12.0), "two columns swapped: moves with its left column at its old size");
+    s.execute("edit.undo", json!({})).unwrap();
+    let after: Vec<_> = [sized, moved, pinned, wide].iter().map(|&o| anchor_of(&s, o)).collect();
+    assert_eq!(after, before, "undo restores every anchor");
 }
 
 #[test]
