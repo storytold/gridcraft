@@ -9,6 +9,7 @@ use std::cell::RefCell;
 
 use egui::{Context, RawInput, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use gridcraft_engine::{Session, core::CellRef, core::Value};
+use gridcraft_ui_egui::control::SyntheticInput;
 use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{SaveAnswer, SheetApp};
 use serde_json::json;
@@ -18,6 +19,8 @@ thread_local! {
     static INFOS: RefCell<egui::ViewportIdMap<ViewportInfo>> = RefCell::new(egui::ViewportIdMap::default());
     /// The viewport commands the app sent this frame.
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
+    /// The app's synthetic-input hook state, as eframe installs it for every viewport.
+    static SYNTHETIC: RefCell<Option<SyntheticInput>> = const { RefCell::new(None) };
 }
 
 fn record(mut out: egui::FullOutput) {
@@ -46,12 +49,20 @@ impl Desk {
             let mut input = RawInput { viewport_id: id, ..RawInput::default() };
             input.viewports = INFOS.with(|i| i.borrow().clone());
             input.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
+            // eframe's viewport hooks run for immediate viewports, before their pass: this is
+            // where control-channel input for that window reaches it.
+            SYNTHETIC.with(|s| {
+                if let Some(s) = &*s.borrow() {
+                    s.raw_input(ctx, &mut input);
+                }
+            });
             let mut cb = viewport.viewport_ui_cb;
             record(ctx.run_ui(input, |ui| cb(ui)));
         });
         let mut session = Session::new();
         session.new_workbook();
         let mut app = SheetApp::new(session, Default::default());
+        SYNTHETIC.with(|s| *s.borrow_mut() = Some(app.synthetic_input()));
         let windows = DocWindows::new(&mut app, egui::ViewportBuilder::default(), quit_with_last_window);
         let mut desk = Desk { ctx, app, windows };
         desk.frames(3);
@@ -66,6 +77,8 @@ impl Desk {
         input.viewports = INFOS.with(|i| i.borrow().clone());
         input.viewports.entry(ViewportId::ROOT).or_default();
         let Desk { ctx, app, windows } = self;
+        // eframe runs the app's raw-input hook for the root viewport before its pass.
+        app.raw_input_hook(ctx, &mut input);
         let mut act = Some(act);
         let out = ctx.clone().run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
@@ -114,6 +127,17 @@ impl Desk {
     fn window_of(&self, doc: usize) -> u64 {
         let uid = self.app.session.documents()[doc].uid;
         self.app.session.doc_window(uid).unwrap_or_default()
+    }
+
+    /// Runs one control request in a frame, as the control server's next poll does.
+    fn control(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        let mut reply = None;
+        self.frame_with(|app, ctx| {
+            if let gridcraft_ui_egui::control::Outcome::Done(v) = gridcraft_ui_egui::control::handle(app, ctx, method, &params) {
+                reply = Some(v);
+            }
+        });
+        reply.expect("the request returns immediately")
     }
 }
 
@@ -436,4 +460,65 @@ fn arrange_all_lays_out_the_native_windows_active_first() {
     let tiled = gridcraft_ui_egui::doc_windows::arrange_rects("tiled", 3, craft_window::Rect::new(0.0, 0.0, 1000.0, 800.0));
     let r = |x, y, w, h| craft_window::Rect::new(x, y, w, h);
     assert_eq!(tiled, [r(0.0, 0.0, 500.0, 400.0), r(500.0, 0.0, 500.0, 400.0), r(0.0, 400.0, 1000.0, 400.0)]);
+}
+
+/// Book1 and Book2 in their own windows: control input goes to the active window's workbook,
+/// never to the root window's, and the other workbook stays untouched (#3036).
+#[test]
+fn control_input_reaches_the_active_windows_workbook() {
+    let mut desk = Desk::new(true);
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    assert_eq!(desk.viewport(w1), ViewportId::ROOT, "Book1's window is the root viewport's");
+    assert_ne!(desk.viewport(w2), ViewportId::ROOT, "Book2's window is a native window of its own");
+    assert_eq!(desk.app.session.active_window(), Some(w2), "Book2's window is active");
+
+    assert_eq!(desk.control("ui.cell.click", json!({"cell": "B2"}))["ok"], true);
+    assert_eq!(desk.control("ui.text", json!({"text": "typed"}))["ok"], true);
+    assert_eq!(desk.control("ui.key", json!({"key": "Enter"}))["ok"], true);
+    desk.frames(4);
+
+    let book2 = &desk.app.session.documents()[1];
+    assert_eq!(
+        book2.wb.active().unwrap().value(CellRef::parse("B2").unwrap()),
+        Value::text("typed"),
+        "the input landed in the active window's workbook"
+    );
+    let book1 = &desk.app.session.documents()[0];
+    assert_eq!(book1.wb.active().unwrap().value(CellRef::parse("B2").unwrap()), Value::Empty, "input never reaches the other workbook");
+    assert_eq!(book1.selection.active, CellRef::parse("A1").unwrap(), "and never moves the other window's selection");
+}
+
+/// One workbook in two windows: control input goes to the active window's view (its sheet,
+/// selection and scroll), and the other window keeps its own (#3036).
+#[test]
+fn control_input_reaches_the_active_window_of_one_workbook() {
+    let mut desk = Desk::new(true);
+    let (w1, w2) = two_windows_on_one_workbook(&mut desk);
+    desk.app.enter_window(w1);
+    desk.app.run("selection.set", json!({"range": "F12"})).unwrap();
+    desk.frames(2);
+    desk.app.enter_window(w2);
+    desk.frames(2);
+    assert_eq!(desk.app.session.active_window(), Some(w2), "window 2 (Sheet2, D4) is active");
+
+    assert_eq!(desk.control("ui.cell.click", json!({"cell": "D5"}))["ok"], true);
+    assert_eq!(desk.control("ui.text", json!({"text": "w"}))["ok"], true);
+    assert_eq!(desk.control("ui.key", json!({"key": "Enter"}))["ok"], true);
+    desk.frames(4);
+
+    // The typing landed in window 2's view: Sheet2, D5, then D6 after Enter.
+    desk.app.enter_window(w2);
+    let d = desk.app.session.doc().unwrap();
+    assert_eq!(d.wb.active_sheet(), 1, "window 2 stayed on Sheet2");
+    assert_eq!(d.wb.active().unwrap().value(CellRef::parse("D5").unwrap()), Value::text("w"));
+    assert_eq!(d.selection.active, CellRef::parse("D6").unwrap(), "Enter moved window 2's selection");
+
+    // Window 1 kept its own sheet and selection, and the click never landed there.
+    desk.app.enter_window(w1);
+    let d = desk.app.session.doc().unwrap();
+    assert_eq!(d.wb.active_sheet(), 0, "window 1 stayed on Sheet1");
+    assert_eq!(d.selection.active, CellRef::parse("F12").unwrap(), "window 1 kept its selection");
+    assert_eq!(d.wb.active().unwrap().value(CellRef::parse("D5").unwrap()), Value::Empty);
 }

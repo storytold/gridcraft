@@ -218,8 +218,15 @@ pub struct SheetApp {
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
-    /// Synthetic input from agents, one batch per step (drags need several steps).
-    pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
+    /// Synthetic input from agents, one batch per step (drags need several steps), bound to the
+    /// window it was meant for.
+    pub synthetic: std::collections::VecDeque<control::SyntheticBatch>,
+    /// The batch handed to a native window outside the root viewport, and the eframe viewport hook
+    /// that injects it (see [`control::SyntheticInput`]).
+    pub(crate) child_input: control::SyntheticInput,
+    /// The native viewport showing each engine window (see [`doc_windows`]); empty on the web, in
+    /// tests and before the first native frame, where every window shares the root viewport.
+    pub(crate) native_viewports: HashMap<u64, egui::ViewportId>,
     /// The front synthetic batch was injected into `RawInput` but no `ui` pass has applied it
     /// yet. eframe retains that unconsumed input across hidden logic-only ticks; the flag makes
     /// the hook offer it once and asks for a hidden paint until a UI pass applies it.
