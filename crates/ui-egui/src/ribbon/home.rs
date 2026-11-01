@@ -190,26 +190,22 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     }
                     ui.separator();
-                    let line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
                     let forced = invoke(app, "home.borderLineColor");
-                    let mut line_color_open = ui.data(|d| d.get_temp::<bool>(line_color_id)).unwrap_or(false) || forced;
-                    let line_color = ui.button("Line Color");
-                    if line_color.clicked() {
-                        line_color_open = !line_color_open;
-                    }
-                    ui.data_mut(|d| d.insert_temp(line_color_id, line_color_open));
-                    egui::Popup::menu(&line_color)
-                        .id(line_color.id.with("line_color_popup"))
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .open_memory(if line_color_open { Some(egui::SetOpenCommand::Bool(true)) } else { None })
-                        .show(|ui| {
-                            if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme_colors(app), "Automatic") {
-                                let c = if c == "none" { "auto".to_string() } else { c };
-                                app.grid.last_border_color = c.clone();
-                                act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": c}));
-                                ui.data_mut(|d| d.insert_temp(line_color_id, false));
-                            }
+                    let (line_color, _) = egui::containers::menu::SubMenuButton::new("Line Color").ui(ui, |ui| {
+                        if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme_colors(app), "Automatic") {
+                            let c = if c == "none" { "auto".to_string() } else { c };
+                            app.grid.last_border_color = c.clone();
+                            act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": c}));
+                            ui.close();
+                        }
+                    });
+                    if forced {
+                        let menu_id = egui::containers::menu::find_menu_root(ui).unique_id;
+                        let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(line_color.id);
+                        egui::containers::menu::MenuState::from_id(ui.ctx(), menu_id, |state| {
+                            state.open_item = Some(submenu_id);
                         });
+                    }
                     if ui.button("More Borders…").clicked() {
                         app.open_dialog("formatCells", json!({"tab": "Border"}));
                     }
