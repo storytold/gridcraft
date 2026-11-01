@@ -306,6 +306,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    session.data_source = Some(gridcraft_datasource::provider());
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {

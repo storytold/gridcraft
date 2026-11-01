@@ -114,6 +114,10 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        // Database commands wait for the server in the background, so the window keeps drawing.
+        if crate::db_jobs::is_db_command(id) {
+            return self.run_db_or_alert(id, params);
+        }
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
@@ -123,7 +127,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
