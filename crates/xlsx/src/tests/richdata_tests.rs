@@ -253,6 +253,19 @@ fn oversized_entry(mut bytes: Vec<u8>, path: &str, size: u32) -> Vec<u8> {
     panic!("fixture entry not found");
 }
 
+/// A CP437 part name (not flagged UTF-8) is reported decoded, `é` and not `�`.
+#[test]
+fn an_oversized_part_is_named_by_its_decoded_name() {
+    let mut bytes = oversized_entry(make_zip(&[("xl/QQ.xml", b"<x/>")]), "xl/QQ.xml", 512 * 1024 * 1024 + 1);
+    // 0x82 is `é` in CP437 and not valid UTF-8 on its own.
+    for i in 0..bytes.len() - 1 {
+        if &bytes[i..i + 2] == b"QQ" {
+            bytes[i..i + 2].copy_from_slice(&[0x82, 0x82]);
+        }
+    }
+    assert_eq!(crate::oversized_part(&bytes), Some(("xl/éé.xml".to_string(), 512 * 1024 * 1024 + 1)));
+}
+
 #[test]
 fn picture_metadata_limits_and_relationship_read_errors_do_not_block_workbooks() {
     let mut parts = independent_parts(false);

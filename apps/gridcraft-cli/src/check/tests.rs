@@ -268,6 +268,51 @@ fn package_validation_finds_what_excel_would_repair() {
     assert_eq!(validate_package(&own).unwrap(), Vec::<String>::new());
 }
 
+/// zip 9 looks entries up by raw name bytes; a CP437 name (not flagged UTF-8) is listed
+/// decoded and must still be readable under that name.
+#[test]
+fn package_validation_reads_parts_with_cp437_names() {
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, body) in [
+        ("[Content_Types].xml", r#"<Types><Default Extension="rels" ContentType="r"/><Override PartName="/xl/éé.xml" ContentType="x"/></Types>"#),
+        ("xl/QQ.xml", "<x/>"),
+        ("xl/_rels/QQ.xml.rels", r#"<Relationships><Relationship Id="rId1" Type="x/styles" Target="styles.xml"/></Relationships>"#),
+    ] {
+        z.start_file(name, stored).unwrap();
+        z.write_all(body.as_bytes()).unwrap();
+    }
+    let mut bytes = z.finish().unwrap().into_inner();
+    // 0x82 is `é` in CP437 and not valid UTF-8 on its own.
+    for i in 0..bytes.len() - 1 {
+        if &bytes[i..i + 2] == b"QQ" {
+            bytes[i..i + 2].copy_from_slice(&[0x82, 0x82]);
+        }
+    }
+    assert_eq!(validate_package(&bytes).unwrap(), ["xl/_rels/éé.xml.rels: rId1 (styles) targets missing part xl/styles.xml"]);
+}
+
+/// A CP437 name and a UTF-8 name can decode to the same part name; the checker reads one entry
+/// per name, so it reports the repeat instead of checking the first entry twice.
+#[test]
+fn package_validation_reports_a_part_name_used_twice() {
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, body) in
+        [("[Content_Types].xml", r#"<Types><Override PartName="/xl/éé.xml" ContentType="x"/></Types>"#), ("xl/éé.xml", "<x/>"), ("xl/QQ.xml", "<y/>")]
+    {
+        z.start_file(name, stored).unwrap();
+        z.write_all(body.as_bytes()).unwrap();
+    }
+    let mut bytes = z.finish().unwrap().into_inner();
+    for i in 0..bytes.len() - 1 {
+        if &bytes[i..i + 2] == b"QQ" {
+            bytes[i..i + 2].copy_from_slice(&[0x82, 0x82]);
+        }
+    }
+    assert_eq!(validate_package(&bytes).unwrap(), ["part xl/éé.xml is in the package more than once"]);
+}
+
 const WB_RELS: &str = "xl/_rels/workbook.xml.rels";
 const SHEET_RELS: &str = "xl/worksheets/_rels/sheet1.xml.rels";
 const MADE_UP: &str = r#"<Relationship Id="rId90" Type="http://example.com/relationships/madeUp" Target="madeUp.xml"/>"#;
@@ -281,7 +326,7 @@ fn with_rels(bytes: &[u8], rels: &[(&str, &str)], parts: &[(&str, &str)]) -> Vec
     let mut pending: Vec<(&str, &str)> = rels.to_vec();
     for i in 0..src.len() {
         let mut f = src.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut body = String::new();
         f.read_to_string(&mut body).unwrap();
         if let Some(at) = pending.iter().position(|(r, _)| *r == name) {
