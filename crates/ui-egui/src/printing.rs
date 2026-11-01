@@ -2,6 +2,13 @@
 use craft_ui::printing::Labels;
 pub use craft_ui::printing::{Discover, Duplex, Feedback, Printer, Settings, State, Submit};
 
+/// Draws the shared print controls.
+///
+/// `craft_ui::printing::State::show` also calls `poll`, so this path polls a second time on top of
+/// [`crate::SheetApp::poll_printing`] in `logic`. That poll is idempotent (it only drains worker
+/// messages into the same state), and the logic-side poll is what lets a hidden window and a
+/// logic-only frame see completion, so it stays. Splitting poll out of the shared `show` API is a
+/// craft-ui follow-up, not a GridCraft-local change.
 pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
     let labels = Labels {
         printer: &translate("Printer"),
@@ -15,9 +22,9 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
         short_edge: &translate("Two-sided: short edge"),
         grayscale: &translate("Grayscale"),
     };
-    state.show(ui, egui::Id::new("gridcraft_print_settings"), discover, &labels);
+    state.show(ui, egui::Id::unique("gridcraft_print_settings"), discover, &labels);
     if let Some(message) = &state.message {
-        ui.label(feedback(message, translate));
+        ui.label(feedback(message, crate::i18n::current(ui.ctx()), translate));
     }
 }
 
@@ -84,7 +91,7 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     }))
 }
 
-pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> String {
+pub fn feedback(message: &Feedback, language: crate::i18n::Language, translate: impl Fn(&str) -> String) -> String {
     match message {
         Feedback::FindingPrinters => translate("Finding printers…"),
         Feedback::NoPrinters => translate("No printers found. Configure a system printer or export a PDF."),
@@ -92,7 +99,7 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
         Feedback::Submitting => translate("Submitting print job…"),
         Feedback::Submitted(receipt) if receipt.trim().is_empty() => translate("Print job submitted."),
         Feedback::Submitted(receipt) => translate("Print job submitted: {receipt}").replace("{receipt}", receipt),
-        Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", error),
+        Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", &language.tr_error(error)),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
     }
 }

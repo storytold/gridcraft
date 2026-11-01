@@ -1,10 +1,13 @@
 //! View tab (sheet view state that's saved with the file) and Page Layout settings.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::RangeRef;
 use gridcraft_model::Orientation;
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param,
+    target_range, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -13,19 +16,30 @@ pub fn specs() -> Vec<CommandSpec> {
             "Freeze Panes",
             ["View", "Window", "Freeze Panes"],
             None,
-            "{cell?: \"B2\" (rows above and columns left of it freeze)}",
+            "{sheet?, cell?: \"B2\" (rows above and columns left of it freeze); without `cell`, unfreezes a frozen sheet}",
             has_doc,
             freeze_panes
         ),
-        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, Some((1, 0)))),
-        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(
+        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
             s,
+            target_sheet(s, p)?,
+            Some((1, 0))
+        )),
+        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
             Some((0, 1))
         )),
-        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, None)),
+        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
+            None
+        )),
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
+        cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
@@ -33,9 +47,26 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
+        cmd!(
+            query "view.statusBar",
+            "Customize Status Bar",
+            [],
+            None,
+            "{average?, count?, numericalCount?, minimum?, maximum?, sum?: bool (the statistics shown for a selection; returns all six)}",
+            always,
+            status_bar
+        ),
         cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
-        cmd!("pageLayout.size", "Size", ["Page Layout", "Page Setup"], None, "{paper: Letter|Legal|A4|A3|A5|Tabloid|Executive}", has_doc, paper),
+        cmd!(
+            "pageLayout.size",
+            "Size",
+            ["Page Layout", "Page Setup"],
+            None,
+            "{paper: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes)}",
+            has_doc,
+            paper
+        ),
         cmd!(
             "pageLayout.margins",
             "Margins",
@@ -96,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Header & Footer",
             ["Insert", "Text"],
             None,
-            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, firstHeader, firstFooter, evenHeader, evenFooter}",
+            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, scaleWithDoc?: bool, alignWithMargins?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, scaleWithDoc, alignWithMargins, firstHeader, firstFooter, evenHeader, evenFooter}",
             has_doc,
             header_footer
         ),
@@ -113,23 +144,28 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     if sh.freeze.is_some() && p.get("cell").is_none() {
-        return set_freeze(s, None);
+        return set_freeze(s, si, None);
     }
-    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let at = match cell_param_on(s, p, "cell", si)? {
+        Some(c) => c,
+        None if si == d.wb.active_sheet() => d.selection.active,
+        // The selection belongs to the active sheet.
+        None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
+    };
     let top = sh.view_top_left;
     let rows = at.row.saturating_sub(top.row);
     let cols = at.col.saturating_sub(top.col);
     let _ = (rows, cols);
     let (rows, cols) = (at.row, at.col);
-    set_freeze(s, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
+    set_freeze(s, si, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
 }
 
-fn set_freeze(s: &mut Session, f: Option<(u32, u32)>) -> Result<Json> {
+fn set_freeze(s: &mut Session, si: usize, f: Option<(u32, u32)>) -> Result<Json> {
     edit(s, |cx| {
-        let si = cx.sheet_index();
         cx.sheet_mut(si)?.freeze = f;
         Ok(json!({"freeze": f}))
     })
@@ -143,6 +179,7 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
             "gridlines" => &mut sh.show_gridlines,
             "headings" => &mut sh.show_headings,
             "zeros" => &mut sh.show_zeros,
+            "outlineSymbols" => &mut sh.show_outline_symbols,
             "rtl" => &mut sh.right_to_left,
             "printGridlines" => &mut sh.print.gridlines,
             _ => &mut sh.print.headings,
@@ -152,12 +189,46 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
     })
 }
 
+/// Ctrl+6: hides every object, or shows them again. Placeholders (from a file) count as shown.
+fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
+    use gridcraft_model::ShowObjects;
+    edit(s, |cx| {
+        let on = bool_param(p, "on").unwrap_or(cx.wb.show_objects == ShowObjects::None);
+        cx.wb.show_objects = if on { ShowObjects::All } else { ShowObjects::None };
+        Ok(json!({"on": on}))
+    })
+}
+
+fn status_bar(s: &mut Session, p: &Json) -> Result<Json> {
+    let st = &mut s.prefs.status_bar;
+    for (key, flag) in [
+        ("average", &mut st.average),
+        ("count", &mut st.count),
+        ("numericalCount", &mut st.numerical_count),
+        ("minimum", &mut st.minimum),
+        ("maximum", &mut st.maximum),
+        ("sum", &mut st.sum),
+    ] {
+        if let Some(on) = bool_param(p, key) {
+            *flag = on;
+        }
+    }
+    Ok(json!({
+        "average": st.average,
+        "count": st.count,
+        "numericalCount": st.numerical_count,
+        "minimum": st.minimum,
+        "maximum": st.maximum,
+        "sum": st.sum,
+    }))
+}
+
 fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
     let z = f64_param(p, "percent").ok_or_else(|| bad("view.zoom", "missing `percent`"))?.clamp(10.0, 400.0) as u16;
     let d = s.doc_mut()?;
     let dirty = d.is_dirty();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     if let Some(sh) = wb.sheet_mut(si) {
         sh.zoom = z;
     }
@@ -232,13 +303,31 @@ fn print_area(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn print_titles(s: &mut Session, p: &Json) -> Result<Json> {
-    let rows = str_param(p, "rows").and_then(RangeRef::parse).map(|r| (r.start.row, r.end.row));
-    let cols = str_param(p, "cols").and_then(RangeRef::parse).map(|r| (r.start.col, r.end.col));
+    // An absent key leaves that axis alone, and an empty or null value clears it — the same
+    // reading `pageLayout.pageSetup` gives `titleRows`/`titleCols`. Assigning `None` for a
+    // key that was never sent used to wipe the other axis.
+    let axis = |key: &str, is_cols: bool| -> Result<Option<Option<(u32, u32)>>> {
+        match p.get(key) {
+            None => Ok(None),
+            Some(Json::Null) => Ok(Some(None)),
+            Some(Json::String(t)) if t.trim().is_empty() => Ok(Some(None)),
+            Some(Json::String(t)) => match RangeRef::parse(t) {
+                Some(r) => Ok(Some(Some(if is_cols { (r.start.col, r.end.col) } else { (r.start.row, r.end.row) }))),
+                None => Err(bad("pageLayout.printTitles", format!("`{key}` is not a range: `{t}`"))),
+            },
+            Some(_) => Err(bad("pageLayout.printTitles", format!("`{key}` must be text like \"1:2\" or \"A:A\""))),
+        }
+    };
+    let (rows, cols) = (axis("rows", false)?, axis("cols", true)?);
     edit(s, |cx| {
         let si = cx.sheet_index();
         let pr = &mut cx.sheet_mut(si)?.print;
-        pr.title_rows = rows;
-        pr.title_cols = cols;
+        if let Some(t) = rows {
+            pr.title_rows = t;
+        }
+        if let Some(t) = cols {
+            pr.title_cols = t;
+        }
         Ok(Json::Null)
     })
 }
@@ -339,6 +428,12 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(on) = bool_param(p, "differentOddEven") {
             pr.different_odd_even = on;
         }
+        if let Some(on) = bool_param(p, "scaleWithDoc") {
+            pr.hf_scale_with_doc = on;
+        }
+        if let Some(on) = bool_param(p, "alignWithMargins") {
+            pr.hf_align_with_margins = on;
+        }
         if let Some((page, footer, idx, text)) = &section {
             let spec = pr.hf_mut(*page, *footer);
             let mut parts = super::print::split_header_footer(spec);
@@ -352,6 +447,8 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
             "footer": pr.footer,
             "differentFirst": pr.different_first,
             "differentOddEven": pr.different_odd_even,
+            "scaleWithDoc": pr.hf_scale_with_doc,
+            "alignWithMargins": pr.hf_align_with_margins,
             "firstHeader": pr.first_header,
             "firstFooter": pr.first_footer,
             "evenHeader": pr.even_header,
@@ -399,9 +496,6 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-#[allow(dead_code)]
-fn unused(_: CellRef) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +518,23 @@ mod tests {
         // A prefs.json saved before the option existed keeps the formula bar shown.
         let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
         assert!(old.formula_bar);
+    }
+
+    #[test]
+    fn status_bar_statistics_default_to_average_count_and_sum_and_turn_on_one_at_a_time() {
+        let mut s = Session::new();
+        let all = json!({"average": true, "count": true, "numericalCount": false, "minimum": false, "maximum": false, "sum": true});
+        assert_eq!(s.execute("view.statusBar", json!({})).unwrap(), all);
+        let r = s.execute("view.statusBar", json!({"minimum": true, "sum": false, "count": "yes"})).unwrap();
+        assert_eq!(r, json!({"average": true, "count": true, "numericalCount": false, "minimum": true, "maximum": false, "sum": false}));
+        assert!(s.prefs.status_bar.minimum && !s.prefs.status_bar.sum);
+        // A prefs.json saved before the option existed, or with only some of the six, keeps the defaults for the rest.
+        let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
+        assert_eq!(old.status_bar, crate::StatusBarStats::default());
+        let part: crate::Prefs = serde_json::from_str(r#"{"statusBar": {"maximum": true}}"#).unwrap();
+        assert!(part.status_bar.maximum && part.status_bar.average && part.status_bar.sum && !part.status_bar.minimum);
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        assert_eq!(saved["statusBar"]["minimum"], true);
+        assert_eq!(saved["statusBar"]["numericalCount"], false);
     }
 }

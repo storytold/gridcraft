@@ -1,6 +1,7 @@
 //! Workbooks.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gridcraft_core::DateSystem;
 use gridcraft_formula::Expr;
@@ -16,6 +17,17 @@ pub enum CalcMode {
     Automatic,
     AutomaticExceptTables,
     Manual,
+}
+
+/// Options › Advanced › "For objects, show" (`<workbookPr showObjects>`, ECMA-376 `ST_Objects`):
+/// whether charts, pictures, shapes and slicers are drawn. Ctrl+6 switches between `All` and
+/// `None`; `Placeholders` only comes from files and is kept as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShowObjects {
+    #[default]
+    All,
+    Placeholders,
+    None,
 }
 
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
@@ -85,6 +97,47 @@ pub struct DocProps {
     pub description: String,
 }
 
+/// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the
+/// base text it annotates.
+///
+/// `start` and `end` are zero-based offsets into the base text (`sb` and `eb` in the file) with
+/// `start < end`; reading keeps them within the text's length in UTF-16 code units. Behaviour
+/// reference: ISO/IEC 29500-1 §18.4.6 `rPh` and the Microsoft Learn `PhoneticRun` class.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticRun {
+    pub start: u32,
+    pub end: u32,
+    pub text: String,
+}
+
+/// The `<phoneticPr>` of a string item: how its phonetic runs are displayed. `kind` (`type`) and
+/// `alignment` only ever hold values ISO/IEC 29500-1 §18.18.57 `ST_PhoneticType` / §18.18.56
+/// `ST_PhoneticAlignment` define, so damaged files cannot be written back invalid.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticProps {
+    /// `fontId`: a required attribute, an index into the style sheet's fonts. A file without one
+    /// gets 0 — the Normal style's font, which an out-of-range index falls back to anyway.
+    #[serde(default)]
+    pub font_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<String>,
+}
+
+/// The phonetic (furigana) data of one shared string: its `<rPh>` runs, in document order, and its
+/// `<phoneticPr>` when the file had one.
+///
+/// `text` is the string's base text — the only handle a cell keeps on its shared string — and is
+/// the key the writer uses to re-emit the runs next to the right `<si>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticString {
+    pub text: String,
+    pub runs: Vec<PhoneticRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<PhoneticProps>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
@@ -93,7 +146,10 @@ pub struct Workbook {
     pub theme: Theme,
     pub date_system: DateSystem,
     pub calc: CalcSettings,
-    pub active_sheet: usize,
+    #[serde(default, skip_serializing_if = "is_all")]
+    pub show_objects: ShowObjects,
+    /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
+    pub active_sheet: ActiveSheet,
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
@@ -104,15 +160,41 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Phonetic (furigana) data of shared strings (`xl/sharedStrings.xml`), one entry per string
+    /// text, so that an open + save keeps a Japanese workbook's readings. Written back next to the
+    /// `<si>` holding the same text.
+    ///
+    /// Keyed by text because that is all a cell keeps of its shared string: the saved table holds
+    /// each text once (the format's `uniqueCount`), so two `<si>` items that share a base text can
+    /// only keep one reading — the reader keeps the first and warns. Empty for workbooks without
+    /// phonetic data; not present in older JSON. Modelled data (unlike [`Workbook::preserved`],
+    /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phonetics: Vec<PhoneticString>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
-    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros.
+    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros. Shared, so a
+    /// copy of the workbook (every edit's undo step) doesn't copy it.
     #[serde(default, with = "crate::b64::opt")]
-    pub vba_project: Option<Vec<u8>>,
+    pub vba_project: Option<Arc<Vec<u8>>>,
     /// Field separator of the CSV this workbook was read from, so saving it as CSV writes the same
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
+    /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
+    #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
+    pub macros: crate::macros::Macros,
+    /// The `macros` entries of a JSON file as read, before the engine checks each one on its own
+    /// and moves it into `macros`, so one damaged or newer macro doesn't stop the file opening.
+    /// Never written.
+    #[serde(rename = "macros", default, skip_serializing, deserialize_with = "crate::macros::entries")]
+    pub macros_read: Vec<serde_json::Value>,
+    /// Macros in a newer format than this build reads, as the file held them. They are never read,
+    /// listed or run; a save writes them back unchanged, so the newer build gets them back whole.
+    /// Shared between snapshots, as nothing changes them.
+    #[serde(skip)]
+    pub macros_unread: Arc<Vec<serde_json::Value>>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -120,11 +202,73 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
+    /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
+    /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
+    /// links are relative to and must keep naming it after a Save As into another folder, since
+    /// the links in memory are still written for the old one. Not in JSON.
+    #[serde(skip)]
+    pub source_path: Option<std::path::PathBuf>,
+}
+
+fn is_all(s: &ShowObjects) -> bool {
+    *s == ShowObjects::All
 }
 
 impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()
+    }
+}
+
+/// The active sheet index of a [`Workbook`].
+///
+/// Every other part of a workbook value is immutable once shared (the engine keeps versions as
+/// `Arc<Workbook>` and tells unsaved changes by pointer). The active sheet is the exception: it
+/// is the view state of the window showing the workbook, and several windows on one workbook
+/// swap their own sheet into it whenever one of them becomes the one commands act on. Keeping it
+/// in an atomic lets that swap happen through the shared `Arc` without cloning the workbook.
+/// Copies (undo versions, a cloned workbook) take the value at the time of the copy.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(from = "usize", into = "usize")]
+pub struct ActiveSheet(AtomicUsize);
+
+impl ActiveSheet {
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+    pub fn set(&self, i: usize) {
+        self.0.store(i, Ordering::Relaxed);
+    }
+}
+
+impl From<usize> for ActiveSheet {
+    fn from(i: usize) -> ActiveSheet {
+        ActiveSheet(AtomicUsize::new(i))
+    }
+}
+
+impl From<ActiveSheet> for usize {
+    fn from(a: ActiveSheet) -> usize {
+        a.get()
+    }
+}
+
+impl Clone for ActiveSheet {
+    fn clone(&self) -> ActiveSheet {
+        ActiveSheet::from(self.get())
+    }
+}
+
+impl PartialEq for ActiveSheet {
+    fn eq(&self, other: &ActiveSheet) -> bool {
+        self.get() == other.get()
+    }
+}
+
+impl std::fmt::Debug for ActiveSheet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get().fmt(f)
     }
 }
 
@@ -138,16 +282,22 @@ impl Workbook {
             theme: Theme::default(),
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
-            active_sheet: 0,
+            show_objects: ShowObjects::All,
+            active_sheet: ActiveSheet::default(),
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
             custom_lists: vec![],
             cell_styles: vec![],
+            phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            macros: crate::macros::Macros::default(),
+            macros_read: vec![],
+            macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
+            source_path: None,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
@@ -159,8 +309,17 @@ impl Workbook {
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
         self.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))
     }
+    /// The index of the sheet the workbook's window shows (the file's active tab).
+    pub fn active_sheet(&self) -> usize {
+        self.active_sheet.get()
+    }
+    /// Changes the active sheet in place, also through a shared `Arc<Workbook>`: it is view state,
+    /// so switching sheets or windows neither copies the workbook nor makes it a new version.
+    pub fn set_active_sheet(&self, i: usize) {
+        self.active_sheet.set(i);
+    }
     pub fn active(&self) -> Option<&Sheet> {
-        self.sheet(self.active_sheet)
+        self.sheet(self.active_sheet())
     }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
@@ -219,7 +378,7 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(ne) }))
                 })
                 .collect();
             if fixed.is_empty() {
@@ -233,7 +392,7 @@ impl Workbook {
             }
         }
         for n in self.names.iter_mut() {
-            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
                 let ne = spell_calls(e.clone(), &lambdas);
                 if ne != e {
                     n.formula = gridcraft_formula::print(&ne);
@@ -295,6 +454,24 @@ fn spell_calls(e: Expr, lambdas: &[String]) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phonetics_are_additive_in_json() -> Result<(), Box<dyn std::error::Error>> {
+        let mut wb = Workbook::new();
+        assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
+        wb.phonetics.push(PhoneticString {
+            text: "東".into(),
+            runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
+            props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
+        });
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.phonetics, wb.phonetics);
+        // JSON written before the field existed still loads.
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().ok_or("none")?.remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn sheet_names() {

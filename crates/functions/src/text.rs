@@ -5,8 +5,8 @@ use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::criteria::wildcard_find;
 use crate::util::{
-    A, MAX_CELLS, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar, text,
-    text_val,
+    A, MAX_CELLS, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, int, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar,
+    text, text_val,
 };
 use crate::{Arg, Ctx, FnSpec, VAR};
 
@@ -111,12 +111,31 @@ fn len(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(text(a, 0)?.chars().count() as f64)
 }
 
+fn lower_char(ch: char) -> char {
+    match ch.to_lowercase().next() {
+        Some(lower) => lower,
+        None => ch,
+    }
+}
+
+fn upper_char(ch: char) -> char {
+    let mut uppercase = ch.to_uppercase();
+    match uppercase.next() {
+        Some(upper) if uppercase.next().is_none() => upper,
+        _ => ch,
+    }
+}
+
+fn proper_upper_char(ch: char) -> char {
+    if ch == '\u{130}' { 'I' } else { upper_char(ch) }
+}
+
 fn lower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_lowercase())
+    text_val(text(a, 0)?.chars().map(lower_char).collect::<String>())
 }
 
 fn upper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_uppercase())
+    text_val(text(a, 0)?.chars().map(upper_char).collect::<String>())
 }
 
 fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -126,9 +145,9 @@ fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for ch in s.chars() {
         if ch.is_alphabetic() {
             if prev_letter {
-                out.extend(ch.to_lowercase());
+                out.push(lower_char(ch));
             } else {
-                out.extend(ch.to_uppercase());
+                out.push(proper_upper_char(ch));
             }
             prev_letter = true;
         } else {
@@ -281,7 +300,11 @@ fn unichar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if !(1.0..=1_114_111.0).contains(&n) {
         return Err(CellError::Value);
     }
-    match char::from_u32(n as u32) {
+    let cp = n as u32;
+    if (0xFDD0..=0xFDEF).contains(&cp) || cp & 0xFFFE == 0xFFFE {
+        return Err(CellError::NA);
+    }
+    match char::from_u32(cp) {
         Some(c) => text_val(c.to_string()),
         None => Err(CellError::NA),
     }
@@ -334,6 +357,8 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             if seen_dec {
                 return Err(CellError::Value);
             }
+        } else if c == '.' || c == ',' {
+            return Err(CellError::Value);
         } else {
             out.push(c);
         }
@@ -348,10 +373,10 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 /// Formats `x` (already rounded) with `decimals` places and optional thousands separators.
 fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
     let d = decimals.max(0) as usize;
-    let s = format!("{:.*}", d, x.abs());
+    let s = x.abs().to_string();
     let (int_part, frac) = match s.split_once('.') {
-        Some((i, f)) => (i.to_string(), Some(f.to_string())),
-        None => (s.clone(), None),
+        Some((i, f)) => (i, f),
+        None => (s.as_str(), ""),
     };
     let int_part = if commas {
         let b = int_part.as_bytes();
@@ -364,12 +389,14 @@ fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
         }
         o
     } else {
-        int_part
+        int_part.to_string()
     };
     let mut out = int_part;
-    if let Some(f) = frac {
+    if d > 0 {
+        let frac_len = frac.len().min(d);
         out.push('.');
-        out.push_str(&f);
+        out.push_str(&frac[..frac_len]);
+        out.extend(std::iter::repeat_n('0', d - frac_len));
     }
     out
 }
@@ -392,13 +419,21 @@ fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
     let no_commas = opt_bool(a, 2, false)?;
     let body = format_fixed(r, d, !no_commas);
+    if body.len() + if r < 0.0 { 1 } else { 0 } > 255 {
+        return Err(CellError::Value);
+    }
     text_val(if r < 0.0 { format!("-{body}") } else { body })
 }
 
 fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
+    let negative = r < 0.0 || (r == 0.0 && d >= 0 && num(a, 0)? < 0.0);
     let body = format_fixed(r, d, true);
-    text_val(if r < 0.0 { format!("(${body})") } else { format!("${body}") })
+    let out = if negative { format!("(${body})") } else { format!("${body}") };
+    if out.len() > 254 {
+        return Err(CellError::Value);
+    }
+    text_val(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -409,10 +444,11 @@ const THAI_DIGITS: [&str; 10] = ["ศูนย์", "หนึ่ง", "สอ�
 const THAI_PLACES: [&str; 6] = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
 
 /// Thai words for a group of up to six decimal digits (most significant first); empty for zero.
-/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด.
-fn thai_group(digits: &[u8]) -> String {
+/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด; `after`
+/// says the number already has a non-zero digit in a higher group (so 1,000,001 ends in เอ็ด).
+fn thai_group(digits: &[u8], after: bool) -> String {
     let n = digits.len();
-    let higher = digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
+    let higher = after || digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
     let mut out = String::new();
     for (i, &d) in digits.iter().enumerate() {
         let place = n - 1 - i;
@@ -445,7 +481,7 @@ fn thai_number(digits: &str) -> String {
     let mut start = 0;
     let mut len = first;
     while let Some(group) = d.get(start..start + len) {
-        out.push_str(&thai_group(group));
+        out.push_str(&thai_group(group, start > 0));
         start += len;
         len = 6;
         if start < d.len() {
@@ -520,7 +556,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
         let mut j = t.len();
         while j > 0 {
             let best =
-                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
             match best {
                 Some(l) => {
                     out.push((j - l, j));
@@ -534,7 +570,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
     }
     let mut i = 0;
     while i < t.len() {
-        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
         match best {
             Some(l) => {
                 out.push((i, i + l));
@@ -549,7 +585,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
 fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     let s = chars(&text(a, 0)?);
     let delims = delimiters(&arg(a, 1)?.value)?;
-    let inst = opt_int(a, 2, 1)?;
+    let inst = if has(a, 2) { int(a, 2)? } else { 1 };
     let mode = opt_int(a, 3, 0)?;
     let match_end = opt_bool(a, 4, false)?;
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
@@ -585,7 +621,7 @@ fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char>> {
-    if delims.iter().all(|d| d.is_empty()) {
+    if delims.iter().all(Vec::is_empty) {
         return vec![s.to_vec()];
     }
     let mut out = Vec::new();
@@ -745,9 +781,9 @@ fn convert_replacement(r: &str) -> String {
     let mut i = 0;
     while i < c.len() {
         let ch = c[i];
-        if ch == '$' && c.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+        if ch == '$' && c.get(i + 1).is_some_and(char::is_ascii_digit) {
             let mut j = i + 1;
-            while c.get(j).is_some_and(|d| d.is_ascii_digit()) {
+            while c.get(j).is_some_and(char::is_ascii_digit) {
                 j += 1;
             }
             out.push_str("${");
@@ -762,23 +798,99 @@ fn convert_replacement(r: &str) -> String {
     out
 }
 
+/// A piece of a replacement: literal text or a capture group (by number or name).
+enum Piece {
+    Text(String),
+    Index(usize),
+    Name(String),
+}
+
+/// A replacement split into pieces as `regex::Captures::expand` reads it: `$$` is `$`, `$name` takes
+/// the longest run of `[_0-9A-Za-z]`, `${name}` ends at `}` (`${}` is empty), a name of digits is a
+/// group number, and a `$` that starts no reference is itself.
+fn template(rep: &str) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let mut lit = String::new();
+    let mut rest = rep;
+    while let Some(i) = rest.find('$') {
+        lit.push_str(&rest[..i]);
+        rest = &rest[i + 1..];
+        if let Some(r) = rest.strip_prefix('$') {
+            lit.push('$');
+            rest = r;
+            continue;
+        }
+        // A braced name is a reference even when empty (it expands to nothing).
+        let braced = rest.strip_prefix('{').and_then(|b| b.find('}').map(|j| (&b[..j], &b[j + 1..])));
+        let (name, after) = braced.unwrap_or_else(|| {
+            let j = rest.find(|c: char| !(c == '_' || c.is_ascii_alphanumeric())).unwrap_or(rest.len());
+            (&rest[..j], &rest[j..])
+        });
+        if braced.is_none() && name.is_empty() {
+            lit.push('$');
+            continue;
+        }
+        if !lit.is_empty() {
+            out.push(Piece::Text(std::mem::take(&mut lit)));
+        }
+        out.push(match name.parse::<usize>() {
+            Ok(n) => Piece::Index(n),
+            Err(_) => Piece::Name(name.to_string()),
+        });
+        rest = after;
+    }
+    lit.push_str(rest);
+    if !lit.is_empty() {
+        out.push(Piece::Text(lit));
+    }
+    out
+}
+
+/// Append a match's replacement to `out`, piece by piece; `None` once `out` would pass `limit`
+/// bytes, before anything that long is built (#2162).
+fn expand_capped(cap: &regex::Captures, pieces: &[Piece], out: &mut String, limit: usize) -> Option<()> {
+    for p in pieces {
+        let s = match p {
+            Piece::Text(t) => t.as_str(),
+            Piece::Index(i) => cap.get(*i).map_or("", |m| m.as_str()),
+            Piece::Name(n) => cap.name(n).map_or("", |m| m.as_str()),
+        };
+        if out.len().saturating_add(s.len()) > limit {
+            return None;
+        }
+        out.push_str(s);
+    }
+    Some(())
+}
+
 fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let rep = convert_replacement(&text(a, 2)?);
+    let rep = template(&convert_replacement(&text(a, 2)?));
     let occ = opt_int(a, 3, 0)?;
     let re = build_regex(&text(a, 1)?, case_arg(a, 4)?)?;
+    // Built match by match within a bound past which the text can only be too long (a character
+    // is at most four bytes), instead of building every replacement first (#2162).
+    let limit = MAX_TEXT * 4;
+    let mut out = String::new();
     if occ == 0 {
-        return check_len(re.replace_all(&s, rep.as_str()).into_owned());
+        let mut last = 0;
+        for cap in re.captures_iter(&s) {
+            let Some(m) = cap.get(0) else { continue };
+            out.push_str(s.get(last..m.start()).unwrap_or_default());
+            expand_capped(&cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+            last = m.end();
+        }
+        out.push_str(s.get(last..).unwrap_or_default());
+        return check_len(out);
     }
     let caps: Vec<regex::Captures> = re.captures_iter(&s).collect();
     let k = occ.unsigned_abs() as usize;
     let idx = if occ > 0 { k.checked_sub(1) } else { caps.len().checked_sub(k) };
     let Some(cap) = idx.and_then(|i| caps.get(i)) else { return text_val(s) };
     let Some(m) = cap.get(0) else { return text_val(s) };
-    let mut out = String::new();
-    out.push_str(&s[..m.start()]);
-    cap.expand(&rep, &mut out);
-    out.push_str(&s[m.end()..]);
+    out.push_str(s.get(..m.start()).unwrap_or_default());
+    expand_capped(cap, &rep, &mut out, limit).ok_or(CellError::Value)?;
+    out.push_str(s.get(m.end()..).unwrap_or_default());
     check_len(out)
 }
 
@@ -956,6 +1068,20 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 mod tests {
     use gridcraft_core::{CellError, Value};
 
+    /// The pieces expand exactly as `regex::Captures::expand` does.
+    #[test]
+    fn template_expands_like_regex() {
+        let re = regex::Regex::new(r"(?<y>\d+)-(\d+)").unwrap();
+        let cap = re.captures("x 2026-10 y").unwrap();
+        for rep in ["$1", "${1}", "$1a", "${1}a", "$y", "${y}!", "$$", "$$1", "a$", "$}", "${", "${}", "${y", "$0|$2|$9", "$-1", "€$1€", ""] {
+            let mut want = String::new();
+            cap.expand(rep, &mut want);
+            let mut got = String::new();
+            assert!(super::expand_capped(&cap, &super::template(rep), &mut got, usize::MAX).is_some());
+            assert_eq!(got, want, "{rep:?}");
+        }
+    }
+
     use crate::util::testutil::*;
 
     #[test]
@@ -976,6 +1102,17 @@ mod tests {
         is_text(bt(1.999), "สองบาทถ้วน");
         is_text(bt(0.005), "หนึ่งสตางค์");
         is_text(bt(-0.001), "ศูนย์บาทถ้วน");
+        // A final one is เอ็ด after higher digits in any group, millions included (#1234).
+        is_text(bt(21_000_001.0), "ยี่สิบเอ็ดล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001.0), "หนึ่งล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001_000_000.0), "หนึ่งล้านเอ็ดล้านบาทถ้วน");
+        is_text(bt(1001.0), "หนึ่งพันเอ็ดบาทถ้วน");
+        is_text(bt(11.0), "สิบเอ็ดบาทถ้วน");
+        is_text(bt(1.0), "หนึ่งบาทถ้วน");
+        is_text(bt(0.01), "หนึ่งสตางค์");
+        is_text(bt(0.21), "ยี่สิบเอ็ดสตางค์");
+        is_text(bt(1250.5), "หนึ่งพันสองร้อยห้าสิบบาทห้าสิบสตางค์");
+        is_text(bt(0.25), "ยี่สิบห้าสตางค์");
         is_err(ev("BAHTTEXT", vec![t("abc")]), CellError::Value);
         // Huge numbers give text (or #NUM! where rounding overflows), never a panic.
         assert!(matches!(bt(-1e300), Value::Text(_)));
@@ -1019,6 +1156,20 @@ mod tests {
     fn case_and_cleanup() {
         is_text(ev("UPPER", vec![t("abc")]), "ABC");
         is_text(ev("LOWER", vec![t("ABC")]), "abc");
+        is_text(ev("UPPER", vec![t("Straße")]), "STRAßE");
+        is_text(ev("LOWER", vec![t("İ")]), "i");
+        is_text(ev("PROPER", vec![t("İSTANBUL")]), "Istanbul");
+        is_text(ev("PROPER", vec![t("ß")]), "ß");
+        is_text(ev("PROPER", vec![t("ÉCOLE")]), "École");
+        let proper = ev("PROPER", vec![t("İSTANBUL Straße")]);
+        is_text(proper.clone(), "Istanbul Straße");
+        assert_eq!(
+            match proper {
+                Value::Text(s) => s.chars().count(),
+                _ => 0,
+            },
+            "Istanbul Straße".chars().count()
+        );
         is_text(ev("PROPER", vec![t("this is a TITLE")]), "This Is A Title");
         is_text(ev("PROPER", vec![t("2-way street's")]), "2-Way Street'S");
         is_text(ev("TRIM", vec![t("  a   b  c ")]), "a b c");
@@ -1077,8 +1228,15 @@ mod tests {
         close(ev("CODE", vec![t("€")]), 128.0);
         is_err(ev("CODE", vec![t("")]), CellError::Value);
         is_text(ev("UNICHAR", vec![n(9731.0)]), "☃");
+        for cp in [0xFDD0, 0xFDEF, 0xFFFE, 0xFFFF, 0x1FFFE, 0x1FFFF, 0x10FFFE, 0x10FFFF] {
+            is_err(ev("UNICHAR", vec![n(f64::from(cp))]), CellError::NA);
+        }
+        for (cp, expected) in [(0xFDCF, "\u{FDCF}"), (0xFDF0, "\u{FDF0}"), (0xFFFD, "\u{FFFD}"), (0x1FFFD, "\u{1FFFD}")] {
+            is_text(ev("UNICHAR", vec![n(f64::from(cp))]), expected);
+        }
         close(ev("UNICODE", vec![t("☃")]), 9731.0);
         is_err(ev("UNICHAR", vec![n(0.0)]), CellError::Value);
+        is_err(ev("UNICHAR", vec![n(1_114_112.0)]), CellError::Value);
         is_err(ev("UNICHAR", vec![n(55296.0)]), CellError::NA);
     }
 
@@ -1109,11 +1267,20 @@ mod tests {
         close(ev("VALUE", vec![t("12:00")]), 0.5);
         close(ev("VALUE", vec![t("2020-01-01")]), 43831.0);
         is_err(ev("VALUE", vec![t("abc")]), CellError::Value);
+        // Accounting negatives, as Excel 365 reads them.
+        close(ev("VALUE", vec![t("$(5)")]), -5.0);
+        close(ev("VALUE", vec![t("$ (1,000.50)")]), -1000.5);
+        close(ev("VALUE", vec![t("(5)%")]), -0.05);
+        for s in ["$(5)%", "$(5%)", "$5%", "(-5)", "((5))", "$(-5)", "(1/2)"] {
+            is_err(ev("VALUE", vec![t(s)]), CellError::Value);
+        }
         close(ev("NUMBERVALUE", vec![t("2.500,27"), t(","), t(".")]), 2500.27);
         close(ev("NUMBERVALUE", vec![t("3.5%")]), 0.035);
         close(ev("NUMBERVALUE", vec![t(" 1 000 ")]), 1000.0);
         close(ev("NUMBERVALUE", vec![t("")]), 0.0);
         is_err(ev("NUMBERVALUE", vec![t("1.2.3")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1.5"), t(","), t(" ")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1,5"), t("."), t(" ")]), CellError::Value);
         is_text(ev("FIXED", vec![n(1234.567), n(1.0)]), "1,234.6");
         is_text(ev("FIXED", vec![n(1234.567), n(-1.0)]), "1,230");
         is_text(ev("FIXED", vec![n(-1234.567), n(1.0), b(true)]), "-1234.6");
@@ -1124,8 +1291,55 @@ mod tests {
         is_text(ev("DOLLAR", vec![n(0.5), n(0.0)]), "$1");
         is_text(ev("USDOLLAR", vec![n(1.0)]), "$1.00");
         is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
+        let fixed_16 = format!("1.1{}", "0".repeat(15));
+        let dollar_16 = format!("$1.1{}", "0".repeat(15));
+        let fixed_20 = format!("1.005{}", "0".repeat(17));
+        let dollar_20 = format!("$1.005{}", "0".repeat(17));
+        let fixed_127 = format!("1.1{}", "0".repeat(126));
+        let dollar_127 = format!("$1.1{}", "0".repeat(126));
+        is_text(ev("FIXED", vec![n(1.1), n(16.0)]), &fixed_16);
+        is_text(ev("DOLLAR", vec![n(1.1), n(16.0)]), &dollar_16);
+        is_text(ev("FIXED", vec![n(1.005), n(20.0)]), &fixed_20);
+        is_text(ev("DOLLAR", vec![n(1.005), n(20.0)]), &dollar_20);
+        is_text(ev("FIXED", vec![n(1.1), n(127.0)]), &fixed_127);
+        is_text(ev("DOLLAR", vec![n(1.1), n(127.0)]), &dollar_127);
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
+    }
+
+    #[test]
+    fn fixed_and_dollar_output_limits() {
+        assert!(matches!(ev("FIXED", vec![n(1e191), n(0.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e192), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(-1e253), n(0.0), b(true)]), Value::Text(ref s) if s.starts_with('-')));
+        is_err(ev("FIXED", vec![n(-1e191), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(1e189), n(1.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e190), n(1.0)]), CellError::Value);
+
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(-1e188), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(-1e189), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1.23456789e187), n(2.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1.23456789e188), n(2.0)]), CellError::Value);
+        is_err(ev("DOLLAR", vec![n(-1.23456789e186), n(2.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(-1.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(-1.0)]), CellError::Value);
+    }
+
+    #[test]
+    fn dollar_keeps_negative_sign_when_nonnegative_precision_rounds_to_zero() {
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(2.0)]), "($0.00)");
+        is_text(ev("DOLLAR", vec![n(0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(0.0001), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-4.0), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-5.0), n(-1.0)]), "($10)");
+        is_text(ev("DOLLAR", vec![n(-0.4), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.5), n(0.0)]), "($1)");
+        is_text(ev("FIXED", vec![n(-0.0001), n(0.0)]), "0");
     }
 
     #[test]
