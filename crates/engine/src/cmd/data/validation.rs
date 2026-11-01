@@ -288,20 +288,23 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = d.wb.active_sheet();
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let mut bad_cells = Vec::new();
-    for dv in &sh.validations {
-        for r in &dv.ranges {
+    for (i, dv) in sh.validations.iter().enumerate() {
+        for (k, r) in dv.ranges.iter().enumerate() {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
+            // A cell is checked once: where a file's rules overlap, against the rule typing uses
+            // (the first one holding it), and once where a rule's own ranges overlap. Only the
+            // earlier ranges that meet this one can hold one of its cells first.
+            let earlier: Vec<&RangeRef> =
+                sh.validations.iter().take(i).flat_map(|e| &e.ranges).chain(dv.ranges.iter().take(k)).filter(|e| e.intersects(&r)).collect();
             for c in r.iter().take(100_000) {
+                if earlier.iter().any(|e| e.contains(c)) {
+                    continue;
+                }
                 let text = sh.input_text(c);
                 // A blank cell breaks a rule with Ignore blank off. A spilled value or a picture in
                 // the cell has no text of its own and stays out.
                 if text.is_empty() && !sh.value(c).is_empty() {
-                    continue;
-                }
-                // Where a file's rules overlap, a cell is checked once, against the rule typing
-                // uses (the first one holding it).
-                if !sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).is_some_and(|d| std::ptr::eq(d, dv)) {
                     continue;
                 }
                 if check_rule(&d.wb, sheet, c, dv, &text).is_some() {

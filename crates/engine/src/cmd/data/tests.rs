@@ -566,6 +566,18 @@ fn circle_invalid_data_checks_a_cell_under_overlapping_rules_once_against_the_fi
 }
 
 #[test]
+fn circle_invalid_data_lists_a_cell_in_two_of_a_rules_own_ranges_once() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[50], [60], [5], [70]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A4", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    // A file can list overlapping ranges in one rule.
+    let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.validations[0].ranges = ["A1:A3", "A2:A4", "A2"].iter().map(|r| RangeRef::parse(r).unwrap()).collect();
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A1", "A2", "A4"]));
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.
