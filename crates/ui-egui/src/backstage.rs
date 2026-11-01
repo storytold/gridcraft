@@ -254,9 +254,8 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
     }
-    let provider_bound = app.session.active().is_some_and(|doc| {
-        app.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(doc.uid))
-    });
+    let provider_bound =
+        app.session.active().is_some_and(|doc| app.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(doc.uid)));
     if app.session.active().is_some_and(|d| d.path.is_some()) || provider_bound {
         app.run_or_alert("file.save", json!({}));
         out.close = true;
@@ -995,12 +994,9 @@ mod tests {
             panic!("command discovery must be synchronous");
         };
         assert!(commands["result"].as_array().unwrap().iter().any(|command| command["id"] == "ui.chooseProviderSave"));
-        let crate::control::Outcome::Done(result) = crate::control::handle(
-            &mut app,
-            &ctx,
-            "engine.execute",
-            &json!({"command":"ui.chooseProviderSave","params":{"saveAs":true}}),
-        ) else {
+        let crate::control::Outcome::Done(result) =
+            crate::control::handle(&mut app, &ctx, "engine.execute", &json!({"command":"ui.chooseProviderSave","params":{"saveAs":true}}))
+        else {
             panic!("the explicit UI request must return handled status");
         };
         assert_eq!(result["ok"], true);
