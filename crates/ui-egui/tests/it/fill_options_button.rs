@@ -123,6 +123,65 @@ fn fill_drag_previews_endpoint_without_changing_the_workbook() {
 }
 
 #[test]
+fn arrows_keep_the_fill_source_and_preview_until_release() {
+    let mut failures = Vec::new();
+    for key in [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::ArrowLeft, egui::Key::ArrowRight] {
+        for modifiers in [
+            Modifiers::NONE,
+            Modifiers::SHIFT,
+            Modifiers { ctrl: true, command: true, ..Modifiers::NONE },
+            Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE },
+        ] {
+            let mut h = harness(one_two);
+            let before = h.state().session.active().unwrap();
+            let (workbook, revision, undo) = (before.wb.clone(), before.revision, before.undo.len());
+            let (start, end) = (corner(&h, "B2"), center(&h, "B6"));
+            press(&mut h, start, PointerButton::Primary);
+            move_to(&mut h, start, end);
+            h.run_steps(3);
+            assert!(h.query_by_label("6").is_some());
+            h.input_mut()
+                .events
+                .extend([Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+            h.step();
+            let source = selection(&h);
+            let label = if modifiers.command { "2" } else { "6" };
+            let preview = h.query_by_label(label).is_some();
+            let d = h.state().session.active().unwrap();
+            let unchanged = std::sync::Arc::ptr_eq(&workbook, &d.wb) && d.revision == revision && d.undo.len() == undo;
+            if key == egui::Key::ArrowDown
+                && modifiers.is_none()
+                && let Ok(path) = std::env::var("GRIDCRAFT_FILL_ARROW_SCREENSHOT")
+            {
+                h.render().unwrap().save(path).unwrap();
+            }
+            // Release without another pointer move: the target must still belong to B1:B2.
+            h.input_mut().events.extend([
+                Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+                Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers },
+            ]);
+            h.run_steps(3);
+            let expected = if modifiers.command { [n(1.0), n(2.0), n(1.0), n(2.0)] } else { [n(3.0), n(4.0), n(5.0), n(6.0)] };
+            let committed = values(&h, &["B3", "B4", "B5", "B6"]) == expected;
+            let once = h.state().session.active().unwrap().undo.len() == undo + 1;
+            if source != "B1:B2" || !preview || !unchanged || !committed || !once || h.state().message.is_some() {
+                failures.push(format!(
+                    "{key:?} {modifiers:?}: source={source}, preview={preview}, unchanged={unchanged}, committed={committed}, once={once}"
+                ));
+            } else {
+                h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+                h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
+                h.run_steps(2);
+                h.key_press(egui::Key::ArrowRight);
+                h.run_steps(2);
+                assert_eq!(selection(&h), "E4", "ordinary arrows work after release");
+            }
+        }
+    }
+    assert!(failures.is_empty(), "arrows changed an active fill's source: {failures:?}");
+}
+
+#[test]
 fn escape_cancels_the_fill_preview_without_committing() {
     let mut h = harness(one_two);
     let before = h.state().session.active().unwrap().wb.clone();
