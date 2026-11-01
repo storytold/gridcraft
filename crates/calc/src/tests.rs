@@ -615,6 +615,25 @@ fn lambda_calls_spend_one_work_budget_per_cell() {
 }
 
 #[test]
+fn lifted_lookups_stop_past_their_work_budget() {
+    // Security: each needle searched the whole lookup vector, so this one cell ran for hours
+    // (about 1.1e12 compares) and hung opening the file that held it. It is #NUM! at once now.
+    let mut t = T::new();
+    t.set("A1", "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    // Ordinary lifted lookups are unaffected.
+    for (i, k) in [10, 20, 30, 40, 50].into_iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &k.to_string());
+        t.set(&format!("C{}", i + 1), &(i + 1).to_string());
+    }
+    t.set("D1", "=SUM(XMATCH({30;50;10},B1:B5))");
+    t.set("D2", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))");
+    t.set("D3", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))");
+    t.set("D4", "=SUM(MATCH({25,50},B1:B5))");
+    assert_eq!([t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4")], [9.0, 6.0, 4.0, 7.0]);
+}
+
+#[test]
 fn accounting_negative_text_coerces() {
     let mut t = T::new();
     t.set("A1", "'$(1,234)");
@@ -1230,6 +1249,25 @@ fn array_broadcast_result_is_capped() {
     assert_eq!(t.num("C2"), 6.0);
     t.set("C3", "=COLUMNS(TEXT(SEQUENCE(2),SEQUENCE(1,5)))");
     assert_eq!(t.num("C3"), 5.0);
+}
+
+/// MAP refuses a result past `MAX_CELLS` by its checked product, before allocating it (the
+/// 2^32-cell wrap that a 32-bit `usize` product would turn into 0 is pinned in
+/// `broadcast_len_rejects_a_product_that_wraps_to_zero_on_32_bits`; `SEQUENCE` tops out at
+/// 16384 columns, so the widest product it can build is 16384 squared).
+#[test]
+fn map_caps_its_result_size() {
+    let mut t = T::new();
+    for (at, formula) in
+        [("A1", "=MAP(SEQUENCE(4001),SEQUENCE(1,4000),LAMBDA(a,b,a))"), ("A2", "=MAP(SEQUENCE(16384),SEQUENCE(1,16384),LAMBDA(a,b,a))")]
+    {
+        t.set(at, formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Within the cap the broadcast shape is unchanged.
+    t.set("A3", "=ROWS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    t.set("A4", "=COLUMNS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    assert_eq!((t.num("A3"), t.num("A4")), (3.0, 2.0));
 }
 
 #[test]

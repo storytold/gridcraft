@@ -55,6 +55,15 @@ impl SheetApp {
         // Requests the command made (a dialog, a draft) belong to the window it left active.
         self.follow_active_window();
         self.after_engine();
+        if id == "formulas.autoSum"
+            && let Some(ed) = self.editor.as_mut()
+            && ed.text.starts_with('=')
+            && ed.text.ends_with("()")
+        {
+            ed.caret = ed.text.chars().count().saturating_sub(1);
+            ed.anchor = ed.caret;
+            ed.sync_caret = true;
+        }
         if id == "view.arrangeAll"
             && self.native_windows
             && let Ok(r) = &r
