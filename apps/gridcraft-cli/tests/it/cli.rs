@@ -242,3 +242,21 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A key the command does not take, inside `params`, is refused too: the third line of the report
+/// in #2256 (`{"nam": "Report3"}`) made a sheet with a default name and the run exited 0.
+#[test]
+fn a_params_key_the_command_does_not_take_stops_the_run() {
+    let dir = tmpdir("params-keys");
+    let out = dir.join("t.xlsx");
+    let o = run(&["run", "--cmd", r#"home.insertSheet={"nam":"Report3"}"#, "--out", out.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "the run must stop: {err}");
+    assert!(err.contains("--cmd, home.insertSheet") && err.contains("unknown key `nam`"), "it names the command and the key: {err}");
+    assert!(!out.exists(), "and writes no workbook: {err}");
+
+    // The documented key still works, and so does a `range` for a command that lists only some keys.
+    ok(&["run", "--cmd", r#"home.insertSheet={"name":"Report3"}"#, "--cmd", r#"home.bold={"range":"A1","sheet":0}"#, "--out", out.to_str().unwrap()]);
+    assert!(ok(&["info", out.to_str().unwrap()]).contains("Report3"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
