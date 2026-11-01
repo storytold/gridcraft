@@ -45,6 +45,12 @@ use crate::hostmode::open_name;
 /// counts as saved under that name, as it would after Save on the desktop.
 const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
+/// The largest file the host may hand over to open, checked before it is copied (the app's own readers have their own limits).
+const MAX_OPEN_BYTES: u64 = 512 << 20;
+
+/// The longest file name taken from the host.
+const MAX_NAME_CHARS: usize = 255;
+
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
@@ -219,7 +225,7 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, data: &JsValue) {
 
 /// The file an open message or event carries: a usable name and the bytes.
 fn open_payload(data: &JsValue) -> Option<(String, Vec<u8>)> {
-    let name = open_name(string(data, "name").as_deref());
+    let name: String = open_name(string(data, "name").as_deref()).chars().take(MAX_NAME_CHARS).collect();
     let bytes = bytes(data)?;
     Some((name, bytes))
 }
@@ -249,13 +255,19 @@ fn string(data: &JsValue, key: &str) -> Option<String> {
 /// `bytes` as an `ArrayBuffer` or `Uint8Array`.
 fn bytes(data: &JsValue) -> Option<Vec<u8>> {
     let bytes = js_sys::Reflect::get(data, &JsValue::from_str("bytes")).ok()?;
-    if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-        Some(array.to_vec())
+    let view = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+        array.clone()
     } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-        Some(js_sys::Uint8Array::new(&bytes).to_vec())
+        js_sys::Uint8Array::new(&bytes)
     } else {
-        None
+        return None;
+    };
+    // A file from the host is untrusted input: refuse an oversized one before copying it into the app's memory.
+    if u64::from(view.length()) > MAX_OPEN_BYTES {
+        log::warn!("host file is {} bytes, over the {} MiB host open limit; not opened", view.length(), MAX_OPEN_BYTES >> 20);
+        return None;
     }
+    Some(view.to_vec())
 }
 
 /// A `JsValue` error as a string, after `what` went wrong.
