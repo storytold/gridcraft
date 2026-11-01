@@ -9,7 +9,10 @@ use crate::style::{Color, Style};
 mod pivot;
 mod print;
 
-pub use pivot::{PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue};
+pub use pivot::{
+    PIVOT_INDEXER, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef, PivotLayout,
+    PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
+};
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PrintSettings, SheetProtection, password_hash};
 
 // ---------------------------------------------------------------- tables

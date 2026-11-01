@@ -1,8 +1,8 @@
 use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::{
-    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup,
+    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -588,6 +588,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            data: vec![],
         });
     }
 
@@ -662,6 +663,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
+    let item_refs = |fields: &[&PivotField], items: &[FieldItems], path: &[u32]| -> Vec<PivotItemRef> {
+        path.iter()
+            .enumerate()
+            .filter_map(|(d, it)| {
+                let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+                Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+            })
+            .collect()
+    };
+    let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
             LineKind::Item(b) => RowKind::Item(b),
@@ -692,6 +703,21 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             let Some(raw) = lookup.get(rp, cp, *vi) else { continue };
             let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0: &level0, siblings: &siblings };
             let shown = show_value(vdef, raw, &lookup, &context);
+            // Every value cell of the report is indexed, so a report that needs more cells than
+            // the index cap is rejected outright — never written with a truncated index that
+            // would answer #REF! for the values the sheet shows.
+            if data.len() >= MAX_INDEXED_CELLS {
+                return Err(format!("A PivotTable report can have at most {MAX_INDEXED_CELLS} value cells."));
+            }
+            let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
+            items.extend(item_refs(&col_fields, &col_items, cp));
+            data.push(PivotDataCell {
+                data_field: vdef.name.clone(),
+                source_col: vdef.source_col.clone(),
+                items,
+                row: u32::try_from(r).unwrap_or(u32::MAX),
+                col: u32::try_from(l + j).unwrap_or(u32::MAX),
+            });
             if let Some(pr) = probe.as_deref_mut() {
                 if pr.at == Some((r, l + j)) {
                     pr.hit = Some((rp.to_vec(), cp.to_vec()));
@@ -703,5 +729,5 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }

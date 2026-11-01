@@ -1,5 +1,5 @@
 use super::output::Output;
-use super::{CellRef, Chart, Series, Workbook, quote_sheet};
+use super::{CellRef, Chart, PivotLookup, Series, Workbook, quote_sheet};
 
 // ---------------------------------------------------------------- PivotCharts
 
@@ -104,5 +104,6 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+        p.data_index = PivotLookup::default();
     }
 }
