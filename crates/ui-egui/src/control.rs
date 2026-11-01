@@ -273,7 +273,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                         app.dialog = Some(d);
                         return err(crate::dialogs::SHEET_DELETED);
                     }
-                    d.end_pick(app);
+                    if let Err(e) = d.end_pick(app) {
+                        // The dialog's sheet can't be shown again (a text-box draft on the picked
+                        // sheet could not be saved): the command stays unrun, the dialog open.
+                        app.dialog = Some(d);
+                        return err(e);
+                    }
                     let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run(cmd, params);
@@ -299,7 +304,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             }
             // Back to the sheet and selection from before a reference box picked, as Cancel does.
             if let Some(mut d) = app.dialog.take() {
-                d.end_pick(app);
+                let _ = d.end_pick(app);
             }
             ok(Json::Null)
         }

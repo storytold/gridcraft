@@ -147,9 +147,11 @@ impl Dialog {
     }
 
     /// Ends picking into the dialog's reference boxes and puts back the sheet and selection from
-    /// before picking began, as closing the dialog does.
-    pub(crate) fn end_pick(&mut self, app: &mut SheetApp) {
-        ref_edit::end_pick(app, self);
+    /// before picking began, as closing the dialog does. Fails when the dialog's sheet could not
+    /// be shown again (a text-box draft on the picked sheet could not be saved): a dialog about
+    /// to run its command must then stay open instead.
+    pub(crate) fn end_pick(&mut self, app: &mut SheetApp) -> Result<(), String> {
+        ref_edit::end_pick(app, self)
     }
 
     /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:

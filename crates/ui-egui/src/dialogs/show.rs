@@ -401,9 +401,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));
         confirm = false;
     }
-    if confirm {
-        // References without a sheet name mean the sheet the dialog was opened on.
-        end_pick(app, &mut d);
+    if confirm && let Err(e) = end_pick(app, &mut d) {
+        // References without a sheet name mean the sheet the dialog was opened on: when it can't
+        // be shown again (a text-box draft on the picked sheet could not be saved), the command
+        // would read them against the wrong sheet, so it doesn't run and the dialog stays.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
@@ -434,8 +437,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if !open && !confirm {
         // Cancelled or closed: back to the sheet and selection from before picking. A confirmed
         // OK went back before its command ran, and stays where the command left things (Data
-        // Analysis shows the report sheet it added).
-        end_pick(app, &mut d);
+        // Analysis shows the report sheet it added). A draft that can't be saved keeps its
+        // message; there is no command left to protect.
+        let _ = end_pick(app, &mut d);
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new

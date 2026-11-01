@@ -255,22 +255,26 @@ fn active_sheet_name(app: &SheetApp) -> String {
 ///
 /// The commands go through [`SheetApp::run`], as the ribbon's do: showing the sheet first saves
 /// a text-box draft left open on the sheet picked on, and the UI's after-command pass runs.
-pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
+///
+/// Fails when the sheet could not be shown again (the draft could not be saved): the person
+/// stays with their text, the selection waits for the next time the dialog lets go, and a
+/// dialog about to run its command must not, since references without a sheet name would be
+/// read against the sheet still shown.
+pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String> {
     d.refs.target = None;
     d.refs.collapsed = None;
     follow_home(app, &mut d.refs);
-    let Some(home) = d.refs.home.as_mut() else { return };
-    let Some(sheet) = home.sheet.clone() else { return };
+    let Some(home) = d.refs.home.as_mut() else { return Ok(()) };
+    let Some(sheet) = home.sheet.clone() else { return Ok(()) };
     // After an OK that failed, the selection is already back and only the sheet is shown again,
     // so references without a sheet name mean it.
-    if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) && app.run("sheet.activate", json!({"sheet": sheet})).is_err() {
-        // The draft could not be saved (its message is shown): the person stays with their text,
-        // and the selection waits for the next time the dialog lets go.
-        return;
+    if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
+        app.run("sheet.activate", json!({"sheet": sheet}))?;
     }
     if let Some((range, active)) = home.selection.take() {
         let _ = app.run("selection.set", json!({"range": range, "active": active}));
     }
+    Ok(())
 }
 
 /// A reference box (RefEdit): a text field that the grid selection fills while it is the box

@@ -352,7 +352,8 @@ impl SheetApp {
                 // opening another dialog) first puts the sheet and selection from before picking
                 // back, as closing it does.
                 if let Some(mut old) = self.dialog.take() {
-                    old.end_pick(self);
+                    // The draft was committed above, so the sheet can be shown again.
+                    let _ = old.end_pick(self);
                 }
                 self.dialog = dialogs::Dialog::open(self, other, params);
             }

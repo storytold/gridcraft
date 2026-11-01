@@ -25,8 +25,13 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));
         *confirm = false;
     }
+    if *confirm && let Err(e) = end_pick(app, d) {
+        // The dialog's sheet can't be shown again (a draft on the picked sheet could not be
+        // saved): the cells would be read against the wrong sheet, so Goal Seek doesn't run.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        *confirm = false;
+    }
     if *confirm {
-        end_pick(app, d);
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),

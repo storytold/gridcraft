@@ -877,3 +877,57 @@ fn a_text_box_draft_is_saved_before_a_scripted_cancel_leaves_the_picked_sheet() 
     assert_eq!(selection(&h), (0, "B5".into()));
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
 }
+
+#[test]
+fn a_draft_that_cannot_be_saved_stops_a_confirm_after_a_cross_sheet_pick() {
+    let mut s = quoted_sheet();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    let id =
+        s.execute("insert.textBox", json!({"at": "D2", "width": 200, "height": 100, "text": "Rate note"})).unwrap()["shape"].as_u64().unwrap() as u32;
+    s.execute("home.insertSheet", json!({"name": "Scratch", "before": 2})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    next_sheet(&mut h);
+    drag(&mut h, "A1", "A6");
+    assert_eq!(field(&h, "range"), "'O''Brien Rates'!$A$1:$A$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    control(&mut h, "ui.dialog.set", json!({"field": "outputTo", "value": "range"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "output", "value": "$H$1"}));
+    // A text box on the picked sheet is being edited when a script shows a third sheet straight
+    // through the engine: the draft's worksheet is no longer the active one, so it can't be
+    // saved, and showing the dialog's sheet again (which saves drafts first) is refused.
+    assert!(h.state_mut().begin_text_box_edit(id));
+    h.run_steps(3);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "Picked note");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 2})).unwrap();
+    h.run_steps(3);
+    assert_eq!(selection(&h).0, 2);
+    let h1 = |h: &H, sheet: usize| h.state().session.active().unwrap().wb.sheets[sheet].value(CellRef::parse("H1").unwrap());
+
+    // The control channel's confirm: the dialog's sheet can't be shown again, so the command
+    // doesn't run anywhere (`$H$1` would have meant the sheet shown, Scratch).
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert!(h.state().text_box_editor.is_some(), "the draft is kept");
+    for sheet in 0..3 {
+        assert!(h1(&h, sheet).is_empty(), "no report on sheet {sheet}: {:?}", h1(&h, sheet));
+    }
+    assert_eq!(selection(&h).0, 2, "still on the sheet shown");
+
+    // The window's OK: the same, with the reason shown.
+    h.state_mut().message = None;
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert!(h.state().message.is_some(), "the reason is shown");
+    for sheet in 0..3 {
+        assert!(h1(&h, sheet).is_empty(), "no report on sheet {sheet}: {:?}", h1(&h, sheet));
+    }
+    assert_eq!(h.state().text_box_editor.as_ref().map(|ed| ed.text.as_str()), Some("Picked note"), "the person's text is kept");
+}
