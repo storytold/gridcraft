@@ -56,8 +56,10 @@ pub fn classify(target: &str) -> LinkKind {
 /// Classifies a link target found in a workbook saved at `workbook_path` (if any): like
 /// [`classify`], but a path to a document on this computer (`Receipts\\a.pdf`, `C:\\Docs\\a.pdf`,
 /// `file:///C:/Docs/a.pdf`) becomes [`LinkKind::LocalFile`] with the absolute path, relative paths
-/// resolved against the workbook's folder as Excel does. Network paths stay refused, and so does
-/// every file type outside [`LOCAL_DOCUMENTS`]. Never panics.
+/// resolved against the workbook's folder as Excel does. Network (UNC) paths stay refused, and so
+/// does every file type outside [`LOCAL_DOCUMENTS`]. A drive letter is treated as a drive the user
+/// connected, mapped network drives included: no new connection to a host named by the link is
+/// made, and telling them apart would need a platform call (`unsafe`, not wasm). Never panics.
 pub fn classify_in(target: &str, workbook_path: Option<&str>) -> LinkKind {
     let t = target.trim();
     if t.chars().any(char::is_control) {
