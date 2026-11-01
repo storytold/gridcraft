@@ -68,7 +68,15 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
         .map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?
         .filter(|a| {
             let ip = canonical(a.ip());
-            !ip.is_loopback() && !ip.is_unspecified() && !is_private_or_shared(&ip)
+            // An IPv4 address embedded in an IPv6 one (NAT64 synthesis, 6to4, Teredo) is the
+            // address actually reached, so the embedded target must pass the IPv4 rules too.
+            let embedded_ok = match ip {
+                std::net::IpAddr::V6(v6) => embedded_ipv4(&v6)
+                    .into_iter()
+                    .all(|t| !t.is_loopback() && !t.is_unspecified() && !is_private_or_shared(&std::net::IpAddr::V4(t))),
+                std::net::IpAddr::V4(_) => true,
+            };
+            !ip.is_loopback() && !ip.is_unspecified() && !is_private_or_shared(&ip) && embedded_ok
         })
         .collect();
     if validated.is_empty() {
@@ -204,6 +212,33 @@ fn canonical(ip: std::net::IpAddr) -> std::net::IpAddr {
         },
         v4 => v4,
     }
+}
+
+/// The IPv4 addresses embedded in an IPv6 address: DNS64/NAT64 synthesis (`64:ff9b::/96`)
+/// and the 6to4/Teredo transition ranges (`2002::/16`, `2001:0::/32`) carry an IPv4
+/// destination the IPv6 rules would not see, so the embedded address is refused by the IPv4
+/// rules instead. Teredo holds two candidates (server and client, bit-flipped); the address is
+/// refused when either one is a refused target.
+fn embedded_ipv4(v6: &std::net::Ipv6Addr) -> Vec<std::net::Ipv4Addr> {
+    let seg = v6.segments();
+    if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 0 && seg[3] == 0 {
+        // 64:ff9b::/96 (the well-known NAT64 prefix): the last 32 bits (segments 6-7) are
+        // the IPv4 address.
+        let o = [(seg[6] >> 8) as u8, seg[6] as u8, (seg[7] >> 8) as u8, seg[7] as u8];
+        return vec![o.into()];
+    }
+    if seg[0] == 0x2002 {
+        // 2002::/16 (6to4): the first 32 bits after the prefix are the IPv4 address.
+        let o = [(seg[1] >> 8) as u8, seg[1] as u8, (seg[2] >> 8) as u8, seg[2] as u8];
+        return vec![o.into()];
+    }
+    if seg[0] == 0x2001 && seg[1] == 0 {
+        // 2001:0::/32 (Teredo): the server (segments 3-4) and client (segments 6-7) hold IPv4
+        // addresses, obfuscated by a bit-flip; either can be the actual target.
+        let flip = |hi: u16, lo: u16| std::net::Ipv4Addr::new(!(hi >> 8) as u8, !hi as u8, !(lo >> 8) as u8, !lo as u8);
+        return vec![flip(seg[3], seg[4]), flip(seg[6], seg[7])];
+    }
+    Vec::new()
 }
 
 /// The agent's resolver: the addresses the SSRF gate validated, and nothing else. ureq never
@@ -350,6 +385,37 @@ mod tests {
         let pub_mapped = canonical("::ffff:93.184.216.34".parse::<std::net::IpAddr>().unwrap());
         assert!(!(pub_mapped.is_loopback() || pub_mapped.is_unspecified() || is_private_or_shared(&pub_mapped)), "a mapped public address passes");
         assert!(matches!(canonical("2606:2800:220:1::1".parse::<std::net::IpAddr>().unwrap()), std::net::IpAddr::V6(_)), "a real IPv6 stays IPv6");
+    }
+
+    #[test]
+    /// An IPv4 address embedded in an IPv6 one is the address actually reached, so the gate
+    /// refuses the embedded IPv4 forms: NAT64's well-known prefix wrapping localhost, a
+    /// private address, or the metadata endpoint, and the 6to4/Teredo transition ranges
+    /// (Teredo's client address for localhost is the bit-flipped `128.128.255.254`).
+    fn ipv6_addresses_with_an_embedded_ipv4_are_refused_as_their_target() {
+        for text in ["64:ff9b::7f00:1", "64:ff9b::0a01:0203", "64:ff9b::a9fe:a9fe", "2002:7f00:1::", "2001:0::8080:fffe"] {
+            let ip: std::net::IpAddr = text.parse().expect("an embedded address parses");
+            let v6 = match ip {
+                std::net::IpAddr::V6(v6) => v6,
+                std::net::IpAddr::V4(_) => panic!("{text} must be IPv6"),
+            };
+            let embedded = embedded_ipv4(&v6);
+            assert!(!embedded.is_empty(), "{text} holds an embedded IPv4");
+            assert!(
+                embedded.iter().any(|t| {
+                    let target = std::net::IpAddr::V4(*t);
+                    target.is_loopback() || target.is_unspecified() || is_private_or_shared(&target)
+                }),
+                "{text} embeds a refused address ({{{:?}}})",
+                embedded
+            );
+        }
+        // A NAT64-wrapped public address passes: only the embedded target's rules matter.
+        let v6: std::net::Ipv6Addr = "64:ff9b::5db8:d822".parse().unwrap();
+        assert_eq!(embedded_ipv4(&v6), vec!["93.184.216.34".parse::<std::net::Ipv4Addr>().unwrap()]);
+        assert!(!is_private_or_shared(&"64:ff9b::5db8:d822".parse::<std::net::IpAddr>().unwrap()));
+        // A real IPv6 (neither mapped, NAT64, 6to4 nor Teredo) has no embedded address.
+        assert!(embedded_ipv4(&"2606:2800:220:1::1".parse().unwrap()).is_empty());
     }
 
     #[test]
