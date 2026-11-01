@@ -214,18 +214,27 @@ fn canonical(ip: std::net::IpAddr) -> std::net::IpAddr {
     }
 }
 
-/// The IPv4 addresses embedded in an IPv6 address: DNS64/NAT64 synthesis (`64:ff9b::/96`)
-/// and the 6to4/Teredo transition ranges (`2002::/16`, `2001:0::/32`) carry an IPv4
-/// destination the IPv6 rules would not see, so the embedded address is refused by the IPv4
-/// rules instead. Teredo holds two candidates (server and client, bit-flipped); the address is
-/// refused when either one is a refused target.
+/// The IPv4 addresses embedded in an IPv6 address: DNS64/NAT64 synthesis (`64:ff9b::/96`
+/// well-known, `64:ff9b:1::/48` local-use) and the 6to4/Teredo transition ranges (`2002::/16`,
+/// `2001:0::/32`) carry an IPv4 destination the IPv6 rules would not see, so the embedded
+/// address is refused by the IPv4 rules instead. Teredo holds two candidates (server and
+/// client, the client bit-flipped); the address is refused when either one is a refused
+/// target.
 fn embedded_ipv4(v6: &std::net::Ipv6Addr) -> Vec<std::net::Ipv4Addr> {
     let seg = v6.segments();
-    if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 0 && seg[3] == 0 {
-        // 64:ff9b::/96 (the well-known NAT64 prefix): the last 32 bits (segments 6-7) are
-        // the IPv4 address.
-        let o = [(seg[6] >> 8) as u8, seg[6] as u8, (seg[7] >> 8) as u8, seg[7] as u8];
-        return vec![o.into()];
+    if seg[0] == 0x64 && seg[1] == 0xff9b {
+        // 64:ff9b::/96 (the well-known NAT64 prefix, RFC 6052): the last 32 bits (segments
+        // 6-7) are the IPv4 address, and RFC 6052 forbids it to translate a private target.
+        if seg[2] == 0 && seg[3] == 0 {
+            let o = [(seg[6] >> 8) as u8, seg[6] as u8, (seg[7] >> 8) as u8, seg[7] as u8];
+            return vec![o.into()];
+        }
+        // 64:ff9b:1::/48 and the rest of the local-use NAT64 space (RFC 8215): the IPv4
+        // target sits in the same low 32 bits, but unlike the well-known prefix it may be a
+        // private address, and a site can use its own prefix on the same shape. The target
+        // cannot be checked by its bits alone, so the whole local-use space is refused: the
+        // page import never connects through a local-use translator.
+        return vec![std::net::Ipv4Addr::LOCALHOST];
     }
     if seg[0] == 0x2002 {
         // 2002::/16 (6to4): the first 32 bits after the prefix are the IPv4 address.
@@ -233,10 +242,12 @@ fn embedded_ipv4(v6: &std::net::Ipv6Addr) -> Vec<std::net::Ipv4Addr> {
         return vec![o.into()];
     }
     if seg[0] == 0x2001 && seg[1] == 0 {
-        // 2001:0::/32 (Teredo): the server (segments 3-4) and client (segments 6-7) hold IPv4
-        // addresses, obfuscated by a bit-flip; either can be the actual target.
+        // 2001:0::/32 (Teredo, RFC 4380): the server's IPv4 address sits unobfuscated in
+        // segments 2-3; the client's sits in segments 6-7, obfuscated by a bit-flip. Either
+        // can be the actual target.
+        let server = std::net::Ipv4Addr::new((seg[2] >> 8) as u8, seg[2] as u8, (seg[3] >> 8) as u8, seg[3] as u8);
         let flip = |hi: u16, lo: u16| std::net::Ipv4Addr::new(!(hi >> 8) as u8, !hi as u8, !(lo >> 8) as u8, !lo as u8);
-        return vec![flip(seg[3], seg[4]), flip(seg[6], seg[7])];
+        return vec![server, flip(seg[6], seg[7])];
     }
     Vec::new()
 }
@@ -393,7 +404,21 @@ mod tests {
     /// private address, or the metadata endpoint, and the 6to4/Teredo transition ranges
     /// (Teredo's client address for localhost is the bit-flipped `128.128.255.254`).
     fn ipv6_addresses_with_an_embedded_ipv4_are_refused_as_their_target() {
-        for text in ["64:ff9b::7f00:1", "64:ff9b::0a01:0203", "64:ff9b::a9fe:a9fe", "2002:7f00:1::", "2001:0::8080:fffe"] {
+        for text in [
+            "64:ff9b::7f00:1",
+            "64:ff9b::0a01:0203",
+            "64:ff9b::a9fe:a9fe",
+            // The local-use NAT64 prefix (RFC 8215) is refused wholesale: its target may be
+            // a private address, and a public-looking one cannot be trusted to be checked.
+            "64:ff9b:1::5db8:d822",
+            "2002:7f00:1::",
+            // Teredo with a private server (192.168.0.1 in segments 2-3, unflipped) and a
+            // public-looking client: the server alone refuses it.
+            "2001:0:c0a8:1::5db8:d822",
+            // Teredo with a public server and a localhost client (the bit-flipped
+            // 128.128.255.254 of 127.0.0.1 in segments 6-7).
+            "2001:0:5db8:d822::8080:fffe",
+        ] {
             let ip: std::net::IpAddr = text.parse().expect("an embedded address parses");
             let v6 = match ip {
                 std::net::IpAddr::V6(v6) => v6,
