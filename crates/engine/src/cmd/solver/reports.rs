@@ -1,9 +1,10 @@
 use super::lp::Outcome;
 use super::model::{Constraint, Goal, Method, Model, Rel, Rhs, parse_model, saved_model};
 use super::problem::{Evaluator, Problem, as_num, build_problem};
+use super::sensitivity::{sensitivity_refusal, sensitivity_report};
 use super::{
-    Cell, CellRef, Ctx, DocState, EngineError, Json, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad, edit, json, optimise,
-    str_param,
+    Cell, CellRef, Ctx, DocState, EngineError, Json, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad, bool_param, edit, json,
+    optimise, str_param,
 };
 
 // ---------------------------------------------------------------- reports
@@ -11,6 +12,7 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ReportKind {
     Answer,
+    Sensitivity,
     Limits,
 }
 
@@ -18,6 +20,7 @@ impl ReportKind {
     fn title(self) -> &'static str {
         match self {
             ReportKind::Answer => "Answer",
+            ReportKind::Sensitivity => "Sensitivity",
             ReportKind::Limits => "Limits",
         }
     }
@@ -26,13 +29,14 @@ impl ReportKind {
 /// The `reports` list (`None` when absent).
 pub(super) fn report_kinds(cmd: &'static str, p: &Json) -> Result<Option<Vec<ReportKind>>> {
     let Some(list) = p.get("reports") else { return Ok(None) };
-    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer and limits"))?;
+    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer, sensitivity and limits"))?;
     let mut kinds = Vec::new();
     for k in list {
         let kind = match k.as_str().map(|t| t.trim().to_ascii_lowercase()).as_deref() {
             Some("answer") => ReportKind::Answer,
+            Some("sensitivity") => ReportKind::Sensitivity,
             Some("limits") => ReportKind::Limits,
-            _ => return Err(bad(cmd, format!("unknown report {k} (answer or limits)"))),
+            _ => return Err(bad(cmd, format!("unknown report {k} (answer, sensitivity or limits)"))),
         };
         if !kinds.contains(&kind) {
             kinds.push(kind);
@@ -42,14 +46,14 @@ pub(super) fn report_kinds(cmd: &'static str, p: &Json) -> Result<Option<Vec<Rep
 }
 
 /// A report's cells: (row, column, value, bold).
-type Lines = Vec<(u32, u32, Value, bool)>;
+pub(super) type Lines = Vec<(u32, u32, Value, bool)>;
 
-fn abs_ref(c: CellRef) -> String {
+pub(super) fn abs_ref(c: CellRef) -> String {
     format!("${}${}", gridcraft_core::col_to_letters(c.col), u64::from(c.row) + 1)
 }
 
 /// A cell's name in the reports: the nearest text to its left and the nearest text above it.
-fn cell_name(sh: &Sheet, c: CellRef) -> String {
+pub(super) fn cell_name(sh: &Sheet, c: CellRef) -> String {
     let text = |c: CellRef| match sh.value(c) {
         Value::Text(t) if !t.trim().is_empty() => Some(t.to_string()),
         _ => None,
@@ -68,7 +72,7 @@ fn method_name(m: Method) -> &'static str {
 }
 
 /// Header labels in bold from column 1, then the rows below them; returns the next free row.
-fn table(out: &mut Lines, row: u32, headers: &[&str], rows: Vec<Vec<Value>>) -> u32 {
+pub(super) fn table(out: &mut Lines, row: u32, headers: &[&str], rows: Vec<Vec<Value>>) -> u32 {
     for (k, h) in headers.iter().enumerate() {
         out.push((row, 1 + k as u32, Value::text(*h), true));
     }
@@ -92,7 +96,7 @@ pub(super) struct ReportInput<'a> {
     pub(super) budget: u64,
 }
 
-fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
+pub(super) fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
     out.push((0, 0, Value::text(format!("GridCraft {} Report", kind.title())), true));
     out.push((1, 0, Value::text(format!("Worksheet: {sheet}")), false));
     3
@@ -255,18 +259,60 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
 }
 
 /// Builds every report before the solution or saved model can change.
-pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportInput) -> Result<Vec<(String, Lines)>> {
+/// What happens to a Sensitivity report the model allows but the solution doesn't: `Refuse`
+/// fails the call before anything changes; `Skip` leaves the report out, with its reason, and
+/// writes the others. `optimum` is false when the solve stopped before an optimum, so the
+/// report isn't attempted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum NotOptimal {
+    Refuse,
+    Skip { optimum: bool },
+}
+
+/// The reports left out under [`NotOptimal::Skip`], as `{report, reason}`.
+pub(super) type Skipped = Vec<Json>;
+
+pub(super) fn prepare_reports(
+    d: &DocState,
+    kinds: &[ReportKind],
+    inp: &ReportInput,
+    not_optimal: NotOptimal,
+) -> Result<(Vec<(String, Lines)>, Skipped)> {
     if kinds.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
-    if d.wb.protected_structure {
-        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    // A request that must write a sheet is refused before any report is built (a Limits report
+    // runs two optimisations per variable); only a Sensitivity report that may be skipped waits
+    // for the check after the loop.
+    let must_write = kinds.iter().any(|k| *k != ReportKind::Sensitivity || not_optimal == NotOptimal::Refuse);
+    if must_write && d.wb.protected_structure {
+        return Err(protected());
     }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
     let mut built = Vec::new();
+    let mut skipped = Vec::new();
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
+            // A model that has no Sensitivity report (integer, Evolutionary, Value Of) is refused
+            // in both modes.
+            ReportKind::Sensitivity => match (not_optimal, sensitivity_refusal(inp.model, inp.prob)) {
+                (NotOptimal::Skip { optimum }, None) => {
+                    let got = if optimum {
+                        sensitivity_report(d, sh, inp).map_err(|e| e.to_string())
+                    } else {
+                        Err("Solver did not reach an optimal solution, so the Sensitivity report was not written.".to_string())
+                    };
+                    match got {
+                        Ok(lines) => lines,
+                        Err(reason) => {
+                            skipped.push(json!({"report": "sensitivity", "reason": reason}));
+                            continue;
+                        }
+                    }
+                }
+                _ => sensitivity_report(d, sh, inp)?,
+            },
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
         let name = (1..=10_000u32)
@@ -275,7 +321,16 @@ pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportIn
             .ok_or_else(|| EngineError::Other("Too many report sheets.".into()))?;
         built.push((name, lines));
     }
-    Ok(built)
+    // Only a report sheet changes the workbook's structure, so a request whose reports were all
+    // skipped still succeeds in a protected workbook.
+    if !built.is_empty() && d.wb.protected_structure {
+        return Err(protected());
+    }
+    Ok((built, skipped))
+}
+
+fn protected() -> EngineError {
+    EngineError::Other("The workbook is protected and cannot be changed.".into())
 }
 
 /// Inserts prepared reports before the model's sheet, which stays active.
@@ -292,7 +347,7 @@ pub(super) fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>
             let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
             sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
         }
-        for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
+        for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 155.0), (6, 140.0), (7, 140.0)] {
             sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
         }
         cx.wb.sheets.insert(at + i, std::sync::Arc::new(sheet));
@@ -321,9 +376,9 @@ pub(super) fn insert_report_selections(s: &mut Session, at: usize, count: usize)
 
 /// `data.solverReport`: reports for a solution of the sheet's saved model.
 pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
-    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, limits)"))?;
+    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, sensitivity, limits)"))?;
     if kinds.is_empty() {
-        return Err(bad(REPORT_CMD, "`reports` is empty (answer, limits)"));
+        return Err(bad(REPORT_CMD, "`reports` is empty (answer, sensitivity, limits)"));
     }
     let d = s.doc()?;
     // The given model as is, else the saved model with any params given here over it.
@@ -365,8 +420,14 @@ pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
     let budget = model.max_evals;
     let message = str_param(p, "message").unwrap_or("").chars().take(500).collect();
     let inp = ReportInput { model: &model, prob: &prob, original, solution, message, budget };
-    let built = prepare_reports(s.doc()?, &kinds, &inp)?;
-    let sheets = edit(s, |cx| Ok(write_reports(cx, model.sheet, built)))?;
+    let not_optimal = if bool_param(p, "skipNotOptimal").unwrap_or(false) { NotOptimal::Skip { optimum: true } } else { NotOptimal::Refuse };
+    let (built, skipped) = prepare_reports(s.doc()?, &kinds, &inp, not_optimal)?;
+    // Nothing left to write (every report skipped): no edit, so no Undo step.
+    let sheets = if built.is_empty() { Vec::new() } else { edit(s, |cx| Ok(write_reports(cx, model.sheet, built)))? };
     insert_report_selections(s, model.sheet, sheets.len());
-    Ok(json!({"sheets": sheets}))
+    let mut out = json!({"sheets": sheets});
+    if !skipped.is_empty() {
+        out["skippedReports"] = json!(skipped);
+    }
+    Ok(out)
 }

@@ -1,7 +1,7 @@
 //! UI interaction tests: real egui input through the whole app (no GPU needed).
 
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_ui_egui::i18n::Language;
@@ -795,6 +795,63 @@ fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
 }
 
 #[test]
+fn solver_results_skip_the_sensitivity_report_for_integer_models() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("B1", "=3*A1")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r =
+        s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4.5", "A1 int"], "method": "simplex"})).unwrap();
+    let mut h = harness(s);
+    // Sensitivity stays off for an integer model, so the Answer report is still written.
+    h.state_mut().open_dialog("solverResults", r);
+    for key in ["answerReport", "sensitivityReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+}
+
+#[test]
+fn solver_results_offer_sensitivity_only_after_an_optimum() {
+    // Rosenbrock's function with 60 evaluations stops at the limit with a solution that is not
+    // an optimum: Sensitivity is disabled, and Answer with Sensitivity ticked writes the Answer
+    // report.
+    let mut s = blank();
+    for (c, v) in [("A1", "-1.2"), ("A2", "1"), ("B1", "=(1-A1)^2+100*(A2-A1^2)^2")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r = s
+        .execute("data.solver", json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "maxEvaluations": 60}))
+        .unwrap();
+    assert_eq!(r["status"], "iterationLimit", "{r}");
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solverResults", r.clone());
+    h.run_steps(2);
+    assert!(h.get_by_label("Sensitivity").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Answer").accesskit_node().is_disabled());
+    for key in ["answerReport", "sensitivityReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+    // The same model after an optimum offers it.
+    let mut ok = r;
+    ok["status"] = json!("converged");
+    h.state_mut().open_dialog("solverResults", ok);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Sensitivity").accesskit_node().is_disabled());
+}
+
+#[test]
 fn solver_dialog_saves_loads_and_resets_the_model() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2")] {
@@ -1090,9 +1147,9 @@ fn solver_results_write_the_chosen_reports() {
         )
         .unwrap();
     let mut h = harness(s);
-    // Restore Original Values with the Answer and Limits reports: the cells go back, the reports stay.
+    // Restore Original Values with the three reports: the cells go back, the reports stay.
     h.state_mut().open_dialog("solverResults", r);
-    for key in ["restore", "answerReport", "limitsReport"] {
+    for key in ["restore", "answerReport", "sensitivityReport", "limitsReport"] {
         h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
     }
     h.run_steps(2);
@@ -1100,7 +1157,7 @@ fn solver_results_write_the_chosen_reports() {
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
-    assert_eq!(names, ["Answer Report 1", "Limits Report 1", "Sheet1"]);
+    assert_eq!(names, ["Answer Report 1", "Sensitivity Report 1", "Limits Report 1", "Sheet1"]);
     assert_eq!(value(&h, "B1"), Value::Number(0.0));
 }
 

@@ -520,12 +520,25 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
     // Reports describe the solution whether it is kept or not.
     let solved = d.values.get("values").and_then(Json::as_object).is_some_and(|v| !v.is_empty());
+    // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report, and
+    // it describes an optimum, so a run that stopped before one (at the evaluation limit) has
+    // none either.
+    let model_allows = d.values.get("model").is_none_or(gridcraft_engine::cmd::solver::sensitivity_applies);
+    let optimum = d.values.get("status").and_then(Json::as_str).is_some_and(gridcraft_engine::cmd::solver::sensitivity_status);
+    let sensitivity = model_allows && optimum;
+    let why_not = if model_allows {
+        "Needs an optimal or converged solution: Solver stopped before reaching one."
+    } else {
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints."
+    };
+    let offered = |key: &str| key != "sensitivityReport" || sensitivity;
     if solved {
         ui.add_space(4.0);
         ui.label("Reports:");
-        for (key, label) in [("answerReport", "Answer"), ("limitsReport", "Limits")] {
-            let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            if ui.checkbox(&mut on, label).changed() {
+        for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
+            let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
+            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, label)).on_disabled_hover_text(why_not);
+            if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }
         }
@@ -537,15 +550,32 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         if changed && restore {
             app.run_or_alert("edit.undo", json!({}));
         }
-        let reports: Vec<&str> = [("answerReport", "answer"), ("limitsReport", "limits")]
+        let reports: Vec<&str> = [("answerReport", "answer"), ("sensitivityReport", "sensitivity"), ("limitsReport", "limits")]
             .into_iter()
-            .filter(|(key, _)| d.values.get(*key).and_then(Json::as_bool) == Some(true))
+            .filter(|(key, _)| offered(key) && d.values.get(*key).and_then(Json::as_bool) == Some(true))
             .map(|(_, kind)| kind)
             .collect();
         if solved && !reports.is_empty() {
             let field = |k: &str| d.values.get(k).cloned().unwrap_or(Json::Null);
-            let params = json!({"reports": reports, "model": field("model"), "values": field("values"), "original": field("original"), "message": field("message")});
-            app.run_or_alert("data.solverReport", params);
+            // A Sensitivity report the values turn out not to support is left out, and the other
+            // reports are still written.
+            let params = json!({"reports": reports, "model": field("model"), "values": field("values"), "original": field("original"),
+                "message": field("message"), "skipNotOptimal": true});
+            match app.run("data.solverReport", params) {
+                Ok(r) => {
+                    let reasons: Vec<&str> = r
+                        .get("skippedReports")
+                        .and_then(Json::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.get("reason").and_then(Json::as_str))
+                        .collect();
+                    if !reasons.is_empty() {
+                        app.message = Some(("Solver Results".into(), reasons.join("\n")));
+                    }
+                }
+                Err(e) => app.message = Some(("Solver Results".into(), crate::clean_error(&e))),
+            }
         }
         *open = false;
     }

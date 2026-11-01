@@ -283,6 +283,8 @@ fn refused_solver_reports_preserve_the_document_and_history() {
         (true, "simplex", json!(["A1 <= 4"]), json!(["answer"]), "workbook is protected"),
         (false, "simplex", json!(["A1 <= 4", "A1 int"]), json!(["answer", "limits"]), "integer or binary"),
         (false, "evolutionary", json!(["A1 <= 4"]), json!(["answer", "limits"]), "Simplex LP and GRG"),
+        (false, "simplex", json!(["A1 <= 4", "A1 int"]), json!(["answer", "sensitivity"]), "integer or binary"),
+        (false, "evolutionary", json!(["A1 <= 4"]), json!(["sensitivity"]), "Simplex LP and GRG"),
     ] {
         for (keep, save) in [(true, true), (false, true), (true, false), (false, false)] {
             let mut s = s();
@@ -398,6 +400,653 @@ fn solver_report_insertion_keeps_variable_edit_guards() {
         assert_eq!(d.undo.len(), before.undo.len());
         assert_eq!(d.sheet_selections, before.sheet_selections);
     }
+}
+
+/// The numbers from column D on in the row below the one holding `text` on report `name`.
+fn report_row(s: &Session, name: &str, text: &str, cols: &[&str]) -> Vec<f64> {
+    let r = row_of(s, name, text) + 1;
+    cols.iter().map(|c| at(s, name, &format!("{c}{r}")).as_f64().unwrap()).collect()
+}
+
+fn close(got: &[f64], want: &[f64], tol: f64) -> bool {
+    got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol * (1.0 + w.abs()))
+}
+
+#[test]
+fn sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges() {
+    // Hillier & Lieberman's Wyndor Glass sensitivity analysis: shadow prices 0, 1.5 and 1
+    // for the three plants; plant 1's hours may fall by 2 and rise without limit, plants 2's
+    // and 3's by 6 either way; the doors' profit 3 may range over 0..7.5, the windows' 5 over
+    // 2 and up.
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [[null, "Doors", "Windows", "Used", "Available"], ["Batches", 0, 0, null, null], ["Plant 1", 1, 0, null, 4], ["Plant 2", 0, 2, null, 12], ["Plant 3", 3, 2, null, 18], ["Profit", 3, 5, null, null]]}),
+    )
+    .unwrap();
+    for r in 3..=6 {
+        set(&mut s, &[(&format!("D{r}"), &format!("=SUMPRODUCT(B{r}:C{r},$B$2:$C$2)"))]);
+    }
+    let solved = s
+        .execute(
+            "data.solver",
+            json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    assert_eq!(solved["reports"], json!(["Sensitivity Report 1"]), "{solved}");
+    let rep = "Sensitivity Report 1";
+    assert_eq!(at(&s, rep, "A1"), Value::text("GridCraft Sensitivity Report"));
+    let r = row_of(&s, rep, "Reduced Cost");
+    assert_eq!(at(&s, rep, &format!("F{}", r + 1)), Value::text("Objective Coefficient"));
+    let cols = ["D", "E", "F", "G", "H"];
+    // Final value, reduced cost, objective coefficient, allowable increase and decrease.
+    assert!(close(&report_row(&s, rep, "$B$2", &cols)[1..], &[0.0, 3.0, 4.5, 3.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$C$2", &cols), &[6.0, 0.0, 5.0, 1e30, 3.0], 1e-9));
+    // Final value, shadow price, right side, allowable increase and decrease.
+    assert!(close(&report_row(&s, rep, "$D$3", &cols), &[2.0, 0.0, 4.0, 1e30, 2.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$D$4", &cols), &[12.0, 1.5, 12.0, 6.0, 6.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$D$5", &cols), &[18.0, 1.0, 18.0, 6.0, 6.0], 1e-9));
+    // A minimisation with `>=` rows: min 2x + 3y, x + y ≥ 4, x + 3y ≥ 6 → (3, 1), cost 9.
+    // The duals 1.5 and 0.5 solve u + v = 2, u + 3v = 3; the basis holds for 2 ≤ b₁ ≤ 6,
+    // 4 ≤ b₂ ≤ 12, 1 ≤ c₁ ≤ 3 and 2 ≤ c₂ ≤ 6.
+    set(&mut s, &[("H1", "0"), ("H2", "0"), ("I1", "=2*H1+3*H2"), ("I2", "=H1+H2"), ("I3", "=H1+3*H2")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4", "I3 >= 6"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$H$1", &cols), &[3.0, 0.0, 2.0, 1.0, 1.0], 1e-9), "{r}");
+    assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[1.0, 0.0, 3.0, 3.0, 1.0], 1e-9));
+    assert!(close(&report_row(&s, &rep, "$I$2", &cols), &[4.0, 1.5, 4.0, 2.0, 2.0], 1e-9));
+    assert!(close(&report_row(&s, &rep, "$I$3", &cols), &[6.0, 0.5, 6.0, 6.0, 2.0], 1e-9));
+    // A variable held at zero has a reduced cost: min 2x + 3y with x + y ≥ 4 alone uses
+    // only x; y would add 3 − 2 = 1 per unit.
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[0.0, 1.0, 3.0, 1e30, 1.0], 1e-9), "{r}");
+    // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report.
+    s.execute("data.solver", json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex"})).unwrap();
+    for p in [
+        json!({"reports": ["sensitivity"], "constraints": ["D3:D5 <= E3:E5", "B2:C2 int"]}),
+        json!({"reports": ["sensitivity"], "method": "evolutionary", "constraints": ["D3:D5 <= E3:E5", "B2:C2 <= 10"]}),
+        json!({"reports": ["sensitivity"], "goal": "value", "value": 30}),
+    ] {
+        assert!(s.execute("data.solverReport", p.clone()).is_err(), "{p}");
+    }
+    // data.solver refuses a Value Of goal's Sensitivity report before it changes anything.
+    set(&mut s, &[("B2", "1"), ("C2", "1")]);
+    let undo = s.doc().unwrap().undo.len();
+    let p = json!({"objective": "D6", "goal": "value", "value": 30, "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex", "reports": ["sensitivity"]});
+    let err = s.execute("data.solver", p).unwrap_err();
+    assert!(err.to_string().contains("maximise or minimise"), "{err}");
+    assert_eq!((at(&s, "Sheet1", "B2"), at(&s, "Sheet1", "C2")), (Value::number(1.0), Value::number(1.0)));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+}
+
+#[test]
+fn simplex_sensitivity_ranges_of_a_redundant_equality_are_zero() {
+    // max x with x = 2 and 2x = 4: the second row repeats the first, so any change to either
+    // right side alone has no solution, and both ranges of each row are 0. With x = 2 alone the
+    // right side may rise without limit and fall by 2 (to x = 0).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=A1"), ("C1", "=A1"), ("C2", "=2*A1")]);
+    let cols = ["D", "F", "G", "H"];
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "variables": "A1", "constraints": ["C1 = 2", "C2 = 4"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &cols), &[2.0, 2.0, 0.0, 0.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$1", &cols));
+    assert!(close(&report_row(&s, &rep, "$C$2", &cols), &[4.0, 4.0, 0.0, 0.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$2", &cols));
+    // The redundant row doesn't restrict the objective coefficient: x = 2 stays the only
+    // solution whatever its profit.
+    assert!(close(&report_row(&s, &rep, "$A$1", &["D", "F", "G", "H"]), &[2.0, 1.0, 1e30, 1e30], 1e-9));
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "variables": "A1", "constraints": ["C1 = 2"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &cols), &[2.0, 2.0, 1e30, 2.0], 1e-9), "{:?}", report_row(&s, &rep, "$C$1", &cols));
+}
+
+#[test]
+fn simplex_sensitivity_report_needs_an_optimal_point() {
+    // Wyndor Glass: (2, 6) is the optimum (36). (0, 0) is feasible but not optimal; (4, 4.8)
+    // reaches 36 but breaks plant 3's hours (21.6 > 18).
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [[null, "Doors", "Windows", "Used", "Available"], ["Batches", 0, 0, null, null], ["Plant 1", 1, 0, null, 4], ["Plant 2", 0, 2, null, 12], ["Plant 3", 3, 2, null, 18], ["Profit", 3, 5, null, null]]}),
+    )
+    .unwrap();
+    for r in 3..=6 {
+        set(&mut s, &[(&format!("D{r}"), &format!("=SUMPRODUCT(B{r}:C{r},$B$2:$C$2)"))]);
+    }
+    let model = json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex"});
+    let report = |b: f64, c: f64| json!({"reports": ["sensitivity"], "model": model, "values": {"B2": b, "C2": c}});
+    for (b, c) in [(0.0, 0.0), (4.0, 4.8)] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", report(b, c)).unwrap_err();
+        assert!(err.to_string().contains("not optimal"), "({b}, {c}): {err}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+    }
+    let r = s.execute("data.solverReport", report(2.0, 6.0)).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
+fn simplex_sensitivity_report_describes_the_vertex_the_solver_returns() {
+    // max x + y with x + y <= 4, x <= 3, y <= 3: every point from (3, 1) to (1, 3) is optimal,
+    // but the ranges belong to one vertex. The vertex Simplex LP returns is reported (from
+    // several starting values, as Solver Results passes the solve's result on); the other vertex
+    // and the midpoint are refused.
+    let model = json!({"objective": "D1", "variables": "A1:A2", "constraints": ["C1 <= 4", "A1 <= 3", "A2 <= 3"], "method": "simplex"});
+    let mut found = Vec::new();
+    for (x, y) in [("0", "0"), ("0.1", "0.7"), ("2.9", "0.3"), ("1", "1"), ("-5", "12.25")] {
+        let mut s = s();
+        set(&mut s, &[("A1", x), ("A2", y), ("C1", "=A1+A2"), ("D1", "=A1+A2")]);
+        let mut p = model.clone();
+        p["keep"] = json!(false);
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        let rep = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"]})).unwrap();
+        assert_eq!(rep["sheets"], json!(["Sensitivity Report 1"]), "from ({x}, {y}): {rep}");
+        found.push((r["values"]["A1"].as_f64().unwrap(), r["values"]["A2"].as_f64().unwrap()));
+    }
+    let (vx, vy) = found[0];
+    assert!(found.iter().all(|v| *v == (vx, vy)), "{found:?}");
+    let other = if vx == 3.0 { (1.0, 3.0) } else { (3.0, 1.0) };
+    assert!([(3.0, 1.0), (1.0, 3.0)].contains(&(vx, vy)), "{found:?}");
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("C1", "=A1+A2"), ("D1", "=A1+A2")]);
+    for (x, y) in [other, (2.0, 2.0)] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": x, "A2": y}})).unwrap_err();
+        assert!(err.to_string().contains("another optimal solution"), "({x}, {y}): {err}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+        // data.solver's Skip mode (as Solver Results passes) skips only the Sensitivity report.
+        let r = s
+            .execute(
+                "data.solverReport",
+                json!({"reports": ["answer", "sensitivity"], "model": model, "values": {"A1": x, "A2": y}, "skipNotOptimal": true}),
+            )
+            .unwrap();
+        assert_eq!(r["skippedReports"][0]["report"], "sensitivity", "{r}");
+        assert_eq!(r["sheets"].as_array().map(Vec::len), Some(1), "{r}");
+    }
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": vx, "A2": vy}})).unwrap();
+    assert!(r["sheets"][0].as_str().unwrap().starts_with("Sensitivity Report"), "{r}");
+}
+
+#[test]
+fn simplex_sensitivity_report_repeats_the_solve_from_its_start_values() {
+    // max 0.1x + 0.1y with 0.1x + 0.1y <= 0.4, 0.7x + 0.7y <= 2.8, x <= 3, y <= 3: the optimum is
+    // not unique, and the difference coefficients of these formulas differ in their last bits
+    // with the point they are taken at. From these starts the solve returns (3, 1) or (1, 3);
+    // linearised at that solution instead, the report's solve broke the tie the other way and
+    // refused the solve's own values. Built from the same start values, the program is the
+    // same to the bit, so each solve's own report is written.
+    let model =
+        json!({"objective": "D1", "variables": "A1:A2", "constraints": ["C1 <= 0.4", "E1 <= 2.8", "A1 <= 3", "A2 <= 3"], "method": "simplex"});
+    let formulas = [("C1", "=A1*0.1+A2*0.1"), ("D1", "=A1*0.1+A2*0.1"), ("E1", "=A1*0.7+A2*0.7")];
+    let program = |s: &Session, x: &[f64]| {
+        let m = super::parse_model(s, &model).unwrap();
+        let prob = super::build_problem(&m);
+        let mut ev = super::Evaluator {
+            trial: super::Trial::new(s.doc().unwrap()),
+            sheet: m.sheet,
+            vars: m.vars.clone(),
+            objective: m.objective,
+            rows: prob.rows.clone(),
+            evals: 0,
+            budget: 100,
+            target: None,
+        };
+        let p = super::lp::simplex_program(&mut ev, m.goal, x).unwrap();
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+        let rows: Vec<(Vec<u64>, u64)> = p.rows.iter().map(|(a, _, b)| (bits(a), b.to_bits())).collect();
+        (bits(&p.cf), bits(&p.c), rows, p.work)
+    };
+    let mut vertices = Vec::new();
+    for (x, y) in [("-3", "-5"), ("-3", "2.42"), ("-3", "6.13"), ("-3", "9.84"), ("-3", "13.55"), ("0.37", "0.3"), ("2.55", "-1.2")] {
+        let mut s = s();
+        set(&mut s, &[("A1", x), ("A2", y)]);
+        set(&mut s, &formulas);
+        let start: Vec<f64> = [x, y].iter().map(|v| v.parse().unwrap()).collect();
+        let before = program(&s, &start);
+        let r = s.execute("data.solver", model.clone()).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        // The program the report builds after the solve (cells now at the solution) from the
+        // solve's `original`, as Solver Results passes it, equals the solve's.
+        let original: Vec<f64> = ["A1", "A2"].iter().map(|c| r["original"][c].as_f64().unwrap()).collect();
+        assert_eq!(original, start);
+        assert_eq!(program(&s, &original), before, "from ({x}, {y})");
+        let rep = s
+            .execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"], "original": r["original"]}))
+            .unwrap();
+        assert_eq!(rep["sheets"], json!(["Sensitivity Report 1"]), "from ({x}, {y}): {rep}");
+        let v = (r["values"]["A1"].as_f64().unwrap(), r["values"]["A2"].as_f64().unwrap());
+        vertices.push(if v.0 > v.1 { "(3, 1)" } else { "(1, 3)" });
+    }
+    // Both vertices occur, so the starts exercise the tie.
+    assert!(vertices.contains(&"(3, 1)") && vertices.contains(&"(1, 3)"), "{vertices:?}");
+}
+
+#[test]
+fn simplex_sensitivity_report_refuses_a_point_that_beats_the_optimum() {
+    // min 1E+9·A1 with A1 ≥ 0: the optimum is 0. A1 = -1E-7 is outside the bound by less than
+    // the precision, yet its objective is -100, far from the optimum.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1E+9*A1")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"], "method": "simplex"});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": -1e-7}})).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": 0}})).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
+fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
+    // The largest rectangle with perimeter at most 20: the area (P/4)² grows by P/8 = 2.5 per
+    // unit of perimeter, and both reduced gradients are 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("A2", "1"), ("B1", "=A1*A2"), ("B2", "=2*A1+2*A2")]);
+    let r =
+        s.execute("data.solver", json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 20"], "reports": ["sensitivity"]})).unwrap();
+    let rep = "Sensitivity Report 1";
+    assert_eq!(r["reports"], json!([rep]), "{r}");
+    assert_eq!(at(&s, rep, &format!("E{}", row_of(&s, rep, "$A$1"))), Value::text("Reduced Gradient"));
+    assert!(close(&report_row(&s, rep, "$A$1", &["D", "E"]), &[5.0, 0.0], 1e-4));
+    assert!(close(&report_row(&s, rep, "$B$2", &["D", "E"]), &[20.0, 2.5], 1e-4));
+    // min (x + 1)² + (y − 2)² with x + y ≤ 1 and x, y ≥ 0: (0, 1). The constraint's
+    // multiplier is −2; x sits at its bound, where raising it costs 2(x + 1) + 2 = 4.
+    set(&mut s, &[("C1", "0.5"), ("C2", "0.5"), ("D1", "=(C1+1)^2+(C2-2)^2"), ("D2", "=C1+C2")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "D1", "goal": "min", "variables": "C1:C2", "constraints": ["D2 <= 1"], "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &["D", "E"]), &[0.0, 4.0], 1e-4), "{r}");
+    assert!(close(&report_row(&s, &rep, "$C$2", &["D", "E"]), &[1.0, 0.0], 1e-4));
+    assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
+}
+
+#[test]
+fn nonlinear_sensitivity_report_needs_an_optimal_point() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=A1^2")]);
+    set(&mut s, &[("C1", "0"), ("D1", "=(C1-2)^2")]);
+    set(&mut s, &[("E1", "1"), ("E2", "1"), ("F1", "=E1*E2"), ("F2", "=2*E1+2*E2")]);
+    set(&mut s, &[("G1", "0"), ("G2", "1"), ("H1", "=(G1+1)^2+(G2-2)^2"), ("H2", "=G1+G2")]);
+    let square = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"]});
+    let shifted = json!({"objective": "D1", "goal": "min", "variables": "C1", "constraints": ["C1 <= 5"]});
+    let rectangle = json!({"objective": "F1", "variables": "E1:E2", "constraints": ["F2 <= 20"]});
+    let bounded = json!({"objective": "H1", "goal": "min", "variables": "G1:G2", "constraints": ["H2 <= 1"]});
+    let report = |model: &serde_json::Value, values: serde_json::Value| json!({"reports": ["sensitivity"], "model": model, "values": values});
+    for (model, values, why) in [
+        // min A1² at A1 = 1: the free variable's reduced gradient is 2, not 0.
+        (&square, json!({"A1": 1}), "free gradient"),
+        // The rectangle at 6 × 6 has a larger area than the optimum but a perimeter of 24 > 20.
+        (&rectangle, json!({"E1": 6, "E2": 6}), "infeasible"),
+        // At 4 × 6 the perimeter binds, but its multiplier can't explain the gradient (6, 4).
+        (&rectangle, json!({"E1": 4, "E2": 6}), "unexplained gradient"),
+        // min (C1 − 2)² at the bound C1 = 0: raising C1 lowers the objective.
+        (&shifted, json!({"C1": 0}), "wrong-way bound"),
+        // (1, 0) in the bounded model: the binding row's multiplier would be +4, the wrong sign
+        // for a `<=` row when minimising, so the row is dropped and the gradient is unexplained.
+        (&bounded, json!({"G1": 1, "G2": 0}), "wrong-sign multiplier"),
+    ] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", report(model, values)).unwrap_err();
+        assert!(err.to_string().contains("not optimal"), "{why}: {err}");
+        let d = s.doc().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb), "{why}");
+        assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()), "{why}");
+    }
+    // The optima are still reported.
+    for (k, (model, values)) in
+        [(&square, json!({"A1": 0})), (&shifted, json!({"C1": 2})), (&rectangle, json!({"E1": 5, "E2": 5})), (&bounded, json!({"G1": 0, "G2": 1}))]
+            .into_iter()
+            .enumerate()
+    {
+        let r = s.execute("data.solverReport", report(model, values)).unwrap();
+        assert_eq!(r["sheets"], json!([format!("Sensitivity Report {}", k + 1)]), "{r}");
+    }
+}
+
+#[test]
+fn solver_writes_the_other_reports_when_the_run_stops_before_an_optimum() {
+    // Rosenbrock's function from (-1.2, 1) with 60 evaluations: the run stops at the limit with
+    // a solution that is not the optimum (1, 1). The solve applies and the Answer report is
+    // written; the Sensitivity report is left out with its reason.
+    let mut s = s();
+    set(&mut s, &[("A1", "-1.2"), ("A2", "1"), ("B1", "=(1-A1)^2+100*(A2-A1^2)^2")]);
+    let undo = s.doc().unwrap().undo.len();
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "maxEvaluations": 60, "reports": ["answer", "sensitivity"]}),
+        )
+        .unwrap();
+    assert_eq!(r["status"], "iterationLimit", "{r}");
+    assert_eq!(r["changed"], true);
+    assert_eq!(n(&s, "A1"), r["values"]["A1"].as_f64().unwrap());
+    assert_eq!(r["reports"], json!(["Answer Report 1"]), "{r}");
+    assert_eq!(r["skippedReports"][0]["report"], "sensitivity", "{r}");
+    assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("optimal"), "{r}");
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    // A solve that reaches the optimum still writes the Sensitivity report and skips nothing.
+    let r = s
+        .execute("data.solver", json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "reports": ["sensitivity"]}))
+        .unwrap();
+    assert_eq!(r["status"], "converged", "{r}");
+    assert_eq!(r["reports"], json!(["Sensitivity Report 1"]), "{r}");
+    assert!(r.get("skippedReports").is_none(), "{r}");
+}
+
+#[test]
+fn solver_report_can_skip_a_sensitivity_report_the_values_do_not_support() {
+    // min A1² at A1 = 1 is not an optimum. Called directly, data.solverReport refuses it; with
+    // skipNotOptimal (as Solver Results passes) the Answer report is still written.
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=A1^2")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 5"]});
+    let p = |reports: serde_json::Value, skip: bool| json!({"reports": reports, "model": model, "values": {"A1": 1}, "skipNotOptimal": skip});
+    let err = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), false)).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    let undo = s.doc().unwrap().undo.len();
+    let r = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), true)).unwrap();
+    assert_eq!(r["sheets"], json!(["Answer Report 1"]), "{r}");
+    assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("not optimal"), "{r}");
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    // With nothing left to write, nothing changes and no Undo step is added.
+    let before = s.doc().unwrap().clone();
+    let r = s.execute("data.solverReport", p(json!(["sensitivity"]), true)).unwrap();
+    assert_eq!(r["sheets"], json!([]), "{r}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    // A model with no Sensitivity report is still refused, skipNotOptimal or not.
+    let err = s.execute("data.solverReport", json!({"reports": ["answer", "sensitivity"], "model": {"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"]}, "skipNotOptimal": true})).unwrap_err();
+    assert!(err.to_string().contains("integer or binary"), "{err}");
+    // In a workbook whose structure is protected, a request whose only report is skipped
+    // writes no sheet, so it succeeds; one that would write a sheet is still refused.
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).protected_structure = true;
+    let before = s.doc().unwrap().clone();
+    let r = s.execute("data.solverReport", p(json!(["sensitivity"]), true)).unwrap();
+    assert_eq!(r["sheets"], json!([]), "{r}");
+    assert!(r["skippedReports"][0]["reason"].as_str().unwrap().contains("not optimal"), "{r}");
+    let err = s.execute("data.solverReport", p(json!(["answer", "sensitivity"]), true)).unwrap_err();
+    assert!(err.to_string().contains("protected"), "{err}");
+    // A request that must write a sheet is refused before its reports are built, so an
+    // integer model's Limits report gives the protection message, not the report's own refusal.
+    let int_model = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"]});
+    let err = s.execute("data.solverReport", json!({"reports": ["limits"], "model": int_model, "values": {"A1": 1}})).unwrap_err();
+    assert!(err.to_string().contains("protected"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+}
+
+#[test]
+fn nonlinear_sensitivity_with_too_many_binding_constraints_is_refused_without_change() {
+    // 80 binding rows on two free variables pass the work limit (lowered in tests); 40 don't.
+    let mut s = s();
+    set(&mut s, &[("A1", "5"), ("A2", "5"), ("B1", "=A1*A2")]);
+    for r in 1..=80 {
+        set(&mut s, &[(&format!("D{r}"), "=A1+A2")]);
+    }
+    let report = |rows: u32| json!({"reports": ["sensitivity"], "model": {"objective": "B1", "variables": "A1:A2", "constraints": [format!("D1:D{rows} <= 10")]}});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", report(80)).unwrap_err();
+    assert!(err.to_string().contains("too many binding constraints"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    let r = s.execute("data.solverReport", report(40)).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
+fn sensitivity_applies_agrees_with_the_report() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=3*A1")]);
+    for (extra, ok) in [
+        (json!({}), true),
+        (json!({"goal": "min"}), true),
+        (json!({"method": "grg"}), true),
+        (json!({"goal": "value", "value": 3}), false),
+        (json!({"constraints": ["A1 <= 4", "A1 int"]}), false),
+        (json!({"constraints": ["A1 <= 4", {"lhs": "A1", "op": "bin"}]}), false),
+        (json!({"method": "evolutionary"}), false),
+    ] {
+        let mut p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "keep": false});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        assert_eq!(super::sensitivity_applies(&p), ok, "{p}");
+        let r = s.execute("data.solver", p.clone()).unwrap();
+        assert_eq!(super::sensitivity_applies(&r["model"]), ok, "{p}");
+        let rep = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"]}));
+        assert_eq!(rep.is_ok(), ok, "{p}: {rep:?}");
+    }
+}
+
+/// How many cells of sheet `name` hold `text`.
+fn count_of(s: &Session, name: &str, text: &str) -> usize {
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(d.wb.sheet_index(name).unwrap()).unwrap();
+    (0..60).flat_map(|r| (0..8).map(move |c| (r, c))).filter(|(r, c)| sh.value(CellRef::new(*r, *c)) == Value::text(text)).count()
+}
+
+#[test]
+fn sensitivity_report_is_the_same_whatever_constant_the_objective_adds() {
+    // A constant in the objective changes no price: max 1E9 + x with x ≤ 10 (a row) has the
+    // same report as max x with x ≤ 10. At x = 10 the row's shadow price is 1 (one more unit
+    // of right side adds one to the objective); x is basic, with reduced cost 0 and
+    // coefficient 1, which may rise without limit and fall by 1 (to 0, where the slack ties);
+    // the right side 10 may rise without limit and fall by 10 (to x = 0). A tolerance taken
+    // from the objective's value (1E-9 · 1E9 = 1) wrote the shadow price as 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1000000000+A1"), ("C1", "=A1"), ("E1", "0"), ("F1", "=E1"), ("G1", "=E1")]);
+    let cols = ["D", "E", "F", "G", "H"];
+    let mut rows = Vec::new();
+    for (obj, var, con, v, c) in [("B1", "A1", "C1", "$A$1", "$C$1"), ("F1", "E1", "G1", "$E$1", "$G$1")] {
+        let p = json!({"objective": obj, "variables": var, "constraints": [format!("{con} <= 10")], "method": "simplex", "reports": ["sensitivity"]});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        rows.push((report_row(&s, &rep, v, &cols), report_row(&s, &rep, c, &cols)));
+    }
+    assert!(close(&rows[0].0, &[10.0, 0.0, 1.0, 1e30, 1.0], 1e-9), "{rows:?}");
+    assert!(close(&rows[0].1, &[10.0, 1.0, 10.0, 1e30, 10.0], 1e-9), "{rows:?}");
+    assert_eq!(rows[0], rows[1]);
+}
+
+#[test]
+fn nonlinear_sensitivity_report_is_the_same_whatever_constant_the_objective_adds() {
+    // min 1E6 + (x − 3)² with x ≤ 2.75 has the same report as min (x − 3)² with x ≤ 2.75. At
+    // x = 2.75 the objective's gradient is 2(2.75 − 3) = −0.5. As a bound on the variable cell
+    // (no constraint row) it is x's reduced gradient, −0.5; as a row y = x ≤ 2.75 it is the
+    // row's Lagrange multiplier, −0.5 (∇f = λ∇y with ∇y = 1), and x's reduced gradient is 0.
+    // A tolerance taken from the objective's value (1E-6 · 1E6 = 1) wrote both as 0. The
+    // difference gradients of the model with the constant lose about four digits to rounding,
+    // so the figures agree to 1E-3.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=1000000+(A1-3)^2"), ("C1", "=A1"), ("E1", "0"), ("F1", "=(E1-3)^2"), ("G1", "=E1")]);
+    let mut figures = Vec::new();
+    for (obj, var, con, v, c) in [("B1", "A1", "C1", "$A$1", "$C$1"), ("F1", "E1", "G1", "$E$1", "$G$1")] {
+        let solve = |s: &mut Session, bound: String| {
+            let p = json!({"objective": obj, "goal": "min", "variables": var, "constraints": [bound], "reports": ["sensitivity"]});
+            let r = s.execute("data.solver", p).unwrap();
+            assert_eq!(r["status"], "converged", "{r}");
+            r["reports"][0].as_str().unwrap().to_string()
+        };
+        let rep = solve(&mut s, format!("{var} <= 2.75"));
+        let at_bound = report_row(&s, &rep, v, &["D", "E"]);
+        assert_eq!(count_of(&s, &rep, c), 0, "a bound has no constraint row");
+        let rep = solve(&mut s, format!("{con} <= 2.75"));
+        figures.push((at_bound, report_row(&s, &rep, v, &["D", "E"]), report_row(&s, &rep, c, &["D", "E"])));
+    }
+    let (at_bound, free, row) = &figures[0];
+    assert!(close(at_bound, &[2.75, -0.5], 1e-3), "{figures:?}");
+    assert!(close(free, &[2.75, 0.0], 1e-3), "{figures:?}");
+    assert!(close(row, &[2.75, -0.5], 1e-3), "{figures:?}");
+    assert!(close(&figures[1].0, at_bound, 1e-3) && close(&figures[1].1, free, 1e-3) && close(&figures[1].2, row, 1e-3), "{figures:?}");
+}
+
+#[test]
+fn simplex_sensitivity_of_a_variable_at_its_upper_bound() {
+    // max 3x + 2y with x + y ≤ 4 (a row), x ≤ 3 and y ≤ 5 (bounds on the variable cells, which
+    // have no row in the Constraints table): x = 3, y = 1, objective 11. The row's shadow price
+    // is y's coefficient 2 (y is basic in it). x, held at its upper bound, has reduced cost
+    // 3 − 1·2 = 1: one more unit of its bound adds 1. This is the convention of Frontline's
+    // "Excel Solver - Interpreting the Sensitivity Report" (solver.com): a variable's dual
+    // value is nonzero only at a bound, measures the objective's change per unit increase in
+    // the variable, and a bound on a variable cell has no row in the Constraints section, its
+    // reduced cost standing for the bound's shadow price. Its coefficient may rise without limit
+    // and fall by 1 (to 2, a tie with y): for a maximum's variable at its upper bound the
+    // Allowable Increase is 1E+30 and the Allowable Decrease the reduced cost, the mirror
+    // image of a variable at zero (`simplex_sensitivity_gives_the_dakota_furniture_report`).
+    // y's coefficient may rise by 1 (to 3, a tie with x) and fall by 2 (to 0, where the row's
+    // slack ties). The right side 4 may rise by 4 (y reaches its bound 5 at 8) and fall by 1
+    // (y reaches 0 at 3).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+2*A2"), ("C1", "=A1+A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 4", "A1 <= 3", "A2 <= 5"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[3.0, 1.0, 3.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0, 2.0, 1.0, 2.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[4.0, 2.0, 4.0, 4.0, 1.0], 1e-9), "{:?}", row("$C$1"));
+    assert_eq!((count_of(&s, &rep, "$A$1"), count_of(&s, &rep, "$A$2"), count_of(&s, &rep, "$C$1")), (1, 1, 1));
+}
+
+#[test]
+fn simplex_sensitivity_of_a_minimum_with_a_greater_row_and_a_bound() {
+    // min 2x + 3y with x + y ≥ 5 (a row) and x ≤ 2 (a bound): x = 2, y = 3, cost 13. The row's
+    // shadow price is 3: one more unit of right side costs one more y. x, at its upper bound,
+    // has reduced cost 2 − 1·3 = −1 (one more unit of its bound saves 1). Its coefficient may
+    // rise by 1 (to 3, a tie with y) and fall without limit: for a minimum's variable at its
+    // upper bound the Allowable Increase is the reduced cost's size and the Allowable Decrease
+    // 1E+30, the mirror image of a minimum's variable at zero (the reduced cost 1 with
+    // Allowable Increase 1E+30 and Allowable Decrease 1 in
+    // `sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges`). y's coefficient
+    // may rise without limit (x can take no more) and fall by 1 (to 2, a tie with x). The right
+    // side 5 may rise without limit and fall by 3 (y reaches 0 at 2).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=2*A1+3*A2"), ("C1", "=A1+A2")]);
+    let p = json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "constraints": ["C1 >= 5", "A1 <= 2"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[2.0, -1.0, 2.0, 1.0, 1e30], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[3.0, 0.0, 3.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[5.0, 3.0, 5.0, 1e30, 3.0], 1e-9), "{:?}", row("$C$1"));
+}
+
+#[test]
+fn simplex_sensitivity_gives_the_dakota_furniture_report() {
+    // Winston, Operations Research: Applications and Algorithms, the Dakota Furniture problem:
+    // max 60x₁ + 30x₂ + 20x₃ (desks, tables, chairs) with 8x₁ + 6x₂ + x₃ ≤ 48 (lumber),
+    // 4x₁ + 2x₂ + 1.5x₃ ≤ 20 (finishing) and 2x₁ + 1.5x₂ + 0.5x₃ ≤ 8 (carpentry): x = (2, 0, 8),
+    // revenue 280. For the basis {s₁, x₃, x₁} the rows of B⁻¹ are (1, 2, −8), (0, 2, −4) and
+    // (0, −0.5, 1.5), so the basic values are B⁻¹b = (24, 8, 2) and the shadow prices
+    // c_B·B⁻¹ = (0, 20, 60)·B⁻¹ = (0, 10, 10). Tables, at zero, have reduced cost
+    // 30 − (6·0 + 2·10 + 1.5·10) = −5: their price must rise by 5 before they are made, so the
+    // Allowable Increase is 5 and the Allowable Decrease 1E+30, as Excel's report shows a
+    // maximum's variable at zero. A change Δ in a basic variable's coefficient moves each
+    // nonbasic reduced cost by Δ times that variable's row of the final tableau; the tables'
+    // column there is B⁻¹(6, 2, 1.5) = (−2, −2, 1.25) and the slacks' columns are B⁻¹'s. Desks
+    // (row 3): −5 − 1.25Δ ≤ 0, −10 + 0.5Δ ≤ 0 and −10 − 1.5Δ ≤ 0 hold for −4 ≤ Δ ≤ 20. Chairs
+    // (row 2): −5 + 2Δ ≤ 0, −10 − 2Δ ≤ 0 and −10 + 4Δ ≤ 0 hold for −5 ≤ Δ ≤ 2.5. A right side
+    // moves the basic values along its column of B⁻¹: lumber (24 + Δ, 8, 2) ≥ 0 for Δ ≥ −24;
+    // finishing (24 + 2Δ, 8 + 2Δ, 2 − 0.5Δ) ≥ 0 for −4 ≤ Δ ≤ 4; carpentry
+    // (24 − 8Δ, 8 − 4Δ, 2 + 1.5Δ) ≥ 0 for −4/3 ≤ Δ ≤ 2.
+    let mut s = s();
+    set(
+        &mut s,
+        &[
+            ("A1", "0"),
+            ("A2", "0"),
+            ("A3", "0"),
+            ("B1", "=60*A1+30*A2+20*A3"),
+            ("C1", "=8*A1+6*A2+A3"),
+            ("C2", "=4*A1+2*A2+1.5*A3"),
+            ("C3", "=2*A1+1.5*A2+0.5*A3"),
+        ],
+    );
+    let p = json!({"objective": "B1", "variables": "A1:A3", "constraints": ["C1 <= 48", "C2 <= 20", "C3 <= 8"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    assert_eq!(r["objective"], 280.0, "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[2.0, 0.0, 60.0, 20.0, 4.0], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[0.0, -5.0, 30.0, 5.0, 1e30], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$A$3"), &[8.0, 0.0, 20.0, 2.5, 5.0], 1e-9), "{:?}", row("$A$3"));
+    assert!(close(&row("$C$1"), &[24.0, 0.0, 48.0, 1e30, 24.0], 1e-9), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[20.0, 10.0, 20.0, 4.0, 4.0], 1e-9), "{:?}", row("$C$2"));
+    assert!(close(&row("$C$3"), &[8.0, 10.0, 8.0, 2.0, 4.0 / 3.0], 1e-9), "{:?}", row("$C$3"));
+}
+
+#[test]
+fn nonlinear_sensitivity_signs_follow_the_goal() {
+    // A Lagrange multiplier is the derivative of the optimal objective with respect to the
+    // row's right side, and a reduced gradient that with respect to the variable's bound,
+    // whichever way the goal points. Frontline's "Excel Solver - Interpreting the Sensitivity
+    // Report" (solver.com) names a binding constraint's dual value its Lagrange multiplier and a
+    // variable's its reduced gradient, each the objective's change per unit increase in the
+    // constraint's bound or the variable, valid at the optimal point alone for a nonlinear
+    // model.
+    // min (x − 3)² + (y − 1)² with x + y ≤ b: the point of the line nearest (3, 1) is
+    // (2.5, 0.5) at b = 3, f*(b) = (4 − b)²/2 and df*/db = −(4 − b) = −1, the multiplier;
+    // maximising the negated objective reaches the same point with multiplier +1. Both
+    // variables are interior, so their reduced gradients are 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=(A1-3)^2+(A2-1)^2"), ("B2", "=0-(A1-3)^2-(A2-1)^2"), ("C1", "=A1+A2")]);
+    for (obj, goal, lambda) in [("B1", "min", -1.0), ("B2", "max", 1.0)] {
+        set(&mut s, &[("A1", "0"), ("A2", "0")]);
+        let p = json!({"objective": obj, "goal": goal, "variables": "A1:A2", "constraints": ["C1 <= 3"], "reports": ["sensitivity"]});
+        let r = s.execute("data.solver", p).unwrap();
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        assert!(close(&report_row(&s, &rep, "$A$1", &["D", "E"]), &[2.5, 0.0], 1e-3), "{goal}: {r}");
+        assert!(close(&report_row(&s, &rep, "$A$2", &["D", "E"]), &[0.5, 0.0], 1e-3), "{goal}: {r}");
+        assert!(close(&report_row(&s, &rep, "$C$1", &["D", "E"]), &[3.0, lambda], 1e-3), "{goal}: {r}");
+    }
+    // max −(x + 1)² − (y − 2)² with x + y ≤ 1 and x, y ≥ 0 mirrors the minimum in
+    // `sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers`: at (0, 1) the
+    // multiplier is +2 (−2 there) and x's reduced gradient −4 (4 there), since raising x from
+    // its bound lowers the maximum by 2(x + 1) + 2 = 4 per unit.
+    set(&mut s, &[("D1", "0.5"), ("D2", "0.5"), ("E1", "=0-(D1+1)^2-(D2-2)^2"), ("E2", "=D1+D2")]);
+    let p = json!({"objective": "E1", "goal": "max", "variables": "D1:D2", "constraints": ["E2 <= 1"], "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$D$1", &["D", "E"]), &[0.0, -4.0], 1e-3), "{r}");
+    assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, 0.0], 1e-3), "{r}");
+    assert!(close(&report_row(&s, &rep, "$E$2", &["D", "E"]), &[1.0, 2.0], 1e-3), "{r}");
 }
 
 fn formula(s: &Session, a1: &str) -> String {
