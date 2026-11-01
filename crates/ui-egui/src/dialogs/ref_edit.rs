@@ -49,7 +49,7 @@ struct Home {
 }
 
 /// The message OK shows once the dialog's own sheet is gone.
-pub(super) const SHEET_DELETED: &str =
+pub(crate) const SHEET_DELETED: &str =
     "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";
 
 /// The workbook's sheet names, in order.

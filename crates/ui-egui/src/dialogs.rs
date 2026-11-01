@@ -35,6 +35,7 @@ use data::{abs, data_validation_fields, remove_duplicates_range, validation_defa
 use find::go_to_entries;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
+pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
 use zoom::zoom_preset;
@@ -149,6 +150,13 @@ impl Dialog {
     /// before picking began, as closing the dialog does.
     pub(crate) fn end_pick(&mut self, app: &mut SheetApp) {
         ref_edit::end_pick(app, self);
+    }
+
+    /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
+    /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
+    /// nothing to refer to.
+    pub(crate) fn home_sheet_deleted(&mut self, app: &SheetApp) -> bool {
+        ref_edit::home_sheet_deleted(app, self)
     }
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.

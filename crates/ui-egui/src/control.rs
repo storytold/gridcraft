@@ -264,8 +264,16 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
+            Some(mut d) => match d.command {
                 Some(cmd) => {
+                    // References without a sheet name mean the sheet the dialog was opened on,
+                    // as OK in the window has it: refused once that sheet is deleted, else shown
+                    // again before the command runs.
+                    if d.home_sheet_deleted(app) {
+                        app.dialog = Some(d);
+                        return err(crate::dialogs::SHEET_DELETED);
+                    }
+                    d.end_pick(app);
                     let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run(cmd, params);
@@ -289,7 +297,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     Err(e) => err(e),
                 };
             }
-            app.dialog = None;
+            // Back to the sheet and selection from before a reference box picked, as Cancel does.
+            if let Some(mut d) = app.dialog.take() {
+                d.end_pick(app);
+            }
             ok(Json::Null)
         }
         "ui.message.dismiss" => {

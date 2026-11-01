@@ -6,9 +6,21 @@ use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use gridcraft_ui_egui::control::{Outcome, handle};
 use serde_json::json;
 
 type H = egui_kittest::Harness<'static, SheetApp>;
+
+/// A control-channel request, as a script or an agent sends it.
+fn control(h: &mut H, method: &str, params: serde_json::Value) -> serde_json::Value {
+    let ctx = h.ctx.clone();
+    let r = match handle(h.state_mut(), &ctx, method, &params) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => json!(null),
+    };
+    h.run_steps(3);
+    r
+}
 
 fn harness(session: Session) -> H {
     let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
@@ -783,4 +795,52 @@ fn a_successful_analysis_to_a_new_sheet_leaves_that_sheet_active() {
     // the sheet it was opened on, as Excel shows the new sheet.
     assert_eq!(sheet_names(&h).len(), 2);
     assert_eq!(selection(&h).0, 1, "the report sheet stays active");
+}
+
+#[test]
+fn a_scripted_cancel_or_ok_goes_back_to_the_dialogs_sheet_like_the_buttons() {
+    // Cancel from the control channel puts the sheet and selection back.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    assert_eq!(selection(&h), (1, "A2".into()));
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "a scripted cancel returns home as the button does");
+
+    // OK from the control channel runs the command on the dialog's sheet: `$H$1` means the sheet
+    // the dialog was opened on, not the sheet the box picked on.
+    let mut h = harness(quoted_sheet());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    next_sheet(&mut h);
+    drag(&mut h, "A1", "A6");
+    assert_eq!(field(&h, "range"), "'O''Brien Rates'!$A$1:$A$6");
+    control(&mut h, "ui.dialog.set", json!({"field": "outputTo", "value": "range"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "output", "value": "$H$1"}));
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(!wb.sheets[0].value(CellRef::parse("H1").unwrap()).is_empty(), "the report is on the dialog's own sheet");
+    assert!(wb.sheets[1].value(CellRef::parse("H1").unwrap()).is_empty(), "not on the sheet shown while picking");
+    assert_eq!(selection(&h).0, 0);
+
+    // A deleted dialog sheet refuses a scripted OK as it refuses the button (Goal Seek presses
+    // its own OK, so `ui.dialog.confirm` refuses it by design; Data Analysis has a command).
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(r["error"].as_str().unwrap_or("").contains("was deleted"), "{r}");
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
 }
