@@ -12,12 +12,25 @@ use super::font_setup::{in_dirs, try_load};
 /// is bundled, and a machine without the face keeps the old behaviour.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
+    let loaded = preferred_file(fonts, fontconfig_arabic());
+    load_faces(fonts, fallback_faces(han), loaded)
+}
+
+/// The preferred Arabic file, once [`load_preferred_arabic`] has loaded it: a file that failed to
+/// load must not keep the system Arabic faces out of the chains.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn preferred_file(fonts: &FontDefinitions, preferred: Option<(String, u32)>) -> Vec<String> {
+    preferred.filter(|_| fonts.font_data.contains_key(PREFERRED_ARABIC)).map(|(path, _)| path).into_iter().collect()
+}
+
+/// Loads the first candidate of each fallback face that loads and returns their keys. `loaded`
+/// holds the files already loaded as a fallback face. A file serves at most one key: the
+/// region-merged Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai
+/// and Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn load_faces(fonts: &mut FontDefinitions, faces: Vec<(&'static str, Vec<(String, u32)>)>, mut loaded: Vec<String>) -> Vec<String> {
     let mut keys = Vec::new();
-    // Files already loaded as a fallback face. A file serves at most one key: the region-merged
-    // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
-    // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
-    let mut loaded: Vec<String> = Vec::new();
-    for (key, cands) in fallback_faces(han) {
+    for (key, cands) in faces {
         for (path, index) in &cands {
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
@@ -36,6 +49,60 @@ pub(super) fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<S
 #[cfg(target_arch = "wasm32")]
 pub(super) fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder) -> Vec<String> {
     Vec::new()
+}
+
+/// The face fontconfig prefers for Arabic leads the script faces (#229), ahead of the system and
+/// bundled Arabic faces.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn load_preferred_arabic(fonts: &mut FontDefinitions) -> Vec<String> {
+    let Some((path, index)) = fontconfig_arabic() else { return Vec::new() };
+    let Some(fd) = try_load(&[(path.as_str(), index)]) else { return Vec::new() };
+    fonts.font_data.insert(PREFERRED_ARABIC.into(), Arc::new(fd));
+    vec![PREFERRED_ARABIC.into()]
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn load_preferred_arabic(_fonts: &mut FontDefinitions) -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const PREFERRED_ARABIC: &str = "sys-arabic-preferred";
+
+/// The face fontconfig prefers for Arabic, such as a Vazirmatn the user set as their Arabic font
+/// (#229), kept only when it has Arabic letters. Asked once per process.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn fontconfig_arabic() -> Option<(String, u32)> {
+    static PREFERRED: std::sync::OnceLock<Option<(String, u32)>> = std::sync::OnceLock::new();
+    PREFERRED
+        .get_or_init(|| {
+            let out = std::process::Command::new("fc-match").args(["--format=%{file}\n%{index}\n", ":lang=ar"]).output().ok()?;
+            let (file, index) = parse_fc_match(&String::from_utf8_lossy(&out.stdout)).filter(|_| out.status.success())?;
+            let bytes = crate::fonts::read_font(std::path::Path::new(&file))?;
+            covers_arabic(&bytes, index).then_some((file, index))
+        })
+        .clone()
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(all(unix, not(target_os = "macos")))))]
+pub(super) fn fontconfig_arabic() -> Option<(String, u32)> {
+    None
+}
+
+/// The file and face index from `fc-match --format='%{file}\n%{index}\n'`. fontconfig packs a
+/// variable font's named instance into the upper 16 bits of the index; only the face index is kept.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn parse_fc_match(out: &str) -> Option<(String, u32)> {
+    let mut lines = out.lines().map(str::trim);
+    let file = lines.next().filter(|file| !file.is_empty())?;
+    let index = lines.next().and_then(|index| index.parse::<u32>().ok()).map_or(0, |packed| packed & 0xFFFF);
+    Some((file.to_owned(), index))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn covers_arabic(bytes: &[u8], index: u32) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| "العربية".chars().all(|ch| font.charmap().map(ch).is_some()))
 }
 
 /// Every fallback face we look for, in chain order: `(key, candidate files)`. One file per script
@@ -57,6 +124,7 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
+        ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -241,6 +309,23 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
         &["NotoSansHebrew-Regular.ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
         "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
     )
+}
+
+/// Arabic faces. Windows has Tahoma, Arial and Segoe UI with Arabic; macOS has Geeza Pro; Linux
+/// usually has Noto Sans Arabic or Noto Naskh Arabic. Installed Noto and Amiri faces found by the
+/// font scan come last, for layouts the paths miss.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn arabic() -> Vec<(String, u32)> {
+    let mut v = script_fonts(
+        &["tahoma.ttf", "arial.ttf", "segoeui.ttf"],
+        &["/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/Supplemental/GeezaPro.ttc"],
+        &["NotoSansArabic-Regular.ttf", "NotoNaskhArabic-Regular.ttf", "noto/NotoSansArabic-Regular.ttf", "noto/NotoNaskhArabic-Regular.ttf"],
+        "/usr/share/fonts/google-noto-vf/NotoSansArabic[wght].ttf",
+    );
+    for family in ["Noto Sans Arabic", "Noto Naskh Arabic", "Amiri"] {
+        v.extend(crate::fonts::faces_of(family).into_iter().map(|face| (face.path.to_string_lossy().into_owned(), face.index)));
+    }
+    v
 }
 
 /// Symbol faces behind the UI font. Interface fonts such as Noto Sans and Cantarell (and egui's
