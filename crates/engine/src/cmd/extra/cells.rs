@@ -123,25 +123,10 @@ pub(super) fn new_cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+/// ([`crate::Prefs::recent_functions`]).
 pub(super) fn recently_used(s: &mut Session, _: &Json) -> Result<Json> {
-    let mut seen: Vec<String> = Vec::new();
-    for (id, p) in s.journal.iter().rev() {
-        if id != "cell.set" {
-            continue;
-        }
-        let input = p.get("input").and_then(Json::as_str).unwrap_or("");
-        if let Ok(e) = gridcraft_formula::parse(input.trim_start_matches('=')) {
-            for f in e.functions() {
-                if !seen.iter().any(|x| x == f) {
-                    seen.push(f.to_string());
-                }
-            }
-        }
-        if seen.len() >= 10 {
-            break;
-        }
-    }
-    Ok(json!(seen))
+    Ok(json!(s.prefs.recent_functions))
 }
 
 pub(super) fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {

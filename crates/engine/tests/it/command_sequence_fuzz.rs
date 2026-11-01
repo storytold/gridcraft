@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
-use gridcraft_engine::model::{CalcMode, Formula, Sheet, Workbook};
+use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
 use serde_json::{Value as Json, json};
 
@@ -491,8 +491,9 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
     wb.names.iter().find(|n| n.name == WATCH_NAME).map(|n| n.formula.as_str())
 }
 
-/// The workbook with view state (active sheet, scroll, active cell) and the Watch Window list
-/// reset: undo restores view state as it was, but switching sheets isn't an undoable edit.
+/// The workbook with view state (active sheet, scroll, active cell, Normal / Page Layout / Page
+/// Break Preview) and the Watch Window list reset: undo restores view state as it was, but
+/// switching sheets or views isn't an undoable edit.
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
     wb.set_active_sheet(0);
@@ -501,6 +502,7 @@ fn canonical(wb: &Workbook) -> Workbook {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();
         sh.view_top_left = CellRef::default();
+        sh.view = SheetViewMode::Normal;
     }
     wb
 }
@@ -1112,5 +1114,15 @@ fn params_docs_parse_into_keys() {
     }
     for (id, _) in CURATED {
         assert!(find_command(id).is_some(), "CURATED names unknown command `{id}`");
+    }
+}
+
+/// Seed 177: switching a sheet to Page Break Preview isn't an undo step (as in Excel), so undoing
+/// everything leaves the view mode alone and the undo check must not count it as an edit.
+#[test]
+fn view_mode_switch_is_not_an_undo_difference() {
+    for id in ["view.pageBreakPreview", "view.pageLayout"] {
+        let failure = replay("sales", &[(id.to_string(), json!({"sheet": 0}))]);
+        assert!(failure.is_none(), "`{id}`: {failure:?}");
     }
 }

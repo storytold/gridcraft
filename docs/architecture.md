@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Python cells as data; earlier: the hidden names that hold macros; macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Python cells as data; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -59,13 +59,20 @@ drawing its own:
   `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
   foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
   token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
-  colours (`theme::Cat`) from the tokens.
+  colours (`theme::Cat`) from the tokens; `icons::paint_accent` gives an icon an accent colour,
+  drawn on its coloured part when it has one (the spine and glyph of `Icon::FnBook`).
 - **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
-  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
-  `i18n` in one place. Split buttons return the main and arrow responses separately, with
-  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
-  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  `small_button`, `small_button_accent`, `split_button`, `big_split_button`, `toggle_button`),
+  translated through `i18n` in one place. Split buttons return the main and arrow responses
+  separately, with accessible names (`AutoSum`, `AutoSum options`); big and small buttons
+  report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
+  scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
   and a test keeps every tab within the card's three rows.
+- **Function Library**: `function_library.rs` holds the function categories (engine id and
+  label, in the Insert Function dialog's order), the function list built once from
+  `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
+  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
+  Recently Used category list what `formulas.recentlyUsed` returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
@@ -102,6 +109,14 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   a recording leaves it out, so playing the recording back never stops the run. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
+- **Recently used functions** (`recent.rs`). `Prefs::recent_functions` holds the ten functions
+  most recently entered in a formula, newest first. `Session::execute` updates it for every
+  `cell.*` and `range.*` command it journals, from any source (interface, control channel, MCP,
+  script). It reads at most 2,000 of the formulas a command enters, starting from the last one
+  (the most recent), so a large paste costs no more than that; `formulas.recentlyUsed` returns
+  it. It is kept with the other preferences (`prefs.json`, the browser's storage on the
+  web) and read leniently, so a malformed value loses only this list. It does not read the
+  journal back, so the journal's trimming does not affect it.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
@@ -186,6 +201,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references |
+| 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
+| 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
