@@ -34,6 +34,9 @@ pub struct DocWindows {
     quit_with_last_window: bool,
     /// Draw every window as a tab in the root window instead of one native window each.
     tabs: bool,
+    /// The order the tabs are shown in (engine window ids); reordering is presentation only, the
+    /// engine's window list keeps its own order.
+    tab_order: Vec<u64>,
     /// The root viewport is hidden because no window is open.
     root_hidden: bool,
 }
@@ -43,7 +46,7 @@ impl DocWindows {
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
         // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, tabs: true, root_hidden: false }
+        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, tabs: true, tab_order: Vec::new(), root_hidden: false }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -230,13 +233,29 @@ impl DocWindows {
     /// first, as moving to a native window does); `×` closes it through `window.close`, so the
     /// unsaved-changes question and the last-window rules stay in the engine.
     fn show_as_tabs(&mut self, app: &mut SheetApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-        app.doc_tabs = Some(crate::doc_tabs::DocTabs::from_app(app));
+        // Keep the strip order: drop closed windows, append new ones (File › New, opened files).
+        let visible = visible_windows(app);
+        self.tab_order.retain(|w| visible.contains(w));
+        for w in &visible {
+            if !self.tab_order.contains(w) {
+                self.tab_order.push(*w);
+            }
+        }
+        app.doc_tabs = Some(crate::doc_tabs::DocTabs::from_app(app, &self.tab_order));
         app.ui(ui);
-        let (picked, closed) = match app.doc_tabs.take() {
-            Some(t) => (t.picked, t.closed),
-            None => (None, None),
+        let (picked, closed, reordered) = match app.doc_tabs.take() {
+            Some(t) => (t.picked, t.closed, t.reordered),
+            None => (None, Vec::new(), None),
         };
-        if let Some(w) = closed {
+        if let Some((moved, before)) = reordered {
+            let order = &mut self.tab_order;
+            if let Some(from) = order.iter().position(|w| *w == moved) {
+                let moving = order.remove(from);
+                let at = order.iter().position(|w| *w == before).unwrap_or(order.len());
+                order.insert(at, moving);
+            }
+        }
+        for w in closed {
             let _ = app.run_or_alert("window.close", json!({"window": w}));
         }
         let active = app.session.active_window();
