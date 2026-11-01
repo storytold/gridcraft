@@ -3,6 +3,11 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+thread_local! {
+    /// Turns `PassHost::column_block` off, to compare results with and without it.
+    pub(crate) static COLUMN_BLOCKS_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
@@ -2311,4 +2316,276 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// The issue's ledger: a unit, a payer and a text per row from row 2, and in F a running count
+/// of the earlier rows with the same unit and payer whose text starts with "Rent".
+fn running_countifs_ledger(n: usize) -> T {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for i in 0..n {
+        let r = i + 2;
+        sh.cells.set(c(&format!("B{r}")), Cell::value(Value::from(format!("U{:02}", i % 80))));
+        sh.cells.set(c(&format!("C{r}")), Cell::value(Value::from(format!("P{:03}", i % 120))));
+        let text = if i % 5 != 0 { format!("Rent {:02}", i % 12 + 1) } else { "Service charge".to_string() };
+        sh.cells.set(c(&format!("D{r}")), Cell::value(Value::from(text)));
+        sh.cells.set(c(&format!("E{r}")), Cell::value(Value::Number((500 + i % 300) as f64)));
+        let f = format!("=COUNTIFS($B$2:B{r},B{r},$C$2:C{r},C{r},$D$2:D{r},\"Rent*\")");
+        sh.cells.set(c(&format!("F{r}")), Cell::formula(Formula::new(&f)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    t
+}
+
+/// Column F of the ledger counted row by row from the stored texts.
+fn running_countifs_by_hand(t: &T, n: usize) -> Vec<f64> {
+    let text = |col: &str, r: usize| match t.get(&format!("{col}{r}")) {
+        Value::Text(s) => s.to_string(),
+        _ => String::new(),
+    };
+    let rows: Vec<(String, String, String)> = (2..n + 2).map(|r| (text("B", r), text("C", r), text("D", r))).collect();
+    (0..n)
+        .map(|i| {
+            let (b, c, _) = &rows[i];
+            rows[..=i].iter().filter(|(b2, c2, d2)| b2 == b && c2 == c && d2.starts_with("Rent")).count() as f64
+        })
+        .collect()
+}
+
+#[test]
+fn running_countifs_match_a_count_by_hand() {
+    let n = 2000;
+    let mut t = running_countifs_ledger(n);
+    let column = |t: &T| (2..n + 2).map(|r| t.num(&format!("F{r}"))).collect::<Vec<_>>();
+
+    assert_eq!(column(&t), running_countifs_by_hand(&t, n));
+    assert_eq!(column(&t).iter().sum::<f64>(), 7488.0);
+
+    // Edits above the table change the running counts below them.
+    t.set("D12", "Service charge");
+    t.set("B13", "U10");
+    t.set("C13", "P010");
+    assert_eq!(column(&t), running_countifs_by_hand(&t, n), "after edits");
+}
+
+#[test]
+fn running_ranges_read_formulas_spills_and_edits() {
+    // B: text with blanks, errors and numbers. C: constants down to C40, a formula at C41.
+    // G: a spill from G1 over G2:G6 above constants from G10. H: long text. Every formula is
+    // compared with the sum of its criteria function over each row's cells alone.
+    let n = 80;
+    let mut t = T::new();
+    for r in 2..n + 2 {
+        let b = match r {
+            r if r % 7 == 0 => String::new(),
+            r if r % 11 == 0 => "#N/A".to_string(),
+            r if r % 13 == 0 => "4".to_string(),
+            r => format!("u{}", r % 4),
+        };
+        if !b.is_empty() {
+            let v = gridcraft_core::parse::parse_input(&b, t.wb.date_system).value;
+            t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("B{r}")), Cell::value(v));
+        }
+        let cv = if r == 41 { Cell::formula(Formula::new("=C40&\"\"")) } else { Cell::value(Value::from(format!("c{}", r % 3))) };
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("C{r}")), cv);
+        if r > 9 {
+            t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("G{r}")), Cell::value(Value::Number((r % 5) as f64)));
+        }
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("H{r}")), Cell::value(Value::from("x".repeat(260 + r % 2))));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(c("G1"), Cell::formula(Formula::new("=SEQUENCE(6)")));
+    let last = n + 1;
+    // (column, formula of row r, its share of row j alone, whether it reads rows 2..=r or r..=last)
+    type Piece = fn(usize, usize) -> String;
+    type RowFormula = fn(usize) -> String;
+    let columns: [(&str, RowFormula, Piece, bool); 4] = [
+        ("J", |r| format!("=COUNTIFS($B$2:B{r},B{r},$C$2:C{r},C{r})"), |r, j| format!("COUNTIFS(B{j},B{r},C{j},C{r})"), true),
+        ("K", |r| format!("=COUNTIFS($G$2:G{r},\">1\",$B$2:B{r},\"<>\")"), |_, j| format!("COUNTIFS(G{j},\">1\",B{j},\"<>\")"), true),
+        (
+            "L",
+            |r| format!("=COUNTIFS(B{r}:$B$81,B{r},H{r}:$H$81,REPT(\"x\",261))"),
+            |r, j| format!("COUNTIFS(B{j},B{r},H{j},REPT(\"x\",261))"),
+            false,
+        ),
+        ("M", |r| format!("=SUMIFS($G$2:G{r},$C$2:C{r},\"c*\")"), |_, j| format!("SUMIFS(G{j},C{j},\"c*\")"), true),
+    ];
+    // Each formula, and the sum of its shares cell by cell, which reads no range.
+    let formulas: Vec<(String, String, String)> = (2..=last)
+        .flat_map(|r| {
+            columns.iter().map(move |(col, full, piece, down)| {
+                let rows: Vec<usize> = if *down { (2..=r).collect() } else { (r..=last).collect() };
+                let by_cell = rows.iter().map(|j| piece(r, *j)).collect::<Vec<_>>().join("+");
+                (format!("{col}{r}"), full(r), format!("={by_cell}"))
+            })
+        })
+        .collect();
+    for (at, f, _) in &formulas {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(Formula::new(f)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let check = |t: &T, step: &str| {
+        for (at, f, by_cell) in &formulas {
+            assert_eq!(t.get(at), crate::evaluate(&t.wb, 0, c(at), by_cell), "{at} {f} ({step})");
+        }
+    };
+    check(&t, "recalc");
+
+    t.set("B5", "u1");
+    check(&t, "edit in B");
+    t.set("C10", "=\"c\"&1");
+    check(&t, "formula in C");
+    t.set("G1", "=SEQUENCE(9)");
+    check(&t, "longer spill");
+}
+
+#[test]
+#[ignore = "timing-sensitive; run with --ignored in release"]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn running_countifs_cost_about_as_much_as_a_running_count() {
+    // Each COUNTIFS of the ledger reads three ranges as long as a running COUNT's one, but its
+    // cells are constants, kept once per recalculation. It used to take nearly four times as
+    // long as COUNT (allocating for each cell compared and walking the cell store for each
+    // range); now it takes less. Best of three, so a slow moment doesn't decide.
+    let n = 2000;
+    let time = |count: bool| {
+        (0..3)
+            .map(|_| {
+                let mut t = running_countifs_ledger(n);
+                if count {
+                    for r in 2..n + 2 {
+                        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("F{r}")), Cell::formula(Formula::new(&format!("=COUNT($E$2:E{r})"))));
+                    }
+                }
+                let start = std::time::Instant::now();
+                t.calc.recalc_all(&mut t.wb);
+                start.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (countifs, count) = (time(false), time(true));
+
+    assert!(countifs < 2.0 * count, "running COUNTIFS {countifs:.3}s, running COUNT {count:.3}s");
+}
+
+/// Column blocks kept for range reads (`column_block`) change no result, bit for bit, in a full
+/// recalculation or the edits after it. Lookups, criteria and products read growing, moving and
+/// fixed blocks of one to three columns, over formulas calculated on demand deeper than the nesting
+/// limit (so evaluations are suspended and restarted), formulas that spill, error values, a
+/// circular reference (iterated in one workbook) and RAND, whose values follow the order formulas
+/// are calculated in. (A chain deep enough to run out of stack could be suspended at another
+/// formula, as the read takes stack, and draw RAND again.)
+#[test]
+fn kept_column_blocks_change_no_result() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, n: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % n
+        }
+    }
+    const ROWS: u32 = 150;
+    const COLS: u32 = 6;
+    // The row of the circular reference; errors come after it, so most reads have none.
+    const LOOP: u32 = 140;
+    let nums = [0.1, 0.2, 0.3, 1e16, -1e16, 1.0, 3.7, -0.0, 12345.678, 1e-9, 7.0];
+    // Column A constants; B formulas of every kind, B1 reading C first; C one chain read
+    // bottom-up (C1 needs C2, ...); D reads of A:C, some reading a spill in E before it is
+    // calculated; E plain formulas, with a spill now and then; F reads of D and E.
+    let cell = |rng: &mut Rng, col: u32, r: u32, spills: bool| -> Cell {
+        let f = |s: String| Cell::formula(Formula::new(&s));
+        let up = r.saturating_sub(1).max(1);
+        let lo = r.saturating_sub(5).max(1);
+        match (col, rng.next(12)) {
+            (0, 0) => Cell::value(Value::text("x1")),
+            (0, 1) => Cell::default(),
+            (0, 2) => Cell::value(Value::Bool(true)),
+            (0, 3) if r > LOOP => Cell::value(Value::Error(CellError::NA)),
+            (0, _) => Cell::value(Value::Number(nums[rng.next(nums.len() as u64) as usize])),
+            (1, _) if r == LOOP => f(format!("=D{r}/2+1")),
+            (1, _) if r == 1 => f("=SUMPRODUCT(C$1:C2)".into()),
+            (1, 0) => f(format!("=N(A{r})*1.1")),
+            (1, 1) => f(format!("=B{up}+N(A{r})")),
+            (1, 2) if r > LOOP => f(format!("=IF(N(A{r})=7,NA(),A{r})")),
+            (1, 3) => f(format!("=SUMPRODUCT(C{r}:C{})", r + 1)),
+            (1, 4) => f(format!("=C{}", r + 1)),
+            (1, 5) => f("=RAND()".into()),
+            (1, 6) => f(format!("=\"x\"&MOD({r},3)")),
+            (1, _) => Cell::value(Value::Number(nums[rng.next(nums.len() as u64) as usize])),
+            (2, _) if r == ROWS => f(format!("=N(A{r})")),
+            (2, _) => f(format!("=C{}+1", r + 1)),
+            (3, _) if r == LOOP => f(format!("=SUMPRODUCT(B$1:B{r})")),
+            (3, _) if spills && r.is_multiple_of(29) => f(format!("=SUMPRODUCT(E$1:E{})", r + 1)),
+            (3, k) => f(match k {
+                0 => format!("=SUMIFS(B$1:B{r},A$1:A{r},\">0\")"),
+                1 => format!("=COUNTIFS(B$1:B{r},\">1\",C$1:C{r},\">\"&{r})"),
+                2 => format!("=IFERROR(VLOOKUP(N(A{r}),A$1:B${ROWS},2,FALSE),-1)"),
+                3 => format!("=INDEX(B$1:C${ROWS},MOD({r}*7,{ROWS})+1,2)"),
+                4 => format!("=SUMPRODUCT(B{lo}:B{r},C{lo}:C{r})"),
+                5 => format!("=MATCH(MAX(C$1:C{r}),C$1:C{r},0)"),
+                6 => format!("=AVERAGEIFS(C$1:C{r},B$1:B{r},\"<>x*\")"),
+                7 => format!("=SUMIF(A{lo}:A{r},\">1\",B{lo}:B{r})"),
+                8 => format!("=COUNTIF(A$1:B{r},\"x*\")"),
+                9 => format!("=SUMPRODUCT(A{lo}:C{r})"),
+                10 => format!("=IFERROR(MATCH(\"x1\",B$1:B{r},0),0)"),
+                _ => format!("=COUNTIFS(B$1:B{r},\"x1\")"),
+            }),
+            (4, _) if spills && r.is_multiple_of(29) => f("=SEQUENCE(2)".into()),
+            (4, _) if spills && r % 29 == 1 && r > 1 => Cell::default(),
+            (4, _) => f(format!("=N(A{r})+0.25")),
+            (_, k) if k % 2 == 0 => f(format!("=COUNTIFS(D$1:D{r},\">0\")")),
+            (_, _) => f(format!("=SUMPRODUCT(D{lo}:E{r})")),
+        }
+    };
+    let values = |wb: &Workbook| -> Vec<Value> {
+        let sh = wb.sheet(0).unwrap();
+        (0..ROWS + 2).flat_map(|r| (0..COLS).map(move |col| sh.value(CellRef::new(r, col)))).collect()
+    };
+    for (seed, spills, iterative) in [(1u64, false, false), (2, false, false), (3, true, false), (4, false, true)] {
+        type Seen = (Vec<Value>, Vec<(usize, CellRef)>);
+        let runs: Vec<Vec<Seen>> = [false, true]
+            .into_iter()
+            .map(|off| {
+                COLUMN_BLOCKS_OFF.with(|o| o.set(off));
+                let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                let mut wb = Workbook::new();
+                wb.calc.iterative = iterative;
+                for r in 1..=ROWS {
+                    for col in 0..COLS {
+                        let input = cell(&mut rng, col, r, spills);
+                        wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r - 1, col), input);
+                    }
+                }
+                let mut calc = Calc::new();
+                calc.rebuild(&wb);
+                calc.recalc_all(&mut wb);
+                let mut seen = vec![(values(&wb), calc.circular.clone())];
+                for _ in 0..10 {
+                    let mut changed = vec![];
+                    for _ in 0..1 + rng.next(3) {
+                        let (r, col) = (1 + rng.next(ROWS as u64) as u32, rng.next(3) as u32);
+                        let input = cell(&mut rng, col, r, spills);
+                        wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r - 1, col), input);
+                        changed.push((0, CellRef::new(r - 1, col)));
+                    }
+                    calc.cells_changed(&mut wb, &changed);
+                    seen.push((values(&wb), calc.circular.clone()));
+                }
+                seen
+            })
+            .collect();
+        COLUMN_BLOCKS_OFF.with(|o| o.set(false));
+        for (round, ((on, on_circular), (off, off_circular))) in runs[0].iter().zip(&runs[1]).enumerate() {
+            assert_eq!(on_circular, off_circular, "seed {seed}, round {round}: circular references");
+            for (i, (a, b)) in on.iter().zip(off).enumerate() {
+                let same = match (a, b) {
+                    (Value::Number(x), Value::Number(y)) => x.to_bits() == y.to_bits(),
+                    (x, y) => x == y,
+                };
+                let at = CellRef::new(i as u32 / COLS, i as u32 % COLS);
+                assert!(same, "seed {seed}, round {round}, {at:?}: {a:?} with kept blocks, {b:?} without");
+            }
+        }
+    }
 }
