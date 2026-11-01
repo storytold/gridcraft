@@ -496,25 +496,30 @@ impl Host for FrozenHost<'_> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn eval_frozen(
-    wb: &Workbook,
-    exprs: &HashMap<Key, std::sync::Arc<Expr>>,
-    prior: &HashMap<Key, Value>,
-    spills: &HashMap<Key, std::sync::Arc<Array>>,
-    spill_index: &SpillIndex,
+struct FrozenIn<'a> {
+    wb: &'a Workbook,
+    exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+    prior: &'a HashMap<Key, Value>,
+    spills: &'a HashMap<Key, std::sync::Arc<Array>>,
+    spill_index: &'a SpillIndex,
     now: f64,
-    k: Key,
-    legacy: Option<RangeRef>,
-) -> (Value, Option<std::sync::Arc<Array>>) {
-    let Some(expr) = exprs.get(&k) else {
-        return (wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default(), None);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type WavePart = (Key, Value, Option<std::sync::Arc<Array>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn eval_frozen(inp: &FrozenIn<'_>, k: Key, legacy: Option<RangeRef>) -> (Value, Option<std::sync::Arc<Array>>) {
+    let Some(expr) = inp.exprs.get(&k) else {
+        return (inp.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default(), None);
     };
-    let mut host = FrozenHost { wb, prior, spills, spill_index, now, at: k, used: HashMap::default() };
+    let mut host =
+        FrozenHost { wb: inp.wb, prior: inp.prior, spills: inp.spills, spill_index: inp.spill_index, now: inp.now, at: k, used: HashMap::default() };
     let v = {
         let mut ev = Evaluator::new(&mut host, k.0, k.1);
         ev.value(expr)
     };
-    finish_formula(wb, exprs, k, expr, v, legacy, true)
+    finish_formula(inp.wb, inp.exprs, k, expr, v, legacy, true)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -699,7 +704,7 @@ fn eval_flat_wave_native(wb: &Workbook, graph: &Graph, dirty: &[Key], now: f64, 
     let prior: HashMap<Key, Value> = HashMap::default();
     let spills_in: HashMap<Key, std::sync::Arc<Array>> = HashMap::default();
     let spill_index = SpillIndex::build(&spills_in);
-    let mut parts: Vec<Vec<(Key, Value, Option<std::sync::Arc<Array>>)>> = Vec::new();
+    let mut parts: Vec<Vec<WavePart>> = Vec::new();
     let mut failed = false;
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
@@ -845,7 +850,7 @@ fn eval_independent_native(
         let n_workers = worker_count(ready.len(), workers);
         let chunk = ready.len().div_ceil(n_workers);
         let spill_index = SpillIndex::build(&spills);
-        let mut parts: Vec<Vec<(Key, Value, Option<std::sync::Arc<Array>>)>> = Vec::new();
+        let mut parts: Vec<Vec<WavePart>> = Vec::new();
         let mut failed = false;
         std::thread::scope(|scope| {
             let mut handles = Vec::new();
@@ -858,7 +863,8 @@ fn eval_independent_native(
                         let mut local = Vec::with_capacity(group.len());
                         for k in group {
                             let legacy = graph.nodes.get(k).and_then(|n| n.legacy);
-                            let (v, sp) = eval_frozen(wb, exprs, values, spills, spill_index, now, *k, legacy);
+                            let inp = FrozenIn { wb, exprs, prior: values, spills, spill_index, now };
+                            let (v, sp) = eval_frozen(&inp, *k, legacy);
                             local.push((*k, v, sp));
                         }
                         local
