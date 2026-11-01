@@ -48,6 +48,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
             if item.clicked() {
                 act(app, "ui.shapeTool", json!({"kind": kind}));
+                // Enter on a focused item makes no pointer click, so the menu wouldn't close itself.
+                ui.close();
             }
         }
     });

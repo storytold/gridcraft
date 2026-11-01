@@ -368,5 +368,6 @@ fn the_shapes_gallery_opened_by_its_keytip_is_reachable_by_keyboard() {
     press(&mut h, egui::Key::Enter);
     h.run_steps(2);
     assert_eq!(h.state().grid.shape_tool.as_deref(), Some("roundedRectangle"), "Down then Enter picks the second shape");
+    assert!(h.query_by_label("Line").is_none(), "the pick closes the gallery");
     assert_eq!(h.state().session.doc().unwrap().selection.active, CellRef::new(0, 0), "the grid didn't take the arrow");
 }
