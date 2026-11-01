@@ -889,3 +889,90 @@ fn closing_the_window_that_shows_a_saved_editor_closes_the_editor_with_it() {
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
 }
+
+#[test]
+fn a_close_request_during_the_editors_save_dialog_waits_for_it() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book1 = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.run_steps(2);
+    let book2 = h.state().session.active().unwrap().uid;
+    h.state_mut().enter_window(home);
+    h.run_steps(2);
+    // Cmd+W: the editor asks about the draft and the close waits.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    // Cmd+W again, then the window's close button, while the question stands: the same close,
+    // so both wait on the same question; it is not asked twice and nothing closes under it.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert_eq!(h.get_all_by_label_contains("Save changes to macro").count(), 1, "one question");
+    assert!(is_open(&h, book1) && is_open(&h, book2));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let pending = h.state().macros.editor.as_ref().and_then(|e| e.then_close.as_ref()).expect("the close waits");
+    assert_eq!((pending.id.as_str(), pending.whole), ("file.close", true), "the close that opened the question is the pending one");
+    // Don't Save: the editor closes and the workbook closes once; the other workbook stays.
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(!is_open(&h, book1));
+    assert!(is_open(&h, book2), "the close ran once");
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+}
+
+#[test]
+fn a_different_close_during_the_editors_question_is_refused_until_it_is_answered() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book = h.state().session.active().unwrap().uid;
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let other = h.state().session.active_window().unwrap();
+    // The editor's window closes while the workbook stays open in the other: the editor asks.
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    // The Backstage Close (the whole workbook) while that question stands asks for more than
+    // the question was asked for: refused with the reason; the question and the workbook stay.
+    let e = h.state_mut().run("file.close", json!({"document": true})).unwrap_err();
+    assert!(e.contains("asking whether to save") && e.contains("its window closes"), "{e}");
+    h.run_steps(2);
+    assert_eq!(h.get_all_by_label_contains("Save changes to macro").count(), 1, "one question");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().session.windows().len(), 2);
+    // Don't Save closes the editor's window alone, as the question was asked for.
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().session.window(home).is_none());
+    assert!(h.state().session.window(other).is_some());
+    assert!(is_open(&h, book), "the workbook stays open in its other window");
+    // The reverse: the workbook is closing when a close of the editor's window alone arrives.
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    h.state_mut().enter_window(other);
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let r = h.state_mut().run("file.close", json!({"document": true})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    let e = h.state_mut().run("window.close", json!({"window": other})).unwrap_err();
+    assert!(e.contains("the workbook closes"), "{e}");
+    // Cancel keeps the workbook, both windows and the draft.
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().session.windows().len(), 2);
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    assert!(h.state().macros.editor.as_ref().is_some_and(|e| e.then_close.is_none()));
+}

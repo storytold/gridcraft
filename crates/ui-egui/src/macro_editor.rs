@@ -107,6 +107,9 @@ pub struct Editor {
 pub struct PendingClose {
     /// The editor's window, where the close was asked.
     pub window: u64,
+    /// Whether the workbook closes (its last window, or `file.close {document: true}`), rather
+    /// than the editor's window alone while the workbook stays open in another.
+    pub whole: bool,
     pub id: String,
     pub params: Json,
 }
@@ -644,35 +647,62 @@ impl Editor {
 /// button) while the draft has unsaved changes: the editor asks about them first, as its own
 /// close button does, and the close (`id` with `params`) goes on once the editor has closed, in
 /// the window it was asked in; Cancel keeps both. Closing the window that shows the editor asks
-/// too, even when the workbook stays open in another window. Returns whether the editor was
-/// asked. A close of another of the workbook's windows, or a forced one, goes ahead as before.
-pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> bool {
+/// too, even when the workbook stays open in another window. A close of another of the
+/// workbook's windows, or a forced one, is none of the editor's business (`None`) and goes ahead
+/// as before.
+///
+/// While the editor is asking, one question stands for one close: a further request for the
+/// same close (Cmd+W pressed again, the close button after Cmd+W) waits for the answer without a
+/// second question, and the pending close then runs once. A request for a different close (the
+/// workbook while only the editor's window was closing, or the reverse) is refused with the
+/// reason until the question is answered, so that the answer never closes more or less than
+/// what was asked.
+pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> Option<Result<Json, String>> {
     let flag = |k: &str| params.get(k).and_then(Json::as_bool) == Some(true);
     if flag("force") {
-        return false;
+        return None;
     }
-    let Some(doc) = app.macros.editor.as_ref().filter(|ed| ed.has_unsaved_changes()).map(|ed| ed.doc) else { return false };
+    let doc = app.macros.editor.as_ref().filter(|ed| ed.has_unsaved_changes()).map(|ed| ed.doc)?;
     let window = match id {
         "file.close" => app.session.active_window(),
         "window.close" => gridcraft_engine::Target::from_json(params).ok().and_then(|t| app.session.target_window(t).ok()),
         _ => None,
     };
-    let Some(owner) = window.and_then(|w| app.session.window(w)).map(|w| w.doc_uid) else { return false };
+    let owner = window.and_then(|w| app.session.window(w)).map(|w| w.doc_uid)?;
     // The editor asks in the window it is shown in.
-    let Some(home) = app.window_with_dialog("macroEditor") else { return false };
+    let home = app.window_with_dialog("macroEditor")?;
     let only = app.session.windows().iter().filter(|w| w.doc_uid == owner).count() <= 1;
     // The workbook closes, or the window that shows the editor does (taking the editor with it).
-    if owner != doc || !(only || (id == "file.close" && flag("document")) || window == Some(home)) {
-        return false;
+    let whole = only || (id == "file.close" && flag("document"));
+    if owner != doc || !(whole || window == Some(home)) {
+        return None;
     }
     if app.ui_window() != Some(home) {
         app.enter_window(home);
     }
-    if let Some(ed) = app.macros.editor.as_mut() {
-        ed.close_requested = true;
-        ed.then_close = Some(PendingClose { window: home, id: id.to_string(), params: params.clone() });
+    let ed = app.macros.editor.as_mut()?;
+    let waiting = json!({"closed": false, "dirty": true, "macroDraft": true});
+    // Quitting: the quit asks about every unsaved workbook itself once the editor has closed,
+    // and Cancel keeps them all.
+    if ed.quit {
+        return Some(Ok(waiting));
     }
-    true
+    match &ed.then_close {
+        Some(pending) if pending.whole == whole => {}
+        Some(pending) => {
+            let what = |whole: bool| if whole { "the workbook" } else { "its window" };
+            return Some(Err(format!(
+                "The macro step editor is asking whether to save its draft before {} closes. Answer that first, then close {}.",
+                what(pending.whole),
+                what(whole)
+            )));
+        }
+        None => {
+            ed.then_close = Some(PendingClose { window: home, whole, id: id.to_string(), params: params.clone() });
+            ed.close_requested = true;
+        }
+    }
+    Some(Ok(waiting))
 }
 
 /// The inputs a run from the editor uses: the first input's example.
