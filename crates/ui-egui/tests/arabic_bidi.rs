@@ -164,3 +164,34 @@ fn right_to_left_editor_keeps_a_trailing_space_inside_the_text() {
         }
     }
 }
+
+fn wrapped_row_edges(sheet_rtl: bool, h_align: &str, text: &str) -> Vec<(f32, f32)> {
+    let mut h = app(text, "RightToLeft", sheet_rtl);
+    h.state_mut().session.execute("home.formatCells", json!({"range": "B2", "style": {"align": {"h": h_align, "wrap": true}}})).unwrap();
+    h.run_steps(2);
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        text_shapes(&shape.shape, text, &mut painted);
+    }
+    let cell = painted.iter().max_by(|a, b| a.pos.y.total_cmp(&b.pos.y)).unwrap();
+    assert!(cell.galley.rows.len() > 1);
+    cell.galley.rows.iter().map(|row| (cell.pos.x + row.rect().left(), cell.pos.x + row.rect().right())).collect()
+}
+
+#[test]
+fn wrapped_right_to_left_rows_follow_the_physical_alignment_on_both_sheet_geometries() {
+    let text = "مرحبا بالعالم\nا";
+    for (sheet_rtl, h_align, on_right) in [
+        (false, "General", true),
+        (false, "Left", false),
+        (false, "Right", true),
+        (true, "General", true),
+        (true, "Left", false),
+        (true, "Right", true),
+    ] {
+        let edges = wrapped_row_edges(sheet_rtl, h_align, text);
+        let side: Vec<f32> = edges.iter().map(|&(left, right)| if on_right { right } else { left }).collect();
+        let first = side[0];
+        assert!(side.iter().all(|x| (x - first).abs() <= 1.0), "sheet_rtl {sheet_rtl}, {h_align}: rows at {edges:?}");
+    }
+}
