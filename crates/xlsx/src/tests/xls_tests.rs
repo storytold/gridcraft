@@ -535,6 +535,9 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     // one that stays. "Empty" (9) has no formula, so "UsesEmpty" = Empty(9) is skipped too.
     // "Mac" (11, a command macro) and the built-in Print_Area (13) have valid formulas but are
     // not imported as names either, so "UsesMac" and "UsesArea" are skipped as well.
+    // "OnChart" (15) and "OnDialog" (17) have valid formulas but are scoped to a chart sheet and
+    // a dialog sheet, which are not imported, so they and "UsesChart" and "UsesDialog" are
+    // skipped too (#2306).
     let ext = cat(&[&[0x3B], &1u16.to_le_bytes(), &u16s(&[0, 2, 0, 0])]);
     let local = cat(&[&[0x3A], &0u16.to_le_bytes(), &u16s(&[0, 0])]);
     let twice = cat(&[&[0x23], &1u32.to_le_bytes(), &ptg_int(2), &[0x05]]);
@@ -544,16 +547,20 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     let uses_empty = cat(&[&[0x23], &9u32.to_le_bytes()]);
     let uses_mac = cat(&[&[0x23], &11u32.to_le_bytes()]);
     let uses_area = cat(&[&[0x23], &13u32.to_le_bytes()]);
+    let uses_chart = cat(&[&[0x23], &15u32.to_le_bytes()]);
+    let uses_dialog = cat(&[&[0x23], &17u32.to_le_bytes()]);
     let lbl_with = |flags: u16, name: &str, rgce: &[u8], itab: u16| {
         rec(0x0018, &cat(&[&u16s(&[flags]), &[0, name.len() as u8], &u16s(&[rgce.len() as u16, 0, itab]), &[0; 4], &[0], name.as_bytes(), rgce]))
     };
     let lbl_in = |name: &str, rgce: &[u8], itab: u16| lbl_with(0, name, rgce, itab);
     let lbl = |name: &str, rgce: &[u8]| lbl_in(name, rgce, 0);
-    let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"]));
-    let globals = |pos: u32| {
+    let boundsheet = |pos: u32, kind: u8, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, kind, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |pos: [u32; 3]| {
         cat(&[
             &bof(0x0005),
-            &boundsheet(pos),
+            &boundsheet(pos[0], 0, "Sheet1"),
+            &boundsheet(pos[1], 2, "Chart1"),
+            &boundsheet(pos[2], 0, "Dialog1"),
             &rec(0x01AE, &u16s(&[1, 0x0401])),
             &rec(0x01AE, &cat(&[&u16s(&[1]), &xlstr("Source.xlsx"), &xlstr("Sheet1")])),
             &rec(0x0017, &cat(&[&u16s(&[2]), &u16s(&[0, 0, 0]), &u16s(&[1, 0, 0])])),
@@ -571,6 +578,10 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
             &lbl("UsesMac", &uses_mac),
             &lbl_with(0x0020, "\u{6}", &local, 1),
             &lbl("UsesArea", &uses_area),
+            &lbl_in("OnChart", &local, 2),
+            &lbl("UsesChart", &uses_chart),
+            &lbl_in("OnDialog", &local, 3),
+            &lbl("UsesDialog", &uses_dialog),
             &eof(),
         ])
     };
@@ -582,6 +593,10 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
     let uses_empty_x1 = cat(&[&[0x43], &10u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let uses_mac_x1 = cat(&[&[0x43], &12u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let uses_area_x1 = cat(&[&[0x43], &14u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let on_chart_x1 = cat(&[&[0x43], &15u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let uses_chart_x1 = cat(&[&[0x43], &16u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let on_dialog_x1 = cat(&[&[0x43], &17u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
+    let uses_dialog_x1 = cat(&[&[0x43], &18u32.to_le_bytes(), &ptg_int(1), &[0x05]]);
     let sheet = cat(&[
         &bof(0x0010),
         &rec(0x0203, &cat(&[&cell(0, 0, 0), &10.0f64.to_le_bytes()])),
@@ -593,16 +608,26 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
         &formula(10, 1, num(7.0), &uses_empty_x1),
         &formula(11, 1, num(30.0), &uses_mac_x1),
         &formula(12, 1, num(40.0), &uses_area_x1),
+        &formula(13, 1, num(50.0), &on_chart_x1),
+        &formula(14, 1, num(51.0), &uses_chart_x1),
+        &formula(15, 1, num(52.0), &on_dialog_x1),
+        &formula(16, 1, num(53.0), &uses_dialog_x1),
         &eof(),
     ]);
-    let pos = globals(0).len() as u32;
-    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(pos), &sheet]))).unwrap();
+    let chart = cat(&[&bof(0x0020), &eof()]);
+    let dialog = cat(&[&bof(0x0010), &rec(0x0081, &[0x10, 0x00]), &eof()]);
+    let first = globals([0; 3]).len() as u32;
+    let pos = [first, first + sheet.len() as u32, first + (sheet.len() + chart.len()) as u32];
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(pos), &sheet, &chart, &dialog]))).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1"]);
     let names: Vec<_> = wb.names.iter().map(|n| (n.name.as_str(), n.formula.as_str())).collect();
     assert_eq!(names, [("Local", "Sheet1!$A$1"), ("Dup", "Sheet1!$A$1"), ("UsesDup", "Dup*2")]);
     assert_eq!(ftext(&wb, "B6"), None);
     assert_eq!(v(&wb, 0, "B6"), Value::Number(60.0));
     assert_eq!(ftext(&wb, "B7").as_deref(), Some("Local*2"));
-    for (cell, saved) in [("B8", 240.0), ("B9", 120.0), ("B11", 7.0), ("B12", 30.0), ("B13", 40.0)] {
+    for (cell, saved) in
+        [("B8", 240.0), ("B9", 120.0), ("B11", 7.0), ("B12", 30.0), ("B13", 40.0), ("B14", 50.0), ("B15", 51.0), ("B16", 52.0), ("B17", 53.0)]
+    {
         assert_eq!(ftext(&wb, cell), None, "{cell} uses a name that uses a skipped name");
         assert_eq!(v(&wb, 0, cell), Value::Number(saved));
     }
