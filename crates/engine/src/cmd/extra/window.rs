@@ -27,15 +27,26 @@ pub(super) fn ruler(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// The Watch Window list isn't an edit (Excel doesn't undo it): undo and redo keep the current
 /// list when they swap in another snapshot of the workbook.
-pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>) {
+pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>) -> bool {
     let find = |wb: &Workbook| wb.names.iter().find(|n| n.name == WATCH_NAME).cloned();
     let keep = find(from);
     if keep == find(to) {
-        return;
+        return false;
     }
     let wb = std::sync::Arc::make_mut(to);
     wb.names.retain(|n| n.name != WATCH_NAME);
     wb.names.extend(keep);
+    true
+}
+
+/// Recalculates the formulas that read the watch list's name, after `keep_watch_list` changed it
+/// in a restored workbook: they depend on the name statically, so nothing else would.
+pub(crate) fn recalc_watch_list_readers(d: &mut crate::DocState) {
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let dirty = crate::cmd::name_readers(wb, &std::iter::once(WATCH_NAME.to_ascii_lowercase()).collect());
+    if !dirty.is_empty() {
+        d.calc.cells_changed(wb, &dirty);
+    }
 }
 
 pub(super) fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
@@ -168,9 +179,15 @@ pub(super) fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
     if changed {
         let v = json!(list.clone());
         let d = s.doc_mut()?;
-        // The watch list is view state: don't add an undo step.
+        // The watch list is view state: don't add an undo step. A formula that reads the name
+        // is recalculated all the same (the list is stored as a defined name).
+        let old = d.wb.names.clone();
         let wb = std::sync::Arc::make_mut(&mut d.wb);
         stash_set(wb, WATCH_NAME, &v);
+        let dirty = crate::cmd::name_readers(wb, &crate::cmd::changed_names(&old, &wb.names));
+        if !dirty.is_empty() {
+            d.calc.cells_changed(wb, &dirty);
+        }
     }
     let d = s.doc()?;
     let rows: Vec<Json> = list
