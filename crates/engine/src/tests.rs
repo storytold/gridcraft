@@ -4536,9 +4536,45 @@ fn view_focus_cell_color_sets_the_sheet_color() {
 fn view_focus_cell_color_rejects_a_bad_hex() {
     let mut s = s();
     s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
-    assert!(s.execute("view.focusCellColor", json!({"color": "#12345"})).is_err());
-    assert!(s.execute("view.focusCellColor", json!({})).is_err());
+    let bad = [
+        json!({"color": "#12345"}),
+        json!({"color": "#fff"}),
+        json!({"color": "#GGGGGG"}),
+        json!({"color": ""}),
+        json!({"color": "#+12345"}),
+        json!({"color": "#-12345"}),
+        json!({"color": 0x5FC8D8}),
+        json!({"color": null}),
+        json!({"color": true}),
+        json!({"color": ["#5FC8D8"]}),
+        json!({}),
+    ];
+    for params in bad {
+        assert!(s.execute("view.focusCellColor", params.clone()).is_err(), "{params} is not a color");
+    }
     assert_eq!(s.doc().unwrap().wb.active().unwrap().focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "the old color stays");
+}
+
+#[test]
+fn view_focus_cell_color_is_undoable() {
+    let mut s = s();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell_color.is_none());
+}
+
+#[test]
+fn a_copied_sheet_keeps_focus_cell() {
+    let mut s = s();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets.len(), 2);
+    for sheet in &wb.sheets {
+        assert!(sheet.focus_cell, "{} keeps the tint", sheet.name);
+        assert_eq!(sheet.focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "{} keeps the color", sheet.name);
+    }
 }
 
 #[test]
