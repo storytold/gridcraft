@@ -334,6 +334,12 @@ fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
     key(&mut h, Key::Y, Modifiers::COMMAND);
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // The Mac Redo shortcut works too, as it does on the sheet.
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("x1"));
+    key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    assert!(h.state().dialog.is_some(), "the dialog is still open");
 }
 
 #[test]
