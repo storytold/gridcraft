@@ -100,6 +100,18 @@ LaTeX subset:
   smallest main-thread stack we run on (1 MB on Windows). Absurd sizes (`\rule{1e308em}{1em}`)
   lay out with huge dimensions, so the wrapper caps them.
 - **wasm.** The crates build for `wasm32-unknown-unknown`.
+- **Regular expressions.** `ratex-parser` pulls in `fancy-regex` (with `bit-set` 0.8 and a
+  second `bit-vec`) for one module, its port of mhchem: 62 anchored patterns in
+  `src/mhchem/data/patterns_regex.json` and a dozen in `src/mhchem/patterns.rs` tokenise the
+  argument of `\ce{…}` and `\pu{…}`, and need lookahead, which the linear-time `regex` crate
+  does not have (`regex` and `regex-lite` serve the parser's other, fixed patterns). Every
+  pattern is compiled with `fancy-regex`'s default backtrack limit of 1,000,000 steps per
+  match; past it the match is reported as no match, so the macro fails instead of hanging.
+  The limit is not reachable from outside the crate. `gate.rs` times 38 sources of exactly
+  4,096 bytes shaped to stress the parser and those patterns (nesting at the depth cap, runs of
+  backslashes and braces, `(a+)+b`, wide and tall environments, chemistry such as `\ce{+-+-…}`,
+  `\ce{111…}` and `\pu{kJ//…}`): the slowest takes 0.8 s in a debug build, with a 10 s bound
+  per source.
 - **Syntax.** Fractions, roots, scripts, big operators and limits, `\left`/`\middle`/`\right`,
   matrices (`matrix`, `pmatrix`, `bmatrix`, `vmatrix`, `cases`, `aligned`, `array`), accents,
   braces, arrows, `\mathbb`/`\mathcal`/`\mathfrak`, `\text`, colours and mhchem all lay out.

@@ -404,3 +404,87 @@ fn the_guarded_entry_points_survive_hostile_input() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+#[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+fn pathological_source_at_the_cap_finishes_in_bounded_time() {
+    // Sources of exactly `MAX_SOURCE_BYTES` built to make a parser or a regular expression work
+    // hardest: groups and delimiters nested to the depth cap, long runs of backslashes, braces and
+    // scripts, a `(a+)+b` shape, wide and tall environments, and chemistry. `\ce` and `\pu` are
+    // the one place RaTeX runs regular expressions over the source (its mhchem port uses
+    // `fancy-regex`, which stops a match after a million backtracking steps); the rest of the
+    // parser is hand written. Each source lays out, checks and converts, or is refused, well
+    // inside the bound (the slowest, `\ce{+-+-...}`, takes 0.8 s in a debug build on an Apple M
+    // series machine; catastrophic backtracking would take minutes), so a regression in RaTeX or
+    // its dependencies shows up here without making a slow CI runner fail.
+    use gridcraft_math::{MAX_DEPTH, MAX_SOURCE_BYTES, check, layout, to_omml};
+    use std::time::{Duration, Instant};
+    let fill = |head: &str, body: &str, tail: &str| {
+        let room = MAX_SOURCE_BYTES.saturating_sub(head.len() + tail.len());
+        let mut s = String::from(head);
+        while s.len() + body.len() <= head.len() + room {
+            s.push_str(body);
+        }
+        while s.len() < MAX_SOURCE_BYTES - tail.len() {
+            s.push(' ');
+        }
+        s.push_str(tail);
+        assert_eq!(s.len(), MAX_SOURCE_BYTES);
+        s
+    };
+    let deep = |open: &str, close: &str| fill(&open.repeat(MAX_DEPTH), "x", &close.repeat(MAX_DEPTH));
+    let sources = [
+        deep("{", "}"),
+        deep("\\left(", "\\right)"),
+        deep("\\frac{", "}{1}"),
+        deep("\\sqrt{", "}"),
+        deep("x^{", "}"),
+        deep("\\hat{", "}"),
+        deep("\\text{", "}"),
+        deep("\\begin{matrix}", "\\end{matrix}"),
+        fill("", "\\\\", ""),
+        fill("", "\\{", ""),
+        fill("", "{}", ""),
+        fill("", "(a+)+", "b"),
+        fill("", "x^", "x"),
+        fill("", "'", ""),
+        fill("", "\\,", ""),
+        fill("", "&", ""),
+        fill("\\begin{matrix}", "&", "\\end{matrix}"),
+        fill("\\begin{aligned}", "\\\\", "\\end{aligned}"),
+        fill("\\begin{cases}", "x&\\\\", "\\end{cases}"),
+        fill("", "\\def\\a{x}", ""),
+        fill("", "\\color{red}", ""),
+        fill("", "\u{0301}", ""),
+        fill("", "\\mathbb{R}", ""),
+        fill("", "\\operatorname{f}", ""),
+        fill("\\ce{", "1", "}"),
+        fill("\\ce{", "0.", "}"),
+        fill("\\ce{", "(a", "}"),
+        fill("\\ce{", "->", "}"),
+        fill("\\ce{", "^_", "}"),
+        fill("\\ce{", "$", "}"),
+        fill("\\ce{", "H2O ", "}"),
+        fill("\\ce{", "\\ce{", "}"),
+        fill("\\ce{", "+-", "}"),
+        fill("\\ce{", "1/2", "}"),
+        fill("\\pu{", "+-", "}"),
+        fill("\\pu{", "1e", "}"),
+        fill("\\pu{", "10^", "}"),
+        fill("\\pu{", "kJ//", "}"),
+    ];
+    let bound = Duration::from_secs(10);
+    let mut slow = Vec::new();
+    for s in &sources {
+        let start = Instant::now();
+        let r = catch_unwind(AssertUnwindSafe(|| (layout(s).is_ok(), check(s).is_ok(), to_omml(s, 11.0).is_ok())));
+        let took = start.elapsed();
+        let head: String = s.chars().take(24).collect();
+        match r {
+            Ok(_) if took <= bound => {}
+            Ok(_) => slow.push(format!("{head:?}: {took:?}")),
+            Err(_) => slow.push(format!("{head:?}: panicked")),
+        }
+    }
+    assert!(slow.is_empty(), "over {bound:?}: {slow:#?}");
+}
