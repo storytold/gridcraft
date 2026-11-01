@@ -526,19 +526,25 @@ fn a_part_over_the_size_limit_says_how_to_get_the_data_in() {
     let mut wb = Workbook::new();
     wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::text("big"));
     let package = save_bytes(&wb, "big.xlsx").unwrap();
-    // The size reported in storytold/gridcraft#1242.
-    let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/worksheets/sheet1.xml", 540_278_731)).unwrap_err().to_string();
+    // 515 MB is over the old kept-part cap and under the streamed cap, so a worksheet opens.
+    // That is the workbook in storytold/gridcraft#175 (about 612 MB inflated).
+    let (opened, _) = open_bytes("big.xlsx", &declaring(package.clone(), "xl/worksheets/sheet1.xml", 540_278_731)).unwrap();
+    assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 0)), gridcraft_core::Value::text("big"));
+    open_bytes("big.xlsx", &declaring(package.clone(), "xl/sharedStrings.xml", 540_278_731)).unwrap();
+    // Past the streamed cap the message names the part, the cap, and a way in. A size just over
+    // the cap is never reported as equal to the cap.
+    let over = u32::try_from(gridcraft_xlsx::MAX_STREAM_PART + 1).unwrap();
+    let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/worksheets/sheet1.xml", over)).unwrap_err().to_string();
     assert!(msg.starts_with("We can't open 'big.xlsx': "), "{msg}");
-    assert!(msg.contains("xl/worksheets/sheet1.xml") && msg.contains("515 MB") && msg.contains("512 MB"), "{msg}");
+    assert!(msg.contains("xl/worksheets/sheet1.xml") && msg.contains("2048 MB"), "{msg}");
     assert!(msg.contains("several sheets") && msg.contains("CSV"), "{msg}");
     assert!(!msg.contains("bytes"), "{msg}");
-    // Splitting sheets doesn't shrink the shared strings, which every sheet uses: only CSV helps.
-    let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/sharedStrings.xml", 540_278_731)).unwrap_err().to_string();
-    assert!(msg.contains("xl/sharedStrings.xml") && msg.contains("515 MB") && msg.contains("CSV"), "{msg}");
+    let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/sharedStrings.xml", over)).unwrap_err().to_string();
+    assert!(msg.contains("xl/sharedStrings.xml") && msg.contains("2048 MB") && msg.contains("CSV"), "{msg}");
     assert!(!msg.contains("several sheets"), "{msg}");
-    // Just over the limit never reads as a size equal to it.
-    let msg = open_bytes("big.xlsx", &declaring(package, "xl/worksheets/sheet1.xml", 512 * 1024 * 1024 + 1)).unwrap_err().to_string();
-    assert!(msg.contains("more than 512 MB"), "{msg}");
+    // A part that is kept, not streamed, still stops at 512 MB.
+    let msg = open_bytes("big.xlsx", &declaring(package, "xl/styles.xml", 512 * 1024 * 1024 + 1)).unwrap_err().to_string();
+    assert!(msg.contains("xl/styles.xml") && msg.contains("512 MB"), "{msg}");
     // A package that fails for another reason keeps its own error, oversized part or not.
     let mut broken = declaring(save_bytes(&wb, "big.xlsx").unwrap(), "xl/worksheets/sheet1.xml", 540_278_731);
     let at = central_entry(&broken, "xl/workbook.xml");

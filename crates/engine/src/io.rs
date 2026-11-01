@@ -202,7 +202,11 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
 /// per part, so smaller sheets fit; the shared strings are one part for every sheet, so only a
 /// CSV, which has no parts, helps there.
 fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
-    let limit = gridcraft_xlsx::MAX_PART >> 20;
+    // Worksheets and shared strings are read from the inflate stream, so their cap is the
+    // streamed one. Every other part is kept in memory and stops at the smaller cap.
+    let streamed = part.contains("worksheets/") || part.to_ascii_lowercase().contains("sharedstrings");
+    let cap = if streamed { gridcraft_xlsx::MAX_STREAM_PART } else { gridcraft_xlsx::MAX_PART };
+    let limit = cap >> 20;
     let mb = size >> 20;
     let size = if mb > limit { format!("{mb} MB") } else { format!("more than {limit} MB") };
     let remedy = if part.contains("worksheets/") {

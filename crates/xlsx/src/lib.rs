@@ -50,7 +50,7 @@ use gridcraft_model::Workbook;
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
-pub use package::MAX_PART;
+pub use package::{MAX_PART, MAX_STREAM_PART};
 pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
