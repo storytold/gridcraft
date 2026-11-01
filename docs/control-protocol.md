@@ -23,7 +23,8 @@ The control port is reachable by every program on the machine, and by a web page
   `{"id":0,"ok":true,"result":{"authenticated":true}}`. Any other first line (a wrong or missing
   token, another method, text that isn't JSON such as an HTTP request, no line within 10 s, or
   one longer than 4 KiB) gets `{"ok":false,"error":"authentication required"}` and the
-  connection is closed. After that, a line that isn't JSON also closes the connection.
+  connection is closed. At most 16 connections may be waiting to send their token at once; past that a new
+  connection is closed before anything is read. After that, a line that isn't JSON also closes the connection.
 - `gridcraft-cli send`/`mcp --connect` and `gridcraft_mcp::Remote` do this themselves: they use
   `GRIDCRAFT_CONTROL_TOKEN` if set, else the token file of that port (so they work for the same
   user on the same machine without setup). Your own client reads the file or the variable.
