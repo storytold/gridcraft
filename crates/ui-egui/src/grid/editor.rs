@@ -125,7 +125,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         app.grid.list_picker = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
+    let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv, c);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
