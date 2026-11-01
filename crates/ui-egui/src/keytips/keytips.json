@@ -267,11 +267,10 @@
   },
   {
    "seq": "HBI",
-   "kind": "command",
+   "kind": "control",
    "target": "home.borderLineColor",
-   "pending": true,
    "excel": "Line Color",
-   "note": "pending: Line Color submenu"
+   "note": "opens the border-line color palette"
   },
   {
    "seq": "HBJ",

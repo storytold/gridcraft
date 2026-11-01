@@ -73,6 +73,16 @@ fn diagram_menu_applies_left_right_inside_and_outside_then_undoes() {
     }
 }
 
+#[test]
+fn borders_button_reuses_the_last_selected_color() {
+    let mut h = harness();
+    h.state_mut().grid.last_border = "bottom".to_string();
+    h.state_mut().grid.last_border_color = "#FF0000".to_string();
+    h.get_by_label("Borders").click();
+    h.run_steps(6);
+    assert_eq!(borders(&h, "A1").bottom.color, Color::Rgb(0xFF0000));
+}
+
 fn colored_borders() -> Borders {
     let line = |color| BorderLine { style: BorderStyle::Thin, color: Color::Rgb(color) };
     Borders {

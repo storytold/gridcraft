@@ -41,6 +41,7 @@ impl WindowUi {
             ribbon_tab: ribbon_tab.to_string(),
             grid: grid::GridState {
                 last_border: like.last_border.clone(),
+                last_border_color: like.last_border_color.clone(),
                 last_fill: like.last_fill.clone(),
                 last_font_color: like.last_font_color.clone(),
                 ..Default::default()

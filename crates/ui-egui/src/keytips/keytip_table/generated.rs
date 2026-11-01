@@ -45,7 +45,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HBE", Entry::Finish(Action::Pending("home.eraseBorder"))), // pending; Excel: Erase Border; pending: Excel arms an eraser pen; GridCraft has no border pen mode yet
     ("HBG", Entry::Finish(Action::Command("home.drawBorder"))),  // Excel: Draw Border Grid; containment(Draw Border)
     ("HBH", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"thickBottom\"}"))), // Excel: Thick Bottom Border; Borders menu item
-    ("HBI", Entry::Finish(Action::Pending("home.borderLineColor"))), // pending; Excel: Line Color; pending: Line Color submenu
+    ("HBI", Entry::Finish(Action::Pending("home.borderLineColor"))), // Excel: Line Color; pending: Line Color submenu
     ("HBJ", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"inside\"}"))), // Excel: (none); Borders menu item GridCraft adds (Excel's menu has no Inside Borders); J is free under HB
     ("HBL", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"left\"}"))),   // Excel: Left Border; Borders menu item
     ("HBM", Entry::Finish(Action::DialogWith("formatCells", "{\"tab\":\"Border\"}"))),      // Excel: More Borders; Format Cells on its Border tab

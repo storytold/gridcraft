@@ -206,6 +206,7 @@ pub struct GridState {
     pub hover_cell: Option<CellRef>,
     pub last_autosave: f64,
     pub last_border: String,
+    pub last_border_color: String,
     pub last_fill: String,
     pub last_font_color: String,
     pub trace: Option<Trace>,
