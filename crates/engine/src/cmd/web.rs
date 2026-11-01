@@ -436,13 +436,48 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             )));
         }
     }
+    // Ordinary cell formulas the user typed inside the table (not calculated-column
+    // metadata, which is restored by name below) are theirs like the kept columns are:
+    // snapshot them before the clear and write them back after, so a refresh keeps them.
+    let kept_cols: std::collections::HashSet<u32> = kept.iter().map(|(i, _)| old.start.col + i).collect();
+    // The totals row's own row (when the table has one, it is the last of the old range) is
+    // rewritten by the totals restore below, not by this snapshot: restoring its old
+    // SUBTOTAL formulas at their old row would overwrite the page's resized data.
+    let totals_old_row = d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname))).filter(|t| t.totals_row).is_some_and(|_| true).then(|| old.end.row);
+    let user_formulas: Vec<(CellRef, std::sync::Arc<gridcraft_model::Formula>)> = {
+        let d = s.doc()?;
+        let Some(sh) = d.wb.sheet(sheet) else { return Ok((table.rows.len(), w)) };
+        sh.cells
+            .iter_range(old)
+            .filter(|(c, _)| !kept_cols.contains(&c.col) && totals_old_row.is_none_or(|r| c.row != r))
+            .filter_map(|(c, x)| x.formula.clone().map(|f| (c, f)))
+            .collect()
+    };
     // The rewrite is one undo step over the table's own place: a failure mid-way rolls the
     // old table and its data back instead of leaving the sheet empty.
     s.grouped("Refresh Web Table", |s| {
         // Clear only the old table's rectangle and rewrite the data; the table itself stays:
         // its style, totals row, calculated-column and XML-binding metadata, filters and flags
-        // are the user's settings, not the page's, and a refresh must not reset them.
-        s.execute("edit.clearContents", json!({"range": old.a1(), "sheet": sheet}))?;
+        // are the user's settings, not the page's, and a refresh must not reset them. The
+        // clear is the refresh's own, not `edit.clearContents`: that path unchecks checked
+        // checkboxes to Value::Bool(false) on its first pass, and a cell left that way
+        // outside a shrunk table would read as content and refuse the next grown refresh.
+        edit(s, |cx| {
+            let cleared: Vec<(CellRef, gridcraft_model::Cell)> = {
+                let sh = cx.wb.sheet(sheet).ok_or_else(|| EngineError::Other("the sheet is gone.".into()))?;
+                sh.cells.iter_range(old).map(|(c, x)| (c, x.clone())).collect()
+            };
+            for (c, _) in &cleared {
+                cx.changed.push((sheet, *c));
+            }
+            let sh = cx.sheet_mut(sheet)?;
+            for (c, x) in cleared {
+                // The cell keeps its style; only the value and formula go.
+                sh.set_cell(c, gridcraft_model::Cell { formula: None, value: gridcraft_core::Value::Empty, style: x.style, ..Default::default() });
+            }
+            cx.structural = true;
+            Ok(())
+        })?;
         // Write at the table's own origin, not A1: a moved table refreshes where it is.
         s.execute("range.setValues", json!({"range": old.start.a1(), "sheet": sheet, "values": rows}))?;
         edit(s, |cx| {
@@ -482,6 +517,16 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 let style = sh.style_id(c);
                 sh.set_cell(c, gridcraft_model::Cell { value: gridcraft_core::Value::text(col.name.as_str()), style, ..Default::default() });
             }
+            // A shrunken page leaves header cells outside the new range: clear them too, or
+            // sync_headers regenerates a name ("Column3") in the dropped column, and the
+            // next grown refresh reads that stale name as foreign content and refuses.
+            for col in (new_range.end.col + 1)..=old.end.col {
+                let at = CellRef::new(old.start.row, col);
+                if sh.cell(at).is_some() {
+                    let style = sh.style_id(at);
+                    sh.set_cell(at, gridcraft_model::Cell { value: gridcraft_core::Value::Empty, style, ..Default::default() });
+                }
+            }
             cx.structural = true;
             Ok(())
         })?;
@@ -508,8 +553,24 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 Ok(())
             })?;
         }
+        // The user's ordinary formulas come back where the page did not overwrite them: only
+        // inside the new range (a formula in a row or column the page dropped is gone with
+        // the data it belonged to), never over a kept calculated column's refilled cell.
+        if !user_formulas.is_empty() {
+            edit(s, |cx| {
+                let sh = cx.sheet_mut(sheet)?;
+                for (c, f) in &user_formulas {
+                    if new_range.contains(*c) && !kept_cols.contains(&c.col) {
+                        let style = sh.style_id(*c);
+                        sh.set_cell(*c, gridcraft_model::Cell { formula: Some(f.clone()), value: gridcraft_core::Value::Empty, style, ..Default::default() });
+                    }
+                }
+                cx.structural = true;
+                Ok(())
+            })?;
+        }
         // The totals row sits below the resized range: restore its SUBTOTAL formulas and
-        // labels, which clearContents took with the rest of the old rectangle.
+        // labels, which the clear took with the rest of the old rectangle.
         let restore_totals = {
             let d = s.doc()?;
             d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname))).filter(|t| t.totals_row).is_some()
@@ -1101,6 +1162,60 @@ mod tests {
         let c2 = sh.cell(gridcraft_core::CellRef::parse("C2").unwrap()).expect("the calculated column's cell");
         assert!(c2.formula.is_some(), "the formula is refilled");
         assert_eq!(c2.value, gridcraft_core::Value::from(25.0));
+    }
+
+    #[test]
+    /// An ordinary formula the user typed inside the table survives a refresh: the clear
+    /// takes the cell's value, the rewrite writes the page's data, and the formula is
+    /// written back over the page's own value. The checkbox two-pass clear is not the
+    /// refresh's clear: a checked box inside the old range, left as `Bool(false)` after the
+    /// table shrinks away from it, would read as content and refuse the next grown refresh.
+    fn a_refresh_keeps_the_user_s_ordinary_formulas() {
+        let mut s = session_with_source();
+        // A three-column import, so the user's formula and checkbox sit inside it.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th><th>Vol</th></tr><tr><td>A</td><td>12.5</td><td>3</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The user's own formula inside the imported data (reads the page's price column).
+        s.execute("cell.set", json!({"cell": "A2", "input": "=B2*10"})).unwrap();
+        // A checked checkbox inside the table, in a column the next page drops.
+        s.execute("cell.set", json!({"cell": "C2", "input": "TRUE", "style": "checkbox"})).unwrap();
+        // The page shrinks to two columns: C2 leaves the table, and the refresh's clear
+        // must leave it truly empty, not the checkbox pass's Bool(false).
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r0 = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r0["refreshed"], 1, "the shrunk refresh succeeds");
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t0 = &sh.tables[0];
+        assert_eq!(t0.range.width(), 2, "the stored range followed the shrunk page");
+        // The user's formula survived the refresh, over the page's new value.
+        let a2 = sh.cell(CellRef::parse("A2").unwrap()).expect("A2 exists");
+        assert!(a2.formula.is_some(), "the user's formula is kept through the refresh");
+        assert_eq!(a1(&s, "A2"), "10", "it recalculates against the new page value (B2=1)");
+        // A later refresh that grows back over the checkbox cell must not be refused:
+        // the refresh's clear left Empty, not Bool(false).
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th><th>Vol</th></tr><tr><td>A</td><td>1</td><td>7</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1, "the grown refresh is not refused by stale checkbox state");
+        assert!(r["errors"].as_array().unwrap().is_empty());
     }
 
     #[test]

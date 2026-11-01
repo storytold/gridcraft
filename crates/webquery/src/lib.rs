@@ -64,7 +64,7 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     // the private one). Redirects are not followed (max_redirects(0) below), so this is the
     // only place a connection can be made from.
     let (host, port) = host_and_port(&req.url)?;
-    let validated: Vec<std::net::SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
+    let validated: Vec<std::net::SocketAddr> = resolve_bounded(host.as_str(), port)
         .map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?
         .filter(|a| {
             let ip = canonical(a.ip());
@@ -286,6 +286,27 @@ fn is_private_or_shared(ip: &std::net::IpAddr) -> bool {
             let seg = v6.segments();
             (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80 || v6.is_loopback()
         }
+    }
+}
+
+/// A hostname resolved under the fetch's own deadline: `to_socket_addrs` blocks for as long
+/// as the system resolver holds it (no timeout of its own), and an unresponsive resolver would
+/// leave the CLI command or the background worker waiting far past the timeout the request
+/// promises. The lookup runs on a helper thread and is awaited with the deadline; a lookup
+/// that outlives it is abandoned (the helper thread ends by itself once the system call
+/// returns, whenever that is). The result is the same iterator `to_socket_addrs` gives.
+fn resolve_bounded(host: &str, port: u16) -> std::io::Result<std::vec::IntoIter<std::net::SocketAddr>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let _ = tx.send(std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)));
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS)) {
+        Ok(addrs) => addrs,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "The address could not be resolved in time.")),
+        // The helper thread can only end by sending; a closed channel means it panicked,
+        // which the standard lookup would have surfaced as an error anyway.
+        Err(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "The address lookup failed.")),
     }
 }
 
