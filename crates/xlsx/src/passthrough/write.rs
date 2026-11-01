@@ -276,6 +276,39 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
     formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
 }
 
+/// The end of the element starting at `s` (`<connection ...`): the whole block, whether it
+/// is self-closing (`<connection id="1"/>`) or holds children (`<connection ...><webPr .../>/// </connection>`). A depth count walks the tags: an inner `/>` closes a child, not the
+/// connection, and a later block's `</connection>` never ends an earlier self-closing one.
+fn block_end(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 1usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let Some(gt) = s[i..].find('>').map(|g| i + g) else { break };
+        let tag = &s[i..=gt];
+        if tag.ends_with("/>") {
+            // Self-closing: opens nothing, so it closes the element it is only when the
+            // depth it sits at is the block's own (the first tag of a self-closing block).
+            if depth == 1 {
+                return Some(gt + 1);
+            }
+        } else if tag.starts_with("</") {
+            depth -= 1;
+            if depth == 0 {
+                return Some(gt + 1);
+            }
+        } else {
+            depth += 1;
+        }
+        i = gt + 1;
+    }
+    None
+}
+
 /// The kept `xl/connections.xml` with the model's current From Web connections merged in:
 /// every foreign `<connection>` (no GridCraft extension) is copied verbatim, and the
 /// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
@@ -283,27 +316,42 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
 fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     let raw = std::str::from_utf8(data).ok()?;
     // Foreign connections are kept as the exact bytes the file held: each <connection> block
-    // (self-closing or not) is scanned out of the raw XML, and the ones without GridCraft's
-    // extension uri are copied verbatim.
+    // (self-closing or a whole tree) is scanned out of the raw XML with a depth count \—
+    // a child's `/>` is not the connection's end, and a later block's `</connection>` is not
+    // an earlier self-closing one's \— and the ones without GridCraft's extension uri
+    // are copied verbatim.
     let mut foreign = String::new();
     let mut rest = raw;
+    let mut foreign_count = 0u32;
     while let Some(start) = rest.find("<connection ") {
         let after = &rest[start..];
-        let end = after.find("</connection>").map(|e| e + "</connection>".len()).or_else(|| after.find("/>").map(|e| e + 2))?;
+        let end = block_end(after)?;
         let block = &after[..end];
         if !block.contains(crate::write::GC_URI) {
             foreign.push_str(block);
+            foreign_count += 1;
         }
         rest = &after[end..];
     }
+    // The rebuilt root keeps the original's namespace and attribute declarations: a
+    // foreign connection block may rely on one (Power Query's `xel:`, say) declared on the
+    // root, and copying the block under a root without it would not be XML it parses from.
+    // GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew), and the
+    // parser gives every attribute exactly as the file held it.
+    let x = crate::xml::parse(data).ok()?;
+    let mut root = String::new();
+    for (k, v) in &x.attrs {
+        if k == "xmlns" || k == "xmlns:gc" {
+            continue;
+        }
+        let _ = write!(root, " {k}=\"{}\"", crate::xml::esc_attr(v));
+    }
     let mut w = String::from(crate::write::XML_DECL);
-    w.push_str("<connections xmlns=\"");
-    w.push_str(crate::write::NS_MAIN);
-    w.push_str("\" xmlns:gc=\"");
-    w.push_str(crate::write::GC_NS);
-    w.push_str("\">");
+    let _ = write!(w, "<connections{root} xmlns=\"{}\" xmlns:gc=\"{}\">",
+        crate::write::NS_MAIN,
+        crate::write::GC_NS);
     w.push_str(&foreign);
-    let mut id = foreign.matches("<connection ").count() as u32 + 1;
+    let mut id = foreign_count + 1;
     for q in &wb.web_queries {
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
         let tid = q.table_id.unwrap_or(0);

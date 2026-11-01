@@ -143,3 +143,35 @@ fn foreign_connections_preserved() -> gridcraft_model::preserved::Preserved {
         sheets: vec![],
     }
 }
+
+#[test]
+/// The kept-part merge scans connection blocks by depth: a foreign self-closing connection
+/// before one of ours is kept verbatim (a flat `/>` search would span it into the next
+/// block and drop it), and the merged part parses with the foreign connection intact.
+fn a_foreign_self_closing_connection_is_kept_by_the_depth_scan() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Flags" type="4"/><connection id="2" name="Old" type="5" refreshedVersion="6"><webPr url="https://gone.example/x"/><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery table="t" occurrence="0" sheet="S" tableId="0" lastSynced="0"/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: true });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (back, r) = read_xlsx(&bytes).unwrap_or_else(|e| panic!("reopen err: {e}"));
+
+    // The foreign self-closing connection stays (not claimed by the model), ours reads back.
+    assert!(back.web_queries.iter().any(|q| q.name == "prices"), "our merged connection reads back");
+    assert_eq!(back.web_queries.len(), 1, "the foreign one is not claimed: {:?}", back.web_queries.iter().map(|q| q.name.clone()).collect::<Vec<_>>());
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("name=\"Flags\" type=\"4\""), "the foreign self-closing connection is kept verbatim");
+    assert!(!text.contains("gone.example"), "our old connection from the file is replaced");
+}
