@@ -37,11 +37,23 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Answers WEBSERVICE; without one it is `#VALUE!`.
+    web: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>,
+    /// [`Calc::recalc_all`] has run.
+    full_pass: bool,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            web: None,
+            full_pass: false,
+        }
     }
 }
 
@@ -121,6 +133,18 @@ impl Calc {
         now_serial()
     }
 
+    /// Installs (or with `None` removes) what answers WEBSERVICE. Cells already calculated keep
+    /// their values until they next recalculate.
+    pub fn set_web_fetcher(&mut self, fetcher: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>) {
+        self.web = fetcher;
+    }
+
+    /// Whether [`Calc::recalc_all`] has run: false for a `Calc` that only [`Calc::rebuild`] built
+    /// the graph for, whose workbook still holds the values its file saved.
+    pub fn has_calculated_all(&self) -> bool {
+        self.full_pass
+    }
+
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
@@ -186,6 +210,7 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.full_pass = true;
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -289,7 +314,23 @@ impl Calc {
         }
     }
 
+    /// Recalculates `cells`, whose formulas and graph entries are as they were, and the formulas
+    /// that depend on them. Unlike [`Calc::cells_changed`] it leaves out the dynamic formulas
+    /// (INDIRECT, OFFSET, volatile ones) that every edit recalculates, so nothing unrelated moves.
+    /// In manual calculation only the cells themselves are evaluated.
+    pub fn recalc_cells(&mut self, wb: &mut Workbook, cells: &[Key]) {
+        let own: Vec<Key> = cells.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
+        let dirty = if wb.calc.mode == CalcMode::Manual { own } else { self.closure(&own, false) };
+        self.run(wb, dirty, false);
+    }
+
     fn dirty_closure(&self, _wb: &Workbook, seeds: &[Key]) -> Vec<Key> {
+        self.closure(seeds, true)
+    }
+
+    /// `seeds` that are formulas, the formulas that read them, and so on; with `dynamic`, every
+    /// dynamic formula and what reads it too.
+    fn closure(&self, seeds: &[Key], dynamic: bool) -> Vec<Key> {
         let mut seen: HashSet<Key> = HashSet::default();
         let mut queue: VecDeque<Key> = VecDeque::new();
         for k in seeds {
@@ -304,9 +345,11 @@ impl Calc {
                 }
             }
         }
-        for k in &self.graph.dynamic {
-            if seen.insert(*k) {
-                queue.push_back(*k);
+        if dynamic {
+            for k in &self.graph.dynamic {
+                if seen.insert(*k) {
+                    queue.push_back(*k);
+                }
             }
         }
         let mut deps = Vec::new();
@@ -343,6 +386,7 @@ impl Calc {
             let tp = prof_now();
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
+                host.web = self.web.clone();
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);

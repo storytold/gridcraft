@@ -64,6 +64,8 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Answers WEBSERVICE; `None` leaves it `#VALUE!`.
+    pub(super) web: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>,
 }
 
 impl<'a> PassHost<'a> {
@@ -96,6 +98,7 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            web: None,
         }
     }
 }
@@ -543,6 +546,9 @@ impl Host for PassHost<'_> {
     }
     fn now_serial(&self) -> f64 {
         self.now
+    }
+    fn web_get(&mut self, url: &str) -> Option<String> {
+        self.web.as_ref()?.get(url)
     }
     fn random(&mut self) -> f64 {
         // xorshift64*

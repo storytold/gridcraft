@@ -77,9 +77,13 @@ pub(crate) mod special;
 pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
+pub(crate) mod web;
+pub(crate) mod xml;
+pub(crate) mod xpath;
 
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};
+pub use web::WebFetcher;
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
 /// `from_ref = true`.
@@ -120,6 +124,11 @@ pub trait Ctx {
     /// Calls that LAMBDA with `arg` (one group's values) and returns its single result; `None` when
     /// there is no lambda.
     fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
+        None
+    }
+    /// For WEBSERVICE: the response body for a validated `http`/`https` URL. `None` when the host
+    /// has no [`WebFetcher`] or the request fails.
+    fn web_get(&mut self, _url: &str) -> Option<String> {
         None
     }
 }

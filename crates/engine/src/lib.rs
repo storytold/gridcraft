@@ -287,6 +287,48 @@ fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     }
 }
 
+/// Whether `text` (upper case) uses `name` (upper case) as a whole word.
+fn mentions(text: &str, name: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+    text.match_indices(name).any(|(at, _)| {
+        let before = text.get(..at).and_then(|t| t.chars().next_back());
+        let after = text.get(at + name.len()..).and_then(|t| t.chars().next());
+        !word(before) && !word(after)
+    })
+}
+
+/// The formula cells of `wb` that reach WEBSERVICE: they call it, or use a defined name that does
+/// (through other names too).
+fn web_formula_cells(wb: &Workbook) -> Vec<calc::Key> {
+    let mut names: Vec<String> = vec![];
+    let reaches = |formula: &str, names: &[String]| {
+        let up = formula.to_ascii_uppercase();
+        up.contains("WEBSERVICE") || names.iter().any(|n| mentions(&up, n))
+    };
+    loop {
+        let known = names.len();
+        for n in &wb.names {
+            let name = n.name.to_ascii_uppercase();
+            if !names.contains(&name) && reaches(&n.formula, &names) {
+                names.push(name);
+            }
+        }
+        if names.len() == known {
+            break;
+        }
+    }
+    let mut cells = vec![];
+    for (si, s) in wb.sheets.iter().enumerate() {
+        let Some(used) = s.used_range() else { continue };
+        for (at, c) in s.cells.iter_range(used) {
+            if c.formula.as_ref().is_some_and(|f| reaches(&f.text, &names)) {
+                cells.push((si, at));
+            }
+        }
+    }
+    cells
+}
+
 impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
@@ -457,6 +499,8 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Answers WEBSERVICE in every workbook ([`Session::set_web_fetcher`]).
+    web_fetcher: Option<Arc<dyn calc::WebFetcher>>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
     /// Windows on the open workbooks ([`windows`]); every workbook has at least one.
@@ -531,6 +575,15 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+    /// Lets WEBSERVICE fetch through `fetcher` in every open and future workbook (`None`: it is
+    /// `#VALUE!`, which is the default). Without a host that installs one, no workbook can make a
+    /// network request. Formulas already calculated keep their values until they recalculate.
+    pub fn set_web_fetcher(&mut self, fetcher: Option<Arc<dyn calc::WebFetcher>>) {
+        for d in &mut self.docs {
+            d.calc.set_web_fetcher(fetcher.clone());
+        }
+        self.web_fetcher = fetcher;
+    }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }
@@ -576,8 +629,26 @@ impl Session {
         cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
         let uid = d.uid;
+        d.calc.set_web_fetcher(self.web_fetcher.clone());
+        // `DocState::new` calculated before the fetcher was here, so a WEBSERVICE formula answered
+        // `#VALUE!`. Calculate just the formulas that reach it, and what depends on them, so
+        // nothing else moves (an iterative loop elsewhere keeps its values). A document made by
+        // `DocState::from_saved` never calculated: it keeps the values its file holds until an
+        // edit reaches them, so it is left alone.
+        if self.web_fetcher.is_some() && d.calc.has_calculated_all() {
+            let cells = web_formula_cells(&d.wb);
+            if !cells.is_empty() {
+                let clean = !d.is_dirty();
+                let mut wb = (*d.wb).clone();
+                d.calc.recalc_cells(&mut wb, &cells);
+                d.wb = Arc::new(wb);
+                if clean {
+                    d.saved = d.wb.clone();
+                }
+            }
+        }
         self.docs.push(d);
         let w = self.push_window(uid);
         self.activate_window(w);

@@ -8,6 +8,7 @@ pub mod recalc;
 mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
+pub use gridcraft_functions::WebFetcher;
 pub use recalc::{Calc, Key, evaluate, now_serial};
 
 #[cfg(test)]
