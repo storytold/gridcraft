@@ -327,12 +327,13 @@ fn formula_fill_preview_uses_the_selected_formula_language() {
 }
 
 #[test]
-fn fill_preview_uses_the_new_sheets_protection_on_the_navigation_frame() {
-    for hidden in [true, false] {
+fn fill_preview_waits_for_the_new_sheets_geometry_and_respects_its_protection() {
+    for (hidden, zoom) in [(false, 200), (true, 200), (false, 100), (true, 100)] {
         let mut h = harness(|s| {
             s.execute("cell.set", json!({"cell": "A1", "input": "=C1*2.71"})).unwrap();
             s.execute("home.insertSheet", json!({"name": "Private"})).unwrap();
             s.execute("cell.set", json!({"cell": "A1", "input": "=C1*1.17"})).unwrap();
+            s.execute("view.zoom", json!({"percent": zoom})).unwrap();
             s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"hidden": hidden}}})).unwrap();
             s.execute("home.formatCells", json!({"range": "A2:A4", "style": {"protection": {"locked": false}}})).unwrap();
             s.execute("review.protectSheet", json!({})).unwrap();
@@ -351,7 +352,29 @@ fn fill_preview_uses_the_new_sheets_protection_on_the_navigation_frame() {
         assert_eq!(h.state().session.active().unwrap().wb.active_sheet(), 1, "the keyboard switches sheets during the drag");
         assert!(matches!(h.state().grid.drag, gridcraft_ui_egui::grid::Drag::Fill { target: Some(_), .. }));
         assert_eq!(value(&h, "A4"), Value::Empty, "the preview must not commit a fill");
-        assert_eq!(h.query_by_label("=C4*1.17").is_some(), !hidden, "the first navigation frame uses the predicted sheet's protection");
+        assert!(h.query_by_label("=C4*1.17").is_none(), "zoom={zoom}: the navigation frame must not use the old sheet's geometry");
+        assert!(h.query_by_label("=C4*2.71").is_none(), "the old sheet's preview must also disappear");
+        if let Ok(prefix) = std::env::var("GRIDCRAFT_FILL_NAV_SNAPSHOT") {
+            h.render().unwrap().save(format!("{prefix}-{zoom}-{hidden}-navigation.png")).unwrap();
+        }
+        let end = center(&h, "A4");
+        h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+        h.input_mut().events.push(Event::Key {
+            key: egui::Key::PageDown,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.input_mut().events.push(Event::PointerMoved(end));
+        h.run_steps(3);
+        assert_eq!(h.query_by_label("=C4*1.17").is_some(), !hidden, "zoom={zoom}: preview resumes using the new sheet's geometry and protection");
+        assert_eq!(value(&h, "A4"), Value::Empty);
+        if let Ok(prefix) = std::env::var("GRIDCRAFT_FILL_NAV_SNAPSHOT") {
+            h.render().unwrap().save(format!("{prefix}-{zoom}-{hidden}-resumed.png")).unwrap();
+        }
+        release(&mut h, end, PointerButton::Primary);
+        assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().input_text(CellRef::parse("A4").unwrap()), "=C4*1.17");
     }
 }
 
