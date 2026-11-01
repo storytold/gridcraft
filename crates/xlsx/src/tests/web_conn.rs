@@ -75,3 +75,71 @@ fn no_connections_writes_no_part() {
     let pkg2 = package::Package::open(&bytes2).expect("opens");
     assert!(!pkg2.has("xl/connections.xml"), "no connections part without connections");
 }
+
+
+#[test]
+/// A workbook saved with connections, reopened and changed (a refresh setting flipped, a
+/// connection removed, a foreign connection in the file) saves the current state: the merge
+/// into the kept part applies GridCraft's connections while the foreign one is kept verbatim.
+fn connections_changes_after_reopen_survive_the_save() {
+    // A file with a foreign connection and one of ours.
+    let mut wb = wb_with_connections();
+    wb.preserved = None;
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (mut reopened, _report) = read_xlsx(&bytes).expect("reopens");
+    assert!(reopened.preserved.is_some(), "the save gave the reopened workbook a kept part");
+    // The user flips refresh-on-open on the second connection and drops the first.
+    let q = reopened.web_queries.iter_mut().find(|q| q.name == "weather").expect("the weather connection");
+    q.refresh_on_open = true;
+    reopened.web_queries.retain(|q| q.name != "prices");
+    let bytes2 = write_xlsx(&reopened).expect("saves again");
+    let (final_wb, _r) = read_xlsx(&bytes2).expect("reopens again");
+    assert_eq!(final_wb.web_queries.len(), 1, "the kept connection survived: {:?}", final_wb.web_queries.iter().map(|q| q.name.clone()).collect::<Vec<_>>());
+    let q = &final_wb.web_queries[0];
+    assert_eq!(q.name, "weather");
+    assert!(q.refresh_on_open, "the flipped setting survived the reopened save");
+    assert_eq!(q.table, "Weather Table");
+    assert_eq!(q.url, "https://example.org/wx");
+}
+
+#[test]
+/// A foreign connection in a file with none of ours stays untouched: the model writes no
+/// connections part, and passthrough keeps the file's own exactly as it was.
+fn a_foreign_connections_part_is_kept_verbatim() {
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Aux")));
+    // The file's own connections part with a database connection.
+    let preserved = foreign_connections_preserved();
+    wb.preserved = Some(std::sync::Arc::new(preserved));
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (back, _r) = read_xlsx(&bytes).expect("reopens");
+    assert!(back.web_queries.is_empty(), "a foreign connection is not claimed by the model");
+    // And the foreign part's bytes are still in the package.
+    let pkg = package::Package::open(&bytes).expect("opens");
+    assert!(pkg.has("xl/connections.xml"), "the foreign part is kept");
+}
+
+/// A `Preserved` whose only part is a foreign connections.xml, as an open would keep it.
+fn foreign_connections_preserved() -> gridcraft_model::preserved::Preserved {
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Query" type="5" refreshedVersion="6"><dbPr connection="Provider=Example" command="SELECT 1"/></connection></connections>"#;
+    let part = gridcraft_model::preserved::PreservedPart {
+        name: "xl/connections.xml".into(),
+        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(),
+        data: xml.to_vec().into(),
+        rels: vec![],
+    };
+    gridcraft_model::preserved::Preserved {
+        package_rels: vec![],
+        rels: vec![gridcraft_model::preserved::PreservedRel {
+            id: "rId9".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(),
+            target: "connections.xml".into(),
+            external: false,
+        }],
+        parts: vec![part],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }
+}

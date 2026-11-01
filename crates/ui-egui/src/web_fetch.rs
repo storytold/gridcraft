@@ -90,13 +90,15 @@ impl SheetApp {
         }
     }
 
-    /// Discards a finished fetch without running its command: the worker is joined so its
-    /// result is freed, and the command (a canceled import, say) never runs.
+    /// Discards a fetch without running its command, whether or not the worker has finished:
+    /// the handle is dropped, never joined. Joining an unfinished worker on the UI thread
+    /// would block the whole interface until the page download ends (a Refresh All runs its
+    /// URLs one after another); a dropped handle detaches the thread instead (std reclaims
+    /// it on exit), and the worker's result is already going nowhere — the channel's
+    /// receiver went with the fetch.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn discard_fetch(&mut self) {
-        if let Some(fetch) = self.fetch.take() {
-            let _ = fetch.handle.and_then(|h| h.join().ok());
-        }
+        drop(self.fetch.take());
     }
 
     /// Applies a finished fetch: the downloaded pages go to `command` as `prefetchedByUrl` and

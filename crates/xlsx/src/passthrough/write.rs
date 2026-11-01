@@ -276,6 +276,55 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
     formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
 }
 
+/// The kept `xl/connections.xml` with the model's current From Web connections merged in:
+/// every foreign `<connection>` (no GridCraft extension) is copied verbatim, and the
+/// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
+/// when the part does not parse: it is kept exactly as the file held it.
+fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
+    let raw = std::str::from_utf8(data).ok()?;
+    // Foreign connections are kept as the exact bytes the file held: each <connection> block
+    // (self-closing or not) is scanned out of the raw XML, and the ones without GridCraft's
+    // extension uri are copied verbatim.
+    let mut foreign = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find("<connection ") {
+        let after = &rest[start..];
+        let end = after.find("</connection>").map(|e| e + "</connection>".len()).or_else(|| after.find("/>").map(|e| e + 2))?;
+        let block = &after[..end];
+        if !block.contains(crate::write::GC_URI) {
+            foreign.push_str(block);
+        }
+        rest = &after[end..];
+    }
+    let mut w = String::from(crate::write::XML_DECL);
+    w.push_str("<connections xmlns=\"");
+    w.push_str(crate::write::NS_MAIN);
+    w.push_str("\" xmlns:gc=\"");
+    w.push_str(crate::write::GC_NS);
+    w.push_str("\">");
+    w.push_str(&foreign);
+    let mut id = foreign.matches("<connection ").count() as u32 + 1;
+    for q in &wb.web_queries {
+        let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
+        let tid = q.table_id.unwrap_or(0);
+        let synced = q.last_synced.unwrap_or(0);
+        let _ = write!(w,
+            "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+            id,
+            crate::xml::esc_attr(&q.name),
+            crate::xml::esc_attr(&q.url),
+            crate::write::GC_URI,
+            crate::xml::esc_attr(&q.table),
+            q.occurrence,
+            crate::xml::esc_attr(&q.sheet),
+            tid,
+            synced);
+        id += 1;
+    }
+    w.push_str("</connections>");
+    Some(w)
+}
+
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
 /// (see [`chart_sheet_usable`]) are left out with the parts only they reach.
 pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> WorkbookKept {
@@ -291,8 +340,20 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             gone.remove(&n);
         }
     }
-    let parts: Vec<PreservedPart> = p.parts.iter().filter(|q| !gone.contains(&normalize(&q.name))).cloned().collect();
+    let mut parts: Vec<PreservedPart> = p.parts.iter().filter(|q| !gone.contains(&normalize(&q.name))).cloned().collect();
     let rels: Vec<PreservedRel> = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).cloned().collect();
+    // The kept connections part gets the model's current From Web connections merged in: the
+    // user may have changed a refresh setting, imported another table or removed a connection
+    // since the open, and a save must write the current state, not the file's. Foreign
+    // connections (a database query) are kept verbatim; GridCraft's (the ones with the
+    // extension element) are replaced wholesale by the model's.
+    if !wb.web_queries.is_empty()
+        && let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml")
+    {
+        if let Some(merged) = merge_connections(&q.data, wb) {
+            q.data = merged.into_bytes().into();
+        }
+    }
     let names = write_parts(out, &parts);
     let ids = attach(wb_rels, &rels, &names);
     for r in &p.package_rels {
