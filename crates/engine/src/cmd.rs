@@ -30,7 +30,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
-use crate::{DocState, EngineError, Result, Selection, Session};
+use crate::{DocState, EngineError, Result, Selection, Session, TextWidth};
 
 pub type Run = fn(&mut Session, &Json) -> Result<Json>;
 pub type Enabled = fn(&Session) -> std::result::Result<(), String>;
@@ -345,8 +345,9 @@ pub struct Ctx<'a> {
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+    let measure = s.text_width.clone().map(|m| WordWidths::new(m, s.text_pixels_per_point));
     let d = s.doc_mut()?;
-    commit(d, |cx| {
+    commit(d, measure, |cx| {
         let r = f(cx)?;
         crate::tables::sync_headers(cx);
         Ok(r)
@@ -357,7 +358,8 @@ fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
 
-pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+/// `measure` sizes the rows of wrapped text the edit touched in the front end's fonts.
+pub(crate) fn commit<R>(d: &mut DocState, measure: Option<WordWidths>, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
     // reads the wall clock without the (disallowed) `now`.
     let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
@@ -406,8 +408,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
+    let mut widths = measure;
     for (si, row) in fit_rows {
-        auto_row_height(&mut wb, si, row);
+        auto_row_height_with(&mut wb, si, row, widths.as_mut());
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
@@ -519,36 +522,124 @@ fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::C
     }
 }
 
-/// Lines a single text line needs when word-wrapped into `width` points. The grid wraps whole
-/// words (egui's LayoutJob), so dividing the total width by the column width undercounts: each
-/// drawn line ends early at the last word that fits. A word wider than the column breaks
-/// mid-word, the way egui does. (#1969)
-fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
-    let word_w = |w: &str| crate::cmd::format::approx_text_width(w, size, bold);
-    let space_w = word_w(" ");
+/// Lines a single text line needs when word-wrapped into `width` points, each piece as wide as
+/// `word_w` says. The grid wraps whole words (egui's LayoutJob), so dividing the total width by
+/// the column width undercounts: each drawn line ends early at the last word that fits. (#1969)
+///
+/// This follows egui's line breaking (its default `SimpleLineBreaker`): a line may end after a
+/// space, after a hyphen, or after other ASCII punctuation, but not after an en or em dash. The
+/// first character that runs past the width ends the line at its last break of the lowest of
+/// those kinds, even when one of a higher kind comes after it; on a line with none, right before
+/// that character. So a word wider than the column breaks between characters, and the space
+/// after a word alone on its line starts the next one. That character then stays on the new
+/// line, whether it fits or not. (CJK text, which egui may also break between characters, is
+/// counted as if broken between any.)
+///
+/// egui starts each character on a whole physical pixel, rounded down from where the text so
+/// far ends, and a line is as wide as its last character's start plus its width less its first
+/// character's start. With `pixels_per_point` the count does the same; without it (an estimate)
+/// widths are taken as they are.
+fn wrapped_line_count(line: &str, width: f32, pixels_per_point: Option<f32>, word_w: &mut dyn FnMut(&str) -> f32) -> f32 {
+    let snap = |x: f32| pixels_per_point.map_or(x, |p| (x * p).floor() / p);
     let mut lines = 1.0f32;
-    let mut used = 0.0f32;
-    for word in line.split_whitespace() {
-        let w = word_w(word);
-        if w > width {
-            // wider than the column: egui fills the current line, then breaks it across lines
-            if used > 0.0 {
-                lines += 1.0;
+    // Where the text so far ends, and where the current line starts (as is and as drawn).
+    let mut x = 0.0f32;
+    let mut row = 0.0f32;
+    let mut row_drawn = 0.0f32;
+    // The last break of each kind on the current line: where the next line would start.
+    let mut breaks: [Option<f32>; 3] = [None; 3];
+    for (at, end, kind) in wrap_pieces(line) {
+        let piece = line.get(at..end).unwrap_or_default();
+        let w = word_w(piece);
+        let last = piece.chars().next_back().map_or(0.0, |c| word_w(c.encode_utf8(&mut [0; 4])));
+        if snap(x + w - last) + last - row_drawn > width {
+            // Character by character, as egui checks each one.
+            let mut cx = x;
+            for ch in piece.chars() {
+                let cw = word_w(ch.encode_utf8(&mut [0; 4]));
+                if snap(cx) + cw - row_drawn > width {
+                    if let Some(next) = breaks.iter().flatten().next().copied() {
+                        lines += 1.0;
+                        row = next;
+                        // Breaks after the new line's start stay where they are.
+                        breaks.iter_mut().for_each(|b| *b = b.filter(|&b| b > next));
+                    } else if cx > row {
+                        lines += 1.0;
+                        row = cx;
+                    }
+                    row_drawn = snap(row);
+                }
+                cx += cw;
             }
-            let chunks = (w / width).ceil();
-            lines += chunks - 1.0;
-            used = w - (chunks - 1.0) * width;
-            continue;
         }
-        let gap = if used > 0.0 { space_w } else { 0.0 };
-        if used + gap + w > width {
-            lines += 1.0;
-            used = w;
-        } else {
-            used += gap + w;
+        x += w;
+        if let Some(b) = kind.and_then(|k| breaks.get_mut(k)) {
+            *b = Some(x);
         }
     }
     lines
+}
+
+/// `line` cut after each character a line may end after, as egui's `SimpleLineBreaker` cuts it:
+/// each piece with the kind of break after it, lowest first (a space, a hyphen, other ASCII
+/// punctuation), or none for the last piece. A no-break space is no break, nor is the end of
+/// the text. Byte ranges into `line`.
+fn wrap_pieces(line: &str) -> Vec<(usize, usize, Option<usize>)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        let end = at + ch.len_utf8();
+        if chars.peek().is_none() {
+            out.push((start, end, None));
+            break;
+        }
+        let kind = if ch.is_whitespace() && ch != '\u{a0}' {
+            Some(0)
+        } else if ch == '-' {
+            Some(1)
+        } else if ch.is_ascii_punctuation() {
+            Some(2)
+        } else {
+            None
+        };
+        if kind.is_some() {
+            out.push((start, end, kind));
+            start = end;
+        }
+    }
+    out
+}
+
+/// Distinct words a pass over the rows measures exactly; past this many, [`TextWidth`] is asked
+/// for its quick measure (never narrower), as AutoFit Column Width does.
+const EXACT_WORD_WIDTHS: usize = 2_000;
+
+/// The widths of the words in wrapped cells, measured by the front end's [`TextWidth`] in the
+/// font the grid draws with, and kept for one pass over the rows of a workbook (a fill repeats
+/// the same words). Keyed by style, so one is never shared between workbooks.
+pub(crate) struct WordWidths {
+    measure: TextWidth,
+    /// [`Session::text_pixels_per_point`](crate::Session::text_pixels_per_point), if usable.
+    pixels_per_point: Option<f32>,
+    known: std::collections::HashMap<(gridcraft_model::StyleId, String), f32>,
+}
+
+impl WordWidths {
+    pub(crate) fn new(measure: TextWidth, pixels_per_point: Option<f32>) -> Self {
+        WordWidths { measure, pixels_per_point: pixels_per_point.filter(|p| p.is_finite() && *p > 0.0), known: Default::default() }
+    }
+
+    fn width(&mut self, style: gridcraft_model::StyleId, font: &gridcraft_model::Font, word: &str) -> f32 {
+        if let Some(w) = self.known.get(&(style, word.to_owned())) {
+            return *w;
+        }
+        let w = (self.measure)(word, font, self.known.len() < EXACT_WORD_WIDTHS);
+        // A front end's answer is input like any other: never let it shrink or poison the row.
+        let w = if w.is_finite() && w >= 0.0 { w } else { crate::cmd::format::approx_text_width(word, font.size, font.bold) };
+        self.known.insert((style, word.to_owned()), w);
+        w
+    }
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.
@@ -557,6 +648,12 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
+    auto_row_height_with(wb, si, row, None);
+}
+
+/// [`auto_row_height`], with wrapped text measured by `widths` when a front end lends its fonts
+/// (the app); without them (CLI, MCP) word widths are estimated.
+pub(crate) fn auto_row_height_with(wb: &mut Workbook, si: usize, row: u32, mut widths: Option<&mut WordWidths>) {
     let Some(sh) = wb.sheet(si) else { return };
     if sh.rows.get(&row).is_some_and(|i| i.custom) {
         return;
@@ -603,9 +700,24 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
             // Only a wrapping cell is laid out over several lines: each explicit line break
             // starts one, and each line folds at the column width.
             if st.align.wrap {
-                let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
-                let w = sh.col_width(c).max(1.0) - 6.0;
-                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
+                let at = CellRef::new(row, c);
+                let text = crate::display::cell_text(wb, sh, at);
+                lines = match widths.as_deref_mut() {
+                    // In the drawing font, at the width the grid wraps at: 2.5 px padding a side,
+                    // the indent and a filter button. egui lets a line run half a point past it
+                    // (`LayoutJob::round_output_to_gui`).
+                    Some(ww) => {
+                        let w = (sh.col_width(c) - 5.0 - st.align.indent as f32 * 9.0 - sh.filter_button_space(at)).max(4.0) + 0.5;
+                        let px = ww.pixels_per_point;
+                        text.lines().map(|l| wrapped_line_count(l, w, px, &mut |word| ww.width(cell.style, &st.font, word))).sum::<f32>()
+                    }
+                    None => {
+                        let w = (sh.col_width(c).max(1.0) - 6.0).max(1.0);
+                        let mut estimate = |word: &str| crate::cmd::format::approx_text_width(word, size, st.font.bold);
+                        text.lines().map(|l| wrapped_line_count(l, w, None, &mut estimate)).sum::<f32>()
+                    }
+                }
+                .max(1.0);
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
@@ -619,6 +731,47 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     if *e == gridcraft_model::LineInfo::default() {
         shm.rows.remove(&row);
     }
+}
+
+/// Refits `wb`'s automatic rows of wrapped text with `measure`, for when the fonts it measures
+/// with changed (the front end bound the workbook's fonts). As when a file opens, rows only
+/// grow: a taller height already there is kept, and custom heights are left alone. The refitted
+/// workbook, or `None` when no row changed.
+pub(crate) fn refit_wrapped_rows(wb: &Workbook, measure: TextWidth, pixels_per_point: Option<f32>) -> Option<Workbook> {
+    let wrapped: Vec<(usize, Vec<u32>)> = wb
+        .sheets
+        .iter()
+        .enumerate()
+        .map(|(si, sh)| {
+            let mut rows: Vec<u32> = sh.cells.iter().filter(|(_, cell)| wb.styles.get(cell.style).align.wrap).map(|(c, _)| c.row).collect();
+            rows.sort_unstable();
+            rows.dedup();
+            (si, rows)
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect();
+    if wrapped.is_empty() {
+        return None;
+    }
+    let mut wb = wb.clone();
+    let mut widths = WordWidths::new(measure, pixels_per_point);
+    let mut changed = false;
+    for (si, rows) in wrapped {
+        for row in rows {
+            let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            auto_row_height_with(&mut wb, si, row, Some(&mut widths));
+            let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            if let Some(before) = before
+                && after.is_none_or(|a| before > a + 0.5)
+                && let Some(sh) = wb.sheet_mut(si)
+            {
+                sh.rows.entry(row).or_default().size = Some(before);
+                continue;
+            }
+            changed |= after != before;
+        }
+    }
+    changed.then_some(wb)
 }
 
 impl Ctx<'_> {

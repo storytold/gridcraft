@@ -40,8 +40,10 @@ impl SheetApp {
             .fold((0u64, 0u64), |(uid, rev), d| (uid.wrapping_mul(31).wrapping_add(d.uid), rev.wrapping_mul(31).wrapping_add(d.revision)))
     }
 
-    /// Installs the text-width closure once, on the first frame.
+    /// Installs the text-width closure once, on the first frame, and keeps the screen's scale it
+    /// measures at up to date.
     pub(super) fn ensure_text_width(&mut self, ctx: &egui::Context) {
+        self.session.text_pixels_per_point = Some(ctx.pixels_per_point());
         if self.session.text_width.is_some() {
             return;
         }
@@ -63,8 +65,10 @@ impl SheetApp {
         if !self.fonts_ready {
             self.start_font_setup(ctx);
         } else if self.fonts_rebind {
-            // A font-set change made last frame is active now.
+            // A font-set change made last frame is active now: rows of wrapped text were measured
+            // in the fallback face until then.
             self.fonts_rebind = false;
+            self.session.refit_wrapped_rows();
         } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
             self.rebind_workbook_fonts(ctx);
         }
@@ -75,6 +79,9 @@ impl SheetApp {
     fn start_font_setup(&mut self, ctx: &egui::Context) {
         if self.fonts_set {
             self.fonts_ready = true;
+            // The font set applied last frame is active now; a workbook opened before it was
+            // sized by estimate.
+            self.session.refit_wrapped_rows();
             return;
         }
         if self.prepared_fonts {
