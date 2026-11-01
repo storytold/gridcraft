@@ -145,6 +145,12 @@ impl Dialog {
         self.refs.collapsed = Some(key.to_string());
     }
 
+    /// Ends picking into the dialog's reference boxes and puts back the sheet and selection from
+    /// before picking began, as closing the dialog does.
+    pub(crate) fn end_pick(&mut self, app: &mut SheetApp) {
+        ref_edit::end_pick(app, self);
+    }
+
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
     pub fn picks_references(&self) -> bool {
         self.pick.is_some()

@@ -579,3 +579,19 @@ fn a_click_elsewhere_keeps_the_collapsed_box_picking() {
     assert_eq!(collapsed(&h), None, "Escape expands it");
     assert!(h.state().dialog.is_some());
 }
+
+#[test]
+fn another_dialog_opened_while_picking_puts_the_selection_back() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "C3", "D6");
+    assert_eq!(field(&h, "changing"), "$C$3:$D$6");
+    assert_eq!(selection(&h), (0, "C3:D6".into()));
+    // A ribbon command opens another dialog while the box picks: the dialog it replaces is gone,
+    // and the sheet and selection from before picking come back, as they do when it is cancelled.
+    h.state_mut().open_dialog("goTo", json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goTo"));
+    assert_eq!(selection(&h), (0, "B5".into()));
+}
