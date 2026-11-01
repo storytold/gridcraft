@@ -23,6 +23,15 @@ pub(super) fn key_from(name: &str) -> Option<egui::Key> {
     })
 }
 
+/// The pointer button a control call names: `"middle"` or `"right"`, left by default.
+pub(super) fn pointer_button(p: &Json) -> egui::PointerButton {
+    match p.get("button").and_then(Json::as_str) {
+        Some("middle") => egui::PointerButton::Middle,
+        Some("right") => egui::PointerButton::Secondary,
+        _ => egui::PointerButton::Primary,
+    }
+}
+
 pub(super) fn modifiers(p: &Json) -> egui::Modifiers {
     let b = |n: &str| p.get(n).and_then(Json::as_bool).unwrap_or(false);
     egui::Modifiers {
@@ -100,17 +109,24 @@ pub(super) fn push_click(app: &mut SheetApp, pos: egui::Pos2, button: egui::Poin
 }
 
 /// Checks the synthetic-event budget, then queues a move, a press, `steps` interpolated moves and a release.
-pub(super) fn push_drag(app: &mut SheetApp, a: egui::Pos2, b: egui::Pos2, steps: usize, m: egui::Modifiers) -> Result<(), String> {
+pub(super) fn push_drag(
+    app: &mut SheetApp,
+    a: egui::Pos2,
+    b: egui::Pos2,
+    steps: usize,
+    button: egui::PointerButton,
+    m: egui::Modifiers,
+) -> Result<(), String> {
     let steps = steps.max(1);
     let events = steps.saturating_add(3);
     synthetic_budget(app, events, events.saturating_mul(std::mem::size_of::<egui::Event>()))?;
     app.synthetic.push_back(vec![egui::Event::PointerMoved(a)]);
-    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m }]);
+    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: a, button, pressed: true, modifiers: m }]);
     for i in 1..=steps {
         let t = i as f32 / steps as f32;
         app.synthetic.push_back(vec![egui::Event::PointerMoved(a + (b - a) * t)]);
     }
-    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m }]);
+    app.synthetic.push_back(vec![egui::Event::PointerButton { pos: b, button, pressed: false, modifiers: m }]);
     Ok(())
 }
 
