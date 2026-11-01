@@ -1,6 +1,7 @@
 use super::printing;
 
 type PickSave = Box<dyn Fn(&str) -> Option<String>>;
+type PickSaveAsync = Box<dyn Fn(&str)>;
 type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
@@ -14,7 +15,14 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// macOS: start an Open sheet and return at once. `None` in [`Self::picked_open`] is cancel.
+    /// A blocking [`Self::pick_open`] runs `NSOpenPanel` inside winit and aborts the process.
+    pub pick_open_async: Option<Box<dyn Fn()>>,
+    pub picked_open: Option<std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>>,
     pub pick_save: Option<PickSave>,
+    /// macOS: start a Save sheet and return at once. `None` in [`Self::picked_save`] is cancel.
+    pub pick_save_async: Option<PickSaveAsync>,
+    pub picked_save: Option<std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot

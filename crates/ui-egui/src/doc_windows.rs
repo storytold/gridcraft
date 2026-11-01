@@ -12,6 +12,7 @@
 //!   workbook closes without asking; a workbook's last window asks Save / Don't Save / Cancel when
 //!   it has unsaved changes.
 //! - Quit ([`SheetApp::request_quit`]) asks about each unsaved workbook in its window; Cancel stops.
+//! - A save sheet holds quit, and holds the close of its workbook, until the sheet finishes.
 //! - When the root's window closes while others are open, another window moves into the root.
 //! - With no window left, the app quits, or (macOS) keeps running with its root hidden and the
 //!   menu bar showing until a workbook is created or opened.

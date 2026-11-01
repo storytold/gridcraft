@@ -16,25 +16,14 @@ impl SheetApp {
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
     /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    pub(super) fn export_pdf_with_picker(&mut self, mut params: Json) {
+    pub(super) fn export_pdf_with_picker(&mut self, params: Json) {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-        let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
-        // The picker may suggest a workbook extension; the export writes a PDF.
-        let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
-        match &mut params {
-            Json::Object(map) => {
-                map.insert("path".into(), Json::String(path));
-            }
-            other => *other = json!({"path": path}),
-        }
-        if let Err(e) = self.run("file.exportPdf", params) {
-            self.alert(e);
-        }
+        let Some(doc) = self.session.active().map(|d| d.uid) else { return };
+        let suggested = format!("{}.pdf", super::save_pick::file_stem(&title));
+        self.start_save(&suggested, super::save_pick::SaveFollow::ExportPdf { doc, params });
     }
 
     /// Builds the selected sheets' print-ready PDF and hands it to the desktop worker or the

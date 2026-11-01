@@ -411,6 +411,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
         "app.quit" => {
             // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
+            // A save sheet still open is cancelled so its path is not written as the process leaves.
+            app.cancel_pending_save();
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Json::Null)
