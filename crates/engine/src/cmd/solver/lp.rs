@@ -1,6 +1,6 @@
 use super::model::Goal;
 use super::problem::Evaluator;
-use super::{CellRef, EPS};
+use super::{CellRef, EPS, LP_WORK};
 
 // ---------------------------------------------------------------- evaluation
 
@@ -498,6 +498,26 @@ pub(super) fn linear_program(goal: Goal, cf: &[f64], f_const: f64, lin: &[(Vec<f
         }
     };
     (c, rows)
+}
+
+/// The linear program Simplex LP solves: the model linearised at `x0`, its objective
+/// coefficients, the costs and rows for the goal, and the work limit for its size.
+pub(super) struct SimplexProgram {
+    pub(super) cf: Vec<f64>,
+    pub(super) c: Vec<f64>,
+    pub(super) rows: Vec<LpRow>,
+    pub(super) work: u64,
+}
+
+/// Builds the [`SimplexProgram`] at `x0`. The solve and the Sensitivity report both build it
+/// here from the start values, so the report's solve repeats the solve's pivots and returns the
+/// same vertex: linearising at another point changes the coefficients in their last bits, and
+/// that can break a tie between pivots the other way.
+pub(super) fn simplex_program(ev: &mut Evaluator, goal: Goal, x0: &[f64]) -> std::result::Result<SimplexProgram, &'static str> {
+    let ((cf, f_const), lin) = linearize(ev, x0)?;
+    let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
+    let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
+    Ok(SimplexProgram { cf, c, rows, work: LP_WORK.max(size) })
 }
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the

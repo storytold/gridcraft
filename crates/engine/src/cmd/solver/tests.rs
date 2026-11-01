@@ -590,6 +590,60 @@ fn simplex_sensitivity_report_describes_the_vertex_the_solver_returns() {
 }
 
 #[test]
+fn simplex_sensitivity_report_repeats_the_solve_from_its_start_values() {
+    // max 0.1x + 0.1y with 0.1x + 0.1y <= 0.4, 0.7x + 0.7y <= 2.8, x <= 3, y <= 3: the optimum is
+    // not unique, and the difference coefficients of these formulas differ in their last bits
+    // with the point they are taken at. From these starts the solve returns (3, 1) or (1, 3);
+    // linearised at that solution instead, the report's solve broke the tie the other way and
+    // refused the solve's own values. Built from the same start values, the program is the
+    // same to the bit, so each solve's own report is written.
+    let model =
+        json!({"objective": "D1", "variables": "A1:A2", "constraints": ["C1 <= 0.4", "E1 <= 2.8", "A1 <= 3", "A2 <= 3"], "method": "simplex"});
+    let formulas = [("C1", "=A1*0.1+A2*0.1"), ("D1", "=A1*0.1+A2*0.1"), ("E1", "=A1*0.7+A2*0.7")];
+    let program = |s: &Session, x: &[f64]| {
+        let m = super::parse_model(s, &model).unwrap();
+        let prob = super::build_problem(&m);
+        let mut ev = super::Evaluator {
+            trial: super::Trial::new(s.doc().unwrap()),
+            sheet: m.sheet,
+            vars: m.vars.clone(),
+            objective: m.objective,
+            rows: prob.rows.clone(),
+            evals: 0,
+            budget: 100,
+            target: None,
+        };
+        let p = super::lp::simplex_program(&mut ev, m.goal, x).unwrap();
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+        let rows: Vec<(Vec<u64>, u64)> = p.rows.iter().map(|(a, _, b)| (bits(a), b.to_bits())).collect();
+        (bits(&p.cf), bits(&p.c), rows, p.work)
+    };
+    let mut vertices = Vec::new();
+    for (x, y) in [("-3", "-5"), ("-3", "2.42"), ("-3", "6.13"), ("-3", "9.84"), ("-3", "13.55"), ("0.37", "0.3"), ("2.55", "-1.2")] {
+        let mut s = s();
+        set(&mut s, &[("A1", x), ("A2", y)]);
+        set(&mut s, &formulas);
+        let start: Vec<f64> = [x, y].iter().map(|v| v.parse().unwrap()).collect();
+        let before = program(&s, &start);
+        let r = s.execute("data.solver", model.clone()).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        // The program the report builds after the solve (cells now at the solution) from the
+        // solve's `original`, as Solver Results passes it, equals the solve's.
+        let original: Vec<f64> = ["A1", "A2"].iter().map(|c| r["original"][c].as_f64().unwrap()).collect();
+        assert_eq!(original, start);
+        assert_eq!(program(&s, &original), before, "from ({x}, {y})");
+        let rep = s
+            .execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"], "original": r["original"]}))
+            .unwrap();
+        assert_eq!(rep["sheets"], json!(["Sensitivity Report 1"]), "from ({x}, {y}): {rep}");
+        let v = (r["values"]["A1"].as_f64().unwrap(), r["values"]["A2"].as_f64().unwrap());
+        vertices.push(if v.0 > v.1 { "(3, 1)" } else { "(1, 3)" });
+    }
+    // Both vertices occur, so the starts exercise the tie.
+    assert!(vertices.contains(&"(3, 1)") && vertices.contains(&"(1, 3)"), "{vertices:?}");
+}
+
+#[test]
 fn simplex_sensitivity_report_refuses_a_point_that_beats_the_optimum() {
     // min 1E+9·A1 with A1 ≥ 0: the optimum is 0. A1 = -1E-7 is outside the bound by less than
     // the precision, yet its objective is -100, far from the optimum.

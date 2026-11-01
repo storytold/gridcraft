@@ -4,11 +4,11 @@
 //! the LP linearised at the solution. GRG Nonlinear: the reduced gradients and the Lagrange
 //! multipliers of the binding constraints at the solution, from difference gradients.
 
-use super::lp::{FinalTableau, LpRow, Outcome, Row, Sense, linear_program, linearize, solve_lp_tableau};
+use super::lp::{FinalTableau, LpRow, Outcome, Row, Sense, SimplexProgram, simplex_program, solve_lp_tableau};
 use super::model::{Goal, Method, Model};
 use super::problem::{Evaluator, Point, Problem, as_num};
 use super::reports::{Lines, ReportInput, ReportKind, abs_ref, cell_name, table, title};
-use super::{CellRef, DocState, EPS, EngineError, LP_WORK, Result, Sheet, Trial, Value};
+use super::{CellRef, DocState, EPS, EngineError, Result, Sheet, Trial, Value};
 
 /// Excel prints an unlimited allowable change as 1E+30.
 const NO_LIMIT: f64 = 1e30;
@@ -148,7 +148,8 @@ pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) ->
         objective: m.objective,
         rows: inp.prob.rows.clone(),
         evals: 0,
-        budget: inp.budget.max(2 * n as u64 + 2),
+        // Room for the gradients (GRG) or two linearisations (Simplex LP) at the least.
+        budget: inp.budget.max(3 * n as u64 + 4),
         target: None,
     };
     let point = ev.eval(x).ok_or_else(out_of_evaluations)?;
@@ -187,15 +188,21 @@ pub(super) fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) ->
 /// Simplex LP: reduced costs, shadow prices and their ranges from the final tableau.
 fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     let (inp, m) = (at.inp, at.inp.model);
-    let ((cf, f_const), lin) = linearize(ev, &inp.solution).map_err(|e| {
+    // The program the solve built, from the same start values (data.solver's x0, which Solver
+    // Results passes back as `original`), so the solve below repeats its pivots. Start values
+    // the model can't be evaluated at (given only to the report) fall back to the solution.
+    let start: Vec<f64> = inp.original.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
+    let built = match simplex_program(ev, m.goal, &start) {
+        Err("nonlinear" | "error") if start != inp.solution => simplex_program(ev, m.goal, &inp.solution),
+        other => other,
+    };
+    let SimplexProgram { cf, c, rows, mut work } = built.map_err(|e| {
         if e == "budget" {
             out_of_evaluations()
         } else {
             EngineError::Other("The model isn't linear in the variable cells, so Simplex LP can't report its sensitivity.".into())
         }
     })?;
-    let (c, rows) = linear_program(m.goal, &cf, f_const, &lin, &ev.rows);
-    let mut work = LP_WORK;
     let (outcome, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
     let (Outcome::Solved(vertex, best, _), Some(tab)) = (outcome, tab) else {
         return Err(EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()));

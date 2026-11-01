@@ -42,7 +42,7 @@ mod reports;
 mod sensitivity;
 
 use evolutionary::{EvoEnd, evolutionary};
-use lp::{Outcome, branch_and_bound, linear_program, linearize, solve_lp};
+use lp::{Outcome, SimplexProgram, branch_and_bound, simplex_program, solve_lp};
 use model::{Goal, Method, Model, model_params, parse_model, save_model};
 pub use model::{saved_model, sensitivity_applies, sensitivity_status};
 use nlp::{nlp, project};
@@ -116,16 +116,13 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
         Outcome::Infeasible
     } else {
         match m.method {
-            Method::Simplex => match linearize(ev, x0) {
+            Method::Simplex => match simplex_program(ev, goal, x0) {
                 Err("nonlinear") | Err("error") => {
                     not_linear = true;
                     Outcome::Infeasible
                 }
                 Err(_) => Outcome::Limit,
-                Ok(((cf, f_const), lin)) => {
-                    let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
-                    let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
-                    let mut work = LP_WORK.max(size);
+                Ok(SimplexProgram { c, rows, mut work, .. }) => {
                     let mut relax = |l: &[f64], h: &[f64]| solve_lp(&c, &rows, l, h, &mut work);
                     if any_int { branch_and_bound(lo, hi, integer, MAX_NODES_LP, gap, &mut relax).0 } else { relax(lo, hi) }
                 }
