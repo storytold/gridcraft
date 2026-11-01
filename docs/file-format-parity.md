@@ -146,6 +146,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-01 | trivial | PDF export prints an equation that has no layout (a source the engine refuses, or one past the open-time budget) one source line per text run, as many as its frame holds and never more than 500, instead of one run with `?` for each newline |
+| 2026-11-01 | trivial | Office Math runs drop the characters XML cannot carry (C0 controls other than tab, newline and carriage return, U+FFFE and U+FFFF), as the rest of the drawing part does |
 | 2026-11-01 | trivial | Office Math whose LaTeX would pass the equation source cap (4,096 bytes) stops converting and reads the writer's fallback, so a wide or long equation in a hostile file costs bounded time and memory |
 | 2026-11-01 | minor | Equations: xlsx writes Office Math (`a14:m`) with a plain-text fallback and the LaTeX source in `descr`, and reads Office Math from other writers back into LaTeX for a common subset; PDF draws equations with the Symbol font |
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |

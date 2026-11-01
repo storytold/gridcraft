@@ -44,6 +44,14 @@ fn unsupported(what: &str) -> MathError {
     MathError::new(format!("{what} can't be saved as an Office equation."), None)
 }
 
+/// Whether XML 1.0 can carry `c`: the same set the xlsx crate's escapes keep, so the OMML is
+/// well formed wherever the drawing part embeds it.
+fn is_xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
+}
+
+/// `s` escaped for element text; characters XML cannot carry (C0 controls other than tab, newline
+/// and carriage return, and U+FFFE and U+FFFF) are dropped, as the xlsx crate's `esc` drops them.
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -52,8 +60,9 @@ fn esc(s: &str) -> String {
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
-            c if (c as u32) < 0x20 && c != '\t' && c != '\n' => {}
-            c => o.push(c),
+            '\r' => o.push_str("&#13;"),
+            c if is_xml_char(c) => o.push(c),
+            _ => {}
         }
     }
     o
@@ -511,6 +520,21 @@ mod tests {
         assert!(to_omml(&"x".repeat(5000), 11.0).is_err());
         assert!(om("x").starts_with("<m:oMath>"));
         assert!(to_omml("x", f32::NAN).unwrap().contains("sz=\"1100\""));
+    }
+
+    #[test]
+    fn characters_xml_cannot_carry_are_dropped_from_runs() {
+        // U+FFFE and U+FFFF are not XML characters, nor are C0 controls other than tab, newline
+        // and carriage return; the xlsx escapes drop them and this writer does the same, so the
+        // OMML it hands the drawing part is well formed. U+FDD0 is a Unicode noncharacter but an
+        // XML character, kept as the xlsx escapes keep it.
+        assert_eq!(esc("a\u{FFFE}b\u{FFFF}c\u{1}d\u{B}e\u{7F}f"), "abcde\u{7F}f");
+        assert_eq!(esc("a\tb\nc\rd\u{FDD0}e"), "a\tb\nc&#13;d\u{FDD0}e");
+        for (src, bad) in [("x\u{FFFE}y", '\u{FFFE}'), ("x\u{FFFF}y", '\u{FFFF}'), ("\\text{a\u{FFFF}b}", '\u{FFFF}')] {
+            if let Ok(o) = to_omml(src, 11.0) {
+                assert!(!o.contains(bad), "{src:?}: {o}");
+            }
+        }
     }
 
     #[test]
