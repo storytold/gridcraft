@@ -101,6 +101,48 @@ struct RefPick {
     applies_to: String,
 }
 
+fn new_formatting_rule_dialog(app: &mut SheetApp, params: &Json) -> Dialog {
+    let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
+    // New Rule starts with Cell Value between; Edit Rule passes the existing rule and its index.
+    let index = p("index").as_u64();
+    let mut rule = p("rule")
+        .as_object()
+        .cloned()
+        .unwrap_or_else(|| json!({"type": "cellIs", "operator": "between", "value": "", "value2": ""}).as_object().cloned().unwrap_or_default());
+    if !rule.contains_key("fill") {
+        let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+        let preset = rule.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
+        cf_apply_preset(&mut rule, &preset, &theme);
+    }
+    let title = if index.is_some() { "Edit Formatting Rule" } else { "New Formatting Rule" };
+    // The sheet name and Applies to range stay fixed if sheets move while the dialog is open.
+    let (sheet, range) = app
+        .session
+        .active()
+        .map(|doc| {
+            let sheet = match p("sheet") {
+                Json::Null => doc.wb.active(),
+                v => v
+                    .as_u64()
+                    .and_then(|i| doc.wb.sheet(i as usize))
+                    .or_else(|| v.as_str().and_then(|n| doc.wb.sheet_index(n)).and_then(|i| doc.wb.sheet(i))),
+            };
+            let range = match p("range") {
+                Json::Null if index.is_none() => json!(doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(",")),
+                r => r,
+            };
+            (sheet.map(|sh| sh.name.clone()).unwrap_or_default(), range)
+        })
+        .unwrap_or_default();
+    let sheet_param = if sheet.is_empty() { p("sheet") } else { json!(sheet) };
+    let mut dialog = Dialog::custom("newFormattingRule", title, json!({"rule": rule, "index": index, "range": range, "sheet": sheet_param}));
+    dialog.command = Some(if index.is_some() { "home.manageRules" } else { "home.conditionalFormat" });
+    let applies_to = range.as_str().unwrap_or_default().to_string();
+    dialog.pick =
+        Some(RefPick { key: "formula", nested: Some("rule"), sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+    dialog
+}
+
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
@@ -965,56 +1007,7 @@ impl Dialog {
                 dialog
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
-            "newFormattingRule" => {
-                // New Rule… starts from Format only cells that contain › Cell Value between;
-                // Manage Rules › Edit Rule… passes the rule's index and params.
-                let index = p("index").as_u64();
-                let mut rule = p("rule").as_object().cloned().unwrap_or_else(|| {
-                    json!({"type": "cellIs", "operator": "between", "value": "", "value2": ""}).as_object().cloned().unwrap_or_default()
-                });
-                if !rule.contains_key("fill") {
-                    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
-                    let preset = rule.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
-                    cf_apply_preset(&mut rule, &preset, &theme);
-                }
-                let title = if index.is_some() { "Edit Formatting Rule" } else { "New Formatting Rule" };
-                // The sheet (by name: inserting or moving sheets changes its index) and the cells
-                // the rule applies to are fixed as the dialog opens, so pointing at cells for the
-                // formula, on this sheet or another, doesn't move the rule.
-                let (sheet, range) = app
-                    .session
-                    .active()
-                    .map(|doc| {
-                        let sheet = match p("sheet") {
-                            Json::Null => doc.wb.active(),
-                            v => v
-                                .as_u64()
-                                .and_then(|i| doc.wb.sheet(i as usize))
-                                .or_else(|| v.as_str().and_then(|n| doc.wb.sheet_index(n)).and_then(|i| doc.wb.sheet(i))),
-                        };
-                        let range = match p("range") {
-                            Json::Null if index.is_none() => json!(doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(",")),
-                            r => r,
-                        };
-                        (sheet.map(|sh| sh.name.clone()).unwrap_or_default(), range)
-                    })
-                    .unwrap_or_default();
-                let sheet_param = if sheet.is_empty() { p("sheet") } else { json!(sheet) };
-                let mut d = Dialog::custom("newFormattingRule", title, json!({"rule": rule, "index": index, "range": range, "sheet": sheet_param}));
-                d.command = Some(if index.is_some() { "home.manageRules" } else { "home.conditionalFormat" });
-                let applies_to = range.as_str().unwrap_or_default().to_string();
-                d.pick = Some(RefPick {
-                    key: "formula",
-                    nested: Some("rule"),
-                    sheet,
-                    caret: 0,
-                    point: None,
-                    anchor: CellRef::new(0, 0),
-                    refocus: false,
-                    applies_to,
-                });
-                d
-            }
+            "newFormattingRule" => new_formatting_rule_dialog(app, &params),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {

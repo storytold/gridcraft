@@ -1,5 +1,5 @@
 use super::show::{ok_cancel, track_pick};
-use super::*;
+use super::{Color32, Dialog, Json, Map, Sense, SheetApp, Stroke, StrokeKind, json, vec2};
 
 /// The six rule types in New Formatting Rule, with the rule `type` each starts from.
 const CF_RULE_KINDS: [(&str, &str); 6] = [
@@ -106,7 +106,7 @@ fn cf_combo(ui: &mut egui::Ui, id: &str, rule: &mut Map<String, Json>, key: &str
     let current = cf_str(rule, key);
     let label = options.iter().find(|(v, _)| *v == current).or(options.first()).map(|(_, l)| lang.tr(l)).unwrap_or_default();
     let mut picked = None;
-    egui::ComboBox::from_id_salt(("cfRule", id)).width(width).selected_text(label).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt(("cfRule", id)).width(width).selected_text(label).show_ui(ui, |ui| {
         for (v, l) in options {
             if ui.selectable_label(*v == current, lang.tr(l)).clicked() {
                 picked = Some(*v);
