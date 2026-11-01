@@ -604,6 +604,49 @@ pub struct Shape {
     pub format: ShapeFormat,
 }
 
+/// The kinds of floating object a sheet holds. Commands name an object by kind and
+/// workbook-unique id (`{kind: "chart", id}`); [`ObjKind::name`] is that parameter's spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Slicer,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 4] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer];
+
+    /// The name used in command parameters.
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Slicer => "slicer",
+        }
+    }
+
+    /// The kind named `s` (any letter case).
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
+}
+
 /// Horizontal alignment of a shape's text (`a:pPr algn`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShapeTextAlign {

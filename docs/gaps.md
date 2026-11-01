@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (§13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (§4: chart resizing is no longer a gap; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -45,10 +45,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
 - **Missing:** axis scaling, label options, error bars, per-point formatting.
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn and written back.
   (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
-  can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read,
-  written, drawn) landed.
+  resize from eight handles (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines
+  (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn
+  and written back.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
@@ -185,6 +185,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |

@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -59,7 +59,8 @@ fn main() {
                 i += 1;
                 pane = args.get(i).cloned();
             }
-            "--chart" => {
+            // Selects a floating object of any kind by id (`--chart` is the older spelling).
+            "--object" | "--chart" => {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
             }
@@ -115,7 +116,7 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.selected_chart = chart;
+                app.select_object_id(chart);
                 if let Some(d) = &dialog {
                     let (name, p) =
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));

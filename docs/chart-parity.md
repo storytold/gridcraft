@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-29 · **Change:** minor (selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-31 · **Change:** minor (charts resize from eight handles; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -37,7 +37,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 | Element | Excel | GridCraft |
 |---|---|---|
-| Move and resize the chart object | yes | yes (corner handle, Format Chart Area Size fields) |
+| Move and resize the chart object | yes | yes (eight handles, each moving only its own edges; Format Chart Area Size fields) (#190) |
 | Selected chart source-data outline | visible on uncovered cells, beneath floating objects | painted above cells and below charts, shapes, pictures and slicers; retains pane clipping and right-to-left cell geometry (#2861) |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
 | Legend | position, overlay, formatting, per-entry delete | position only |
@@ -79,18 +79,18 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 ## Work (40–60 h)
 
-1. Chart resizing (#190): 1–2 h.
-2. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
-3. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
-4. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
-5. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
-6. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
-7. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
+1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
+2. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
+3. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
+4. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
+5. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
+6. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |

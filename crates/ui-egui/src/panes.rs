@@ -3,6 +3,8 @@
 use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
 
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
@@ -146,10 +148,11 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
     for it in items.iter().rev() {
         let kind = it["kind"].as_str().unwrap_or("").to_string();
         let id = it["id"].as_u64().unwrap_or(0) as u32;
+        let obj = ObjKind::parse(&kind).map(|k| ObjRef::new(k, id));
         ui.horizontal(|ui| {
-            let sel = app.selected_chart == Some(id);
+            let sel = obj.is_some() && app.selected_object == obj;
             if ui.selectable_label(sel, it["name"].as_str().unwrap_or("")).clicked() {
-                app.selected_chart = Some(id);
+                app.selected_object = obj;
             }
             if ui.small_button("▲").on_hover_text("Bring Forward").clicked() {
                 app.run_or_alert("arrange.bringForward", json!({"kind": kind, "id": id}));
@@ -166,7 +169,7 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Draws the chart format pane: title, type, legend, elements/axis titles, series colors, palettes/layouts and size.
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else {
+    let Some(id) = app.selected_chart() else {
         ui.label(egui::RichText::new("Select a chart to format it.").italics());
         return;
     };

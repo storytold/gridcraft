@@ -1,3 +1,5 @@
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use super::editor::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
@@ -10,9 +12,6 @@ use super::{
 };
 
 // ------------------------------------------------------------------ interaction
-
-/// How close (in points) a press must be to an object's bottom-right corner to resize it instead of moving it.
-pub(super) const OBJECT_RESIZE_RADIUS: f32 = 10.0;
 
 struct InteractionInput<'a> {
     ui: &'a mut egui::Ui,
@@ -107,7 +106,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         && let Some(p) = pos
         && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
-        app.selected_chart = Some(id);
+        app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
         match act {
             crate::chartview::SlicerAction::Toggle(value) => {
                 let _ = app.run("slicer.toggle", json!({"slicer": id, "value": value, "multi": mods.command || mods.ctrl}));
@@ -123,41 +122,39 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let primary_drag = resp.drag_started_by(egui::PointerButton::Primary);
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
-        let at = if primary_drag { pointer.press_origin().or(pos) } else { pos };
+        let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
+        // The selected object's handles reach a little outside it, so they win over hit-testing.
+        // Only they resize: a press anywhere on another object selects and moves it, as the
+        // hover cursor shows.
+        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
+        let handle = on_handle.map(|(.., h)| h);
         if let Some(p) = at
-            && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
+            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
         {
-            app.selected_chart = Some(id);
-            if kind == "shape"
-                && resp.double_clicked()
-                && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
-            {
-                app.begin_text_box_edit(id);
+            app.selected_object = Some(obj);
+            if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
                 return;
             }
-            if kind == "chart" && resp.double_clicked() {
-                app.grid.pane = Some("formatChart".into());
-            }
-            if primary_drag {
-                let a = object_anchor(sh, kind, id);
-                let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
-                if let Some(a) = a {
-                    app.grid.drag = Drag::Object { kind, id, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), resize };
+            if primary_drag && let Some(a) = sh.object_anchor(obj) {
+                app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle, stepped: false };
+                // The first recognised drag frame already holds movement away from the press.
+                if let Some(now) = pos {
+                    drag_object(app, geo, sh, now);
                 }
             }
             return;
         }
-        app.selected_chart = None;
+        app.selected_object = None;
     }
     // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
     // under it; a right press that wobbles into a drag counts too (#2067).
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
-        && let Some((kind, id, _)) = crate::chartview::hit(app, geo, sh, p)
+        && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
     {
-        app.selected_chart = Some(id);
-        app.grid.object_menu = Some((geo.mirror_pos(p), kind, id));
+        app.selected_object = Some(obj);
+        app.grid.object_menu = Some((geo.mirror_pos(p), obj.kind.name(), obj.id));
         return;
     }
 
@@ -241,7 +238,7 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
             if let Some(p) = pos
-                && let Some(("shape", id, _)) = crate::chartview::hit(app, geo, sh, p)
+                && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
                 let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
@@ -669,21 +666,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
             }
-            Drag::Object { kind, id, start, orig, resize } => {
-                let d = (p - start) / geo.z;
-                let (cell, dx, dy, w, h) = orig;
-                let params = if resize {
-                    json!({"kind": kind, "id": id, "width": (w + d.x).max(20.0), "height": (h + d.y).max(20.0)})
-                } else {
-                    // Re-anchor at the cell under the new top-left.
-                    let x0 = sh.col_left(cell.col) as f32 + dx + d.x;
-                    let y0 = sh.row_top(cell.row) as f32 + dy + d.y;
-                    let nc = CellRef::new(sh.row_at(y0.max(0.0) as f64), sh.col_at(x0.max(0.0) as f64));
-                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0.max(0.0) - sh.col_left(nc.col) as f32, "dy": y0.max(0.0) - sh.row_top(nc.row) as f32})
-                };
-                let _ = app.session.run("object.move", params);
-                coalesce_last_undo(app);
-            }
+            Drag::Object { .. } => drag_object(app, geo, sh, p),
             Drag::None => {}
         }
     }
@@ -974,29 +957,38 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
 }
 
-fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::model::Anchor> {
-    match kind {
-        "chart" => sh.charts.iter().find(|c| c.id == id).map(|c| c.anchor),
-        "image" => sh.images.iter().find(|c| c.id == id).map(|c| c.anchor),
-        "slicer" => sh.slicers.iter().find(|c| c.id == id).map(|c| c.anchor),
-        _ => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
-    }
-}
-
-pub(super) fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
-    let Some(id) = app.selected_chart else { return false };
-    let kind = if sh.charts.iter().any(|object| object.id == id) {
-        "chart"
-    } else if sh.images.iter().any(|object| object.id == id) {
-        "image"
-    } else if sh.shapes.iter().any(|object| object.id == id) {
-        "shape"
-    } else {
-        return false;
+/// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
+/// (logical coordinates). The whole drag coalesces into one undo step of its own.
+fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let Drag::Object { obj, start, orig, handle, stepped } = app.grid.drag.clone() else { return };
+    let d = (p - start) / geo.z;
+    let (cell, dx, dy, w, h) = orig;
+    let x0 = sh.col_left(cell.col) as f32 + dx;
+    let y0 = sh.row_top(cell.row) as f32 + dy;
+    let [x0, y0, x1, y1] = match handle {
+        Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
+        None => {
+            let (x0, y0) = ((x0 + d.x).max(0.0), (y0 + d.y).max(0.0));
+            [x0, y0, x0 + w, y0 + h]
+        }
     };
-    app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-    app.selected_chart = None;
-    true
+    // Re-anchor at the cell under the new top-left.
+    let nc = CellRef::new(sh.row_at(y0 as f64), sh.col_at(x0 as f64));
+    let params = json!({
+        "kind": obj.kind.name(), "id": obj.id, "at": nc.a1(),
+        "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32,
+        "width": x1 - x0, "height": y1 - y0,
+    });
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", params);
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Object { stepped, .. } = &mut app.grid.drag
+    {
+        // The first step of this drag stays apart from an earlier drag's step of the same name.
+        *stepped = true;
+    }
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's

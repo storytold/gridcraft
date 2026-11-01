@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -68,7 +68,7 @@ this logic, with one undo step.
 | A Table's header names and filter buttons in the column headings once its header row scrolls away | done (#1423): with the active cell in the Table, as in Excel; the button opens the column's filter menu, the rest of the heading still selects the column. Plain AutoFilter ranges keep their letters (Excel does the same) |
 | Copy as HTML table for other apps | done (#36, 10-10) |
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
-| Move and resize charts, pictures and shapes | charts can't be resized (#190) |
+| Move and resize charts, pictures and shapes | done (#190, #213): charts, pictures, shapes and slicers select with a frame of eight handles; each handle resizes only its own edges (they never cross), the body moves the object, and the pointer shows a resize or move cursor; Delete or Backspace deletes the selected object and Escape drops the selection; double-click edits a text box, opens Format Chart for a chart. Rotation handle, Shift for proportional resizing, Alt to snap to cells and multi-object selection missing |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
@@ -196,6 +196,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Floating objects: one selection for charts, pictures, shapes and slicers, eight resize handles with matching cursors (right-to-left sheets included), Escape drops the selection |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |

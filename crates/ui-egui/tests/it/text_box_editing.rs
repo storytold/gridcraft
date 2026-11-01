@@ -102,7 +102,7 @@ fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     let (mut h, id) = fixture();
     edit_box(&mut h, id);
     h.check_accessibility();
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id));
     let anchor = shape(&h, id).anchor;
     let start = shape_rect(&h, id).min + vec2(5.0, 10.0);
     drag(&mut h, start, start + vec2(60.0, 0.0));
