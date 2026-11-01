@@ -443,7 +443,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     // The totals row's own row (when the table has one, it is the last of the old range) is
     // rewritten by the totals restore below, not by this snapshot: restoring its old
     // SUBTOTAL formulas at their old row would overwrite the page's resized data.
-    let totals_old_row = d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname))).filter(|t| t.totals_row).is_some_and(|_| true).then(|| old.end.row);
+    let totals_old_row = d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname))).filter(|t| t.totals_row).map(|_| old.end.row);
     let user_formulas: Vec<(CellRef, std::sync::Arc<gridcraft_model::Formula>)> = {
         let d = s.doc()?;
         let Some(sh) = d.wb.sheet(sheet) else { return Ok((table.rows.len(), w)) };
@@ -473,7 +473,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             let sh = cx.sheet_mut(sheet)?;
             for (c, x) in cleared {
                 // The cell keeps its style; only the value and formula go.
-                sh.set_cell(c, gridcraft_model::Cell { formula: None, value: gridcraft_core::Value::Empty, style: x.style, ..Default::default() });
+                sh.set_cell(c, gridcraft_model::Cell { formula: None, value: gridcraft_core::Value::Empty, style: x.style });
             }
             cx.structural = true;
             Ok(())
@@ -559,10 +559,14 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         if !user_formulas.is_empty() {
             edit(s, |cx| {
                 let sh = cx.sheet_mut(sheet)?;
+                // The kept columns' refilled cells sit at their new positions (page width plus
+                // each kept index); a user formula restored over one of them would desync it
+                // from its TableColumn.formula metadata.
+                let kept_new: std::collections::HashSet<u32> = (0..kept.len() as u32).map(|i| new_range.start.col + w as u32 + i).collect();
                 for (c, f) in &user_formulas {
-                    if new_range.contains(*c) && !kept_cols.contains(&c.col) {
+                    if new_range.contains(*c) && !kept_new.contains(&c.col) {
                         let style = sh.style_id(*c);
-                        sh.set_cell(*c, gridcraft_model::Cell { formula: Some(f.clone()), value: gridcraft_core::Value::Empty, style, ..Default::default() });
+                        sh.set_cell(*c, gridcraft_model::Cell { formula: Some(f.clone()), value: gridcraft_core::Value::Empty, style });
                     }
                 }
                 cx.structural = true;
@@ -1216,6 +1220,59 @@ mod tests {
         let r = s.execute("data.webRefresh", json!({})).unwrap();
         assert_eq!(r["refreshed"], 1, "the grown refresh is not refused by stale checkbox state");
         assert!(r["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    /// A page that shrinks from four columns to two moves the kept calculated column onto a
+    /// column that held a user formula: the refilled calculated column wins, and the user
+    /// formula is not restored over it (that would desync the cell from its TableColumn
+    /// formula metadata).
+    fn a_shrunk_page_moves_the_kept_column_onto_a_user_formula_column() {
+        let mut s = session_with_source();
+        // A three-column import so the calculated column (added fourth) has room.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th><th>Vol</th></tr><tr><td>A</td><td>1</td><td>3</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // A user calculated column, fourth of four.
+        super::super::edit(&mut s, |cx| {
+            let sh = cx.sheet_mut(cx.wb.sheet_index("Web").ok_or_else(|| EngineError::Other("no Web sheet".into()))?)?;
+            let ti = sh.tables.iter().position(|t| t.name == "prices").expect("the table");
+            sh.tables[ti].columns.push(gridcraft_model::TableColumn { name: "Total3".into(), totals: TotalsFn::None, totals_label: None, formula: Some("B2*2".into()), unique_name: None, xml: None });
+            cx.structural = true;
+            Ok(())
+        })
+        .unwrap();
+        // A user formula in C2, which is where the kept column lands when the page shrinks
+        // to two columns (new position: start.col + w + 0 = C).
+        s.execute("cell.set", json!({"cell": "C2", "input": "=B2*999"})).unwrap();
+        // The page shrinks to two columns: the calculated column moves from D to C.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1, "the shrunk refresh succeeds (errors: {})", r["errors"]);
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = sh.tables.iter().find(|t| t.name == "prices").unwrap();
+        // The kept column is third of three, at its new position C.
+        assert_eq!(t.columns.len(), 3, "the page's two columns plus the kept one");
+        assert_eq!(t.columns[2].name, "Total3");
+        // Its cell holds the metadata's formula, not the user's C2 formula.
+        let c2 = sh.cell(CellRef::parse("C2").unwrap()).expect("C2 exists");
+        let f = c2.formula.as_ref().expect("the refilled formula");
+        let code = gridcraft_formula::print(&f.expr().expect("a parsed formula"));
+        assert!(code.contains("B2*2"), "the calculated column's formula is refilled (got {code})");
+        assert!(!code.contains("999"), "the user formula was not restored over it");
+        assert_eq!(a1(&s, "C2"), "2", "it recalculates against the new page value");
     }
 
     #[test]

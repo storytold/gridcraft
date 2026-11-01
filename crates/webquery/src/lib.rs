@@ -64,7 +64,11 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     // the private one). Redirects are not followed (max_redirects(0) below), so this is the
     // only place a connection can be made from.
     let (host, port) = host_and_port(&req.url)?;
-    let validated: Vec<std::net::SocketAddr> = resolve_bounded(host.as_str(), port)
+    // One deadline covers the resolution and the request: DNS alone could otherwise eat
+    // nearly the whole 30 s before the HTTP timeout even started, doubling the worst case.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS);
+    let resolved = resolve_bounded(host.as_str(), port, deadline);
+    let validated: Vec<std::net::SocketAddr> = resolved
         .map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?
         .filter(|a| {
             let ip = canonical(a.ip());
@@ -82,6 +86,9 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     if validated.is_empty() {
         return Err(format!("\u{2018}{host}\u{2019} is an address on this machine or its network, and can\u{2019}t be imported from."));
     }
+    // Whatever the deadline has left is all the request gets: the fetch as a whole answers
+    // within the one timeout it promises.
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
     let agent = ureq::Agent::with_parts(
         ureq::config::Config::builder()
             .max_redirects(0)
@@ -90,7 +97,7 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
             // the destination could be an address that never passed the check. The page import
             // always connects directly, or not at all.
             .proxy(None)
-            .timeout_global(Some(std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS)))
+            .timeout_global(Some(remaining))
             .build(),
         ureq::unversioned::transport::DefaultConnector::default(),
         FixedResolver(validated),
@@ -295,13 +302,15 @@ fn is_private_or_shared(ip: &std::net::IpAddr) -> bool {
 /// promises. The lookup runs on a helper thread and is awaited with the deadline; a lookup
 /// that outlives it is abandoned (the helper thread ends by itself once the system call
 /// returns, whenever that is). The result is the same iterator `to_socket_addrs` gives.
-fn resolve_bounded(host: &str, port: u16) -> std::io::Result<std::vec::IntoIter<std::net::SocketAddr>> {
+fn resolve_bounded(host: &str, port: u16, deadline: std::time::Instant) -> std::io::Result<std::vec::IntoIter<std::net::SocketAddr>> {
     let (tx, rx) = std::sync::mpsc::channel();
     let host = host.to_string();
-    std::thread::spawn(move || {
+    // Builder::spawn propagates a thread-creation failure instead of panicking: the
+    // WebFetch contract promises an error, never a panic.
+    std::thread::Builder::new().spawn(move || {
         let _ = tx.send(std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)));
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS)) {
+    })?;
+    match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
         Ok(addrs) => addrs,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "The address could not be resolved in time.")),
         // The helper thread can only end by sending; a closed channel means it panicked,
