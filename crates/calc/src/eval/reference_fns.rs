@@ -233,7 +233,13 @@ impl<'h> Evaluator<'h> {
         let vertical = name == "VLOOKUP";
         let end =
             if vertical { CellRef::new(area.range.end.row, area.range.start.col) } else { CellRef::new(area.range.start.row, area.range.end.col) };
-        let keys = self.area_value(&Area { sheet: area.sheet, range: RangeRef::new(area.range.start, end) });
+        let search_range = RangeRef::new(area.range.start, end);
+        let keys = match self.area_value(&Area { sheet: area.sheet, range: search_range }) {
+            // A cell error inside a larger table is an unmatched key, not a table error.
+            // Only wrap single-cell vectors: errors materializing larger ranges still propagate.
+            v @ Value::Error(_) if search_range.is_single() && !area.range.is_single() => Value::from(Array::scalar(v)),
+            v => v,
+        };
         let Some(search) = gridcraft_functions::lookup("MATCH") else { return err(CellError::Name) };
         let mut one = |key: Value, index: Value, mode: Value| {
             if let Value::Error(e) = key {
