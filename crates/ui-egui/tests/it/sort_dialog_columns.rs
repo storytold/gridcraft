@@ -41,7 +41,7 @@ fn add_level_picks_a_column_no_level_uses_yet() {
     h.run_steps(2);
     // Level 1 seeded B; clicking "+ Add Level" must not default level 2 to B too (#1906 review).
     h.run_steps(6);
-    h.get_by_label("+ Add Level").click();
+    h.get_by_label("Add Level").click();
     h.run_steps(6);
     let cols: Vec<String> = h.state().dialog.as_ref().unwrap().values["levels"]
         .as_array()
@@ -49,6 +49,68 @@ fn add_level_picks_a_column_no_level_uses_yet() {
         .unwrap_or_default();
     assert_eq!(cols.len(), 2, "two levels after Add Level");
     assert_ne!(cols[0], cols[1], "the second level defaults to a different column: {cols:?}");
+}
+
+#[test]
+fn add_level_does_not_add_a_column_outside_the_selected_range() {
+    let mut s = sales();
+    s.execute("selection.set", json!({"range": "A1:A4", "active": "A2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.get_by_label("Add Level").click();
+    h.run_steps(4);
+    let levels = h.state().dialog.as_ref().unwrap().values["levels"].as_array().unwrap();
+    assert_eq!(levels.len(), 1, "no additional level should use a column outside A");
+    assert_eq!(levels[0]["column"], "A");
+}
+
+#[test]
+fn sort_dialog_restores_all_selected_areas_and_the_active_cell() {
+    let mut s = sales();
+    s.execute("selection.set", json!({"range": "A1:A4,B1:B4", "active": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Escape,
+        physical_key: Some(Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    let selection = &h.state().session.active().unwrap().selection;
+    assert_eq!(selection.a1(), "A1:A4,B1:B4");
+    assert_eq!(selection.active.a1(), "B2");
+}
+
+#[test]
+fn sort_dialog_restores_initial_selection_after_header_toggle() {
+    let mut h = harness(sales());
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.get_by_label("My list has headers").click();
+    h.run_steps(2);
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(2);
+    let selection = &h.state().session.active().unwrap().selection;
+    assert_eq!(selection.a1(), "B2");
+    assert_eq!(selection.active.a1(), "B2");
+}
+
+#[test]
+fn sort_dialog_restores_initial_selection_after_confirming_with_header_toggle() {
+    let mut h = harness(sales());
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.get_by_label("My list has headers").click();
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let selection = &h.state().session.active().unwrap().selection;
+    assert_eq!(selection.a1(), "B2");
+    assert_eq!(selection.active.a1(), "B2");
 }
 
 #[test]
@@ -69,4 +131,19 @@ fn sorting_by_the_seeded_column_orders_the_rows() {
     let sh = d.wb.active().unwrap();
     let nums: Vec<i64> = (1..4).map(|r| sh.value(gridcraft_engine::core::CellRef::new(r, 1))).filter_map(|v| v.as_f64().map(|n| n as i64)).collect();
     assert_eq!(nums, vec![10, 20, 30], "sort ran on the seeded column B");
+}
+
+#[test]
+fn sheet_tabs_cannot_switch_while_sort_is_open() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    for id in ["sheet.activate", "sheet.next", "sheet.previous", "home.insertSheet", "home.deleteSheet"] {
+        assert!(h.state_mut().run(id, json!({"sheet": 1})).is_err(), "{id} is refused while Sort is open");
+    }
+    assert_eq!(h.state().session.active().unwrap().wb.active_sheet(), 0);
+    assert!(h.state().dialog.is_some());
 }

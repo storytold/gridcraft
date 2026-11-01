@@ -26,6 +26,14 @@ impl SheetApp {
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
+        if self.dialog.as_ref().is_some_and(|d| d.name == "sort")
+            && matches!(
+                id,
+                "sheet.activate" | "sheet.next" | "sheet.previous" | "sheet.move" | "sheet.hide" | "home.insertSheet" | "home.deleteSheet"
+            )
+        {
+            return Err("Close the Sort dialog before switching or changing worksheets.".into());
+        }
         if matches!(
             id,
             "sheet.activate"
@@ -347,7 +355,12 @@ impl SheetApp {
                     "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
                 ));
             }
-            other => self.dialog = dialogs::Dialog::open(self, other, params),
+            other => {
+                if let Some(mut current) = self.dialog.take() {
+                    current.restore_selection(&mut self.session);
+                }
+                self.dialog = dialogs::Dialog::open(self, other, params);
+            }
         }
     }
 
