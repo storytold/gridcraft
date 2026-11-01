@@ -57,89 +57,90 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
-            // Tabs row.
-            let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.add_space(8.0);
-                    if app.chrome.file_tab {
-                        file_menu(app, ui);
-                    }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+            crate::rtl::root(ui, |ui| {
+                // Tabs row.
+                let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(8.0);
+                        if app.chrome.file_tab {
+                            file_menu(app, ui);
                         }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                        let mut tabs: Vec<&str> = TABS.to_vec();
+                        let ctx_tabs = contextual_tabs(app);
+                        tabs.extend(ctx_tabs.iter());
+                        for tab in tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
-                    }
+                    });
                 });
-            });
-            if collapsed {
-                return;
-            }
-            // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
-            // within the window (with the margin it has on the left), or its right scroll arrow
-            // would be drawn off screen.
-            let left = ui.cursor().min.x;
-            let screen = ui.ctx().content_rect();
-            let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
-            ui.painter().rect_filled(card, 10.0, t.ribbon);
-            ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            let inner = card.shrink2(vec2(10.0, 6.0));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                // One scroll state per tab: a tab opened after scrolling another starts at its
-                // left edge, and a tab keeps its own offset while others are used.
-                let tab = app.ui.ribbon_tab.clone();
-                let mut area = egui::ScrollArea::horizontal()
-                    .id_salt(("ribbon_scroll", tab.as_str()))
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-                // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
-                // way to move it. An arrow click records the requested offset for the next frame.
-                // Expire it if this tab stops rendering, rather than replaying it much later.
-                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
-                    && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
-                {
-                    area = area.horizontal_scroll_offset(x);
+                if collapsed {
+                    return;
                 }
-                let scroll = area.show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
+                // within the window (with the margin it has on the left), or its right scroll arrow
+                // would be drawn off screen.
+                let left = ui.cursor().min.x;
+                let screen = ui.ctx().content_rect();
+                let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
+                let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+                ui.painter().rect_filled(card, 10.0, t.ribbon);
+                ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+                let inner = card.shrink2(vec2(10.0, 6.0));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                    // One scroll state per tab: a tab opened after scrolling another starts at its
+                    // left edge, and a tab keeps its own offset while others are used.
+                    let tab = app.ui.ribbon_tab.clone();
+                    let area = egui::ScrollArea::horizontal()
+                        .id_salt(("ribbon_scroll", tab.as_str()))
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                    let mut target = None;
+                    // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
+                    // way to move it. An arrow click records the requested offset for the next frame.
+                    // Expire it if this tab stops rendering, rather than replaying it much later.
+                    if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
+                        && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
+                    {
+                        target = Some(x);
+                    }
+                    let scroll = crate::rtl::scroll_row(ui, tab.as_str(), area, target, true, |ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -157,9 +158,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             _ => home(app, ui),
                         }
                     });
+                    scroll_arrows(ui, &t, tab.as_str(), scroll);
                 });
-                scroll_arrows(ui, &t, tab.as_str(), scroll);
-            });
+            })
         });
 }
 
@@ -247,8 +248,9 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
 /// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
 /// Excel's; the ribbon's tab and collapsed state are left as they were for when it closes.
 fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let t = Tokens::get(ui.ctx());
-    let label = egui::RichText::new(app.ui.language.tr("File")).font(theme::ui_font(13.5)).color(t.accent);
+    let label = egui::RichText::new(lang.tr("File")).font(theme::ui_font(13.5)).color(t.accent);
     let file = ui.add(egui::Button::new(label).frame(false).min_size(vec2(46.0, 30.0)));
     if file.clicked() {
         app.open_backstage(crate::backstage::Page::Home);
@@ -265,7 +267,7 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     let mode = app.ui.theme_mode();
     for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-        if ui.radio(mode == value, lang.tr(label)).clicked() {
+        if crate::rtl::radio(ui, mode == value, lang.tr(label)).clicked() {
             act(app, "view.theme", json!({"mode": value}));
             ui.close();
         }

@@ -1,6 +1,6 @@
 //! Original border diagrams, painted with the same strokes as worksheet cells.
 
-use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::{BorderStyle, Borders, Theme};
 
 use crate::grid::paint_border;
@@ -12,7 +12,8 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
     let response = ui.add(egui::Button::new("").frame(false).min_size(vec2(254.0, 26.0)));
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let t = Tokens::get(ui.ctx());
-    let rect = Rect::from_center_size(pos2(response.rect.left() + 16.0, response.rect.center().y), vec2(20.0, 16.0));
+    let rtl = crate::rtl::on(ui.ctx());
+    let rect = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, response.rect, 16.0), response.rect.center().y), vec2(20.0, 16.0));
     let edges = [
         [rect.left_top(), rect.right_top()],
         [rect.left_bottom(), rect.right_bottom()],
@@ -45,7 +46,13 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
             paint_border(ui.painter(), points, style, t.text);
         }
     }
-    ui.painter().text(pos2(response.rect.left() + 36.0, response.rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
+    ui.painter().text(
+        pos2(crate::rtl::lead_x(rtl, response.rect, 36.0), response.rect.center().y),
+        crate::rtl::lead_center(rtl),
+        crate::i18n::tr(ui, label),
+        theme::ui_font(12.5),
+        t.text,
+    );
     response
 }
 
@@ -53,7 +60,7 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 /// and explicit border colors faithful in both light and dark application themes.
 pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
     ui.add_space(8.0);
-    ui.label("Preview");
+    ui.label(crate::i18n::tr(ui, "Preview"));
     let (area, response) = ui.allocate_exact_size(vec2(248.0, 104.0), Sense::hover());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Border preview"));
     let t = Tokens::get(ui.ctx());

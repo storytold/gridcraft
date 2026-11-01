@@ -272,9 +272,9 @@ pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, 
             continue;
         }
         let lang = app.ui.language;
-        let response = ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
+        let response = ui.add(crate::rtl::item(ui, lang.tr(label), vec2(220.0, 22.0)));
         if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
-            keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
+            keytip(app, ui, sequence, pos2(crate::rtl::trail_x(crate::rtl::on(ui.ctx()), response.rect, 10.0), response.rect.center().y));
         }
         if response.clicked() {
             if let Some(d) = id.strip_prefix("dialog:") {

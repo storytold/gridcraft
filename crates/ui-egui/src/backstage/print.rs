@@ -21,7 +21,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
     ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(250.0);
             if let Some(discover) = &app.services.printers {
                 crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
@@ -49,7 +49,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 .response
                 .accessible_name(lang.tr("Print What"));
             ui.add_space(8.0);
-            if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
+            if crate::rtl::checkbox(ui, &mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
                 bs.preview_page = 0;
             }
             ui.add_space(8.0);
@@ -58,7 +58,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
         });
         ui.add_space(24.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             if pages.is_empty() {
                 dim(ui, lang.tr("Nothing to print."));
                 return;
@@ -84,7 +84,8 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             dim(ui, &format!("{sheet} · {range}"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.add_enabled(bs.preview_page > 0, egui::Button::new("◀")).on_hover_text(lang.tr("Previous page")).clicked() {
+                let (back, forward) = if crate::rtl::on(ui.ctx()) { ("▶", "◀") } else { ("◀", "▶") };
+                if ui.add_enabled(bs.preview_page > 0, egui::Button::new(back)).on_hover_text(lang.tr("Previous page")).clicked() {
                     bs.preview_page = bs.preview_page.saturating_sub(1);
                 }
                 let text = lang
@@ -92,7 +93,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                     .replace("{page}", &(bs.preview_page + 1).to_string())
                     .replace("{pages}", &pages.len().to_string());
                 ui.label(text);
-                if ui.add_enabled(bs.preview_page < last, egui::Button::new("▶")).on_hover_text(lang.tr("Next page")).clicked() {
+                if ui.add_enabled(bs.preview_page < last, egui::Button::new(forward)).on_hover_text(lang.tr("Next page")).clicked() {
                     bs.preview_page = (bs.preview_page + 1).min(last);
                 }
             });

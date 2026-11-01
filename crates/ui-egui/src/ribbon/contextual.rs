@@ -4,6 +4,7 @@ use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_
 
 /// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let Some((tname, header, totals, banded, banded_c, first, last, filter, style)) = app.session.active().and_then(|d| {
         let sh = d.wb.active()?;
         let t = sh.table_at(d.selection.active)?;
@@ -11,8 +12,8 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }) else {
         return;
     };
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new("Table Name:").small());
+    crate::rtl::vertical(ui, |ui| {
+        ui.label(egui::RichText::new(lang.tr("Table Name:")).small());
         let field = egui::Id::unique(("gridcraft.table_name", &tname));
         if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
             && name != tname
@@ -41,26 +42,26 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "table.insertSlicer", json!({"table": tname}));
     }
     sep(ui);
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         for (label, cmd, v) in [
             ("Header Row", "table.headerRow", header && filter),
             ("Total Row", "table.totalRow", totals),
             ("Banded Rows", "table.bandedRows", banded),
         ] {
             let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
+            if crate::rtl::checkbox(ui, &mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
             }
         }
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         for (label, cmd, v) in [
             ("First Column", "table.firstColumn", first),
             ("Last Column", "table.lastColumn", last),
             ("Banded Columns", "table.bandedColumns", banded_c),
         ] {
             let mut on = v;
-            if ui.checkbox(&mut on, label).changed() {
+            if crate::rtl::checkbox(ui, &mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
             }
         }
@@ -104,17 +105,18 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
         }
         let more = icon_button(ui, Icon::Chevron, t.text_dim, "More Table Styles", vec2(18.0, 40.0));
         anchor_keytip(app, ui, &more, &["table.style"]);
-        egui::Popup::menu(&more).show(|ui| table_gallery(app, ui, "table.style"));
+        crate::rtl::menu(&more).show(|ui| table_gallery(app, ui, "table.style"));
     });
 }
 
 pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let Some(id) = app.selected_chart else { return };
     let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
         keytip(app, ui, sequence, ae.rect.center_bottom());
     }
-    egui::Popup::menu(&ae).show(|ui| {
+    crate::rtl::menu(&ae).show(|ui| {
         menu_items(
             app,
             ui,
@@ -146,7 +148,7 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     ) {
         keytip(app, ui, sequence, ct.rect.center_bottom());
     }
-    egui::Popup::menu(&ct).show(|ui| {
+    crate::rtl::menu(&ct).show(|ui| {
         for (label, k, s) in [
             ("Clustered Column", "column", ""),
             ("Stacked Column", "column", "stacked"),
@@ -161,7 +163,7 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Funnel", "funnel", ""),
             ("Treemap", "treemap", ""),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "chart.set", json!({"chart": id, "type": k, "subtype": s}));
             }
         }

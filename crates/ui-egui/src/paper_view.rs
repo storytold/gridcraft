@@ -865,7 +865,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Header & Footer presets (shown with sample values, as the result will read).
     for (label, part) in [("Header", false), ("Footer", true)] {
         let r = big_button(ui, if part { Icon::Footer } else { Icon::Header }, label, label, true);
-        egui::Popup::menu(&r).show(|ui| {
+        crate::rtl::menu(&r).show(|ui| {
             let presets: [(String, &str); 7] = [
                 (tr(app, "(none)").to_string(), ""),
                 ("Page 1".into(), "&CPage &P"),
@@ -911,21 +911,21 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
             (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
         });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let (mut f, mut o) = (first, odd_even);
-        if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
+        if crate::rtl::checkbox(ui, &mut f, tr(app, "Different First Page")).changed() {
             set_option(app, "differentFirst", f);
         }
-        if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
+        if crate::rtl::checkbox(ui, &mut o, tr(app, "Different Odd & Even Pages")).changed() {
             set_option(app, "differentOddEven", o);
         }
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let (mut sd, mut am) = (scale_doc, align);
-        if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
+        if crate::rtl::checkbox(ui, &mut sd, tr(app, "Scale with Document")).changed() {
             set_option(app, "scaleWithDoc", sd);
         }
-        if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
+        if crate::rtl::checkbox(ui, &mut am, tr(app, "Align with Page Margins")).changed() {
             set_option(app, "alignWithMargins", am);
         }
     });

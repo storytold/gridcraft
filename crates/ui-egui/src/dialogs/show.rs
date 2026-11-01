@@ -112,6 +112,7 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
+    let lang = app.ui.language;
     let Some(mut d) = app.dialog.take() else { return };
     let home = app.ui_window();
     // The macro step editor is a large resizable window of its own.
@@ -161,7 +162,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    window.show(ctx, |ui| crate::rtl::root(ui, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -185,11 +186,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
-                    ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
+                    ui.label(lang.tr("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:"));
                     ui.add_space(4.0);
                     ui.monospace("gridcraft --control 7979        # JSON-lines control channel\ngridcraft-cli mcp --connect 7979   # MCP bridged to this window\ngridcraft-cli mcp                   # headless MCP server");
                     ui.add_space(4.0);
-                    ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
+                    ui.label(lang.tr_with(
+                        "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md.",
+                        &[("count", &gridcraft_engine::command_specs().len().to_string())],
+                    ));
                 }
                 "about" => about(ui, &mut d),
                 "journal" => {
@@ -228,17 +232,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     }
                     if app.services.pick_picture_async.is_some() {
-                        let name = d.values.get("alt").and_then(Json::as_str).unwrap_or("No picture selected");
+                        let name = d.values.get("alt").and_then(Json::as_str).unwrap_or_else(|| lang.tr("No picture selected"));
                         ui.label(name);
                     } else {
-                        ui.label("Picture file path (PNG or JPEG):");
+                        ui.label(lang.tr("Picture file path (PNG or JPEG):"));
                         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                         if ui.text_edit_singleline(&mut path).changed() {
                             d.values.remove("base64");
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button(lang.tr("Browse…")).clicked() {
                         if let Some(start) = &app.services.pick_picture_async {
                             let inbox = crate::Inbox::default();
                             start(inbox.clone());
@@ -252,13 +256,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    ui.label("Description (optional):");
+                    ui.label(lang.tr("Description (optional):"));
                     let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
                     if ui.text_edit_singleline(&mut alt).changed() {
                         d.values.insert("alt".into(), json!(alt));
                     }
                     if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
-                        ui.label(egui::RichText::new("Fits inside the selected cell and moves with its content.").small());
+                        ui.label(egui::RichText::new(lang.tr("Fits inside the selected cell and moves with its content.")).small());
                     }
                     ok_cancel(ui, &mut confirm, &mut open);
                 }
@@ -287,7 +291,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "saveCopy" => {
                     let fmt = d.values.get("format").and_then(Json::as_str).unwrap_or("xlsx").to_string();
-                    ui.label(format!("Save a copy as .{fmt}"));
+                    ui.label(lang.tr_with("Save a copy as .{format}", &[("format", &fmt)]));
                     let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                     ui.text_edit_singleline(&mut path);
                     d.values.insert("path".into(), json!(path.clone()));
@@ -315,48 +319,49 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
-                    ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
+                    let title = d.values.get("title").and_then(Json::as_str).map_or_else(|| lang.tr("this workbook").to_string(), str::to_string);
+                    ui.label(lang.tr_with("Do you want to save the changes you made to {title}?", &[("title", &title)]));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
                         for (label, answer) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
+                            if ui.button(lang.tr(label)).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
                                 open = false;
                             }
                         }
                     });
                 }
                 "start" => {
-                    ui.heading("Start a new workbook");
+                    ui.heading(lang.tr("Start a new workbook"));
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Blank workbook").clicked() {
+                        if ui.button(lang.tr("Blank workbook")).clicked() {
                             app.run_or_alert("file.new", json!({}));
                             open = false;
                         }
                         for (n, t) in gridcraft_engine::sample::SAMPLES {
-                            if ui.button(*t).clicked() {
+                            if ui.button(lang.tr(t)).clicked() {
                                 app.run_or_alert("file.new", json!({"sample": n}));
                                 open = false;
                             }
                         }
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Recent").strong());
+                    ui.label(egui::RichText::new(lang.tr("Recent")).strong());
                     for path in app.ui.recent.clone() {
                         if ui.link(&path).clicked() {
                             app.open_path(&path);
                             open = false;
                         }
                     }
-                    if ui.button("Open…").clicked() {
+                    if ui.button(lang.tr("Open…")).clicked() {
                         app.open_dialog("open", json!({}));
                         open = false;
                     }
                 }
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
-        });
+        }));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -440,7 +445,7 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
@@ -504,11 +509,11 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
-    egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    let mut fields = |ui: &mut egui::Ui| {
         for f in d.fields.clone() {
             match f {
                 Field::Text { key, label } => {
-                    ui.vertical(|ui| {
+                    crate::rtl::vertical(ui, |ui| {
                         let label = ui.label(lang.tr(label));
                         let mut s = d
                             .values
@@ -532,14 +537,14 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                 }
                 Field::Password { key, label } => {
                     // Masked as typed (Excel shows dots); "Show password" reveals it on purpose.
-                    ui.vertical(|ui| {
+                    crate::rtl::vertical(ui, |ui| {
                         let label = ui.label(lang.tr(label));
                         let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
                         if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(320.0)).labelled_by(label.id).changed()
                         {
                             d.values.insert(key.into(), json!(s));
                         }
-                        ui.checkbox(&mut d.show_password, lang.tr("Show password"));
+                        crate::rtl::checkbox(ui, &mut d.show_password, lang.tr("Show password"));
                     });
                 }
                 Field::Number { key, label } => {
@@ -556,7 +561,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     });
                 }
                 Field::Choice { key, label, options } => {
-                    ui.vertical(|ui| {
+                    crate::rtl::vertical(ui, |ui| {
                         let field_label = ui.label(egui::RichText::new(lang.tr(label)).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         if d.name == "dataValidation" {
@@ -575,7 +580,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                                 .labelled_by(field_label.id);
                         } else {
                             for (val, text) in options {
-                                if ui.radio(cur == val, lang.tr(text)).clicked() {
+                                if crate::rtl::radio(ui, cur == val, lang.tr(text)).clicked() {
                                     d.set_value(key, json!(val));
                                 }
                             }
@@ -584,9 +589,12 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                 }
                 Field::Check { key, label } => {
                     let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                    if ui.checkbox(&mut b, lang.tr(label)).changed() {
+                    if crate::rtl::checkbox(ui, &mut b, lang.tr(label)).changed() {
                         d.values.insert(key.into(), json!(b));
                     }
+                }
+                Field::Shown(t) => {
+                    ui.label(egui::RichText::new(t.as_str()).small());
                 }
                 Field::Note(t) => {
                     // A note can carry user data (a URL, a file or sheet name); `tr` reads a `|` as a
@@ -597,5 +605,15 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
             }
             ui.end_row();
         }
-    });
+    };
+    // One column: a grid only spaces the rows. Mirrored, a plain column keeps the check boxes and
+    // labels on the side reading starts from, which a grid (always laid out from the left) cannot.
+    if crate::rtl::flows(ui) {
+        crate::rtl::vertical(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            fields(ui);
+        });
+    } else {
+        egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, fields);
+    }
 }
