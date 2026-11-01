@@ -400,6 +400,422 @@ fn solver_report_insertion_keeps_variable_edit_guards() {
     }
 }
 
+fn formula(s: &Session, a1: &str) -> String {
+    let d = s.doc().unwrap();
+    d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn save_and_load_model_round_trip_through_cells() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2"), ("C2", "24")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"], "method": "simplex"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let out = s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap();
+    assert_eq!(out["range"], "H1:H8");
+    let rows: Vec<String> = (1..=8).map(|r| formula(&s, &format!("H{r}"))).collect();
+    assert_eq!(
+        rows,
+        [
+            "MAX($B$1)",
+            "COUNT($A$1:$A$2)",
+            "AND($B$2<=$C$2)",
+            "AND($B$3<=6)",
+            "AND($A$1:$A$2=INT($A$1:$A$2))",
+            "AND(($A$2=0)+($A$2=1))",
+            "AND($A$1>=1)",
+            "{2,1,100,0.075,0,1,0.0001,50}",
+        ]
+    );
+    // The constraint cells show whether each constraint holds at the solution (4, 0).
+    assert_eq!(at(&s, "Sheet1", "H3"), Value::Bool(true));
+    assert_eq!(at(&s, "Sheet1", "H2"), Value::number(2.0));
+    // Reset All removes the model; Load Model restores it from the range or its first cell.
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"].as_u64().map(|n| n > 0), Some(true));
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"], 0);
+    for from in ["H1:H8", "H1"] {
+        let loaded = s.execute("data.solverLoadModel", json!({"from": from})).unwrap();
+        assert_eq!(loaded["model"]["objective"], "B1", "{loaded}");
+        assert_eq!(loaded["model"]["constraints"], json!(["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"]));
+        assert_eq!(loaded["model"]["method"], "simplex");
+    }
+    set(&mut s, &[("A1", "0"), ("A2", "0")]);
+    let r = s.execute("data.solver", json!({"saved": true})).unwrap();
+    assert_eq!((r["status"].as_str(), n(&s, "A1"), n(&s, "A2")), (Some("optimal"), 4.0, 0.0), "{r}");
+    // A Value Of goal and the Evolutionary options survive too; an explicit model is saved
+    // as given.
+    let evo = json!({"objective": "B1", "goal": "value", "value": -2.5, "variables": "A1:A2", "constraints": ["A1:A2 <= 10"], "nonNegative": false, "method": "evolutionary", "populationSize": 40, "randomSeed": 3, "requireBounds": false});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "J10", "model": evo})).unwrap()["range"], "J10:J13");
+    assert_eq!(formula(&s, "J10"), "$B$1=-2.5");
+    let m = s.execute("data.solverLoadModel", json!({"from": "J10:J13"})).unwrap()["model"].clone();
+    assert_eq!((m["goal"].as_str(), m["value"].as_f64(), m["nonNegative"].as_bool()), (Some("value"), Some(-2.5), Some(false)), "{m}");
+    assert_eq!((m["method"].as_str(), m["populationSize"].as_f64(), m["randomSeed"].as_f64()), (Some("evolutionary"), Some(40.0), Some(3.0)));
+    assert_eq!(m["requireBounds"], false);
+    // Each command is one undo step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.execute("data.solver", json!({})).unwrap()["model"]["method"], "simplex");
+    // Refused: no model or no target, overlapping the model, off the sheet, ranges that
+    // hold no model, other sheets and oversized ranges.
+    set(&mut s, &[("L1", "=1+1"), ("L2", "=SUM(A1:A2)")]);
+    for (cmd, p) in [
+        ("data.solverSaveModel", json!({})),
+        ("data.solverSaveModel", json!({"to": "A1"})),
+        ("data.solverSaveModel", json!({"to": "B3"})),
+        ("data.solverSaveModel", json!({"to": "A1048575"})),
+        ("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "variables": "A1,A2", "constraints": ["A1,A2 <= 3"]}})),
+        ("data.solverSaveModel", json!({"to": "H1", "model": "B1"})),
+        ("data.solverLoadModel", json!({})),
+        ("data.solverLoadModel", json!({"from": "L1:L2"})),
+        ("data.solverLoadModel", json!({"from": "Z1"})),
+        ("data.solverLoadModel", json!({"from": "H2:H8"})),
+        ("data.solverLoadModel", json!({"from": "H1:H1048576"})),
+        ("data.solverLoadModel", json!({"from": "Nope!H1"})),
+    ] {
+        assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+    }
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(s.execute("data.solverSaveModel", json!({"to": "H1"})).is_err(), "no model to save");
+}
+
+#[test]
+fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let (one, two) = {
+        let wb = &s.doc().unwrap().wb;
+        (wb.sheet_index("Sheet1").unwrap(), wb.sheet_index("Two").unwrap())
+    };
+    // A model saved as workbook-level names, which every sheet reads.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for (name, formula) in [
+            ("solver_opt", "Sheet1!$B$1"),
+            ("solver_adj", "Sheet1!$A$1"),
+            ("solver_typ", "1"),
+            ("solver_num", "0"),
+            ("solver_eng", "2"),
+            ("solver_ssz", "500"),
+        ] {
+            wb.names.push(gridcraft_model::DefinedName {
+                name: name.into(),
+                scope: None,
+                formula: formula.into(),
+                comment: String::new(),
+                hidden: true,
+            });
+        }
+    }
+    let model = |s: &Session, sheet: usize| super::saved_model(&s.doc().unwrap().wb, sheet);
+    assert_eq!(model(&s, one).map(|m| m["objective"].clone()), Some(json!("B1")));
+    // Reset All empties this sheet's model, which the dialog then shows, and no other sheet's.
+    let r = s.execute("data.solverReset", json!({})).unwrap();
+    assert_eq!(model(&s, one), None, "{r}");
+    assert_eq!(r["masked"], true, "{r}");
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    assert_eq!(model(&s, two).map(|m| m["objective"].clone()), Some(json!("B1")));
+    assert_eq!(s.doc().unwrap().wb.names.iter().filter(|n| n.scope.is_none()).count(), 6);
+    // Undo brings the model back with its options; the mask survives XLSX.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(model(&s, one).and_then(|m| m["populationSize"].as_f64()), Some(500.0));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(model(&s, one), None);
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "r.xlsx", "base64": b64})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(model(&s, one), None);
+    assert!(model(&s, two).is_some());
+    // A model saved on the sheet replaces the mask and is read alone: the workbook-level
+    // population size doesn't leak into it.
+    s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 3"], "method": "simplex"})).unwrap();
+    let m = model(&s, one).unwrap();
+    assert_eq!((m["objective"].as_str(), m["populationSize"].is_null()), (Some("B1"), true), "{m}");
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["masked"], true);
+    assert_eq!(model(&s, one), None);
+}
+
+#[test]
+fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2"), ("H9", "=1+1")]);
+    let long = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3", "A2 <= 3"]});
+    let short = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": long})).unwrap()["range"], "H1:H7");
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": short, "overwrite": true})).unwrap()["range"], "H1:H4");
+    // The old model's last rows are cleared; a formula below it stays.
+    for r in 5..=7 {
+        assert_eq!(formula(&s, &format!("H{r}")), "", "H{r}");
+    }
+    assert_eq!(formula(&s, "H9"), "1+1");
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24"]), "{loaded}");
+    // Reading down from one cell stops at the options row even with formulas right below it.
+    set(&mut s, &[("H5", "=2+2")]);
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24"]), "{loaded}");
+    // Saving over cells that hold no model leaves the cells below them as they are.
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H8", "model": short, "overwrite": true})).unwrap()["range"], "H8:H11");
+    assert_eq!(formula(&s, "H5"), "2+2");
+}
+
+#[test]
+fn save_model_asks_before_it_replaces_data_and_is_one_undo_step() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("H2", "kept"), ("H3", "=1+1")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
+    // A value or a formula in the column: refused, the sheet unchanged, the cell named.
+    let e = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model.clone()})).unwrap_err().to_string();
+    assert!(e.contains(crate::cmd::analysis::OVERWRITE_ERROR) && e.contains("H1:H4") && e.contains("H2"), "{e}");
+    assert_eq!((at(&s, "Sheet1", "H2"), formula(&s, "H3"), formula(&s, "H1")), (Value::text("kept"), "1+1".into(), String::new()));
+    // So is a model saved there before, and `overwrite` only as a true boolean.
+    assert!(s.execute("data.solverSaveModel", json!({"to": "J10", "model": model.clone()})).is_ok());
+    for overwrite in [json!(null), json!(false), json!("true"), json!(1)] {
+        let e = s.execute("data.solverSaveModel", json!({"to": "J10", "model": model.clone(), "overwrite": overwrite})).unwrap_err();
+        assert!(e.to_string().contains(crate::cmd::analysis::OVERWRITE_ERROR), "{overwrite}: {e}");
+    }
+    // overwrite: true replaces the data in one undo step, which brings it all back.
+    let out = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model, "overwrite": true})).unwrap();
+    assert_eq!(out["range"], "H1:H4");
+    assert_eq!((formula(&s, "H1"), formula(&s, "H2"), formula(&s, "H3")), ("MAX($B$1)".into(), "COUNT($A$1:$A$2)".into(), "AND($B$2<=24)".into()));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(
+        (at(&s, "Sheet1", "H2"), formula(&s, "H3"), formula(&s, "H1"), formula(&s, "H4")),
+        (Value::text("kept"), "1+1".into(), String::new(), String::new())
+    );
+    assert_eq!(formula(&s, "J10"), "MAX($B$1)");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(formula(&s, "H2"), "COUNT($A$1:$A$2)");
+}
+
+#[test]
+fn saving_and_resetting_a_model_keep_the_users_own_solver_names() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=ABS(A1-3)"), ("C1", "100")]);
+    let name = |name: &str, scope: Option<usize>, formula: &str, hidden: bool| gridcraft_model::DefinedName {
+        name: name.into(),
+        scope,
+        formula: formula.into(),
+        comment: String::new(),
+        hidden,
+    };
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        // The user's own names, on the sheet and the workbook, and Excel's Solver names the
+        // model replaces.
+        wb.names.push(name("solver_budget", Some(0), "Sheet1!$C$1", false));
+        wb.names.push(name("Solver_Lhs_Total", Some(0), "Sheet1!$C$1", false));
+        wb.names.push(name("solver_budget", None, "Sheet1!$C$1", false));
+        wb.names.push(name("solver_lin", Some(0), "2", true));
+        wb.names.push(name("solver_lhs12", Some(0), "Sheet1!$A$1", true));
+    }
+    let names = |s: &Session| -> Vec<String> {
+        let mut v: Vec<String> = s.doc().unwrap().wb.names.iter().map(|n| format!("{}@{:?}", n.name, n.scope)).collect();
+        v.sort();
+        v
+    };
+    let mine = ["Solver_Lhs_Total@Some(0)", "solver_budget@None", "solver_budget@Some(0)"];
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let after = names(&s);
+    assert!(mine.iter().all(|n| after.contains(&n.to_string())), "{after:?}");
+    assert!(!after.iter().any(|n| n.starts_with("solver_lin") || n.starts_with("solver_lhs12")), "{after:?}");
+    // Load Model saves the model again; Reset All removes it and nothing else.
+    s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap();
+    s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert!(mine.iter().all(|n| names(&s).contains(&n.to_string())), "{:?}", names(&s));
+    let model_names = names(&s).len() - mine.len();
+    let r = s.execute("data.solverReset", json!({})).unwrap();
+    assert_eq!((r["removed"].as_u64(), r["masked"].as_bool()), (Some(model_names as u64), Some(false)), "{r}");
+    assert_eq!(names(&s), mine);
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+}
+
+#[test]
+fn save_model_refuses_a_place_where_the_options_cannot_spill() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)"), ("H24", "=SEQUENCE(1,3)"), ("K30", "=SEQUENCE(3)"), ("M50", "=SEQUENCE(3)")]);
+    // Tables whose empty data rows meet an options row: one in its way, one holding the
+    // options cell.
+    for range in ["T59:U62", "W69:W71"] {
+        s.execute("insert.table", json!({"range": range, "header": true})).unwrap();
+    }
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["F4 <= 5"]});
+    let save = |s: &mut Session, to: &str| s.execute("data.solverSaveModel", json!({"to": to, "model": model.clone()}));
+    // The options row (H4) spills into I4:O4: a value in its last cell is in the way.
+    set(&mut s, &[("O4", "x")]);
+    let e = save(&mut s, "H1").unwrap_err().to_string();
+    assert!(e.contains("I4:O4") && e.contains("O4 isn't empty"), "{e}");
+    assert_eq!((formula(&s, "H1"), formula(&s, "H4")), (String::new(), String::new()));
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    // With the row clear the options spill, and saving again at the same cell replaces them.
+    set(&mut s, &[("O4", "")]);
+    for overwrite in [false, true] {
+        let p = json!({"to": "H1", "model": model.clone(), "overwrite": overwrite});
+        assert_eq!(s.execute("data.solverSaveModel", p).unwrap()["range"], "H1:H4");
+        assert_eq!(
+            (at(&s, "Sheet1", "H4"), at(&s, "Sheet1", "I4"), at(&s, "Sheet1", "O4")),
+            (Value::number(1.0), Value::number(1.0), Value::number(50.0))
+        );
+    }
+    // Refused: in the options row, a formula (H24), another formula's spilled values (K31,
+    // from K30), a cell of the model (F4), merged cells, a table and the sheet's last columns;
+    // a column over another formula's spilled values (I24 of H24:J24, M51 of M50:M52) or with
+    // its options cell in a table.
+    s.execute("home.mergeCells", json!({"range": "S8:T9"})).unwrap();
+    for (to, why) in [
+        ("G21", "H24 isn't empty"),
+        ("J28", "K31 holds the values of another formula"),
+        ("E1", "F4 is a cell of the model"),
+        ("R5", "merged"),
+        ("S57", "T60:Z60, but a table is in the way"),
+        ("XFA1", "need 8 cells"),
+        ("I21", "cover I24, which holds the values of another formula"),
+        ("M51", "cover M51, which holds the values of another formula"),
+        ("W67", "X70:AD70, but a table is in the way"),
+    ] {
+        let e = save(&mut s, to).unwrap_err().to_string();
+        assert!(e.contains(why), "{to}: {e}");
+        assert_eq!(formula(&s, to), "", "{to}");
+    }
+    assert_eq!(
+        (at(&s, "Sheet1", "J24"), at(&s, "Sheet1", "K32"), at(&s, "Sheet1", "M52")),
+        (Value::number(3.0), Value::number(3.0), Value::number(3.0))
+    );
+}
+
+#[test]
+fn load_model_refuses_a_range_with_a_cell_without_a_formula() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3"], "method": "simplex"});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": model})).unwrap()["range"], "H1:H6");
+    // A range with empty cells after the model loads it.
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1:H9"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24", "B3 <= 6", "A1 <= 3"]), "{loaded}");
+    s.execute("data.solverReset", json!({})).unwrap();
+    // A constraint overwritten by a constant would drop that constraint; a gap before the
+    // options row would drop the options. Both are refused, naming the cell.
+    for (cell, input) in [("H4", "7"), ("H5", "")] {
+        let before = formula(&s, cell);
+        set(&mut s, &[(cell, input)]);
+        let e = s.execute("data.solverLoadModel", json!({"from": "H1:H6"})).unwrap_err().to_string();
+        assert!(e.contains(cell), "{e}");
+        assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null(), "{cell}");
+        set(&mut s, &[(cell, &format!("={before}"))]);
+    }
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1:H6"})).is_ok());
+}
+
+#[test]
+fn load_model_refuses_a_model_cut_short_and_keeps_the_old_one() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3"], "method": "simplex"});
+    s.execute("data.solver", model).unwrap();
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap()["range"], "H1:H6");
+    let kept = |s: &mut Session| {
+        let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+        assert_eq!((m["constraints"].clone(), m["method"].clone()), (json!(["B2 <= 24", "B3 <= 6", "A1 <= 3"]), json!("simplex")), "{m}");
+    };
+    // A constraint cleared (H4), the options row cleared (H6) or replaced by a constant: from
+    // the first cell or as a range, the rows above the gap are not loaded as the whole model.
+    for (cell, input) in [("H4", ""), ("H6", ""), ("H6", "7")] {
+        let before = formula(&s, cell);
+        set(&mut s, &[(cell, input)]);
+        for from in ["H1", "H1:H6", "H1:H9"] {
+            let e = s.execute("data.solverLoadModel", json!({"from": from})).unwrap_err().to_string();
+            assert!(e.contains("complete model") || e.contains(cell), "{cell} {from}: {e}");
+            kept(&mut s);
+        }
+        set(&mut s, &[(cell, &format!("={before}"))]);
+    }
+    // An options row cut short or edited by hand: fewer than the eight values Save Model
+    // writes, or a value that isn't a number (among the eight, after them or after the sixteenth).
+    let options = formula(&s, "H6");
+    for row in [
+        "={1}",
+        "={2,1,100,0.075,0,1,0.0001}",
+        "={2,1,100,0.075,0,1,\"x\",50}",
+        "={2,TRUE,100,0.075,0,1,0.0001,50}",
+        "={2,1,100,0.075,0,1,0.0001,50,\"x\"}",
+        "={2,1,100,0.075,0,1,0.0001,50,9,10,11,12,13,14,15,16,\"x\"}",
+    ] {
+        set(&mut s, &[("H6", row)]);
+        for from in ["H1", "H1:H6"] {
+            let e = s.execute("data.solverLoadModel", json!({"from": from})).unwrap_err().to_string();
+            assert!(e.contains("complete model"), "{row} {from}: {e}");
+            kept(&mut s);
+        }
+    }
+    // More values than eight (as a later version may write) still load.
+    set(&mut s, &[("H6", &format!("={}", options.trim_end_matches('}').to_string() + ",7,8}"))]);
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1"})).is_ok());
+    kept(&mut s);
+    set(&mut s, &[("H6", &format!("={options}"))]);
+    // The gap is named when reading down from one cell.
+    set(&mut s, &[("H4", "")]);
+    let e = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_err().to_string();
+    assert!(e.contains("H4 holds no formula"), "{e}");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1"})).is_ok());
+    kept(&mut s);
+}
+
+#[test]
+fn load_model_reads_a_bounded_column_and_refuses_malformed_cells() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)")]);
+    let put = |s: &mut Session, col: u32, rows: std::ops::Range<u32>, f: &dyn Fn(u32) -> String| {
+        let d = s.doc_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut d.wb).sheets[0]);
+        for r in rows {
+            sh.set_cell(CellRef::new(r, col), gridcraft_model::Cell::formula(gridcraft_model::Formula::new(&f(r))));
+        }
+    };
+    // A column of formulas far longer than any model: read from its first cell, the read stops
+    // after the most rows a model takes and the column is refused; as a range, it is refused
+    // before any cell is read.
+    put(&mut s, 15, 0..5_000, &|r| format!("{r}+1"));
+    for from in ["P1", "P1:P5000", "P1:P1048576", "A1:XFD1048576"] {
+        assert!(s.execute("data.solverLoadModel", json!({"from": from})).is_err(), "{from}");
+    }
+    // Malformed and hostile cells and ranges: an error each, never a panic, no model.
+    let bad = ["AND(", "{", "{1e400,2", "MAX(Nope!A1)", "COUNT($A$1:$A$2", "AND($B$1<=", "MAX($B$1)&\"x\""];
+    put(&mut s, 17, 0..bad.len() as u32, &|r| bad[r as usize].to_string());
+    put(&mut s, 18, 0..1, &|_| format!("AND({})", "(".repeat(10_000)));
+    for r in 1..=bad.len() {
+        assert!(s.execute("data.solverLoadModel", json!({"from": format!("R{r}")})).is_err(), "R{r}");
+    }
+    for from in ["S1", "", ":", "P1:", "H0", "Sheet9!H1", "'Sheet1'!R1:R7", "R7:R1"] {
+        assert!(s.execute("data.solverLoadModel", json!({"from": from})).is_err(), "{from}");
+    }
+    assert!(s.execute("data.solverLoadModel", json!({"from": 7})).is_err());
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+}
+
+#[test]
+fn load_model_keeps_the_evolutionary_convergence_and_generations() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)")]);
+    let evo = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "evolutionary", "convergence": 0.001, "generationsWithoutImprovement": 20});
+    s.execute("data.solverSaveModel", json!({"to": "H1", "model": evo})).unwrap();
+    let m = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap()["model"].clone();
+    assert_eq!((m["convergence"].as_f64(), m["generationsWithoutImprovement"].as_f64()), (Some(0.001), Some(20.0)), "{m}");
+    // They survive XLSX; Excel's time limit (solver_mni, in seconds) isn't written or read.
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "c.xlsx", "base64": b64})).unwrap();
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    assert_eq!((m["convergence"].as_f64(), m["generationsWithoutImprovement"].as_f64()), (Some(0.001), Some(20.0)), "{m}");
+    assert!(!s.doc().unwrap().wb.names.iter().any(|n| n.name == "solver_mni"));
+    // Reset All removes the GridCraft name with the rest.
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.names.iter().all(|n| n.scope != Some(0)));
+}
+
 #[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the

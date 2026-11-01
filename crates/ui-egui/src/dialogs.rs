@@ -663,12 +663,18 @@ impl Dialog {
                 d
             }
             "solver" => {
-                // Starts from the sheet's saved model, else the active cell as objective.
+                // Starts from the sheet's saved model, else the active cell as objective; fields
+                // given when opening it go over either.
                 let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet()));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
-                if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
-                    for (k, x) in m {
-                        v.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                for m in [saved.as_ref(), Some(&params)].into_iter().flatten().filter_map(Json::as_object) {
+                    if let Some(v) = values.as_object_mut() {
+                        for (k, x) in m {
+                            v.insert(
+                                k.clone(),
+                                if k == "value" { json!(x.as_str().map_or_else(|| x.to_string(), str::to_string)) } else { x.clone() },
+                            );
+                        }
                     }
                 }
                 if let Some(v) = values.as_object_mut() {
