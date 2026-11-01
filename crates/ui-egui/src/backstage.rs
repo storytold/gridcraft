@@ -668,7 +668,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     });
 }
 
-/// Draws the Save As type picker and action: xlsx opens the `saveAs` dialog, other types export, and the page closes when the save/export succeeds (or a web download handles it).
+/// Draws the Save As type picker and action: xlsx (and CSV on the desktop) opens the `saveAs` dialog, other types export, and the page closes when the save/export succeeds (or a web download handles it).
 fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
     dim(ui, lang.tr("Save the workbook under another name or in another folder."));
@@ -695,9 +695,11 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
-        if fmt == "xlsx" {
+        // A workbook or (on the desktop) a CSV becomes the window's file; a web page or PDF is a
+        // copy, and the web downloads a CSV as one.
+        if fmt == "xlsx" || (fmt == "csv" && !web) {
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
+            app.open_dialog("saveAs", json!({"format": fmt}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;
@@ -707,7 +709,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
         }
     }
     ui.add_space(18.0);
-    dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    dim(ui, lang.tr("A web page or PDF is a copy: the workbook keeps its own file."));
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {

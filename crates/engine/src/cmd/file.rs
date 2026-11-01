@@ -130,7 +130,21 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
-    // Only a full-fidelity format clears the dirty flag and becomes the document's file.
+    // Save As to a text file (CSV, TSV) makes it the window's file, as in Excel: the title names
+    // it and Save writes it again, instead of the workbook staying on the file it was saved from.
+    // The workbook still reads as edited when it was, since the text file holds only the active
+    // sheet's values (#2607); and saying so once, here, beats finding out after closing it.
+    let text = matches!(kind, Some(crate::io::FileKind::Csv | crate::io::FileKind::Tsv));
+    if text && d.path.as_deref() != Some(path.as_str()) {
+        d.path = Some(path.clone());
+        d.content_kind = None;
+        let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+        s.ui_requests.push(crate::UiRequest::Message(format!(
+            "{name} keeps only the active sheet's values. Formatting, formulas and other sheets stay in this window until you close it; to keep them, save as an Excel Workbook (.xlsx)."
+        )));
+        return Ok(json!({"path": path, "bytes": bytes.len()}));
+    }
+    // Only a full-fidelity format clears the dirty flag.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
         // before the `saved` snapshot, or the workbook would read as dirty the moment it was
