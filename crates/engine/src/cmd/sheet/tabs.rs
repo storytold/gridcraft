@@ -164,13 +164,15 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.tables.clear(); // table names must be unique
             sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
-            // rely on it), so the copied objects get fresh ones.
-            let mut next = cx.wb.next_object_id();
-            let mut fresh = || {
-                let id = next;
-                next = next.saturating_add(1);
-                id
-            };
+            // rely on it), so the copied objects get fresh ones (free ones, even when a file used
+            // the largest id).
+            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len();
+            let ids = cx.wb.free_object_ids(count);
+            if ids.len() < count {
+                return Err(bad("sheet.move", "no free object ids are left for the copied objects"));
+            }
+            let mut ids = ids.into_iter();
+            let mut fresh = || ids.next().unwrap_or(u32::MAX);
             sh.charts.iter_mut().for_each(|o| o.id = fresh());
             sh.images.iter_mut().for_each(|o| o.id = fresh());
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
