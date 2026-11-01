@@ -14,7 +14,8 @@
 //! `cldr-numbers-full/main/<locale>/numbers.json` and `cldr-dates-full/main/<locale>/ca-gregorian.json`),
 //! which is also what macOS, Android and ICU ship. They were read from those files for en-GB,
 //! en-IN, cs and ru, read from ICU's CLDR 48 data for the Swiss regions and nl-NL, and written
-//! from the same conventions for the other regions.
+//! from the same conventions for the other regions. CLDR data is under the Unicode License v3,
+//! reproduced in `NOTICE` (row in `ATTRIBUTION.md`).
 //! Deliberate choices where operating systems differ from CLDR:
 //! - Short dates use a four-digit year (`dd/mm/yyyy`, where CLDR has `dd/MM/y` or `dd/MM/yy`):
 //!   Excel's short date is the system's, Windows writes four digits, and a two-digit year would
