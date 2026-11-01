@@ -335,7 +335,7 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
         if primary != Ordering::Equal {
             return primary;
         }
-        let secondary = secondary_weights(a).cmp(&secondary_weights(b));
+        let secondary = secondary_weights(a).cmp(secondary_weights(b));
         if secondary != Ordering::Equal {
             return secondary;
         }
@@ -399,22 +399,15 @@ fn primary_chars(s: &str) -> impl Iterator<Item = char> + '_ {
 /// The second level, for text whose primary characters are equal: per letter, its digit script and
 /// then its marks, the letters' lists closed by 0 so that an unmarked letter sorts first. Marks
 /// before the first letter form a list of their own.
-fn secondary_weights(s: &str) -> Vec<u16> {
-    let mut out = Vec::new();
-    for c in lowercase_chars(s) {
-        if ignorable(c) {
-            continue;
-        }
-        match arabic_mark_rank(c) {
-            Some(rank) => out.push(rank.saturating_add(1)),
-            None => {
-                out.push(0);
-                out.push(digit(c).map_or(0, |(script, _)| script));
-            }
-        }
-    }
-    out.push(0);
-    out
+fn secondary_weights(s: &str) -> impl Iterator<Item = u16> + '_ {
+    lowercase_chars(s)
+        .filter(|&c| !ignorable(c))
+        .flat_map(|c| match arabic_mark_rank(c) {
+            Some(rank) => [Some(rank.saturating_add(1)), None],
+            None => [Some(0), Some(digit(c).map_or(0, |(script, _)| script))],
+        })
+        .flatten()
+        .chain(std::iter::once(0))
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
