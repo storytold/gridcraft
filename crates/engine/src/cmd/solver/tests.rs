@@ -896,6 +896,15 @@ fn integer_optimality_reads_a_percent_sign_as_percent() {
         let r = s.execute("data.solver", p).unwrap();
         assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(want), "{given}: {r}");
     }
+    // Percents whose fraction is not exact in binary read back as given, from the solve's
+    // result and from the saved model.
+    for given in [7.0, 29.0, 0.1] {
+        let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4", "A1 int"], "method": "simplex", "integerOptimality": given});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(given), "{r}");
+        let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+        assert_eq!(m["integerOptimality"].as_f64(), Some(given), "{m}");
+    }
 }
 
 #[test]

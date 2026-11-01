@@ -473,7 +473,7 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         }
     }
     if let Some(v) = get("solver_tol").and_then(|v| num_text(&v)) {
-        model["integerOptimality"] = json!(v * 100.0);
+        model["integerOptimality"] = json!(percent(v));
     }
     if let Some(v) = get("solver_rbv") {
         model["requireBounds"] = json!(v.trim() != "2");
@@ -512,7 +512,7 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         "nonNegative": m.non_negative,
         "method": method,
         "maxEvaluations": m.max_evals,
-        "integerOptimality": m.gap * 100.0,
+        "integerOptimality": percent(m.gap),
     });
     let e = &m.evo;
     out["populationSize"] = json!(e.population);
@@ -568,7 +568,7 @@ pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
         n(e.convergence),
         e.stall,
         m.max_evals,
-        n(m.gap * 100.0)
+        n(percent(m.gap))
     ));
     Ok(rows)
 }
@@ -692,4 +692,12 @@ pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
     }
     model["constraints"] = json!(constraints);
     Ok(model)
+}
+
+/// Integer Optimality as a percent from its stored fraction. The product is rounded to 1E-10 %,
+/// so a fraction such as 0.07 reads back as 7 and not 7.000000000000001.
+fn percent(fraction: f64) -> f64 {
+    let p = fraction * 100.0;
+    let rounded = (p * 1e10).round() / 1e10;
+    if rounded.is_finite() { rounded } else { p }
 }
