@@ -296,6 +296,95 @@ fn pivot_cache_vba_and_embeddings_found() {
 }
 
 #[test]
+fn all_hidden_kinds_found_in_one_package() {
+    // One hidden thing of each kind, in a single package: the proof that the
+    // audit's finding classes are all live, not just individually tested.
+    let sheets = format!("{}{}{}", sheet("Budget", "rId1", ""), sheet("Salaries", "rId2", "hidden"), sheet("Keys", "rId3", "veryHidden"));
+    let wb = workbook(
+        &sheets,
+        r#"<definedNames><definedName name="Secret" hidden="1">Budget!$B$2</definedName></definedNames><externalReferences><externalReference r:id="rId9"/></externalReferences>"#,
+    );
+    let mut rels = workbook_rels(&[("rId1", "worksheets/sheet1.xml"), ("rId2", "worksheets/sheet2.xml"), ("rId3", "worksheets/sheet3.xml")]);
+    rels = rels.replace(
+        "</Relationships>",
+        &format!(r#"<Relationship Id="rId9" Type="{RT}externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#),
+    );
+    let sheet_xml = format!(
+        r#"<worksheet xmlns="{NS_X}"><cols><col min="2" max="2" hidden="1"/></cols><sheetData><row r="3" hidden="1"><c r="A3"><v>2</v></c></row></sheetData></worksheet>"#
+    );
+    let comments = format!(
+        r#"<comments xmlns="{NS_X}"><authors><author>Quill Ramsey</author></authors><commentList><comment ref="B2" authorId="0"><text><t>Check this.</t></text></comment></commentList></comments>"#
+    );
+    let persons =
+        format!(r#"<personList xmlns="{NS_X}"><person displayName="Ona Vettel" id="{{11111111-1111-1111-1111-111111111111}}"/></personList>"#);
+    let threaded =
+        r#"<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><threadedComment ref="D4" personId="{11111111-1111-1111-1111-111111111111}"><text><t>Threaded note.</t></text></threadedComment></ThreadedComments>"#.to_string();
+    let core = r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Quill Ramsey</dc:creator></cp:coreProperties>"#;
+    let app =
+        r#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Company>Acme Corp</Company></Properties>"#;
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", wb),
+        ("xl/_rels/workbook.xml.rels", rels),
+        ("xl/worksheets/sheet1.xml", sheet_xml),
+        ("xl/worksheets/sheet2.xml", format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#)),
+        ("xl/worksheets/sheet3.xml", format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#)),
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}comments" Target="../comments1.xml"/></Relationships>"#
+            ),
+        ),
+        ("xl/comments1.xml", comments),
+        ("xl/persons/person.xml", persons),
+        ("xl/threadedComments/threadedComment1.xml", threaded),
+        ("docProps/core.xml", core.to_string()),
+        ("docProps/app.xml", app.to_string()),
+        ("xl/externalLinks/externalLink1.xml", format!(r#"<externalLink xmlns="{NS_X}"/>"#)),
+        ("xl/pivotCache/pivotCacheDefinition1.xml", "<pivotCacheDefinition/>".to_string()),
+        ("xl/vbaProject.bin", "fake".to_string()),
+        ("xl/embeddings/oleObject1.bin", "fake".to_string()),
+        ("stray.txt", "leftover".to_string()),
+    ]);
+    let fs = findings(&pkg);
+    let kinds = ids(&fs);
+    for expected in [
+        "hidden/row",
+        "hidden/column",
+        "hidden/sheet",
+        "hidden/defined-name",
+        "external-link",
+        "author-pii/comment",
+        "author-pii/threaded-comment",
+        "author-pii/core-properties",
+        "author-pii/extended-properties",
+        "pivot-cache",
+        "active-content/vba",
+        "active-content/ole",
+        "package/orphan-part",
+    ] {
+        assert!(kinds.contains(&expected), "missing {expected} in {kinds:?}");
+    }
+}
+
+#[test]
+fn xml_deeper_than_importer_depth_is_an_error() {
+    // Bounds match the xlsx importer (depth 256): nesting past it must fail
+    // closed, never scan partially.
+    let nested = "<g>".repeat(300) + &"</g>".repeat(300);
+    let sheet_xml = format!(r#"<worksheet xmlns="{NS_X}"><sheetData>{nested}</sheetData></worksheet>"#);
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook(&sheet("Budget", "rId1", ""), "")),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        ("xl/worksheets/sheet1.xml", sheet_xml),
+    ]);
+    assert!(matches!(audit_bytes(&pkg), Err(AuditError::Limit(_))), "{:?}", audit_bytes(&pkg).map(|_| ()));
+}
+
+#[test]
 fn orphan_part_found() {
     let pkg = zip(&[
         ("[Content_Types].xml", content_types()),

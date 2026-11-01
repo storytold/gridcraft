@@ -70,14 +70,21 @@ fn attr_rel<'a>(el: &'a Element, local: &str) -> Option<&'a str> {
     attr(el, NS_R, local).or_else(|| attr(el, NS_R_STRICT, local))
 }
 
-/// Cap on ZIP entries read: a package is a handful of parts, not millions.
-const MAX_PARTS: usize = 100_000;
+/// Bounds shared with the `gridcraft-xlsx` importer (`crates/xlsx/src/package.rs`
+/// and `crates/xlsx/src/xml.rs`): a file the importer accepts must not be one
+/// the audit rejects for a different size reason, and vice versa. The element
+/// count below is the one extra guard the importer does not have; it is
+/// stricter, never looser, and is documented here so the divergence is explicit.
+const MAX_PARTS: usize = 200_000;
 /// Cap on decompressed bytes read from a single part (zip-bomb guard).
-const MAX_PART_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PART_BYTES: u64 = 512 * 1024 * 1024;
 /// Cap on decompressed bytes read across all scanned parts: the per-part cap
 /// does not bound total memory, and deflate can compress ~1000:1.
 const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
-/// Cap on XML elements walked in a single part.
+/// Cap on XML nesting depth, matching the importer's `MAX_DEPTH`.
+const MAX_XML_DEPTH: u32 = 256;
+/// Cap on XML elements walked in a single part (audit-only guard; the
+/// importer caps depth, not element count).
 const MAX_XML_ELEMENTS: u64 = 2_000_000;
 
 /// What the audit found, as a stable machine-readable vocabulary.
@@ -415,6 +422,7 @@ fn for_each_element(xml: &[u8], part: &str, f: &mut impl FnMut(&Element) -> Resu
     }
     let mut buf = Vec::new();
     let mut count: u64 = 0;
+    let mut depth: u32 = 0;
     loop {
         buf.clear();
         let (resolution, event) = reader.read_resolved_event_into(&mut buf).map_err(|e| AuditError::Xml(part.to_string(), e.to_string()))?;
@@ -430,7 +438,16 @@ fn for_each_element(xml: &[u8], part: &str, f: &mut impl FnMut(&Element) -> Resu
                 if count > MAX_XML_ELEMENTS {
                     return Err(AuditError::Limit(format!("{part}: too many XML elements")));
                 }
+                if matches!(event, Event::Start(_)) {
+                    depth = depth.saturating_add(1);
+                    if depth > MAX_XML_DEPTH {
+                        return Err(AuditError::Limit(format!("{part}: XML nesting deeper than {MAX_XML_DEPTH}")));
+                    }
+                }
                 f(&element_of(&mut reader, &ns, e, part)?)?;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
             }
             Event::Eof => break,
             _ => {}
@@ -512,6 +529,9 @@ fn texts_of(xml: &[u8], part: &str, ns: &[u8], local: &str) -> Result<Vec<String
                     current.clear();
                 } else if depth > 0 {
                     depth = depth.saturating_add(1);
+                    if matches!(event, Event::Start(_)) && depth > MAX_XML_DEPTH {
+                        return Err(AuditError::Limit(format!("{part}: XML nesting deeper than {MAX_XML_DEPTH}")));
+                    }
                 }
                 if matches!(event, Event::Empty(_)) && depth > 0 {
                     depth = depth.saturating_sub(1);
