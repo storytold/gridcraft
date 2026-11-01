@@ -1,4 +1,4 @@
-pub(crate) mod tr;
+pub mod tr;
 
 use gridcraft_core::CellError;
 
@@ -56,17 +56,23 @@ impl FormulaLocale {
     pub fn function_name(self, canonical: &str) -> &str {
         match self {
             Self::Es => SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, es)| *es).unwrap_or(canonical),
-            Self::Tr => tr::TURKISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, t)| *t).unwrap_or(canonical),
+            Self::Tr => tr::TURKISH.iter().find(|(en, _)| tr::turkish_eq_ignore_case(en, canonical)).map(|(_, t)| *t).unwrap_or(canonical),
             Self::En => canonical,
         }
     }
     pub fn canonical_name(self, localized: &str) -> &str {
         match self {
-            Self::Es => SPANISH.iter().find(|(_, es)| es.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized),
+            Self::Es => SPANISH
+                .iter()
+                .find(|(_, es)| es.eq_ignore_ascii_case(localized))
+                .or_else(|| SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(localized)))
+                .map(|(en, _)| *en)
+                .unwrap_or(localized),
             Self::Tr => tr::TURKISH
                 .iter()
                 .chain(tr::TURKISH_ALIASES.iter())
                 .find(|(_, t)| tr::turkish_eq_ignore_case(t, localized))
+                .or_else(|| tr::TURKISH.iter().chain(tr::TURKISH_ALIASES.iter()).find(|(en, _)| tr::turkish_eq_ignore_case(en, localized)))
                 .map(|(en, _)| *en)
                 .unwrap_or(localized),
             Self::En => localized,

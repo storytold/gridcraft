@@ -1,16 +1,11 @@
-use gridcraft_formula::{FormulaLocale, parse, parse_input, print, print_input};
+use gridcraft_formula::{FormulaLocale, TURKISH, parse, parse_input, print, print_input, turkish_eq_ignore_case};
 
 fn input(src: &str) -> String {
     print(&parse_input(src, FormulaLocale::Tr, |_| false).unwrap())
 }
 
 fn tr_eq(a: &str, b: &str) -> bool {
-    FormulaLocale::Tr.canonical_name(a) == FormulaLocale::Tr.canonical_name(b)
-        || a.chars().zip(b.chars()).all(|(ca, cb)| match (ca, cb) {
-            ('i' | 'İ', 'i' | 'İ') => true,
-            ('ı' | 'I', 'ı' | 'I') => true,
-            (x, y) => x.eq_ignore_ascii_case(&y),
-        }) && a.chars().count() == b.chars().count()
+    FormulaLocale::Tr.canonical_name(a) == FormulaLocale::Tr.canonical_name(b) || turkish_eq_ignore_case(a, b)
 }
 
 #[test]
@@ -188,4 +183,104 @@ fn turkish_error_literals_parse_and_display() {
     }
     assert_eq!(tr.uppercase("iç_verim_oranı"), "İÇ_VERİM_ORANI");
     assert_eq!(tr.lowercase("İÇ_VERİM_ORANI"), "iç_verim_oranı");
+}
+
+#[test]
+fn turkish_case_folding_and_dotless_i() {
+    let tr = FormulaLocale::Tr;
+
+    // Direct canonical_name resolution tests
+    for (name, expected) in [
+        // Dotless ı typed on Turkish keyboard for English names with 'I':
+        ("ıserror", "ISERROR"),
+        ("iserror", "ISERROR"),
+        ("ISERROR", "ISERROR"),
+        ("ıferror", "IFERROR"),
+        ("iferror", "IFERROR"),
+        ("mın", "MIN"),
+        ("min", "MIN"),
+        ("MIN", "MIN"),
+        ("MİN", "MIN"),
+        ("ındex", "INDEX"),
+        ("index", "INDEX"),
+        ("INDEX", "INDEX"),
+        ("İNDEX", "INDEX"),
+        ("ısblank", "ISBLANK"),
+        ("isblank", "ISBLANK"),
+        ("ısnumber", "ISNUMBER"),
+        ("ısna", "ISNA"),
+        // Turkish localized names typed with dotless ı or dotted i/İ:
+        ("ehatalıysa", "ISERROR"),
+        ("ehataliysa", "ISERROR"),
+        ("EHATALIYSA", "ISERROR"),
+        ("eğerhata", "IFERROR"),
+        ("EĞERHATA", "IFERROR"),
+        ("eğersay", "COUNTIF"),
+        ("EĞERSAY", "COUNTIF"),
+        ("düşeyara", "VLOOKUP"),
+        ("DÜŞEYARA", "VLOOKUP"),
+        ("indis", "INDEX"),
+        ("ındıs", "INDEX"),
+        ("İNDİS", "INDEX"),
+        ("INDIS", "INDEX"),
+    ] {
+        assert_eq!(tr.canonical_name(name), expected, "canonical_name({name})");
+    }
+
+    // Full formula input parse & print round-trip tests
+    for (src, expected) in [
+        ("=ıserror(A1)", "ISERROR(A1)"),
+        ("=iserror(A1)", "ISERROR(A1)"),
+        ("=ISERROR(A1)", "ISERROR(A1)"),
+        ("=ehatalıysa(A1)", "ISERROR(A1)"),
+        ("=ehataliysa(A1)", "ISERROR(A1)"),
+        ("=EHATALIYSA(A1)", "ISERROR(A1)"),
+        ("=ıferror(A1;0)", "IFERROR(A1,0)"),
+        ("=iferror(A1;0)", "IFERROR(A1,0)"),
+        ("=eğerhata(A1;0)", "IFERROR(A1,0)"),
+        ("=EĞERHATA(A1;0)", "IFERROR(A1,0)"),
+        ("=mın(A1:A10)", "MIN(A1:A10)"),
+        ("=min(A1:A10)", "MIN(A1:A10)"),
+        ("=MİN(A1:A10)", "MIN(A1:A10)"),
+        ("=ındex(A1:B2;1;1)", "INDEX(A1:B2,1,1)"),
+        ("=index(A1:B2;1;1)", "INDEX(A1:B2,1,1)"),
+        ("=indis(A1:B2;1;1)", "INDEX(A1:B2,1,1)"),
+        ("=ındıs(A1:B2;1;1)", "INDEX(A1:B2,1,1)"),
+        ("=İNDİS(A1:B2;1;1)", "INDEX(A1:B2,1,1)"),
+        ("=eğersay(A1:A10;\">0\")", "COUNTIF(A1:A10,\">0\")"),
+        ("=düşeyara(A2;D:E;2;yanlış)", "VLOOKUP(A2,D:E,2,FALSE)"),
+        ("=ısblank(A1)", "ISBLANK(A1)"),
+        ("=ısnumber(A1)", "ISNUMBER(A1)"),
+        ("=ısna(A1)", "ISNA(A1)"),
+    ] {
+        assert_eq!(input(src), expected, "input formula test failed for: {src}");
+    }
+}
+
+#[test]
+fn turkish_translation_has_no_collisions_and_all_round_trip() {
+    let tr = FormulaLocale::Tr;
+    assert_eq!(TURKISH.len(), 507, "expected 507 translated functions in TURKISH table");
+
+    // 1. Verify no two distinct English functions share one Turkish name (exact collision check)
+    let mut tr_to_en = std::collections::HashMap::new();
+    for &(en, localized) in TURKISH {
+        if let Some(prev_en) = tr_to_en.insert(localized, en) {
+            panic!("Collision in TURKISH table: '{localized}' is mapped from both '{prev_en}' and '{en}'");
+        }
+    }
+
+    // 2. Verify no collisions even under Turkish case-folding (locale-aware comparison)
+    for (i, &(en1, tr1)) in TURKISH.iter().enumerate() {
+        for &(en2, tr2) in &TURKISH[i + 1..] {
+            assert!(!turkish_eq_ignore_case(tr1, tr2), "Turkish case-folding collision: '{tr1}' ({en1}) vs '{tr2}' ({en2})");
+        }
+    }
+
+    // 3. Verify every function in TURKISH round-trips: canonical_name(function_name(en)) == en
+    for &(en, _) in TURKISH {
+        let localized = tr.function_name(en);
+        let roundtrip = tr.canonical_name(localized);
+        assert_eq!(roundtrip, en, "Round-trip failed for function: '{en}' -> '{localized}' -> '{roundtrip}'");
+    }
 }
