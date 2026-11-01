@@ -82,6 +82,13 @@ fn equations_write_office_math_with_a_text_fallback_and_read_back() {
     assert!(d.contains("descr=\"gridcraft:latex:x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\""));
     assert!(d.contains("<a:t>x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}</a:t>"), "the fallback shows the source");
     assert!(d.contains("<a:srgbClr val=\"1F4E79\"/>"), "the ink colour is kept");
+    // The colour sits on the Office Math runs themselves, not only on the text fallback (which
+    // the reader would take if the Choice were ever filtered out).
+    let math = &d[d.find("<a14:m>").unwrap()..d.find("</a14:m>").unwrap()];
+    assert!(
+        math.contains("<a:solidFill><a:srgbClr val=\"1F4E79\"/></a:solidFill><a:latin typeface=\"Cambria Math\"/></a:rPr>"),
+        "the Office Math runs carry the ink colour: {math}"
+    );
     // A commutative diagram is outside the Office Math subset: text only, no choice.
     assert_eq!(d.matches("<mc:AlternateContent").count(), 2, "{d}");
     assert!(d.contains("descr=\"gridcraft:latex:\\begin{CD} A @&gt;f&gt;&gt; B \\end{CD}\""));

@@ -379,7 +379,7 @@ fn the_guarded_entry_points_survive_hostile_input() {
         let r = catch_unwind(AssertUnwindSafe(|| {
             let laid = gridcraft_math::layout(s);
             let checked = gridcraft_math::check(s);
-            let omml = gridcraft_math::to_omml(s, 11.0);
+            let omml = gridcraft_math::to_omml(s, 11.0, None);
             (laid, checked, omml)
         }));
         let Ok((laid, checked, omml)) = r else {
@@ -477,7 +477,7 @@ fn pathological_source_at_the_cap_finishes_in_bounded_time() {
     let mut slow = Vec::new();
     for s in &sources {
         let start = Instant::now();
-        let r = catch_unwind(AssertUnwindSafe(|| (layout(s).is_ok(), check(s).is_ok(), to_omml(s, 11.0).is_ok())));
+        let r = catch_unwind(AssertUnwindSafe(|| (layout(s).is_ok(), check(s).is_ok(), to_omml(s, 11.0, None).is_ok())));
         let took = start.elapsed();
         let head: String = s.chars().take(24).collect();
         match r {

@@ -347,13 +347,8 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
         .split('\n')
         .map(|line| format!("<a:p><a:pPr algn=\"ctr\"/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr><a:t>{}</a:t></a:r></a:p>", esc(line)))
         .collect();
-    match gridcraft_math::to_omml(&sh.text, size_pt) {
+    match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
-            let omml = if fill.is_empty() {
-                omml
-            } else {
-                omml.replace("<a:latin typeface=\"Cambria Math\"/></a:rPr>", &format!("{fill}<a:latin typeface=\"Cambria Math\"/></a:rPr>"))
-            };
             let math = format!(
                 "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\"/></a:p>"
             );

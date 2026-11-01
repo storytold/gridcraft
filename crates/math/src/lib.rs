@@ -500,7 +500,7 @@ mod tests {
         for s in ["", " ", "\\", "{", "}", "^", "_", "&", "\\\\", "\u{0}", "\u{FFFF}", "\u{1F600}", "$", "#", "\\begin{matrix}", "\\end{matrix}"] {
             let _ = layout(s);
             let _ = check(s);
-            let _ = to_omml(s, 11.0);
+            let _ = to_omml(s, 11.0, None);
         }
     }
 
@@ -516,7 +516,7 @@ mod tests {
     fn the_gallery_lays_out_and_converts() {
         for (name, src) in GALLERY {
             assert!(layout(src).is_ok_and(|l| !l.items.is_empty()), "{name}");
-            assert!(to_omml(src, 11.0).is_ok(), "{name}");
+            assert!(to_omml(src, 11.0, None).is_ok(), "{name}");
         }
     }
 

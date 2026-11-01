@@ -12,13 +12,15 @@ use crate::MathError;
 const MAX_WALK: usize = 96;
 
 /// `latex` as an `<m:oMath>` element (prefix `m` for the OMML namespace and `a` for DrawingML,
-/// declared by the caller), with runs at `size_pt` points.
-pub fn to_omml(latex: &str, size_pt: f32) -> Result<String, MathError> {
+/// declared by the caller), with runs at `size_pt` points in the `ink` colour (none: the
+/// paragraph's own).
+pub fn to_omml(latex: &str, size_pt: f32, ink: Option<[u8; 3]>) -> Result<String, MathError> {
     crate::check_caps(latex)?;
     crate::guarded(|| {
         let nodes = crate::parse(latex)?;
         let sz = if size_pt.is_finite() { (size_pt * 100.0).round().clamp(100.0, 400_000.0) as u32 } else { 1100 };
-        let mut w = Writer { out: String::from("<m:oMath>"), sz };
+        let fill = ink.map(|[r, g, b]| format!("<a:solidFill><a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/></a:solidFill>")).unwrap_or_default();
+        let mut w = Writer { out: String::from("<m:oMath>"), sz, fill };
         w.seq(&nodes, &Style::default(), 0)?;
         w.out.push_str("</m:oMath>");
         Ok(w.out)
@@ -38,6 +40,8 @@ struct Style {
 struct Writer {
     out: String,
     sz: u32,
+    /// The DrawingML fill of every run (`<a:solidFill>…</a:solidFill>`), or empty.
+    fill: String,
 }
 
 fn unsupported(what: &str) -> MathError {
@@ -134,8 +138,9 @@ impl Writer {
             self.out.push_str("</m:rPr>");
         }
         self.out.push_str(&format!(
-            "<a:rPr lang=\"en-US\" sz=\"{}\"><a:latin typeface=\"Cambria Math\"/></a:rPr><m:t>{}</m:t></m:r>",
+            "<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr><m:t>{}</m:t></m:r>",
             self.sz,
+            self.fill,
             esc(text)
         ));
     }
@@ -450,7 +455,7 @@ mod tests {
     use super::*;
 
     fn om(s: &str) -> String {
-        to_omml(s, 11.0).unwrap()
+        to_omml(s, 11.0, None).unwrap()
     }
 
     /// The markup without the per-run DrawingML properties, to keep assertions readable.
@@ -512,12 +517,21 @@ mod tests {
     #[test]
     fn the_unsupported_subset_is_an_error() {
         for s in ["\\begin{CD} A @>>> B \\end{CD}", "\\rule{1em}{1em}", "\\xrightarrow{f}", "\\verb|x|"] {
-            assert!(to_omml(s, 11.0).is_err(), "{s}");
+            assert!(to_omml(s, 11.0, None).is_err(), "{s}");
         }
-        assert!(to_omml("\\frac{1}{", 11.0).is_err());
-        assert!(to_omml(&"x".repeat(5000), 11.0).is_err());
+        assert!(to_omml("\\frac{1}{", 11.0, None).is_err());
+        assert!(to_omml(&"x".repeat(5000), 11.0, None).is_err());
         assert!(om("x").starts_with("<m:oMath>"));
-        assert!(to_omml("x", f32::NAN).unwrap().contains("sz=\"1100\""));
+        assert!(to_omml("x", f32::NAN, None).unwrap().contains("sz=\"1100\""));
+    }
+
+    #[test]
+    fn runs_carry_the_ink_colour_when_one_is_given() {
+        let o = to_omml("x+1", 11.0, Some([0x1F, 0x4E, 0x79])).unwrap();
+        let run =
+            "<a:rPr lang=\"en-US\" sz=\"1100\"><a:solidFill><a:srgbClr val=\"1F4E79\"/></a:solidFill><a:latin typeface=\"Cambria Math\"/></a:rPr>";
+        assert_eq!(o.matches(run).count(), 3, "{o}");
+        assert!(!om("x+1").contains("<a:solidFill>"), "no ink: the paragraph's colour applies");
     }
 
     #[test]
@@ -529,7 +543,7 @@ mod tests {
         assert_eq!(esc("a\u{FFFE}b\u{FFFF}c\u{1}d\u{B}e\u{7F}f"), "abcde\u{7F}f");
         assert_eq!(esc("a\tb\nc\rd\u{FDD0}e"), "a\tb\nc&#13;d\u{FDD0}e");
         for (src, bad) in [("x\u{FFFE}y", '\u{FFFE}'), ("x\u{FFFF}y", '\u{FFFF}'), ("\\text{a\u{FFFF}b}", '\u{FFFF}')] {
-            if let Ok(o) = to_omml(src, 11.0) {
+            if let Ok(o) = to_omml(src, 11.0, None) {
                 assert!(!o.contains(bad), "{src:?}: {o}");
             }
         }
@@ -558,7 +572,7 @@ mod tests {
             "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
             "f(x) = \\begin{cases} x & x \\ge 0 \\\\ -x & x < 0 \\end{cases}",
         ] {
-            assert!(to_omml(s, 11.0).is_ok(), "{s}: {:?}", to_omml(s, 11.0));
+            assert!(to_omml(s, 11.0, None).is_ok(), "{s}: {:?}", to_omml(s, 11.0, None));
         }
     }
 }

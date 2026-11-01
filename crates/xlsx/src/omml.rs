@@ -606,7 +606,7 @@ mod tests {
         // The writer keeps an author's blank row and drops only the empty row a trailing `\\`
         // leaves; the reader joins rows with `\\`, so the count of `\\` is the row count less one.
         let back = |src: &str| {
-            let omml = gridcraft_math::to_omml(src, 11.0).unwrap();
+            let omml = gridcraft_math::to_omml(src, 11.0, None).unwrap();
             to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap()
         };
         let cases = back("\\begin{cases} x \\\\ \\\\ y \\end{cases}");
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn writing_then_reading_keeps_the_maths() {
         for (_, src) in gridcraft_math::GALLERY {
-            let omml = gridcraft_math::to_omml(src, 11.0).unwrap();
+            let omml = gridcraft_math::to_omml(src, 11.0, None).unwrap();
             let back =
                 to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap();
             let (a, b) = (gridcraft_math::layout(src).unwrap(), gridcraft_math::layout(&back).unwrap());
