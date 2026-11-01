@@ -260,6 +260,22 @@ fn save_and_open_roundtrip() {
     let _ = std::fs::remove_file(path);
 }
 
+/// #2255: `parse: false` on `write_range` stores strings as the text they are, so a dd.mm.yyyy
+/// date or a thousands separator survives, and the result names the strings the default read.
+#[test]
+fn write_range_can_store_strings_as_text() {
+    let mut s = server();
+    let row = json!([["05.04.2026", "2.500", "4.25 %", "=1+1"]]);
+    let stored = ok(&mut s, "write_range", json!({"range": "A1", "parse": false, "values": row}));
+    assert_eq!(stored["convertedCount"], 0, "nothing was read: {stored}");
+    let v = ok(&mut s, "read_range", json!({"range": "A1:D1"}));
+    assert_eq!(v["values"], json!([["05.04.2026", "2.500", "4.25 %", 2.0]]), "{v}");
+    // Without it the strings are read like typed input, and the result says which.
+    let read = ok(&mut s, "write_range", json!({"range": "A3", "values": row}));
+    assert_eq!(read["convertedCount"], 3, "{read}");
+    assert_eq!(read["converted"][0], json!({"cell": "A3", "input": "05.04.2026", "stored": "5/4/2026"}), "{read}");
+}
+
 /// An agent builds a small monthly budget through MCP tool calls only.
 #[test]
 fn agent_builds_a_budget() {

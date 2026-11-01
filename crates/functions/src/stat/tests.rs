@@ -227,10 +227,19 @@ fn percentiles() {
     close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(5.43)]), 0.381);
     close(ev("PERCENTRANK.EXC", vec![e9, n(5.43), n(1.0)]), 0.3);
     let t = c(&[1.0, 2.0, 3.0]);
-    close(ev("PERCENTRANK", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
-    close(ev("PERCENTRANK.INC", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
-    close(ev("PERCENTRANK.INC", vec![t.clone(), n(1.0), n(400.0)]), 0.0);
-    close(ev("PERCENTRANK.EXC", vec![t, n(2.0), n(400.0)]), 0.5);
+    // Excel 16: significance 309 and up is #DIV/0!, 308 still works.
+    for name in ["PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC"] {
+        is_err(ev(name, vec![t.clone(), n(2.0), n(309.0)]), CellError::Div0);
+        is_err(ev(name, vec![t.clone(), n(1.0), n(400.0)]), CellError::Div0);
+        close(ev(name, vec![t.clone(), n(2.0), n(308.0)]), 0.5);
+    }
+    // From significance 15 up the result has 15 significant digits.
+    let k = c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    for sig in [15.0, 16.0, 308.0] {
+        close_tol(ev("PERCENTRANK.INC", vec![k.clone(), n(2.123_456_789), n(sig)]), 0.187_242_798_166_667, 1e-16);
+    }
+    close_tol(ev("PERCENTRANK.INC", vec![k.clone(), n(2.123_456_789), n(14.0)]), 0.187_242_798_166_66, 1e-15);
+    close(ev("PERCENTRANK.EXC", vec![k, n(2.123_456_789), n(16.0)]), 0.265_432_098_625);
 }
 
 #[test]

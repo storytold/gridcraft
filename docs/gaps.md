@@ -72,14 +72,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
-  formats, merges, sizes, names); fonts, fills, borders, charts, pictures, comments, conditional
+  formats, merges, sizes, names, and cell formatting: fonts, fills, borders, alignment); exact theme colours (XFExt), charts, pictures, comments, conditional
   formats, validation and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
   `.xlsx` workbooks (Agile and Standard encryption) open with their password since #11, but are
   saved without it: GridCraft can't write an encrypted file yet. Encrypted `.xls` (FILEPASS) and
   RC4-encrypted files are still refused with a message.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
-- **Estimate:** 14–21 h (`.xls` styles and objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
+- **Estimate:** 14–21 h (`.xls` objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
