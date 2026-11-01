@@ -430,3 +430,57 @@ fn clearing_pasting_over_or_blocking_a_python_spill_recalculates_its_readers() {
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(super::v(&s, "B1"), Value::Number(0.0), "redo");
 }
+
+/// `prefix` and a comment padded to the longest code that still fits in one cell.
+fn at_the_limit(prefix: &str) -> String {
+    let with = |n: usize| format!("{prefix}\n#{}", "x".repeat(n));
+    let (mut lo, mut hi) = (0, gridcraft_model::python::MAX_FORMULA_CHARS);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if PyCode::new(&with(mid)).fits() { lo = mid } else { hi = mid - 1 }
+    }
+    with(lo)
+}
+
+#[test]
+fn an_edit_that_would_make_python_code_too_long_is_refused() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let other = s.doc().unwrap().wb.sheet(1).unwrap().name.clone();
+    let refused = |e: crate::EngineError, cell: &str| {
+        let e = e.to_string();
+        assert!(e.contains(&format!("!{cell} longer than Excel's 8192-character")) && e.contains("nothing was changed"), "{e}");
+    };
+    // A sheet rename that lengthens a reference.
+    let a1 = at_the_limit(&format!("a = xl(\"{other}!B2\")"));
+    plant(&mut s, 0, "A1", &a1);
+    refused(s.execute("sheet.rename", json!({"sheet": 1, "name": "A much longer sheet name"})).unwrap_err(), "A1");
+    assert_eq!(code(&s, 0, "A1").unwrap(), a1);
+    assert_eq!(s.doc().unwrap().wb.sheet(1).unwrap().name, other);
+    // One of the same length is made.
+    let same = "Z".repeat(other.chars().count());
+    s.execute("sheet.rename", json!({"sheet": 1, "name": same})).unwrap();
+    assert_eq!(code(&s, 0, "A1").unwrap(), a1.replace(&other, &same));
+    // Code short of the limit still follows each edit.
+    plant(&mut s, 0, "A7", "d = xl(\"Z1\")");
+    s.execute("selection.set", json!({"range": "B10"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "Y:Y"})).unwrap();
+    assert_eq!(code(&s, 0, "A7").unwrap(), "d = xl(\"AA1\")");
+    // An inserted column that turns Z1 into AA1.
+    let a3 = at_the_limit("b = xl(\"Z1\")");
+    plant(&mut s, 0, "A3", &a3);
+    s.execute("cell.set", json!({"cell": "D1", "input": "kept"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    refused(s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap_err(), "A3");
+    assert_eq!(code(&s, 0, "A3").unwrap(), a3);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("D1").unwrap()), Value::text("kept"));
+    // A cut to another sheet, which qualifies B9 with the source sheet.
+    let a5 = at_the_limit("c = xl(\"B9\")");
+    plant(&mut s, 0, "A5", &a5);
+    s.execute("edit.cut", json!({"range": "A5"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    refused(s.execute("edit.paste", json!({"at": "C1"})).unwrap_err(), "C1");
+    assert_eq!(code(&s, 0, "A5").unwrap(), a5);
+    assert_eq!(code(&s, 1, "C1"), None);
+}

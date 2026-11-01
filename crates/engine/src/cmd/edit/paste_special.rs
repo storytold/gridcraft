@@ -145,6 +145,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             moved_formulas = taken;
         }
+        let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
             let sc = CellRef::new(src.start.row + r, src.start.col + c);
             let (dr, dc) = if transpose { (c, r) } else { (r, c) };
@@ -189,10 +190,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             // A Python cell's code travels with it. Cut to another sheet, it keeps reading the
             // cells its `xl()` references named on its original sheet, as a moved formula does:
             // they are qualified with that sheet before the workbook-wide move adjustment below.
-            let moved_py = |cell: &Cell| -> Option<std::sync::Arc<gridcraft_model::PyCode>> {
-                let py = cell.py.clone()?;
+            let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
+                let Some(py) = cell.py.clone() else { return Ok(None) };
                 if !cut_move || dest_sheet == clip.sheet {
-                    return Some(py);
+                    return Ok(Some(py));
                 }
                 let qualified = gridcraft_model::python::rewrite_xl(&py.code, |reference| {
                     let e = gridcraft_formula::parse(reference).ok()?.map(&mut |x| match x {
@@ -204,10 +205,14 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     });
                     Some(gridcraft_formula::print(&e))
                 });
-                Some(match qualified {
-                    Some(code) => std::sync::Arc::new(gridcraft_model::PyCode { code, ..(*py).clone() }),
+                Ok(Some(match qualified {
+                    Some(code) => {
+                        let moved = gridcraft_model::PyCode { code, ..(*py).clone() };
+                        check_python_fits(&moved, &dest_name, dest)?;
+                        std::sync::Arc::new(moved)
+                    }
                     None => py,
-                })
+                }))
             };
             if link {
                 let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
@@ -226,7 +231,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         new_picture = src_picture.clone();
                         new.formula = shift(&sc_cell);
                         new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
-                        new.py = moved_py(&sc_cell);
+                        new.py = moved_py(&sc_cell)?;
                         let st = map_style(sc_cell.style, &mut cx.wb);
                         new.style = if what == What::AllExceptBorders {
                             let borders = cx.wb.styles.get(old.style).borders;
@@ -239,7 +244,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         new_picture = src_picture.clone();
                         new.formula = shift(&sc_cell);
                         new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
-                        new.py = moved_py(&sc_cell);
+                        new.py = moved_py(&sc_cell)?;
                         if what == What::FormulasAndNumberFormats {
                             let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
                             new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
@@ -323,7 +328,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name, to_row: at.row, to_col: at.col }
             };
-            rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e);
+            rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e)?;
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
@@ -347,7 +352,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
-pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) {
+pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
     use gridcraft_formula::adjust::Edit;
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
@@ -386,14 +391,19 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             n.formula = gridcraft_formula::print(&new);
         }
     }
-    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
+    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e))
 }
 
 /// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on
 /// sheet `host` to its new form. Every reference-moving edit (insert and delete of lines or cells,
 /// cut-move, sheet rename and delete) runs it, as it adjusts formulas. A literal is only replaced
-/// when the reference it names changed, and text that doesn't parse is kept.
-pub(crate) fn rewrite_python_refs(wb: &mut gridcraft_model::Workbook, f: &impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
+/// when the reference it names changed, and text that doesn't parse is kept. A rewrite that would
+/// make a cell's code longer than one cell holds (a longer sheet name, `Z1` becoming `AA1`) refuses
+/// the whole edit, which then changes nothing: see [`check_python_fits`].
+pub(crate) fn rewrite_python_refs(
+    wb: &mut gridcraft_model::Workbook,
+    f: &impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr,
+) -> Result<()> {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };
         let host = sh.name.clone();
@@ -407,6 +417,7 @@ pub(crate) fn rewrite_python_refs(wb: &mut gridcraft_model::Workbook, f: &impl F
                 (after != before).then_some(after)
             });
             if let Some(code) = changed {
+                check_python_fits(&gridcraft_model::PyCode { code: code.clone(), object: py.object, ..Default::default() }, &host, c)?;
                 new_code.push((c, code));
             }
         }
@@ -422,4 +433,20 @@ pub(crate) fn rewrite_python_refs(wb: &mut gridcraft_model::Workbook, f: &impl F
             }
         }
     }
+    Ok(())
+}
+
+/// Refuses Python code an edit has made longer than one cell holds: the limit `python.set`
+/// enforces and opening a file applies (code over it is dropped to its value on open). The edit
+/// is refused rather than made, so no code is lost and none keeps a reference the edit moved.
+pub(crate) fn check_python_fits(py: &gridcraft_model::PyCode, sheet: &str, at: CellRef) -> Result<()> {
+    if py.fits() {
+        return Ok(());
+    }
+    Err(EngineError::Other(format!(
+        "The edit would make the Python code in {}!{} longer than Excel's {}-character formula limit, so nothing was changed. Shorten the code first.",
+        gridcraft_formula::quote_sheet(sheet),
+        at.a1(),
+        gridcraft_model::python::MAX_FORMULA_CHARS
+    )))
 }

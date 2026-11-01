@@ -160,7 +160,10 @@ characters (the function's syntax, which some files hold), the `_xlfn._xlws.` pr
 code, which structural edits rewrite like formula references.
 
 Only those edits rewrite them: inserting or deleting cells, rows and columns, a cut and paste, and
-renaming or deleting a sheet. Copying, filling and sorting carry the code unchanged, so an `xl()`
+renaming or deleting a sheet. An edit that would make a cell's code longer than the limit (a
+longer sheet name, `Z1` becoming `AA1`, a cut to another sheet that qualifies the references) is
+refused and changes nothing, since code over the limit would be dropped to its value on the next
+open. Copying, filling and sorting carry the code unchanged, so an `xl()`
 reference acts as an absolute reference. A sort that moves a Python cell to another row leaves its
 code reading the cells it named before (a formula moved by the same sort has its relative references
 shifted), and references to the sorted cells from other cells, formulas and Python code alike, keep
@@ -200,7 +203,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references |
+| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
