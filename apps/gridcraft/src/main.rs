@@ -34,11 +34,21 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+            if self.2.is_none() {
+                // Read once, when the bar is first installed: the variable only ever opts out.
+                if std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                    self.2 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
+                }
             }
+            // Drain the events of the bar still installed before any rebuild below, so a click that
+            // arrives with the language change is not lost with the old channel.
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
+                // macOS keeps the menu bar it was given, so a new interface language needs a new
+                // bar: the old one is dropped as the translated one takes over.
+                if m.needs_reinstall(&self.0) {
+                    self.2 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
+                }
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
         }

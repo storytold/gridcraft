@@ -866,14 +866,18 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
     for (label, part) in [("Header", false), ("Footer", true)] {
         let r = big_button(ui, if part { Icon::Footer } else { Icon::Header }, label, label, true);
         egui::Popup::menu(&r).show(|ui| {
-            let presets: [(String, &str); 7] = [
-                (tr(app, "(none)").to_string(), ""),
-                ("Page 1".into(), "&CPage &P"),
-                ("Page 1 of ?".into(), "&CPage &P of &N"),
-                (sheet_name.clone(), "&C&A"),
-                (file.clone(), "&C&F"),
-                (format!("{sheet_name}, Page 1"), "&C&A, Page &P"),
-                (format!("{file}, Page 1"), "&C&F, Page &P"),
+            // The spec is the text the preset inserts, so its wording follows the interface
+            // language as the preview does; the `&P`/`&N` codes stay.
+            let page = tr(app, "Page");
+            let of = tr(app, "of");
+            let presets: [(String, String); 7] = [
+                (tr(app, "(none)").to_string(), String::new()),
+                (tr(app, "Page 1").to_string(), format!("&C{page} &P")),
+                (tr(app, "Page 1 of ?").to_string(), format!("&C{page} &P {of} &N")),
+                (sheet_name.clone(), "&C&A".to_string()),
+                (file.clone(), "&C&F".to_string()),
+                (format!("{sheet_name}, {}", tr(app, "Page 1")), format!("&C&A, {page} &P")),
+                (format!("{file}, {}", tr(app, "Page 1")), format!("&C&F, {page} &P")),
             ];
             for (text, spec) in presets {
                 if ui.button(text).clicked() {

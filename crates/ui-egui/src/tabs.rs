@@ -344,7 +344,12 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(
+                            ui,
+                            egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Macros preserved (not executed)"))
+                                .font(theme::ui_font(12.5))
+                                .color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -439,6 +444,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
 /// Numerical Count, Minimum, Maximum, Sum. Each one shows when it is turned on (`view.statusBar`)
 /// and the selection has a value for it.
 pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
+    let lang = app.ui.language;
     let Some(d) = app.session.active() else { return vec![] };
     let Some(sh) = d.wb.active() else { return vec![] };
     if d.selection.is_single_cell() {
@@ -455,22 +461,22 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(format!("{}: {}", lang.tr("Average"), fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(format!("{}: {}", lang.tr("Count"), st.count));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(format!("{}: {}", lang.tr("Numerical Count"), st.numeric));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(format!("{}: {}", lang.tr("Minimum"), fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(format!("{}: {}", lang.tr("Maximum"), fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(format!("{}: {}", lang.tr("Sum"), fmt(st.sum)));
     }
     parts
 }
@@ -530,6 +536,10 @@ mod tests {
         }
         app.run("selection.set", json!({"range": "A1:A5"})).unwrap();
         assert_eq!(super::selection_statistics(&app), ["Average: 4", "Count: 4", "Sum: 12"]);
+        // The same statistics in Chinese: the status bar follows the interface language.
+        app.ui.language = crate::i18n::Language::Zh;
+        assert_eq!(super::selection_statistics(&app), ["平均值: 4", "计数: 4", "求和: 12"]);
+        app.ui.language = crate::i18n::Language::En;
         app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
         assert_eq!(super::selection_statistics(&app), ["Average: 4", "Count: 4", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"]);
         app.run("view.statusBar", json!({"average": false, "count": false, "sum": false})).unwrap();
