@@ -1,5 +1,7 @@
 # Decisions
 
+> **Last updated:** 2026-11-01 · Whole-row function contexts and stable self-intersection (#3067).
+
 ## Bound repeated XLSX column expansion (#1022)
 
 Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.
@@ -32,7 +34,13 @@ This is a writer policy; interpreting implicit intersection in imported legacy f
 
 ## Whole-row references under scalar operators intersect implicitly (#3030)
 
-One narrow exception to the array-semantics stance above: a whole-row reference (`1:30`) used as an operand of a unary or binary operator is reduced by implicit intersection — the band's cell in the formula's own column, on the formula's row clamped into the band — instead of being read as an array. A full-width array can only spill sideways over the formula's neighbours, and the size of that spill depended on the sheet's used range; Excel for the web shows a single value for `=-1:30` both inside the band and below it. When the intersection lands on the formula's own cell, the stored value is read directly, so the self-read is not reported circular. Bounded ranges and whole columns keep their array behaviour, and function arguments are unaffected.
+One narrow exception to the array-semantics stance above: outside function evaluation, a whole-row reference (`1:30`) used as an operand of a unary or binary operator is reduced by implicit intersection. It selects the band's cell in the formula's own column, on the formula's row clamped into the band. Bounded ranges and whole columns keep their array behavior.
+
+Function arguments and bodies retain array evaluation, including arithmetic nested inside `SUM`, `SUMPRODUCT`, `IF`, `LET` and directly invoked lambdas. The function context is restored before evaluating a neighboring operand. Explicit `@` retains its existing intersection behavior in either context.
+
+The implicit self-cell exception reads as empty, as it does on the first calculation. Reading a previous cached formula value would feed results back into ordinary recalculation (`=1:30+1` would change from 1 to 2 to 3), without iterative calculation being enabled. Ordinary self-references still report `#CIRC!`, and references to the same address on another sheet use normal host evaluation.
+
+The below-band clamp remains provisional: #3030 observed zero for empty data both inside and below the band, but did not measure the selected nonempty cell below it. These regressions fix evaluation contexts and cached feedback; they do not establish a new Excel parity claim for that selection policy. Microsoft's [Formula versus Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2) describes the distinction between implicit intersection and array evaluation.
 
 ## Static cell pictures
 
@@ -84,3 +92,9 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-01 | minor | Keep function/lambda arrays and stable self-intersection in the narrow whole-row operator policy; below-band selection remains unverified (#3067) |
