@@ -325,6 +325,8 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
+    /// The flat wave and the serial host share this loop; splitting them hides the round order.
+    #[allow(clippy::cognitive_complexity)]
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
@@ -845,6 +847,7 @@ pub(crate) mod tests {
         .then_some(seen)
     }
 
+    #[allow(clippy::type_complexity)]
     fn snapshot(wb: &Workbook) -> (Vec<(usize, u32, u32, Value)>, Vec<(usize, CellRef, Value)>) {
         let mut cells = Vec::new();
         let mut spill_vals = Vec::new();
