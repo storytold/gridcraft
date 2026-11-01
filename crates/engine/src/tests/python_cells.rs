@@ -316,3 +316,36 @@ fn a_hidden_python_cell_on_a_protected_sheet_hides_its_code() {
     assert!(s.execute("python.set", json!({"cell": "A1", "code": "2"})).is_err());
     assert_eq!(code(&s, 0, "A1").as_deref(), Some("secret = 1\nsecret"));
 }
+
+#[test]
+fn every_merge_keeps_only_the_upper_left_cells_python_code() {
+    let mut s = s();
+    for (cmd, row) in [("home.mergeAcross", 1), ("home.mergeCells", 2), ("home.mergeCenter", 3)] {
+        plant(&mut s, 0, &format!("A{row}"), "'kept'");
+        plant(&mut s, 0, &format!("B{row}"), "'merged away'");
+        s.execute(cmd, json!({"range": format!("A{row}:B{row}")})).unwrap();
+        assert_eq!(code(&s, 0, &format!("A{row}")).as_deref(), Some("'kept'"), "{cmd}");
+        assert_eq!(code(&s, 0, &format!("B{row}")), None, "{cmd}: the hidden cell is no Python cell");
+        assert_eq!(super::v(&s, &format!("B{row}")), Value::Empty, "{cmd}");
+    }
+}
+
+#[test]
+fn unmerging_lets_a_blocked_python_result_spill_again() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = Arc::make_mut(&mut d.wb);
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("A1").unwrap()).unwrap();
+        let value = Value::Array(Arc::new(gridcraft_core::Array::new(2, 1, vec![Value::Number(5.0), Value::Number(6.0)]).unwrap()));
+        Arc::make_mut(cell.py.as_mut().unwrap()).output =
+            Some(gridcraft_model::PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
+    }
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(super::v(&s, "A2"), Value::Number(6.0));
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    assert_eq!(super::v(&s, "A1"), Value::Error(gridcraft_core::CellError::Spill), "a merged cell blocks the spill");
+    s.execute("home.unmergeCells", json!({"range": "A2:B2"})).unwrap();
+    assert_eq!((super::v(&s, "A1"), super::v(&s, "A2")), (Value::Number(5.0), Value::Number(6.0)), "it spills again");
+}
