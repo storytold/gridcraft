@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (`cargo xtask bench`: measured recalc baselines; earlier: automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -204,14 +204,26 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
-| Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Edit → recalc, 100k-deep chain | 90–106 ms (target < 100 ms) | tens of ms | measured (`cargo xtask bench`, `edit.chain`) |
+| Edit → recalc, 100k formulas reading one cell | 71–87 ms | tens of ms | measured (`edit.fanout`) |
+| Edit → 100 whole-column SUMIFS / XLOOKUP over 100k rows | 420–590 ms / 160–250 ms | not measured | measured (`edit.sumifs`, `edit.lookup`) |
+| Calculate Now, 300k formulas | 395–455 ms | not measured | measured (`recalc.full`) |
+| Save the 100k-row model (300k formulas) as XLSX | ~530 ms | not measured | measured (`xlsx.save`) |
+| Reopen that file | drops the last ~9,000 rows (element cap from #2413; fix in PR #2527, then ~1.3 s with full recalc) | opens | measured (`xlsx.open`) |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
 independent chains (native only; WASM stays single-threaded), whole-column reference
-clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measured.
+clamping, and faster whole-column SUMIFS and lookups (each formula rescans the column on every
+edit).
+
+Benchmarks: `cargo xtask bench` builds ten fixed workbooks in code, times each operation through
+`Session::execute` (median of 7 after a warm-up, results checked) and compares with a baseline
+saved by `--save`. The numbers above are ranges over several runs on an Apple M2 Pro, release
+build, 100,000 rows, 2026-10-26; recalculation is single-threaded, so core count doesn't change
+them.
 
 ## Platforms
 
@@ -327,13 +339,13 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 - Pixel comparison against Excel screenshots (planned; screenshots stay in `plan/excel/`).
 - Function results against Excel-computed oracles (a corpus repo is the planned home).
-- Recalc and open-time benchmarks on fixed workbooks (no `cargo xtask bench` yet).
 - Whether Excel opens our XLSX output without repair, across features.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Performance: `cargo xtask bench` measures recalc, entry, sort and XLSX save/open on fixed in-code workbooks; the 100k-dependent edit is 90–106 ms (was ~0.4 s, an old timing), around the 100 ms target for simple formulas; a 100k-row model doesn't reopen whole until PR #2527 lands (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
