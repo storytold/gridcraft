@@ -562,6 +562,50 @@ fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
 }
 
 #[test]
+fn saving_and_resetting_a_model_keep_the_users_own_solver_names() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=ABS(A1-3)"), ("C1", "100")]);
+    let name = |name: &str, scope: Option<usize>, formula: &str, hidden: bool| gridcraft_model::DefinedName {
+        name: name.into(),
+        scope,
+        formula: formula.into(),
+        comment: String::new(),
+        hidden,
+    };
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        // The user's own names, on the sheet and the workbook, and Excel's Solver names the
+        // model replaces.
+        wb.names.push(name("solver_budget", Some(0), "Sheet1!$C$1", false));
+        wb.names.push(name("Solver_Lhs_Total", Some(0), "Sheet1!$C$1", false));
+        wb.names.push(name("solver_budget", None, "Sheet1!$C$1", false));
+        wb.names.push(name("solver_lin", Some(0), "2", true));
+        wb.names.push(name("solver_lhs12", Some(0), "Sheet1!$A$1", true));
+    }
+    let names = |s: &Session| -> Vec<String> {
+        let mut v: Vec<String> = s.doc().unwrap().wb.names.iter().map(|n| format!("{}@{:?}", n.name, n.scope)).collect();
+        v.sort();
+        v
+    };
+    let mine = ["Solver_Lhs_Total@Some(0)", "solver_budget@None", "solver_budget@Some(0)"];
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let after = names(&s);
+    assert!(mine.iter().all(|n| after.contains(&n.to_string())), "{after:?}");
+    assert!(!after.iter().any(|n| n.starts_with("solver_lin") || n.starts_with("solver_lhs12")), "{after:?}");
+    // Load Model saves the model again; Reset All removes it and nothing else.
+    s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap();
+    s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert!(mine.iter().all(|n| names(&s).contains(&n.to_string())), "{:?}", names(&s));
+    let model_names = names(&s).len() - mine.len();
+    let r = s.execute("data.solverReset", json!({})).unwrap();
+    assert_eq!((r["removed"].as_u64(), r["masked"].as_bool()), (Some(model_names as u64), Some(false)), "{r}");
+    assert_eq!(names(&s), mine);
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+}
+
+#[test]
 fn load_model_refuses_a_range_with_a_cell_without_a_formula() {
     let mut s = s();
     set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2")]);

@@ -317,10 +317,26 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
 /// in seconds. They are saved under a GridCraft name, which Excel ignores.
 const STALL_NAME: &str = "gridcraft_solver_stall";
 
-/// Whether `name` is one of the hidden names of a saved model.
+/// The names of a saved model after `solver_`, as Excel's Solver writes them (GridCraft writes
+/// some of them). Saving a model and Reset All remove these and no other `solver_` names.
+const SOLVER_KEYS: [&str; 28] = [
+    "adj", "cvg", "drv", "eng", "est", "itr", "lin", "mip", "mni", "mrt", "msl", "neg", "nod", "num", "nwt", "opt", "pre", "rbv", "rlx", "rsd",
+    "scl", "sho", "ssz", "tim", "tol", "typ", "val", "ver",
+];
+
+/// Whether `name` is one of the names of a saved model: Excel's Solver names (`solver_opt`,
+/// `solver_lhs1` and so on) and GridCraft's own. A user's name such as `solver_budget` is not.
 pub(super) fn is_model_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name.starts_with("solver_") || name == STALL_NAME
+    if name == STALL_NAME {
+        return true;
+    }
+    let Some(key) = name.strip_prefix("solver_") else { return false };
+    if SOLVER_KEYS.contains(&key) {
+        return true;
+    }
+    // One name per constraint: solver_lhs1, solver_rel1, solver_rhs1, …
+    ["lhs", "rel", "rhs"].iter().filter_map(|p| key.strip_prefix(p)).any(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The model as hidden names scoped to its sheet (replacing any saved before).
