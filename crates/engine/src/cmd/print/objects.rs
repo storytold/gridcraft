@@ -32,10 +32,12 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
 /// Most source lines printed for an equation that has no layout.
 pub(super) const MAX_FALLBACK_LINES: usize = 500;
 
-/// The lines of `text` printed in place of an equation that has no layout: those that fit a frame
-/// `h` points tall at `line_h` points per line (at least the first), and never more than
+/// The lines of `text` printed in place of an equation that has no layout: those of its first
+/// `MAX_SOURCE_BYTES` (a longer source never lays out, and a file can carry megabytes) that fit a
+/// frame `h` points tall at `line_h` points per line (at least the first), and never more than
 /// [`MAX_FALLBACK_LINES`]. A single `pg.text` call would print every newline as `?`.
 pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<Item = &str> {
+    let text = crate::cmd::equation::source_excerpt(text);
     let fit = h / line_h;
     let n = if fit >= MAX_FALLBACK_LINES as f32 {
         MAX_FALLBACK_LINES

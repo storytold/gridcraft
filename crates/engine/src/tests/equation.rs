@@ -100,6 +100,23 @@ fn edit_keeps_the_scale_and_fits_the_frame() {
 }
 
 #[test]
+fn the_source_excerpt_is_at_most_the_cap_and_whole_chars() {
+    use crate::cmd::equation::source_excerpt;
+    use gridcraft_math::MAX_SOURCE_BYTES as CAP;
+    assert_eq!(source_excerpt(""), "");
+    assert_eq!(source_excerpt("x+y"), "x+y");
+    let at = "x".repeat(CAP);
+    assert_eq!(source_excerpt(&at), at, "a source at the cap is whole");
+    assert_eq!(source_excerpt(&format!("{at}tail")), at);
+    // A three-byte character straddling the cap is left out rather than cut in two.
+    let s = format!("{}\u{20AC}", "x".repeat(CAP - 1));
+    assert_eq!(source_excerpt(&s), "x".repeat(CAP - 1));
+    let s = format!("{}\u{20AC}\u{20AC}", "x".repeat(CAP - 2));
+    assert_eq!(source_excerpt(&s).len(), CAP - 2);
+    assert_eq!(source_excerpt(&"\u{1F600}".repeat(2000)).len(), CAP);
+}
+
+#[test]
 fn edit_refuses_what_is_not_an_equation() {
     let mut s = s();
     let tb = s.execute("insert.textBox", json!({"text": "hi"})).unwrap()["shape"].as_u64().unwrap();

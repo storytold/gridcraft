@@ -249,7 +249,8 @@ pub fn paint_shape(p: &Painter, r: Rect, sp: &Shape, wb: &Workbook, z: f32) {
         // frame so it can be found and fixed.
         other => {
             let font = FontId::new(13.0 * z, FontFamily::Name(theme::MONO.into()));
-            let g = p.layout(sp.text.clone(), font, t.cell_text, (r.width() - 8.0 * z).max(1.0));
+            let source = gridcraft_engine::cmd::equation::source_excerpt(&sp.text).to_owned();
+            let g = p.layout(source, font, t.cell_text, (r.width() - 8.0 * z).max(1.0));
             p.galley(r.min + vec2(4.0, 4.0) * z, g, t.cell_text);
             if matches!(other, Some(Err(_))) {
                 let dash = egui::Shape::dashed_line(

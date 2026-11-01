@@ -144,6 +144,22 @@ fn edit_equation(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- PDF
 
+/// The first [`gridcraft_math::MAX_SOURCE_BYTES`] bytes of an equation's source, cut at a char
+/// boundary. A longer source never lays out (the editor refuses it, and a file can carry one of
+/// megabytes), so what shows it as text, the sheet painter and the PDF fallback, shows this much
+/// and does no work on the rest.
+pub fn source_excerpt(text: &str) -> &str {
+    let cap = gridcraft_math::MAX_SOURCE_BYTES;
+    if text.len() <= cap {
+        return text;
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.get(..end).unwrap_or("")
+}
+
 /// The PDF face for a glyph: Symbol for Greek letters and operators, else the Times (or
 /// Helvetica, Courier) face for its style. `None` when no standard font can show `c`.
 fn pdf_font(c: char, face: gridcraft_math::Face) -> Option<gridcraft_pdf::Font> {

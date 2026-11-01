@@ -628,6 +628,32 @@ fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+fn an_equation_source_of_a_megabyte_prints_a_bounded_excerpt() {
+    // A file can carry a source far past `MAX_SOURCE_BYTES` (the drawing part may be 512 MiB). It
+    // never lays out, so the fallback prints the first 4,096 bytes and does no work on the rest:
+    // the PDF holds one run of that length, not the megabyte, and export takes bounded time.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut() {
+            x.text = "l".repeat(1 << 20);
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let start = std::time::Instant::now();
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let took = start.elapsed();
+    let text = String::from_utf8_lossy(&pdf);
+    let longest = text.split(|c| c != 'l').map(str::len).max().unwrap_or(0);
+    assert_eq!(longest, gridcraft_math::MAX_SOURCE_BYTES, "the run is the excerpt and no more");
+    assert!(pdf.len() < 64 * 1024, "the PDF holds the excerpt, not the megabyte: {} bytes", pdf.len());
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+}
+
+#[test]
 fn equations_print_with_the_symbol_font() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
