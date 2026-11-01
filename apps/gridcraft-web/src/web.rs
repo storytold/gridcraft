@@ -154,6 +154,10 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        // Apply browser commands before persisting preferences changed in this frame.
+        if let Some(bridge) = &self.bridge {
+            bridge.poll_mcp(&mut self.app, ctx);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
