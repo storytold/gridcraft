@@ -331,6 +331,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             && (consume_fresh_key(i, egui::Key::N) || consume_fresh_key(i, egui::Key::D))
                         {
                             Some(crate::SaveAnswer::DontSave)
+                        } else if i.modifiers.is_none()
+                            && (consume_fresh_key(i, egui::Key::Escape) || consume_fresh_key(i, egui::Key::C))
+                        {
+                            Some(crate::SaveAnswer::Cancel)
                         } else {
                             None
                         }
@@ -475,14 +479,14 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
     });
 }
 
-/// Consumes one fresh, unmodified press of `key`. Held-key repeats stay queued.
+/// Consumes one fresh, unmodified press of `key` (matching logical key or physical key layout). Held-key repeats stay queued.
 fn consume_fresh_key(input: &mut egui::InputState, key: egui::Key) -> bool {
     let before = input.events.len();
     input.events.retain(|event| {
         !matches!(
             event,
-            egui::Event::Key { key: ev_key, modifiers, pressed: true, repeat: false, .. }
-                if *ev_key == key && modifiers.is_none()
+            egui::Event::Key { key: ev_key, physical_key, modifiers, pressed: true, repeat: false, .. }
+                if (*ev_key == key || *physical_key == Some(key)) && modifiers.is_none()
         )
     });
     input.events.len() != before
