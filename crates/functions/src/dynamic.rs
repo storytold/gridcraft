@@ -442,10 +442,17 @@ fn span(len: usize, n: Option<i64>, take: bool) -> R<(usize, usize)> {
     }
 }
 
+/// The part of a `rows`×`cols` grid that TAKE (`take = true`) or DROP keeps, from its `rows` and
+/// `columns` arguments (`args[1]`, `args[2]`): `(first row, end row, first column, end column)`.
+pub fn take_drop_window(rows: usize, cols: usize, args: &[Arg], take: bool) -> R<(usize, usize, usize, usize)> {
+    let (r0, r1) = span(rows, opt_count(args, 1)?, take)?;
+    let (c0, c1) = span(cols, opt_count(args, 2)?, take)?;
+    Ok((r0, r1, c0, c1))
+}
+
 fn take_drop(args: &[Arg], take: bool) -> R<Value> {
     let a = arr_arg(args, 0)?;
-    let (r0, r1) = span(a.rows, opt_count(args, 1)?, take)?;
-    let (c0, c1) = span(a.cols, opt_count(args, 2)?, take)?;
+    let (r0, r1, c0, c1) = take_drop_window(a.rows, a.cols, args, take)?;
     let rows: Vec<Vec<Value>> = (r0..r1).map(|r| (c0..c1).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()).collect();
     from_rows(rows, &Value::Empty)
 }

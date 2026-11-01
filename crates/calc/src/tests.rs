@@ -176,6 +176,91 @@ fn index_with_arrays_of_positions() {
     assert_eq!(t.num("E7"), 6.0);
 }
 
+/// As observed in Excel: COUNTA skips a blank cell of a reference, and counts a blank in an array result.
+#[test]
+fn counta_counts_the_blanks_of_array_results() {
+    let mut t = T::new();
+    for (cell, v) in [("A1", "a"), ("A3", "b"), ("A4", "a")] {
+        t.set(cell, v);
+    }
+    for (i, flag) in [1, 1, 1, 0, 1].iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &flag.to_string());
+    }
+    for (formula, expected) in [
+        ("=COUNTA(A1:A5)", 3.0),
+        ("=COUNTA(INDEX(A1:A5,0))", 3.0),
+        ("=COUNTA(OFFSET(A1,0,0,5))", 3.0),
+        ("=COUNTA(IF(TRUE,A1:A5))", 3.0),
+        ("=COUNTA(CHOOSE(1,A1:A5))", 3.0),
+        ("=COUNTA(LET(x,A1:A5,x))", 3.0),
+        ("=COUNTA(UNIQUE(A1:A5))", 3.0),
+        ("=COUNTA(FILTER(A1:A5,B1:B5=1))", 4.0),
+        ("=COUNTA(SORT(A1:A5))", 5.0),
+        ("=COUNTA(TRANSPOSE(A1:A5))", 5.0),
+        ("=COUNTA(VSTACK(A1:A5))", 5.0),
+        ("=COUNTA(TOCOL(A1:A5))", 5.0),
+        ("=COUNTA(CHOOSEROWS(A1:A5,1,2))", 2.0),
+        ("=COUNTA(EXPAND(A1:A5,6))", 6.0),
+        ("=COUNTA(IF(B1:B5=1,A1:A5))", 5.0),
+    ] {
+        t.set("D1", formula);
+        assert_eq!(t.num("D1"), expected, "{formula}");
+    }
+}
+
+/// As observed in Excel: TAKE and DROP of a reference return a reference; of an array, an array.
+#[test]
+fn take_and_drop_of_a_reference_are_references() {
+    let mut t = T::new();
+    for (cell, v) in [("A1", "a"), ("A3", "b"), ("A4", "a"), ("C2", "x")] {
+        t.set(cell, v);
+    }
+    for i in 1..=5 {
+        t.set(&format!("B{i}"), &i.to_string());
+    }
+    for (formula, expected) in [
+        ("=COUNTA(TAKE(A1:A5,3))", 2.0),
+        ("=COUNTA(DROP(A1:A5,1))", 2.0),
+        ("=COUNTA(TAKE(A1:A5,-2))", 1.0),
+        ("=COUNTA(DROP(A1:A5,-1))", 3.0),
+        ("=COUNTA(TAKE(A1:A5,9))", 3.0),
+        ("=COUNTA(TAKE(A1:C5,2,1))", 1.0),
+        ("=COUNTA(TAKE(A1:C5,,1))", 3.0),
+        ("=COUNTA(DROP(A1:C5,,2))", 1.0),
+        ("=COUNTA(TAKE(A:A,2))", 1.0),
+        ("=COUNTA(TAKE(A:A,-2))", 0.0),
+        ("=COUNTA(DROP(A:A,1))", 2.0),
+        ("=COUNTA(TAKE(A1:A5,-1.9))", 0.0),
+        ("=COUNTA(TAKE(TAKE(A1:A5,4),-3))", 2.0),
+        ("=COUNTA(DROP(TAKE(A1:A5,4),1))", 2.0),
+        ("=COUNTA(UNIQUE(TAKE(A1:A5,3)))", 3.0),
+        ("=ROWS(TAKE(A:A,-2))", 2.0),
+        ("=ROW(TAKE(A:A,-1))", 1_048_576.0),
+        ("=ROW(TAKE(A1:A5,-1))", 5.0),
+        ("=COLUMN(TAKE(B1:C5,1,-1))", 3.0),
+        ("=SUM(TAKE(B1:B5,2))", 3.0),
+        ("=SUM(DROP(B1:B5,-1))", 10.0),
+        ("=SUM(TAKE(B1:B5,2):B4)", 10.0),
+    ] {
+        t.set("E1", formula);
+        assert_eq!(t.num("E1"), expected, "{formula}");
+    }
+    for (formula, expected) in [
+        ("=ISREF(TAKE(A1:A5,3))", true),
+        ("=ISREF(DROP(A1:A5,1))", true),
+        ("=ISREF(TAKE(B1:C5,2,1))", true),
+        ("=ISREF(TAKE({1;2},1))", false),
+        ("=ISREF(CHOOSEROWS(A1:A5,1))", false),
+    ] {
+        t.set("E1", formula);
+        assert_eq!(t.get("E1"), Value::Bool(expected), "{formula}");
+    }
+    for (formula, expected) in [("=TAKE(A1:A5,0)", CellError::Calc), ("=DROP(A1:A5,9)", CellError::Calc), ("=TAKE(A1:A5,\"x\")", CellError::Value)] {
+        t.set("E1", formula);
+        assert_eq!(t.get("E1"), Value::Error(expected), "{formula}");
+    }
+}
+
 #[test]
 fn index_area_number_overflow() {
     let mut t = T::new();

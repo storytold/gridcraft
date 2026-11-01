@@ -281,7 +281,9 @@ pub(super) fn counta_impl(a: &[Arg]) -> f64 {
     let mut c = 0usize;
     for x in a {
         match &x.value {
-            Value::Array(arr) => c += arr.iter().filter(|v| !v.is_empty()).count(),
+            Value::Array(arr) if x.from_ref => c += arr.iter().filter(|v| !v.is_empty()).count(),
+            // A blank in an array result counts, as in Excel: COUNTA(UNIQUE(A1:A5)) includes the blank row.
+            Value::Array(arr) => c += arr.iter().count(),
             Value::Empty if x.from_ref => {}
             _ => c += 1,
         }
