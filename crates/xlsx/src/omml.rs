@@ -6,10 +6,21 @@ use crate::xml::El;
 
 /// Deepest OMML nesting converted.
 const MAX_DEPTH: usize = 64;
+/// Longest LaTeX the conversion produces before it gives up. `gridcraft_math::check` refuses a
+/// longer source anyway, so converting the rest of a wide or long equation would only spend time
+/// and memory on a hostile file.
+const MAX_OUT_BYTES: usize = gridcraft_math::MAX_SOURCE_BYTES;
 
 /// The LaTeX for an `m:oMath` (or `m:oMathPara`) element, if every part is in the subset and the
 /// result lays out.
 pub fn to_latex(e: &El) -> Option<String> {
+    let out = convert(e)?;
+    (!out.is_empty() && gridcraft_math::check(&out).is_ok()).then_some(out)
+}
+
+/// The conversion itself, before the final check: `None` for a construct outside the subset, an
+/// equation nested past [`MAX_DEPTH`] or one whose LaTeX passes [`MAX_OUT_BYTES`].
+fn convert(e: &El) -> Option<String> {
     let mut out = String::new();
     match e.name.as_str() {
         "oMathPara" => {
@@ -24,8 +35,7 @@ pub fn to_latex(e: &El) -> Option<String> {
         "oMath" => seq(e, &mut out, 0)?,
         _ => return None,
     }
-    let out = out.trim().to_string();
-    (!out.is_empty() && gridcraft_math::check(&out).is_ok()).then_some(out)
+    Some(out.trim().to_string())
 }
 
 /// The first `m:oMath`/`m:oMathPara` under `e` (an `a14:m` element or a paragraph), searched to a
@@ -80,6 +90,9 @@ fn seq(e: &El, out: &mut String, depth: usize) -> Option<()> {
     }
     for c in &e.children {
         node(c, out, depth + 1)?;
+        if out.len() > MAX_OUT_BYTES {
+            return None;
+        }
     }
     Some(())
 }
@@ -193,20 +206,24 @@ fn run_text(r: &El) -> String {
     r.kids("t").map(|t| t.text.as_str()).collect()
 }
 
-fn escape_text(s: &str) -> String {
-    let mut o = String::new();
+/// Appends `s` escaped for `\text{…}`; `None` once the LaTeX passes [`MAX_OUT_BYTES`], checked
+/// after every character so that a long run never expands in full.
+fn escape_text(s: &str, out: &mut String) -> Option<()> {
     for c in s.chars() {
         match c {
             '{' | '}' | '%' | '#' | '&' | '$' | '_' => {
-                o.push('\\');
-                o.push(c);
+                out.push('\\');
+                out.push(c);
             }
-            '\\' => o.push_str("\\textbackslash "),
-            '^' | '~' => o.push(' '),
-            c => o.push(c),
+            '\\' => out.push_str("\\textbackslash "),
+            '^' | '~' => out.push(' '),
+            c => out.push(c),
+        }
+        if out.len() > MAX_OUT_BYTES {
+            return None;
         }
     }
-    o
+    Some(())
 }
 
 /// Known operator names written upright in a run (`sin`, `log`, `lim`).
@@ -223,7 +240,7 @@ fn run(r: &El, out: &mut String) -> Option<()> {
     let rpr = r.child("rPr");
     if on(rpr, "nor") {
         out.push_str("\\text{");
-        out.push_str(&escape_text(&text));
+        escape_text(&text, out)?;
         out.push('}');
         return Some(());
     }
@@ -252,6 +269,11 @@ fn run(r: &El, out: &mut String) -> Option<()> {
         match char_latex(c) {
             Some(l) => out.push_str(l),
             None => out.push(c),
+        }
+        // Checked per character, not from the run's byte length: a character may map to a
+        // longer macro or a shorter sign, so only the LaTeX produced counts.
+        if out.len() > MAX_OUT_BYTES {
+            return None;
         }
     }
     if wrap.is_some() {
@@ -551,6 +573,32 @@ mod tests {
         // Deep nesting stops instead of recursing without bound.
         let deep = format!("{}<m:r><m:t>x</m:t></m:r>{}", "<m:box><m:e>".repeat(100), "</m:e></m:box>".repeat(100));
         assert_eq!(latex(&deep), None);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+    fn latex_past_the_source_cap_stops_converting_and_falls_back() {
+        // 100,000 sibling runs: the conversion stops once its LaTeX passes the cap that
+        // `gridcraft_math::check` enforces, instead of building the whole string and then
+        // refusing it, so the caller falls back to the writer's text in bounded time.
+        let wide = el(&"<m:r><m:t>x</m:t></m:r>".repeat(100_000));
+        let start = std::time::Instant::now();
+        assert_eq!(convert(&wide), None);
+        assert_eq!(to_latex(&wide), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        // One run whose text alone is past the cap is refused before it is escaped (each
+        // backslash would otherwise grow to `\textbackslash `).
+        let long = el(&format!("<m:r><m:rPr><m:nor/></m:rPr><m:t>{}</m:t></m:r>", "\\".repeat(MAX_OUT_BYTES + 1)));
+        assert_eq!(convert(&long), None);
+        // Groups count the braces they add even when no run adds text.
+        let groups = el(&"<m:box><m:e/></m:box>".repeat(MAX_OUT_BYTES / 2 + 1));
+        assert_eq!(convert(&groups), None);
+        // At the cap the equation still reads back, and the cap counts the LaTeX produced, not
+        // the run's bytes: a minus sign (three bytes of UTF-8) becomes a one-byte `-`.
+        let at_cap = el(&"<m:r><m:t>x</m:t></m:r>".repeat(MAX_OUT_BYTES));
+        assert_eq!(to_latex(&at_cap).map(|s| s.len()), Some(MAX_OUT_BYTES));
+        let minus = el(&format!("<m:r><m:t>{}</m:t></m:r>", "\u{2212}".repeat(MAX_OUT_BYTES)));
+        assert_eq!(to_latex(&minus), Some("-".repeat(MAX_OUT_BYTES)));
     }
 
     #[test]
