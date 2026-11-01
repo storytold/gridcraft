@@ -198,6 +198,36 @@ fn whole_row_self_intersection_does_not_reuse_cached_results() {
     t.calc.cells_changed(&mut t.wb, &[(1, c("A1")), (1, c("B3"))]);
     t.set("B3", "=-Other!1:30");
     assert_eq!(t.get("B3"), Value::Number(-10.0), "the same address on another sheet is evaluated normally");
+    // A name scoped to Other evaluates its unqualified rows on Other, but the
+    // formula's own cell is still Sheet1!B3: Other!B3 is read, not blanked.
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "OtherBand".into(),
+        scope: Some(1),
+        formula: "-1:30".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.calc.rebuild(&t.wb);
+    t.set("B3", "=Other!OtherBand");
+    assert_eq!(t.get("B3"), Value::Number(-10.0), "a scoped name does not move the formula's own cell");
+}
+
+#[test]
+fn whole_row_computed_criteria_intersect_at_the_criteria_cell() {
+    // #3030: a database function's computed criterion is the criteria cell's own
+    // formula, so `=3:3>0` intersects at that cell's column (K) on each record's
+    // row, not at column A as an array argument's first element would.
+    let mut t = T::new();
+    for (row, name, k, a) in [(3, "a", "-1", "1"), (4, "b", "1", "-1"), (5, "c", "-1", "1")] {
+        t.set(&format!("F{row}"), name);
+        t.set(&format!("K{row}"), k);
+        t.set(&format!("A{row}"), a);
+    }
+    t.set("F2", "name");
+    t.set("K46", "Formula");
+    t.set("K47", "=3:3>0");
+    t.set("B1", "=DGET($F$2:$F$5,\"name\",K46:K47)");
+    assert_eq!(t.get("B1"), Value::text("b"));
 }
 
 #[test]
