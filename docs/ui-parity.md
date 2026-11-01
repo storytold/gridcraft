@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (RefEdit reference boxes in dialogs; Goal Seek, Solver and Data Analysis use them; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -175,11 +175,19 @@ applies to as it is (#2348).
 
 Reference boxes (RefEdit) take a range by selection on the grid: while a box is the one being
 picked into, clicking or dragging on the sheet writes the absolute reference into it (with the
-sheet name when the selection is on another sheet), and typing still edits it. The box's collapse
-button shrinks the dialog to the box while the person selects; Escape, Enter or the expand button
-restore it, and the sheet and selection from before picking come back when the dialog runs its
-command or closes. The collapse button is reachable from the keyboard and named for screen
-readers. Goal Seek, Solver (objective, variable cells and both sides of a new constraint) and
+sheet name, quoted when it needs quotes, when the selection is on another sheet:
+`'Rates Table'!$A$2:$A$4`), and typing still edits it. The box's collapse button shrinks the
+dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
+there does not press OK, which is not shown while collapsed), and the sheet and selection from
+before picking come back when the dialog runs its command or closes, or when a ribbon command
+opens another dialog over it. While collapsed, the arrow keys move the selection on the grid,
+Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, and the box
+follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
+reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
+elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
+keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. The
+collapse button is reachable from the keyboard and named for screen readers. Goal Seek, Solver
+(objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
 Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
 Filter) still take typed references.
@@ -207,7 +215,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver and Data Analysis use them |
+| 2026-11-01 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, and a dialog opened over a picking one puts the selection back |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |
