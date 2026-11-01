@@ -337,6 +337,11 @@ fn block_end(s: &str) -> Option<usize> {
 /// when the part does not parse: it is kept exactly as the file held it.
 fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     let raw = std::str::from_utf8(data).ok()?;
+    // Nothing of ours in the part and nothing to write: leave the file's part alone (a
+    // foreign-only connections.xml is never rewritten, byte for byte).
+    if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
+        return None;
+    }
     // Foreign connections are kept as the exact bytes the file held: each <connection> block
     // (self-closing or a whole tree) is scanned out of the raw XML with a depth count \—
     // a child's `/>` is not the connection's end, and a later block's `</connection>` is not
@@ -344,14 +349,22 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // are copied verbatim.
     let mut foreign = String::new();
     let mut rest = raw;
-    let mut foreign_count = 0u32;
-    while let Some(start) = rest.find("<connection ") {
+    // The element name may be followed by any XML whitespace, not only a space: a tab or a
+    // newline between `<connection` and its first attribute is valid, and a flat search for
+    // "<connection " would skip such a block (and drop it from the merge).
+    loop {
+        // The element name may be followed by any XML whitespace, not only a space: a tab or a
+        // newline between `<connection` and its first attribute is valid. `<connection` also
+        // prefixes `<connections` (the root), so every occurrence is checked until one is an
+        // element of its own.
+        let Some(start) = rest.match_indices("<connection").map(|(s, _)| s).find(|&s| {
+            rest.as_bytes().get(s + "<connection".len()).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        }) else { break };
         let after = &rest[start..];
         let end = block_end(after)?;
         let block = &after[..end];
         if !block.contains(crate::write::GC_URI) {
             foreign.push_str(block);
-            foreign_count += 1;
         }
         rest = &after[end..];
     }
@@ -373,7 +386,9 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
         crate::write::NS_MAIN,
         crate::write::GC_NS);
     w.push_str(&foreign);
-    let mut id = foreign_count + 1;
+    // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
+    // start past the highest id the part holds, never at a count that could collide.
+    let mut id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0) + 1;
     for q in &wb.web_queries {
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
         let tid = q.table_id.unwrap_or(0);
@@ -417,9 +432,10 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     // since the open, and a save must write the current state, not the file's. Foreign
     // connections (a database query) are kept verbatim; GridCraft's (the ones with the
     // extension element) are replaced wholesale by the model's.
-    if !wb.web_queries.is_empty()
-        && let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml")
-    {
+    if let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml") {
+        // Runs even when the model holds no connections now: the part's stale GridCraft
+        // connections (removed since the open) must not survive the save, while foreign ones
+        // stay whatever the model does.
         if let Some(merged) = merge_connections(&q.data, wb) {
             q.data = merged.into_bytes().into();
         }

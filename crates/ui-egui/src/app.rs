@@ -47,6 +47,8 @@ impl SheetApp {
             control_rx: None,
             #[cfg(not(target_arch = "wasm32"))]
             fetch: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            reaped: std::collections::VecDeque::new(),
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -244,6 +246,7 @@ impl SheetApp {
         // preview or import whose dialog is gone is dropped — its result has nowhere to land.
         #[cfg(not(target_arch = "wasm32"))]
         {
+            self.reap_fetches();
             // This block runs in every window's pass; a fetch belongs to the window that
             // started it, so only that window polls or discards it \u{2014} another window drawing
             // first must not consume a result the owning window's dialog still expects. The

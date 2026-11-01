@@ -98,7 +98,22 @@ impl SheetApp {
     /// receiver went with the fetch.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn discard_fetch(&mut self) {
-        drop(self.fetch.take());
+        if let Some(fetch) = self.fetch.take() {
+            // Not detached into the void and not joined here: the handle goes to the reaper,
+            // which joins finished workers on later passes (freeing their results) and drops
+            // the oldest when the list grows past its bound (a capped list cannot grow with
+            // repeated cancellations; a dropped handle detaches, same as std's own bounds).
+            self.reaped.push_back(fetch.handle);
+            self.reaped.truncate(8);
+        }
+    }
+
+    /// Joins reaped workers that have finished, freeing their results. Called from the app's
+    /// regular update; a finished worker's join is instantaneous, and the list is capped, so
+    /// this never blocks meaningfully and never grows unbounded.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn reap_fetches(&mut self) {
+        self.reaped.retain_mut(|h| !h.as_ref().is_some_and(|h| h.is_finished()));
     }
 
     /// Applies a finished fetch: the downloaded pages go to `command` as `prefetchedByUrl` and

@@ -203,3 +203,48 @@ fn the_depth_scan_handles_quoted_angle_brackets_and_comments() {
     assert!(text.contains("name=\"prices\""), "our connection is merged in");
     assert_eq!(text.matches("<connection ").count(), 2, "exactly two connections");
 }
+
+#[test]
+/// Removing the last web query from a reopened workbook sticks: the stale GridCraft
+/// connection must not survive the save, and the foreign one must (CodeRabbit's reopen/save
+/// regression: clearing the model results in no web queries on the next read).
+fn clearing_the_last_web_query_after_reopen_survives_the_save() {
+    let mut wb = wb_with_connections();
+    wb.preserved = None;
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (mut reopened, _) = read_xlsx(&bytes).expect("reopens");
+    assert_eq!(reopened.web_queries.len(), 2);
+    reopened.web_queries.clear();
+    let bytes2 = write_xlsx(&reopened).expect("saves again");
+    let (final_wb, _) = read_xlsx(&bytes2).expect("reopens again");
+    assert!(final_wb.web_queries.is_empty(), "the cleared connections did not come back: {:?}", final_wb.web_queries.iter().map(|q| q.name.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+/// A connection element whose name is followed by a newline or tab (valid XML) is scanned:
+/// the flat "<connection " search would skip and drop it on a merge.
+fn a_connection_with_whitespace_after_its_name_is_scanned() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection
+        id="1"
+        name="Spaced"
+        type="4"/></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("name=\"Spaced\""), "the whitespace-formatted foreign connection is kept verbatim");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+}

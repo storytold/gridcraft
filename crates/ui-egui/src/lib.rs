@@ -236,6 +236,10 @@ pub struct SheetApp {
     /// The From Web page fetch running on a worker thread (native only; see `web_fetch`).
     #[cfg(not(target_arch = "wasm32"))]
     pub fetch: Option<PendingFetch>,
+    /// Workers whose fetch was discarded (dialog or window closed while it ran): joined when
+    /// finished, capped, so a cancel neither detaches into the void nor blocks the UI.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub reaped: std::collections::VecDeque<Option<std::thread::JoinHandle<Json>>>,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
