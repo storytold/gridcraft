@@ -39,8 +39,8 @@ chrono = { version = "0.4.45", default-features = false, features = ["std", "clo
 web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
-quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
 # Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).
 aes = { version = "0.9", default-features = false }
@@ -58,7 +58,7 @@ arboard = { version = "3.6", default-features = false }
 sys-locale = "0.3"
 # Font parser egui's epaint uses; the UI validates system font files with it before handing them
 # to egui, which panics on a file it can't parse. Same version as epaint's, so no second copy.
-skrifa = { version = "0.44", default-features = false, features = ["std"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
