@@ -833,6 +833,69 @@ fn solver_dialog_saves_loads_and_resets_the_model() {
 }
 
 #[test]
+fn solver_reset_all_and_load_model_drop_the_old_models_options() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    // A GRG Nonlinear model on cells, which has no Evolutionary options.
+    s.execute("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "goal": "min", "variables": "A1"}})).unwrap();
+    let mut h = harness(s);
+    let old = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "requireBounds": false, "convergence": "0.5", "randomSeed": "11", "populationSize": "40", "mutationRate": "0.5", "generationsWithoutImprovement": "5", "modelArea": true, "modelRange": "H1"});
+    h.state_mut().open_dialog("solver", old.clone());
+    h.run_steps(2);
+    let keys = ["requireBounds", "convergence", "randomSeed", "populationSize", "mutationRate", "generationsWithoutImprovement"];
+    let left = |h: &egui_kittest::Harness<'_, SheetApp>| -> Vec<&str> {
+        let d = h.state().dialog.as_ref().unwrap();
+        keys.into_iter().filter(|k| d.values.contains_key(*k)).collect()
+    };
+    let kept = |h: &egui_kittest::Harness<'_, SheetApp>| -> Vec<&str> {
+        let d = h.state().dialog.as_ref().unwrap();
+        keys.into_iter().filter(|k| d.values.get(*k) == old.get(*k)).collect()
+    };
+    // Load Model keeps none of the old options: the loaded model's own, or none.
+    h.get_by_label("Load").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("method"), Some(&json!("grg")));
+    assert_eq!(kept(&h), Vec::<&str>::new());
+    // Reset All drops them.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in old.as_object().unwrap() {
+            d.values.insert(k.clone(), v.clone());
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    assert_eq!(left(&h), Vec::<&str>::new());
+    // A new Evolutionary model then solves with the default options.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [
+            ("objective", json!("B1")),
+            ("goal", json!("min")),
+            ("variables", json!("A1")),
+            ("constraints", json!(["A1 <= 10"])),
+            ("method", json!("evolutionary")),
+        ] {
+            d.values.insert(k.into(), v);
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!(
+        (saved["requireBounds"].as_bool(), saved["randomSeed"].as_f64(), saved["convergence"].as_f64()),
+        (Some(true), Some(0.0), Some(0.0001)),
+        "{saved}"
+    );
+    assert_eq!((saved["populationSize"].as_f64(), saved["generationsWithoutImprovement"].as_f64()), (Some(100.0), Some(50.0)), "{saved}");
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

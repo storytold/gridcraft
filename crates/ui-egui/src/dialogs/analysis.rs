@@ -169,6 +169,19 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     ok_cancel(ui, confirm, open);
 }
 
+/// The keys of the model's options in the Solver Parameters form. A key that is absent means
+/// the option's default, so Reset All and Load Model remove them all before a model of their
+/// own; an option of the model before would otherwise go with the next solve.
+const SOLVER_OPTION_KEYS: [&str; 6] =
+    ["convergence", "mutationRate", "populationSize", "randomSeed", "generationsWithoutImprovement", "requireBounds"];
+
+/// Removes the model's options from the form, so the next solve uses their defaults.
+fn clear_solver_options(d: &mut Dialog) {
+    for key in SOLVER_OPTION_KEYS {
+        d.values.remove(key);
+    }
+}
+
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
 /// command; the result opens Solver Results. Reset All clears the form and the sheet's model;
 /// Load/Save reads or writes the model on cells of the sheet.
@@ -299,6 +312,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     ] {
                         d.values.insert(k.into(), v);
                     }
+                    clear_solver_options(d);
                     d.values.remove("modelNote");
                 }
                 Err(e) => {
@@ -321,6 +335,8 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                 match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
                     Ok(r) => {
                         if let Some(m) = r.get("model").and_then(Json::as_object) {
+                            // The loaded model's options only: one it omits takes its default.
+                            clear_solver_options(d);
                             for (k, x) in m {
                                 d.values.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
                             }
