@@ -64,9 +64,162 @@ pub(crate) const TIMES_BOLD: [u16; 95] = [
     394, 220, 394, 520, // '{'..'~'
 ];
 
+/// Latin Extended-A (U+0100..=U+017F): the standard (Adobe Glyph List) glyph name of each
+/// character and an ASCII character of similar width.
+pub(crate) const LATIN_EXT_A: [(&str, char); 128] = [
+    ("Amacron", 'A'),
+    ("amacron", 'a'),
+    ("Abreve", 'A'),
+    ("abreve", 'a'),
+    ("Aogonek", 'A'),
+    ("aogonek", 'a'),
+    ("Cacute", 'C'),
+    ("cacute", 'c'),
+    ("Ccircumflex", 'C'),
+    ("ccircumflex", 'c'),
+    ("Cdotaccent", 'C'),
+    ("cdotaccent", 'c'),
+    ("Ccaron", 'C'),
+    ("ccaron", 'c'),
+    ("Dcaron", 'D'),
+    ("dcaron", 'd'),
+    ("Dcroat", 'D'),
+    ("dcroat", 'd'),
+    ("Emacron", 'E'),
+    ("emacron", 'e'),
+    ("Ebreve", 'E'),
+    ("ebreve", 'e'),
+    ("Edotaccent", 'E'),
+    ("edotaccent", 'e'),
+    ("Eogonek", 'E'),
+    ("eogonek", 'e'),
+    ("Ecaron", 'E'),
+    ("ecaron", 'e'),
+    ("Gcircumflex", 'G'),
+    ("gcircumflex", 'g'),
+    ("Gbreve", 'G'),
+    ("gbreve", 'g'),
+    ("Gdotaccent", 'G'),
+    ("gdotaccent", 'g'),
+    ("Gcommaaccent", 'G'),
+    ("gcommaaccent", 'g'),
+    ("Hcircumflex", 'H'),
+    ("hcircumflex", 'h'),
+    ("Hbar", 'H'),
+    ("hbar", 'h'),
+    ("Itilde", 'I'),
+    ("itilde", 'i'),
+    ("Imacron", 'I'),
+    ("imacron", 'i'),
+    ("Ibreve", 'I'),
+    ("ibreve", 'i'),
+    ("Iogonek", 'I'),
+    ("iogonek", 'i'),
+    ("Idotaccent", 'I'),
+    ("dotlessi", 'i'),
+    ("IJ", 'N'),
+    ("ij", 'x'),
+    ("Jcircumflex", 'J'),
+    ("jcircumflex", 'j'),
+    ("Kcommaaccent", 'K'),
+    ("kcommaaccent", 'k'),
+    ("kgreenlandic", 'k'),
+    ("Lacute", 'L'),
+    ("lacute", 'l'),
+    ("Lcommaaccent", 'L'),
+    ("lcommaaccent", 'l'),
+    ("Lcaron", 'L'),
+    ("lcaron", 'l'),
+    ("Ldot", 'L'),
+    ("ldot", 'l'),
+    ("Lslash", 'L'),
+    ("lslash", 'l'),
+    ("Nacute", 'N'),
+    ("nacute", 'n'),
+    ("Ncommaaccent", 'N'),
+    ("ncommaaccent", 'n'),
+    ("Ncaron", 'N'),
+    ("ncaron", 'n'),
+    ("napostrophe", 'n'),
+    ("Eng", 'N'),
+    ("eng", 'n'),
+    ("Omacron", 'O'),
+    ("omacron", 'o'),
+    ("Obreve", 'O'),
+    ("obreve", 'o'),
+    ("Ohungarumlaut", 'O'),
+    ("ohungarumlaut", 'o'),
+    ("OE", 'W'),
+    ("oe", 'm'),
+    ("Racute", 'R'),
+    ("racute", 'r'),
+    ("Rcommaaccent", 'R'),
+    ("rcommaaccent", 'r'),
+    ("Rcaron", 'R'),
+    ("rcaron", 'r'),
+    ("Sacute", 'S'),
+    ("sacute", 's'),
+    ("Scircumflex", 'S'),
+    ("scircumflex", 's'),
+    ("Scedilla", 'S'),
+    ("scedilla", 's'),
+    ("Scaron", 'S'),
+    ("scaron", 's'),
+    ("Tcommaaccent", 'T'),
+    ("tcommaaccent", 't'),
+    ("Tcaron", 'T'),
+    ("tcaron", 't'),
+    ("Tbar", 'T'),
+    ("tbar", 't'),
+    ("Utilde", 'U'),
+    ("utilde", 'u'),
+    ("Umacron", 'U'),
+    ("umacron", 'u'),
+    ("Ubreve", 'U'),
+    ("ubreve", 'u'),
+    ("Uring", 'U'),
+    ("uring", 'u'),
+    ("Uhungarumlaut", 'U'),
+    ("uhungarumlaut", 'u'),
+    ("Uogonek", 'U'),
+    ("uogonek", 'u'),
+    ("Wcircumflex", 'W'),
+    ("wcircumflex", 'w'),
+    ("Ycircumflex", 'Y'),
+    ("ycircumflex", 'y'),
+    ("Ydieresis", 'Y'),
+    ("Zacute", 'Z'),
+    ("zacute", 'z'),
+    ("Zdotaccent", 'Z'),
+    ("zdotaccent", 'z'),
+    ("Zcaron", 'Z'),
+    ("zcaron", 'z'),
+    ("longs", 'f'),
+];
+
+/// The [`LATIN_EXT_A`] entry of `c`, if it is in that block.
+pub(crate) fn latin_ext_a(c: char) -> Option<(&'static str, char)> {
+    LATIN_EXT_A.get((c as u32).checked_sub(0x100)? as usize).copied()
+}
+
+/// Romanian Ș ș Ț ț with a comma below (U+0218..=U+021B, Latin Extended-B): glyph name and an
+/// ASCII character of similar width. The names are the `uniXXXX` form: a viewer that substitutes
+/// a font finds the glyph either by that name (TeX Gyre Heros, for one, names them so and has no
+/// `scommaaccent`) or by the code point the name spells. The AGL names are not used: it maps
+/// `Tcommaaccent`/`tcommaaccent` to the cedilla letters U+0162/U+0163, which Romanian does not use.
+pub(crate) const COMMA_BELOW: [(&str, char); 4] = [("uni0218", 'S'), ("uni0219", 's'), ("uni021A", 'T'), ("uni021B", 't')];
+
+/// The [`COMMA_BELOW`] entry of `c`, if it is one of those letters.
+pub(crate) fn comma_below(c: char) -> Option<(&'static str, char)> {
+    COMMA_BELOW.get((c as u32).checked_sub(0x218)? as usize).copied()
+}
+
 /// Maps a non-ASCII character to an ASCII character of similar width, or `None` to use the
 /// font's default width.
 pub(crate) fn fold(c: char) -> Option<char> {
+    if let Some((_, base)) = latin_ext_a(c).or_else(|| comma_below(c)) {
+        return Some(base);
+    }
     Some(match c {
         'À'..='Å' => 'A',
         'Æ' => 'W',
