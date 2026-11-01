@@ -1,5 +1,4 @@
-//! A tiny, self-contained PDF 1.7 writer for `GridCraft`'s print and PDF export.
-//!
+//! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //! - The 14 standard fonts (no embedding) with `WinAnsiEncoding`, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
@@ -32,7 +31,6 @@ pub struct Point {
 }
 
 impl Point {
-    #[must_use]
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
@@ -48,7 +46,6 @@ pub struct Rect {
 }
 
 impl Rect {
-    #[must_use]
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self { x, y, width, height }
     }
@@ -104,7 +101,6 @@ impl Font {
     ];
 
     /// PostScript base font name.
-    #[must_use]
     pub fn base_name(self) -> &'static str {
         match self {
             Font::Helvetica => "Helvetica",
@@ -128,7 +124,6 @@ impl Font {
     }
 
     /// The face of `family` with the given weight and slant.
-    #[must_use]
     pub fn styled(family: Family, bold: bool, italic: bool) -> Font {
         match (family, bold, italic) {
             (Family::Sans, false, false) => Font::Helvetica,
@@ -148,7 +143,6 @@ impl Font {
 
     /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
     /// Courier, everything else to Helvetica.
-    #[must_use]
     pub fn family_for(name: &str) -> Family {
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
@@ -172,7 +166,6 @@ impl Font {
     }
 
     /// Advance width of a character in 1/1000 em.
-    #[must_use]
     pub fn char_width(self, c: char) -> u16 {
         if self == Font::Symbol {
             return symbol_code(c).and_then(symbol_width).unwrap_or(500);
@@ -206,7 +199,6 @@ impl Font {
 }
 
 /// Width of `text` in points when set in `font` at `size` points.
-#[must_use]
 #[expect(clippy::cast_precision_loss, reason = "The public API returns f32; accumulated u64 units may exceed its exact integer range")]
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     // u64: a u32 sum overflows for ~8 million characters.
@@ -215,7 +207,6 @@ pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
 }
 
 /// Unicode → `WinAnsiEncoding` (CP1252) byte; unmappable characters become `?`.
-#[must_use]
 pub fn win_ansi(c: char) -> u8 {
     let u = c as u32;
     if (0x20..0x7F).contains(&u) || (0xA0..=0xFF).contains(&u) {
@@ -401,11 +392,9 @@ const MAX_PAGE_LINKS: usize = 4096;
 const MAX_LINK_URI_BYTES: usize = 4096;
 
 impl Page {
-    #[must_use]
     pub fn width(&self) -> f32 {
         self.width
     }
-    #[must_use]
     pub fn height(&self) -> f32 {
         self.height
     }
@@ -886,7 +875,6 @@ fn serialize_page(page: &mut Page, next: &mut u32, font_dict: &str, page_count: 
 }
 
 impl PdfDoc {
-    #[must_use]
     pub fn new() -> PdfDoc {
         PdfDoc::default()
     }
@@ -900,7 +888,6 @@ impl PdfDoc {
         &mut self.pages[i]
     }
 
-    #[must_use]
     pub fn page_count(&self) -> usize {
         self.pages.len()
     }
@@ -911,7 +898,6 @@ impl PdfDoc {
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
-    #[must_use]
     pub fn finish(mut self) -> Vec<u8> {
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
