@@ -74,6 +74,7 @@ impl SheetApp {
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
+            ask_agent: Default::default(),
             allow_close: false,
             open_switch_windows: false,
             ui_window: None,
@@ -83,6 +84,13 @@ impl SheetApp {
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
         }
+    }
+
+    /// Ask Agent's queue, shared with the control channel (the desktop app with `--control`).
+    pub fn with_agent_hub(mut self, hub: crate::ask_agent::AgentHub) -> SheetApp {
+        self.ask_agent = Default::default();
+        self.ask_agent.hub = Some(hub);
+        self
     }
 
     /// One-time context setup: start cataloging the machine's fonts, then install the fonts and
@@ -211,6 +219,9 @@ impl SheetApp {
         if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
+        if self.backstage.is_none() {
+            crate::ask_agent::keys(self, &ctx);
+        }
         if self.chrome.title_bar {
             ribbon::title_bar(self, ui);
         }
@@ -234,6 +245,9 @@ impl SheetApp {
                 grid::show(self, ui);
                 self.perf.grid_ms = now_ms() - g0;
             });
+        }
+        if self.backstage.is_none() {
+            crate::ask_agent::show(self, &ctx);
         }
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);

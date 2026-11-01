@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod ask_agent;
 /// GridCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
 #[cfg(not(target_arch = "wasm32"))]
@@ -281,6 +282,8 @@ pub struct SheetApp {
     /// Automate › Macros: relative recording, recent macros, a macro's question.
     pub macros: macro_ui::MacroUi,
     pub started: f64,
+    /// Ask Agent: the control channel request queue and selection bubble.
+    pub ask_agent: ask_agent::AskAgent,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,

@@ -54,12 +54,12 @@ pub fn auth_line(id: u64, token: &str) -> String {
 /// `Err` is the reply for a refused connection, which the caller sends and then closes. The
 /// refusal is the same whatever was wrong, so it tells a stranger nothing.
 pub fn check_first_line(line: &str, token: &str) -> Result<Value, Value> {
-    let refused = || json!({"ok": false, "error": "authentication required"});
+    let refused = || json!({"ok": false, "error": "authentication required", "errorCode": "UNAUTHORIZED"});
     let msg: Value = serde_json::from_str(line.trim()).map_err(|_| refused())?;
     if msg.get("method").and_then(Value::as_str) != Some(AUTH_METHOD) {
         return Err(refused());
     }
-    let given = msg.get("params").and_then(|p| p.get("token")).and_then(Value::as_str).unwrap_or("");
+    let given = msg.get("params").and_then(|p| p.get("token").or_else(|| p.get("key"))).and_then(Value::as_str).unwrap_or("");
     // Always compare, so a missing token costs the same as a wrong one.
     if constant_time_eq(given.as_bytes(), token.as_bytes()) && !token.is_empty() {
         Ok(json!({"id": msg.get("id").cloned().unwrap_or(Value::Null), "ok": true, "result": {"authenticated": true}}))

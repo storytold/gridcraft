@@ -387,8 +387,12 @@ fn main() -> eframe::Result<()> {
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
-                    match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
-                        Ok(rx) => app.control_rx = Some(rx),
+                    let agents = gridcraft_ui_egui::ask_agent::AgentHub::default();
+                    match control_server::start(port, control_token.clone(), cc.egui_ctx.clone(), agents.clone()) {
+                        Ok(rx) => {
+                            app.control_rx = Some(rx);
+                            app = app.with_agent_hub(agents);
+                        }
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }

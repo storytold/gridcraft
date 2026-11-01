@@ -56,6 +56,8 @@ with a file open.
 | `open_workbook` / `save_workbook` / `new_workbook` | `path` / `path?` / `sample?` | Files (`.xlsx`, `.csv`, `.tsv`, `.json`, `.html`). |
 | `undo` / `redo` | `steps?` | History. |
 | `screenshot` | `path` | PNG of the window (Remote only). |
+| `wait_for_request` | `timeout_s?`, `agent?` | Wait for an Ask Agent request from the desktop app (Remote only). |
+| `reply_to_request` | `id`, `text`, `done?`, `error?` | Send progress or final answer for an Ask Agent request. |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
 Every tool that acts on a workbook (all but `list_commands`, `list_functions`, `list_windows`, `open_workbook`,
@@ -90,3 +92,10 @@ methods `-32601`.
 `Server::new(Box::new(Remote::connect(&control_addr("7979"))?))`, then `Server::serve(stdin, stdout)` or
 `Server::handle_line(line) -> Option<String>`. Implement the `Backend` trait (`call(method, params)`) to drive another
 host.
+
+## Ask Agent
+
+Connect an external agent to a running desktop app with `gridcraft-cli mcp --connect 7979`.
+- `wait_for_request` claims the user's active request (instruction, selection, document).
+- Edit directly with standard MCP tools; all changes form ONE undo group.
+- `reply_to_request` updates the review bubble with progress notes or the final response.
