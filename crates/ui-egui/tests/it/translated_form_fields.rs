@@ -80,10 +80,15 @@ fn chart_format_pane_is_translated() {
 
 #[test]
 fn custom_dialogs_are_translated() {
-    let dialogs: [(&str, &[&str]); 3] = [
+    let dialogs: [(&str, &[&str]); 4] = [
         ("find", &["Find what:", "Match case", "Match entire cell contents", "Find All", "Find Next"]),
         ("goalSeek", &["Set cell:", "To value:", "By changing cell:"]),
         ("nameManager", &["New…", "Edit…"]),
+        // Also the fields' accessible names and the goal radio buttons.
+        (
+            "solver",
+            &["Set Objective:", "Value Of:", "By Changing Variable Cells:", "Constraint Cell Reference", "Constraint Value", "Constraint Operator"],
+        ),
     ];
     for (dialog, labels) in dialogs {
         let mut h = harness();

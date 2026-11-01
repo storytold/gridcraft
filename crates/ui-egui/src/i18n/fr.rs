@@ -1242,6 +1242,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Send" => "Envoyer",
         "Send Backward" => "Reculer",
         "Table Name:" => "Nom du tableau :",
+        "Constraint Cell Reference" => "Référence de cellule de la contrainte",
+        "Constraint Value" => "Valeur de la contrainte",
+        "Constraint Operator" => "Opérateur de la contrainte",
         "There are no shapes, pictures or charts on this sheet." => "Cette feuille ne contient aucune forme, image ni graphique.",
         _ => return None,
     })

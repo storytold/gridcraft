@@ -189,7 +189,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
     ui.horizontal(|ui| {
         ui.label(tr(ui, "To:"));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
-            if ui.radio(goal == g, label).clicked() {
+            if ui.radio(goal == g, tr(ui, label)).clicked() {
                 d.values.insert("goal".into(), json!(g));
             }
         }
