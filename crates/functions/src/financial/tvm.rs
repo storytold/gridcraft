@@ -290,7 +290,7 @@ pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
     let guess = opt_num(a, 2, 0.1)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
-        return Err(CellError::Num);
+        return Err(CellError::NA);
     }
     num_val(solve_rate(|r| xnpv_calc(r, &v, &d), guess)?)
 }
