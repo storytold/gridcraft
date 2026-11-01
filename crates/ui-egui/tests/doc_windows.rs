@@ -257,6 +257,23 @@ fn quit_asks_about_each_unsaved_workbook_in_its_window_and_cancel_stops() {
 }
 
 #[test]
+fn a_quit_question_brings_its_window_to_the_front_from_the_background() {
+    // A Dock quit reaches the app while it is behind other apps, hidden or minimized.
+    let mut desk = Desk::new(true);
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    desk.frames(3);
+    let w = desk.window_of(0);
+
+    let sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    for cmd in [ViewportCommand::Visible(true), ViewportCommand::Minimized(false), ViewportCommand::Focus] {
+        assert!(sent_to(&sent, desk.viewport(w), &cmd), "{cmd:?} missing: {sent:?}");
+    }
+    let sent = desk.frames(2);
+    assert!(!sent_to(&sent, desk.viewport(w), &ViewportCommand::Focus), "only once: {sent:?}");
+}
+
+#[test]
 fn the_root_adopts_the_remaining_window_with_its_workbook_and_state() {
     let mut desk = Desk::new(true);
     desk.app.run("file.new", json!({})).unwrap();
