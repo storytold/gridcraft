@@ -142,6 +142,9 @@ pub struct Evaluator<'h> {
     /// Function arguments and bodies keep their array evaluation; the whole-row
     /// scalar-operator exception applies outside this context.
     in_function: bool,
+    /// The sheet of the cell whose formula this is. `sheet` moves to a name's
+    /// scope while the name is evaluated; this does not.
+    home: usize,
 }
 
 struct FnCtx<'a, 'h> {
@@ -190,7 +193,10 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
-            in_function: self.ev.in_function,
+            // The criterion is the criteria cell's own formula, not an argument
+            // expression, so it starts in a scalar context of its own.
+            in_function: false,
+            home: area.sheet,
         };
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
         // The child's spend counts against this cell's budget.
@@ -214,7 +220,7 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, in_function: false }
+        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL, in_function: false, home: sheet }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
@@ -247,7 +253,7 @@ impl<'h> Evaluator<'h> {
             if r.start.col == 0 && r.end.col == MAX_COLS - 1 {
                 let row = self.at.row.clamp(r.start.row, r.end.row);
                 let cell = CellRef::new(row, self.at.col);
-                return if a.sheet == self.sheet && cell == self.at { Value::Empty } else { self.host.cell_value(a.sheet, cell) };
+                return if a.sheet == self.home && cell == self.at { Value::Empty } else { self.host.cell_value(a.sheet, cell) };
             }
         }
         self.deref(ev)
