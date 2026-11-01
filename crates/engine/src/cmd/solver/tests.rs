@@ -516,6 +516,50 @@ fn simplex_sensitivity_report_needs_an_optimal_point() {
 }
 
 #[test]
+fn simplex_sensitivity_report_describes_the_vertex_the_solver_returns() {
+    // max x + y with x + y <= 4, x <= 3, y <= 3: every point from (3, 1) to (1, 3) is optimal,
+    // but the ranges belong to one vertex. The vertex Simplex LP returns is reported (from
+    // several starting values, as Solver Results passes the solve's result on); the other vertex
+    // and the midpoint are refused.
+    let model = json!({"objective": "D1", "variables": "A1:A2", "constraints": ["C1 <= 4", "A1 <= 3", "A2 <= 3"], "method": "simplex"});
+    let mut found = Vec::new();
+    for (x, y) in [("0", "0"), ("0.1", "0.7"), ("2.9", "0.3"), ("1", "1"), ("-5", "12.25")] {
+        let mut s = s();
+        set(&mut s, &[("A1", x), ("A2", y), ("C1", "=A1+A2"), ("D1", "=A1+A2")]);
+        let mut p = model.clone();
+        p["keep"] = json!(false);
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["status"], "optimal", "{r}");
+        let rep = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"]})).unwrap();
+        assert_eq!(rep["sheets"], json!(["Sensitivity Report 1"]), "from ({x}, {y}): {rep}");
+        found.push((r["values"]["A1"].as_f64().unwrap(), r["values"]["A2"].as_f64().unwrap()));
+    }
+    let (vx, vy) = found[0];
+    assert!(found.iter().all(|v| *v == (vx, vy)), "{found:?}");
+    let other = if vx == 3.0 { (1.0, 3.0) } else { (3.0, 1.0) };
+    assert!([(3.0, 1.0), (1.0, 3.0)].contains(&(vx, vy)), "{found:?}");
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("C1", "=A1+A2"), ("D1", "=A1+A2")]);
+    for (x, y) in [other, (2.0, 2.0)] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": x, "A2": y}})).unwrap_err();
+        assert!(err.to_string().contains("another optimal solution"), "({x}, {y}): {err}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+        // data.solver's Skip mode (as Solver Results passes) skips only the Sensitivity report.
+        let r = s
+            .execute(
+                "data.solverReport",
+                json!({"reports": ["answer", "sensitivity"], "model": model, "values": {"A1": x, "A2": y}, "skipNotOptimal": true}),
+            )
+            .unwrap();
+        assert_eq!(r["skippedReports"][0]["report"], "sensitivity", "{r}");
+        assert_eq!(r["sheets"].as_array().map(Vec::len), Some(1), "{r}");
+    }
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": vx, "A2": vy}})).unwrap();
+    assert!(r["sheets"][0].as_str().unwrap().starts_with("Sensitivity Report"), "{r}");
+}
+
+#[test]
 fn simplex_sensitivity_report_refuses_a_point_that_beats_the_optimum() {
     // min 1E+9·A1 with A1 ≥ 0: the optimum is 0. A1 = -1E-7 is outside the bound by less than
     // the precision, yet its objective is -100, far from the optimum.

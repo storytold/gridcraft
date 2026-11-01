@@ -197,12 +197,22 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     let (c, rows) = linear_program(m.goal, &cf, f_const, &lin, &ev.rows);
     let mut work = LP_WORK;
     let (outcome, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
-    let (Outcome::Solved(_, best, _), Some(tab)) = (outcome, tab) else {
+    let (Outcome::Solved(vertex, best, _), Some(tab)) = (outcome, tab) else {
         return Err(EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()));
     };
     // The report describes the optimum, so the values it shows must be one.
     if !optimal_point(&c, &rows, (&inp.prob.lo, &inp.prob.hi), &inp.solution, best) {
         return Err(not_optimal());
+    }
+    // The prices and ranges come from the tableau of `vertex`, so the values shown must be that
+    // vertex. Another optimum with the same objective (when the optimum is not unique) has other
+    // ranges, so it is refused too, although it is optimal.
+    let near = |a: f64, b: f64| (a - b).abs() <= super::PRECISION * (1.0 + a.abs().max(b.abs()));
+    if vertex.len() != inp.solution.len() || !vertex.iter().zip(&inp.solution).all(|(a, b)| near(*a, *b)) {
+        return Err(EngineError::Other(
+            "The Sensitivity report needs the values at the Simplex LP solution: these values are another optimal solution, whose ranges differ. Solve the model with Simplex LP first."
+                .into(),
+        ));
     }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
