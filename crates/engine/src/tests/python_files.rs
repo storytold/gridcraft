@@ -622,3 +622,27 @@ fn a_formula_entered_in_a_python_spill_takes_the_area_as_a_formula_would() {
         assert_eq!(wb.active().unwrap().value(c), fresh.active().unwrap().value(c), "{c}");
     }
 }
+
+#[test]
+fn a_new_return_type_drops_the_kept_result() {
+    // Same code, the other return type: the result belongs to the old type, so it goes.
+    let mut s = super::python_cells::spill_with_a_reader();
+    s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]", "output": "object"})).unwrap();
+    let a1 = code(&s, "A1").unwrap();
+    assert!(a1.object && a1.output.is_none(), "no result of the other type is kept");
+    assert_eq!(v(&s, "A1"), Value::Error(CellError::Blocked));
+    assert_eq!(v(&s, "A2"), Value::Empty, "no spill");
+    assert!(s.doc().unwrap().wb.active().unwrap().spill_ranges.is_empty());
+    assert_eq!(v(&s, "B1"), Value::Number(0.0), "the reader of the old spill is recalculated");
+    let xml = sheet_xml(&save(&mut s, "xlsx"));
+    assert!(xml.contains("<f>_xlfn._xlws.PY(0,1)</f><v>#VALUE!</v>") && !xml.contains("r=\"A2\""), "no old cached value is written: {xml}");
+    // Undo brings the result back.
+    s.execute("edit.undo", json!({})).unwrap();
+    let a1 = code(&s, "A1").unwrap();
+    assert!(!a1.object && a1.output.is_some());
+    assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "B1")), (Value::Number(5.0), Value::Number(6.0), Value::Number(6.0)));
+    // Same code, same return type: the result is kept as before.
+    s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]", "output": "value"})).unwrap();
+    assert!(code(&s, "A1").unwrap().output.is_some());
+    assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "B1")), (Value::Number(5.0), Value::Number(6.0), Value::Number(6.0)));
+}

@@ -68,8 +68,10 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     if header {
         return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
     }
-    // Unchanged code keeps its result (and its value); new code has none until it runs.
-    let keep = old.filter(|o| o.code == py.code);
+    // Unchanged code with the same return type keeps its result (and its value); new code, or a
+    // new return type, has none until it runs: a result of the other type would show a value and
+    // preview that don't belong to the cell.
+    let keep = old.filter(|o| o.code == py.code && o.object == py.object);
     let value = match &keep {
         Some(o) => {
             py.output = o.output.clone();

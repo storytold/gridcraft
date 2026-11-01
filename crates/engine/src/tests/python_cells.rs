@@ -373,7 +373,7 @@ fn save_model_asks_before_it_writes_over_a_python_cell_that_shows_nothing() {
 }
 
 /// A1 is a Python cell whose kept result `[5, 6]` spills over A1:A2, and B1 reads A2.
-fn spill_with_a_reader() -> crate::Session {
+pub(super) fn spill_with_a_reader() -> crate::Session {
     let mut s = s();
     s.execute("python.set", json!({"cell": "A1", "code": "[5, 6]"})).unwrap();
     {
