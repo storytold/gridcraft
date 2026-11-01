@@ -1,4 +1,4 @@
-use super::clipboard::What;
+use super::clipboard::{CLIP_WALK_CAP, What};
 use super::{
     Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
     target_sheet,
@@ -36,6 +36,24 @@ fn apply_operation(op: &str, old: &Cell, new: &mut Cell) {
     }
 }
 
+fn apply_requested_operation(
+    op: &str,
+    what: What,
+    old_picture: bool,
+    new_picture: &mut Option<std::sync::Arc<gridcraft_model::CellPicture>>,
+    old: &Cell,
+    new: &mut Cell,
+) {
+    if op == "none" || !matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas) || new.formula.is_some() {
+        return;
+    }
+    if old_picture || new_picture.is_some() {
+        *new_picture = None;
+        new.value = Value::Error(gridcraft_core::CellError::Value);
+    }
+    apply_operation(op, old, new);
+}
+
 fn operation_symbol(op: &str) -> Option<char> {
     match op {
         "add" => Some('+'),
@@ -64,9 +82,14 @@ fn copy_merges(
         let col_offset = at.col as i64 - src.start.col as i64;
         if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
             let moved = RangeRef::new(start, end);
+            let anchors: Vec<CellRef> =
+                cx.sheet_mut(dest_sheet)?.spill_ranges.iter().filter(|(_, spill)| spill.intersects(&moved)).map(|(anchor, _)| *anchor).collect();
             let sheet = cx.sheet_mut(dest_sheet)?;
             sheet.merges.retain(|existing| !existing.intersects(&moved));
             sheet.merges.push(moved);
+            for anchor in anchors {
+                cx.touch(dest_sheet, anchor);
+            }
         }
     }
     Ok(())
@@ -98,6 +121,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let sel = s.doc()?.selection.current();
     let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
     let src = clip.range;
+    if src.count() > CLIP_WALK_CAP {
+        return Err(EngineError::Other("The copied area is too large to paste.".into()));
+    }
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
@@ -126,7 +152,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
-        let mut moved_formulas = Vec::new();
+        let mut moved_formulas = std::collections::HashMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
@@ -143,13 +169,13 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
-            moved_formulas = taken;
+            moved_formulas = taken.into_iter().collect();
         }
         for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
             let sc = CellRef::new(src.start.row + r, src.start.col + c);
             let (dr, dc) = if transpose { (c, r) } else { (r, c) };
             let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-            let src_cell = if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
+            let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
             let src_val = src_sheet.value(sc);
             let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
             if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
@@ -232,14 +258,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     What::Comments | What::Validation | What::ColumnWidths => {}
                 }
                 // Operations combine numbers with what is already there.
-                if op != "none" && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas) && new.formula.is_none() {
-                    if old_picture.is_some() || new_picture.is_some() {
-                        new_picture = None;
-                        new.value = Value::Error(gridcraft_core::CellError::Value);
-                    }
-                    // Numbers stored as text participate; other text and errors stay as they are.
-                    apply_operation(&op, &old, &mut new);
-                }
+                apply_requested_operation(&op, what, old_picture.is_some(), &mut new_picture, &old, &mut new);
             }
             // The copied cell's validation rule replaces whatever rule the destination had.
             if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
@@ -255,6 +274,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     sh.validations.push(dv);
                 }
             }
+            let changed = new != old || old_picture.is_some() || new_picture.is_some();
             match what {
                 What::Comments => {
                     if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
@@ -280,7 +300,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             if let Some(picture) = new_picture {
                 cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
             }
-            cx.touch(dest_sheet, dest);
+            if changed {
+                cx.touch(dest_sheet, dest);
+            }
         }
         // Merged areas inside the copied block travel with it.
         copy_merges(cx, dest_sheet, src_sheet, src, at, what, transpose)?;

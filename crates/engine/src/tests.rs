@@ -4613,6 +4613,22 @@ fn subtotal_109_recalculates_when_row_height_or_autofit_reveals_rows() {
 }
 
 #[test]
+fn paste_of_a_huge_untrimmed_copy_neither_hangs_nor_aborts() {
+    // #2158: the copy was walked cell by cell (17 billion cells) and ran the process out of memory.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=A1*2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:XFC1048575"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(5.0));
+    assert_eq!(v(&s, "B3"), Value::Number(10.0));
+    // A used range that is itself huge is refused, not walked.
+    s.execute("cell.set", json!({"cell": "XFD1048576", "input": "1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:XFD1048576"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "A1"})).is_err());
+}
+
+#[test]
 fn paste_special_validation_copies_the_rule() {
     let mut s = s();
     let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
