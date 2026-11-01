@@ -59,6 +59,15 @@ fn ctrl_shift_symbols_apply_number_formats_and_borders() {
 }
 
 #[test]
+fn ctrl_shift_7_border_shortcut_uses_last_border_color() {
+    let mut h = harness(book("A1:B2"));
+    h.state_mut().grid.last_border_color = "#C00000".into();
+    key(&mut h, Key::Num7, CTRL_SHIFT);
+    let color = h.state().session.journal.iter().find(|(id, _)| *id == "home.borders").and_then(|(_, p)| p.get("color").and_then(|c| c.as_str()));
+    assert_eq!(color, Some("#C00000"));
+}
+
+#[test]
 fn copy_formula_from_above_and_function_keys() {
     let mut h = harness(book("C2"));
     key(&mut h, Key::Quote, CTRL);

@@ -287,7 +287,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery, _seen: &mut std::collecti
         use std::os::unix::fs::MetadataExt as _;
         if let Ok(m) = std::fs::metadata(dir)
             && let Some(id) = m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino()))
-            && !seen.insert(id)
+            && !_seen.insert(id)
         {
             return true;
         }

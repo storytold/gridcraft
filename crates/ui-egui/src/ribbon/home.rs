@@ -186,14 +186,18 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 ui.separator();
                 let line_color_label = app.ui.language.tr("Line Color");
-                ui.menu_button(line_color_label, |ui| {
-                    let colors = theme_colors(app);
-                    let automatic = app.ui.language.tr("Automatic");
-                    if let Some(color) = color_palette(ui, &colors, automatic) {
-                        app.grid.last_border_color = if color == "none" { "auto".into() } else { color };
-                        ui.close();
-                    }
-                });
+                let line_color = ui.button(line_color_label);
+                egui::Popup::menu(&line_color)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .open_memory(popup_command(forced_border_color, line_color.clicked()))
+                    .show(|ui| {
+                        let colors = theme_colors(app);
+                        let automatic = app.ui.language.tr("Automatic");
+                        if let Some(color) = color_palette(ui, &colors, automatic) {
+                            app.grid.last_border_color = if color == "none" { "auto".into() } else { color };
+                            ui.close();
+                        }
+                    });
                 if ui.button("More Borders…").clicked() {
                     app.open_dialog("formatCells", json!({"tab": "Border"}));
                 }

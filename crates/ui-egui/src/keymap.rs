@@ -297,6 +297,12 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
     let (active, anchor) = app.session.active().map(|d| (d.selection.active, d.selection.anchor)).unwrap_or_default();
     match shortcut {
         Shortcut::Run(id, params) => {
+            let mut params = params;
+            if id == "home.borders"
+                && let Some(object) = params.as_object_mut()
+            {
+                object.entry("color").or_insert_with(|| json!(app.grid.last_border_color.clone()));
+            }
             app.run_or_alert(id, params);
             app.grid.ensure_visible = true;
         }

@@ -76,6 +76,7 @@ pub(super) fn latin_extended() -> Vec<(String, u32)> {
         (format!("{win}\\tahoma.ttf"), 0),
         (format!("{win}\\arialuni.ttf"), 0),
         (format!("{mac}/Arial.ttf"), 0),
+        (format!("{mac}/Supplemental/Arial.ttf"), 0),
         (format!("{mac}/Helvetica.ttc"), 0),
     ];
     for d in [

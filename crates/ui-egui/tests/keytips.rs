@@ -759,9 +759,17 @@ fn border_keytip_more_borders_opens_format_cells_on_the_border_tab() {
 }
 
 #[test]
+fn border_keytip_line_color_opens_the_palette() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::B, Key::I], false);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Theme Colors").count(), 1, "H,B,I must open the border line color palette");
+}
+
+#[test]
 fn border_keytips_without_a_command_stay_silent() {
-    // Erase Border (a pen mode), Line Color and Line Style are reserved: no border is drawn.
-    for k in [Key::E, Key::I, Key::Y] {
+    // Erase Border and Line Style remain reserved: they do not apply a preset.
+    for k in [Key::E, Key::Y] {
         let mut h = harness(selected("A1"));
         sequence(&mut h, &[Key::H, Key::B, k], false);
         assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");
