@@ -1027,3 +1027,56 @@ fn goal_seeks_cancel_with_an_unsavable_draft_closes_without_running() {
     assert_eq!(message.0, "Goal Seek", "the reason is shown: {message:?}");
     assert_eq!(selection(&h).0, 2);
 }
+
+#[test]
+fn a_sheet_deleted_and_another_inserted_in_one_batch_is_not_taken_for_a_rename() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // One script batch, between two frames: the dialog's sheet goes and another takes its place,
+    // which leaves the name list the same length with one entry changed, as a rename would.
+    let s = &mut h.state_mut().session;
+    s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Fresh", "before": 0})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Fresh", "Rates"]);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "Fresh!$C$3", "the new sheet is not the dialog's own: picks carry its name");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "OK is refused");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    h.state_mut().message = None;
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "C3".into()), "cancelling does not put the old selection onto the new sheet");
+}
+
+#[test]
+fn undoing_and_redoing_the_dialogs_sheets_rename_still_follow_it() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "renamed, still the dialog's own sheet");
+    // Undo brings the old name back; redo the new one: both are recorded steps that rename.
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h)[0], "Sheet1");
+    drag(&mut h, "C4", "C4");
+    assert_eq!(field(&h, "changing"), "$C$4");
+    h.state_mut().session.execute("edit.redo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h)[0], "Model");
+    drag(&mut h, "C5", "C5");
+    assert_eq!(field(&h, "changing"), "$C$5");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
+}

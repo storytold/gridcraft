@@ -1,6 +1,11 @@
 //! Reference boxes (Excel's RefEdit): text fields that take a range by selection on the grid, with
 //! a button that collapses the dialog to the box while the person selects.
 
+use std::sync::Arc;
+
+use gridcraft_engine::model::Workbook;
+use gridcraft_engine::{DocState, HistoryEntry};
+
 use super::data::abs;
 use super::{Dialog, Icon, Json, SheetApp, json, theme, vec2};
 
@@ -37,50 +42,120 @@ pub(super) struct RefBoxes {
 #[derive(Clone, Debug)]
 struct Home {
     /// The sheet's name, or `None` once the sheet is deleted. Followed by name when other sheets
-    /// are inserted, moved or deleted (indexes change), and by position when the sheet itself is
-    /// renamed.
+    /// are inserted, moved or deleted (indexes change), and through the engine's recorded steps
+    /// when the sheet itself is renamed (see [`follow_home`]).
     sheet: Option<String>,
-    /// The workbook's sheet names, in order, when last seen: a rename is the one change that
-    /// keeps the list's length and replaces only the home sheet's entry.
+    /// The workbook's sheet names, in order, when last seen.
     names: Vec<String>,
+    /// The undo history when last seen: its length, and the workbooks its top entries hold, so
+    /// the steps recorded since can be told apart from entries undone or trimmed.
+    undo_len: usize,
+    undo_top: Option<Arc<Workbook>>,
+    redo_top: Option<Arc<Workbook>>,
     /// The ranges and active cell from before picking began on the dialog's sheet, put back once
     /// when the dialog runs its command or closes.
     selection: Option<(String, String)>,
+}
+
+impl Home {
+    /// The home sheet `sheet` on `doc`, with the selection to put back and the history as it is.
+    fn new(doc: &DocState, sheet: String, selection: Option<(String, String)>) -> Home {
+        let mut home = Home { sheet: Some(sheet), names: Vec::new(), undo_len: 0, undo_top: None, redo_top: None, selection };
+        home.remember(doc);
+        home
+    }
+
+    /// Notes the sheet names and the history as they are now.
+    fn remember(&mut self, doc: &DocState) {
+        self.names = doc.wb.sheets.iter().map(|s| s.name.clone()).collect();
+        self.undo_len = doc.undo.len();
+        self.undo_top = doc.undo.last().map(|e| e.wb.clone());
+        self.redo_top = doc.redo.last().map(|e| e.wb.clone());
+    }
 }
 
 /// The message OK shows once the dialog's own sheet is gone.
 pub(crate) const SHEET_DELETED: &str =
     "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";
 
-/// The workbook's sheet names, in order.
-fn sheet_names(app: &SheetApp) -> Vec<String> {
-    app.session.active().map(|doc| doc.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default()
-}
-
 /// Keeps the dialog's own sheet across changes made while it is open. When its name is still
-/// there, it is still the sheet (others were inserted, moved or deleted). When it is gone and the
-/// only difference from last frame is that one entry, it was renamed. Any other way of losing the
-/// name (the sheet count changed, or other names changed too) means it was deleted, for good: a
+/// there, it is still the sheet (others were inserted, moved or deleted). When it is gone, the
+/// sheet was renamed only if the engine's recorded steps since the dialog last looked say so:
+/// every undo entry holds the workbook before its step, so the workbook's states are walked one
+/// recorded step at a time ([`recorded_states`]), and a step counts as a rename only when the
+/// sheet count is unchanged, exactly one name differs, at the home sheet's index, and the sheet
+/// there keeps its cells ([`renamed_in_step`]). A deletion followed by an insertion is two steps,
+/// the first of which changes the count, however the two are batched between frames; a rename
+/// is one step. Anything the steps don't account for means the sheet was deleted, for good: a
 /// sheet inserted later is never taken for it.
 fn follow_home(app: &SheetApp, refs: &mut RefBoxes) {
     let Some(home) = refs.home.as_mut() else { return };
-    let names = sheet_names(app);
-    if let Some(sheet) = home.sheet.as_mut()
-        && !names.iter().any(|n| n.eq_ignore_ascii_case(sheet))
+    let Some(doc) = app.session.active() else { return };
+    if let Some(own) = home.sheet.clone()
+        && !doc.wb.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&own))
     {
-        home.sheet = renamed_to(&names, &home.names, sheet);
+        home.sheet = renamed_through_history(doc, home, &own);
     }
-    home.names = names;
+    home.remember(doc);
 }
 
-/// The new name of the sheet `own` when `names` differs from `before` only by `own`'s entry.
-fn renamed_to(names: &[String], before: &[String], own: &str) -> Option<String> {
-    if names.len() != before.len() {
+/// The name the home sheet `own` carries now, when the recorded steps since the dialog last
+/// looked rename it (possibly several times) and nothing else.
+fn renamed_through_history(doc: &DocState, home: &Home, own: &str) -> Option<String> {
+    let states = recorded_states(doc, home)?;
+    let mut name = own.to_string();
+    let mut prev: Option<&Workbook> = None;
+    for state in states.iter().map(|wb| &**wb).chain(std::iter::once(&*doc.wb)) {
+        match prev {
+            Some(before) => name = renamed_in_step(before, state, &name)?,
+            // The first recorded state must be the one the dialog last saw.
+            None if !state.sheets.iter().map(|s| &s.name).eq(home.names.iter()) => return None,
+            None => {}
+        }
+        prev = Some(state);
+    }
+    Some(name)
+}
+
+/// The workbooks before each step recorded since `home` last looked, in order; the current
+/// workbook follows the last. Commands and redos push an entry holding the workbook before
+/// them, so when the remembered top undo entry is still there, the entries above it are the
+/// steps now applied (whatever was undone after them is gone). When it is not (steps were
+/// undone), each undo pushed a redo entry holding the workbook before it, so the new redo
+/// entries are the steps, provided every undone step moved one entry across. Anything else
+/// (undone, then new commands; history trimmed meanwhile) is `None`: not accounted for.
+fn recorded_states(doc: &DocState, home: &Home) -> Option<Vec<Arc<Workbook>>> {
+    let above = |stack: &[HistoryEntry], top: &Option<Arc<Workbook>>| -> Option<Vec<Arc<Workbook>>> {
+        let from = match top {
+            // Everything above the remembered top entry was pushed since.
+            Some(top) => stack.iter().position(|e| Arc::ptr_eq(&e.wb, top))?.saturating_add(1),
+            // The stack was empty then: every entry was pushed since.
+            None => 0,
+        };
+        Some(stack.iter().skip(from).map(|e| e.wb.clone()).collect())
+    };
+    match (above(&doc.undo, &home.undo_top), above(&doc.redo, &home.redo_top)) {
+        (Some(commands), _) => Some(commands),
+        (None, Some(undos)) if !undos.is_empty() && doc.undo.len().saturating_add(undos.len()) == home.undo_len => Some(undos),
+        _ => None,
+    }
+}
+
+/// The name of the sheet called `name` in `before` after the step that made `after` of it, when
+/// that step kept the sheet: same sheet count, the same names everywhere else, and the sheet at
+/// its index keeping its cells (a sheet inserted in its place has none). `None` when the step
+/// could have deleted it.
+fn renamed_in_step(before: &Workbook, after: &Workbook, name: &str) -> Option<String> {
+    if before.sheets.len() != after.sheets.len() {
         return None;
     }
-    let mut changed = names.iter().zip(before).filter(|(now, then)| now != then);
-    let (now, then) = changed.next()?;
-    (changed.next().is_none() && then.eq_ignore_ascii_case(own)).then(|| now.clone())
+    let idx = before.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
+    let (was, now) = (before.sheets.get(idx)?, after.sheets.get(idx)?);
+    if now.name.eq_ignore_ascii_case(name) {
+        return Some(name.to_string());
+    }
+    let others_same = before.sheets.iter().zip(&after.sheets).enumerate().all(|(i, (a, b))| i == idx || a.name == b.name);
+    (others_same && was.cells.len() == now.cells.len()).then(|| now.name.clone())
 }
 
 /// Whether the sheet the dialog was opened on has been deleted while it picked: its references
@@ -227,9 +302,7 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
         let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
         let selection = Some((ranges.join(","), doc.selection.active.a1()));
         match d.refs.home.as_mut() {
-            None => {
-                d.refs.home = Some(Home { sheet: Some(sheet.name.clone()), names: doc.wb.sheets.iter().map(|s| s.name.clone()).collect(), selection })
-            }
+            None => d.refs.home = Some(Home::new(doc, sheet.name.clone(), selection)),
             // Picking again after a failed OK: the selection to put back is the one now on the
             // dialog's sheet.
             Some(home) if home.selection.is_none() && home.sheet.as_deref().is_some_and(|own| own.eq_ignore_ascii_case(&sheet.name)) => {
