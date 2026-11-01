@@ -190,6 +190,9 @@ pub struct DocState {
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
     pub path: Option<String>,
+    /// What `path` resolved to (symlinks followed) when the document was opened or last saved.
+    /// Save refuses to write if the path now resolves elsewhere.
+    pub resolved_path: Option<std::path::PathBuf>,
     pub saved: Arc<Workbook>,
     pub revision: u64,
     /// Identifies this open workbook for the rest of the session: it never changes while the
@@ -314,6 +317,7 @@ impl DocState {
             selection: sel,
             undo: vec![],
             redo: vec![],
+            resolved_path: path.as_deref().and_then(io::resolve_path),
             path,
             revision: 1,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),

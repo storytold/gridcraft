@@ -561,3 +561,158 @@ fn content_wins_over_a_mismatched_extension() {
         assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::text("b"), "{name}");
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn save_through_a_symlink_updates_the_target_and_keeps_the_link() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("real")).unwrap();
+    let real = dir.join("real").join("book.xlsx");
+    std::fs::write(&real, b"v1").unwrap();
+    let link = dir.join("book.xlsx");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    write_file(link.to_str().unwrap(), b"v2").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link must stay a link");
+    assert_eq!(std::fs::read(&real).unwrap(), b"v2");
+    assert_eq!(std::fs::read(&link).unwrap(), b"v2");
+    assert!(!dir.join("real").join("book.xlsx.sctmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn save_refuses_a_symlink_retargeted_since_open() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-retarget-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (real, other) = (dir.join("real.xlsx"), dir.join("other.xlsx"));
+    std::fs::write(&real, b"mine").unwrap();
+    std::fs::write(&other, b"theirs").unwrap();
+    let link = dir.join("book.xlsx");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let opened = resolve_path(link.to_str().unwrap()).unwrap();
+    write_file_expecting(link.to_str().unwrap(), b"v2", Some(&opened)).unwrap();
+    assert_eq!(std::fs::read(&real).unwrap(), b"v2");
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    assert!(write_file_expecting(link.to_str().unwrap(), b"v3", Some(&opened)).is_err());
+    assert_eq!(std::fs::read(&other).unwrap(), b"theirs");
+    // The link's folder is not where a retargeted save would have landed: links rebase
+    // against the folder of the file that is really written.
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let deep = dir.join("sub").join("deep.xlsx");
+    std::fs::write(&deep, b"d").unwrap();
+    let deep_link = dir.join("deep-link.xlsx");
+    std::os::unix::fs::symlink(&deep, &deep_link).unwrap();
+    assert_eq!(source_dir(deep_link.to_str().unwrap()).unwrap(), std::fs::canonicalize(dir.join("sub")).unwrap());
+    // A new file below a symlinked folder rebases against the folder it lands in.
+    let dir_link = dir.join("folder-link");
+    std::os::unix::fs::symlink(dir.join("sub"), &dir_link).unwrap();
+    let fresh = dir_link.join("new.xlsx");
+    assert_eq!(source_dir(fresh.to_str().unwrap()).unwrap(), std::fs::canonicalize(dir.join("sub")).unwrap());
+    let written = write_file_expecting(fresh.to_str().unwrap(), b"n", None).unwrap();
+    assert_eq!(written, std::fs::canonicalize(dir.join("sub")).unwrap().join("new.xlsx"));
+    assert_eq!(std::fs::read(dir.join("sub").join("new.xlsx")).unwrap(), b"n");
+    // A link left dangling since open is refused, not replaced by a regular file; a
+    // regular file deleted since open is simply written again.
+    std::fs::remove_file(&other).unwrap();
+    let expected = std::fs::canonicalize(&deep).unwrap();
+    std::fs::remove_file(&deep_link).unwrap();
+    std::os::unix::fs::symlink(dir.join("gone.xlsx"), &deep_link).unwrap();
+    assert!(write_file_expecting(deep_link.to_str().unwrap(), b"x", Some(&expected)).is_err());
+    assert!(std::fs::symlink_metadata(&deep_link).unwrap().file_type().is_symlink());
+    // A target whose name isn't UTF-8 is still written through the link.
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let odd = dir.join("sub").join(std::ffi::OsStr::from_bytes(b"odd-\xff.xlsx"));
+        std::fs::write(&odd, b"o1").unwrap();
+        let odd_link = dir.join("odd-link.xlsx");
+        std::os::unix::fs::symlink(&odd, &odd_link).unwrap();
+        write_file(odd_link.to_str().unwrap(), b"o2").unwrap();
+        assert!(std::fs::symlink_metadata(&odd_link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&odd).unwrap(), b"o2");
+    }
+    let plain = dir.join("sub").join("plain.xlsx");
+    std::fs::write(&plain, b"p").unwrap();
+    let expected = std::fs::canonicalize(&plain).unwrap();
+    std::fs::remove_file(&plain).unwrap();
+    write_file_expecting(plain.to_str().unwrap(), b"again", Some(&expected)).unwrap();
+    assert_eq!(std::fs::read(&plain).unwrap(), b"again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn save_follows_a_chain_of_relative_links_to_the_real_file() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-chain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("real")).unwrap();
+    std::fs::create_dir_all(dir.join("links")).unwrap();
+    let real = dir.join("real").join("book.xlsx");
+    std::fs::write(&real, b"v1").unwrap();
+    // links/a -> b -> c -> ../real/book.xlsx, every target relative to the folder of its link.
+    std::os::unix::fs::symlink("../real/book.xlsx", dir.join("links").join("c")).unwrap();
+    std::os::unix::fs::symlink("c", dir.join("links").join("b")).unwrap();
+    std::os::unix::fs::symlink("b", dir.join("links").join("a")).unwrap();
+    let a = dir.join("links").join("a");
+    let opened = resolve_path(&a).unwrap();
+    assert_eq!(opened, std::fs::canonicalize(&real).unwrap());
+    let written = write_file_expecting(a.to_str().unwrap(), b"v2", Some(&opened)).unwrap();
+    assert_eq!(written, opened);
+    assert_eq!(std::fs::read(&real).unwrap(), b"v2");
+    for link in ["a", "b", "c"] {
+        let link = dir.join("links").join(link);
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "{link:?} must stay a link");
+    }
+    assert!(!dir.join("real").join("book.xlsx.sctmp").exists());
+    // A folder that is a link, with a relative target, takes the temporary file too.
+    std::os::unix::fs::symlink("real", dir.join("folder")).unwrap();
+    write_file(dir.join("folder").join("book.xlsx").to_str().unwrap(), b"v3").unwrap();
+    assert_eq!(std::fs::read(&real).unwrap(), b"v3");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn a_link_loop_is_refused_for_a_document_and_replaced_for_save_as() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-loop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.xlsx"), dir.join("b.xlsx"));
+    std::os::unix::fs::symlink("b.xlsx", &a).unwrap();
+    std::os::unix::fs::symlink("a.xlsx", &b).unwrap();
+    assert!(resolve_path(&a).is_none(), "a loop resolves to nothing");
+    // A document that was opened from somewhere else and now finds a loop keeps it untouched.
+    let expected = dir.join("elsewhere.xlsx");
+    assert!(write_file_expecting(a.to_str().unwrap(), b"x", Some(&expected)).is_err());
+    assert!(std::fs::symlink_metadata(&a).unwrap().file_type().is_symlink());
+    // With nothing expected (Save As) the path is written as it is, replacing the link.
+    write_file(a.to_str().unwrap(), b"y").unwrap();
+    assert!(!std::fs::symlink_metadata(&a).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&a).unwrap(), b"y");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn verbatim_windows_paths_lose_their_prefix_only_when_the_plain_form_is_the_same_file() {
+    assert_eq!(strip_verbatim(r"\\?\C:\Users\me\book.xlsx").as_deref(), Some(r"C:\Users\me\book.xlsx"));
+    assert_eq!(strip_verbatim(r"\\?\d:\book.xlsx").as_deref(), Some(r"d:\book.xlsx"));
+    assert_eq!(strip_verbatim(r"\\?\UNC\server\share\book.xlsx").as_deref(), Some(r"\\server\share\book.xlsx"));
+    // Not verbatim, or no plain form: left alone.
+    assert_eq!(strip_verbatim(r"C:\Users\me\book.xlsx"), None);
+    assert_eq!(strip_verbatim("/home/me/book.xlsx"), None);
+    assert_eq!(strip_verbatim(r"\\?\GLOBALROOT\Device\x"), None);
+    assert_eq!(strip_verbatim(r"\\?\C:"), None);
+    assert_eq!(strip_verbatim(r"\\?\C:\a\..\b.xlsx"), None, "`..` is taken literally after the prefix");
+    assert_eq!(strip_verbatim(r"\\?\C:\a/b.xlsx"), None, "`/` is taken literally after the prefix");
+    let long = format!(r"\\?\C:\{}\book.xlsx", "d".repeat(300));
+    assert_eq!(strip_verbatim(&long), None, "too long for the plain form");
+    // `simplified` only ever changes a path that is verbatim.
+    assert_eq!(simplified(std::path::PathBuf::from("/tmp/x")), std::path::PathBuf::from("/tmp/x"));
+}
