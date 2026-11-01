@@ -301,7 +301,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let refs = formula_refs(&ed.text);
     let t = Tokens::get(ui.ctx());
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
-    let cell_text_color = if on_sheet { t.cell_text } else { t.text };
+    // The in-cell editor sets the cell's font colour as the override (see `grid::editor`).
+    let cell_text_color = if on_sheet { ui.visuals().override_text_color.unwrap_or(t.cell_text) } else { t.text };
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();

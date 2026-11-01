@@ -79,6 +79,11 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
     child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    // The text takes the cell's font colour as it is typed, not only once it is entered (#3011):
+    // white text on a black fill must be readable while editing. Automatic keeps the theme's ink.
+    if st.font.color != super::Color::Auto {
+        child.visuals_mut().override_text_color = Some(super::cell_paint::col32(st.font.color, wb, Tokens::get(ui.ctx()).cell_text));
+    }
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0, erect.height() - 2.0);
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.cell_editor.rect"), erect));
 }
