@@ -779,9 +779,12 @@ fn paint_validation_circles(p: &Painter, geo: &Geo, sh: &Sheet, cells: &[CellRef
     // sheet with many circles.
     let rows = geo.row_at(sh, clip.top()).saturating_sub(1)..=geo.row_at(sh, clip.bottom()).saturating_add(1);
     let cols = geo.col_at(sh, clip.left()).saturating_sub(1)..=geo.col_at(sh, clip.right()).saturating_add(1);
+    let in_view = |a: &RangeRef| a.end.row >= *rows.start() && a.start.row <= *rows.end() && a.end.col >= *cols.start() && a.start.col <= *cols.end();
+    // A cell in a merged area off screen is off screen too, so only the merges in view count.
+    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| in_view(m)).copied().collect();
     for &c in cells {
-        let area = sh.merge_at(c).unwrap_or(RangeRef::cell(c));
-        if area.end.row < *rows.start() || area.start.row > *rows.end() || area.end.col < *cols.start() || area.start.col > *cols.end() {
+        let area = merges.iter().find(|m| m.contains(c)).copied().unwrap_or(RangeRef::cell(c));
+        if !in_view(&area) {
             continue;
         }
         let r = geo.range_rect(sh, area);
@@ -1103,6 +1106,24 @@ mod validation_circle_tests {
         assert!(frozen.iter().all(|(_, clip)| clip.top() >= split), "drawn in the scrolling pane only: {frozen:?}");
         assert!(frozen.iter().any(|(oval, _)| rings(&app, &geo, oval, "A5")), "{frozen:?}");
         assert!(!frozen.iter().any(|(oval, _)| rings(&app, &geo, oval, "A3")), "A3 is under the frozen rows: {frozen:?}");
+    }
+
+    #[test]
+    fn a_merged_cell_has_one_oval_around_its_area_while_any_of_it_shows() {
+        let mut app = app();
+        app.run("home.mergeCells", json!({"range": "A5:C5"})).unwrap();
+        let area = RangeRef::parse("A5:C5").unwrap();
+        for cols in [0, 2] {
+            let d = app.session.active().unwrap();
+            let right = d.wb.active().unwrap().col_left(cols) as f32;
+            let (geo, ovals) = ovals(&mut app, vec2(right, 0.0));
+            let d = app.session.active().unwrap();
+            let r = geo.range_rect(d.wb.active().unwrap(), area);
+            // Scrolled by two columns, A5 is off screen and C5 still shows.
+            let around: Vec<_> =
+                ovals.iter().filter(|(o, _)| Rect::from_center_size(o.center, o.radius * 2.0).expand(o.stroke.width).contains_rect(r)).collect();
+            assert_eq!(around.len(), 1, "scrolled by {cols} columns: {ovals:?}");
+        }
     }
 
     #[test]
