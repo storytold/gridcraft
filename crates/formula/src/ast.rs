@@ -60,6 +60,16 @@ impl Reference {
             _ => None,
         }
     }
+    /// A reference into another workbook (`[1]Sheet1!A1`, `'[1]My sheet'!A:C`). Sheet names can't
+    /// hold `[` or `]`, so a `[` never names a sheet of this workbook.
+    pub fn is_external(&self) -> bool {
+        let book = |name: &str| name.contains('[');
+        match &self.sheet {
+            SheetSel::Current => false,
+            SheetSel::Named(name) => book(name),
+            SheetSel::Span(first, last) => book(first) || book(last),
+        }
+    }
 }
 
 /// Structured reference `Table1[[#Headers],[Col1]:[Col3]]`, `[@Col]`.
