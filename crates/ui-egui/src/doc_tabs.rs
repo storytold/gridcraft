@@ -11,6 +11,7 @@
 use egui::{Button, RichText, ScrollArea, Stroke, Ui, vec2};
 
 use crate::OpenWindow;
+use craft_window::WindowId;
 use crate::theme::Tokens;
 
 /// Padding after a tab, so the labels do not touch.
@@ -61,6 +62,10 @@ pub struct DocTabs {
     pub pinned: Vec<u64>,
     /// The tab the user acted on this frame.
     pub action: Option<TabAction>,
+    /// Other native windows a tab can be moved to: (label, window; None = the main window).
+    pub windows: Vec<(String, Option<WindowId>)>,
+    /// A tab the user asked to move into another native window.
+    pub move_to: Option<(u64, Option<WindowId>)>,
     /// A tab dragged to a new position: `(window, index in the strip without the dragged tab)`.
     pub reordered: Option<(u64, usize)>,
 }
@@ -68,6 +73,24 @@ pub struct DocTabs {
 impl DocTabs {
     pub fn new(tabs: Vec<OpenWindow>) -> DocTabs {
         DocTabs { tabs, ..Default::default() }
+    }
+
+    /// The strip for one native window: its own tabs only, pinned first, in the window's order.
+    pub fn from_group(app: &crate::SheetApp, order: &[u64], pinned: &[u64], active: Option<u64>) -> DocTabs {
+        let mut tabs: Vec<OpenWindow> = app
+            .open_windows()
+            .into_iter()
+            .filter(|w| order.contains(&w.window))
+            .map(|mut w| {
+                w.active = Some(w.window) == active;
+                w
+            })
+            .collect();
+        tabs.sort_by_key(|w| {
+            let pin = pinned.iter().position(|id| *id == w.window);
+            (pin.is_none(), pin.unwrap_or(0), order.iter().position(|id| *id == w.window).unwrap_or(usize::MAX))
+        });
+        DocTabs { tabs, pinned: pinned.to_vec(), ..Default::default() }
     }
 
     /// The strip for the windows on screen, pinned first and then in `order` (windows missing from
@@ -99,6 +122,8 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
     let t = Tokens::get(ui.ctx());
     let mut action: Option<TabAction> = None;
     let mut reordered = None;
+    let mut moved_to: Option<(u64, Option<WindowId>)> = None;
+    let windows = tabs.windows.clone();
     let all: Vec<u64> = tabs.tabs.iter().map(|t| t.window).collect();
     let pinned = tabs.pinned.clone();
     let mut rects: Vec<(u64, egui::Rect)> = Vec::new();
@@ -161,6 +186,15 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
                             action = Some(TabAction::MoveEnd(w));
                             ui.close();
                         }
+                        if !windows.is_empty() {
+                            ui.separator();
+                            for (label, target) in &windows {
+                                if ui.button(label).clicked() {
+                                    moved_to = Some((w, *target));
+                                    ui.close();
+                                }
+                            }
+                        }
                     });
                     ui.separator();
                     let to_the_right: Vec<u64> = all.iter().copied().skip(index + 1).collect();
@@ -202,4 +236,5 @@ pub fn show_inline(ui: &mut Ui, tabs: &mut DocTabs, labels: &Labels, max_w: f32)
     }
     tabs.action = action;
     tabs.reordered = reordered;
+    tabs.move_to = moved_to;
 }

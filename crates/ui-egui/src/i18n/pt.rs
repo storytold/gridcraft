@@ -348,6 +348,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save As" => "Salvar como",
         "Export" => "Exportar",
         "Close" => "Fechar",
+        "Main window" => "Janela principal",
         "Pin tab" => "Fixar separador",
         "Standalone window" => "Janela autônoma",
         "Move tab to" => "Mover aba para",
