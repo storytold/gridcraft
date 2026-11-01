@@ -30,15 +30,17 @@ fn run() -> Result<(), String> {
         let v = wb.sheet(0).map(|s| s.value(CellRef::new(N - 1, 1)));
         v == Some(Value::Number(f64::from(2 + N - 1)))
     })?);
+    println!("median-independent-ms: {independent:.3}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     let same_row = median_ms(&time_edits(same_row_book()?, 3.0, |wb| {
         let v = wb.sheet(0).map(|s| s.value(CellRef::new(N - 1, 10)));
         v == Some(Value::Number(9.0))
     })?);
-    let chain = chain_ms()?;
-
-    println!("median-independent-ms: {independent:.3}");
     println!("median-same-row-sum-ms: {same_row:.3}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let chain = chain_ms()?;
     println!("serial-chain-ms: {chain:.3}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     if independent >= 100.0 || same_row >= 100.0 {
         return Err(format!("median not under 100 ms (independent {independent:.3}, same-row sum {same_row:.3})"));
     }

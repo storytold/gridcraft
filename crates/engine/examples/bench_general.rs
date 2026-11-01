@@ -47,6 +47,7 @@ fn run() -> Result<(), String> {
 
     let median = median_ms(&samples);
     println!("median-general-ms: {median:.3}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 
     exec(&mut s, "cell.set", json!({"sheet": "Data", "cell": "A1", "input": "2"}))?;
     verify_calc_outputs(&s)?;
