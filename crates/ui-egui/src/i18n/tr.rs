@@ -4,6 +4,8 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Search commands (Alt+Q)" => "Komutları ara (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Bir komut arayın, ör. dondur, grafik, kalın…",
         "Paste" => "Yapıştır",
         "Paste Values" => "Değerleri Yapıştır",
         "Paste Formulas" => "Formülleri Yapıştır",

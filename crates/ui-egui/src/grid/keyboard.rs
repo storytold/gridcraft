@@ -71,6 +71,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                    // A shortcut that opened a dialog hands it the rest of this frame's input:
+                    // the text some hosts send with Alt+Q must not start a cell edit.
+                    if app.dialog.is_some() {
+                        return;
+                    }
                     shortcut_ran = true;
                     continue;
                 }

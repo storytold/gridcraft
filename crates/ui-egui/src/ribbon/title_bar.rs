@@ -121,7 +121,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let left_end = ui.min_rect().right();
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
+                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (Alt+Q)", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));

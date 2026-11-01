@@ -144,8 +144,6 @@ pub(super) fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Data ▸ Outline ▸ Settings: whether summary rows sit below their detail and summary columns
-/// right of it. A changed direction moves each collapsed group's mark (+) to its new summary line.
 /// Moves the collapsed marks of a line axis to the summary line on its new side (`on` is the new
 /// setting, `was_before` the old one). A line that nested groups share keeps its mark on the outermost
 /// group whose detail is all hidden, or the outermost when none is.
@@ -174,6 +172,8 @@ fn move_marks(map: &mut std::collections::BTreeMap<u32, LineInfo>, was_before: b
     }
 }
 
+/// Data ▸ Outline ▸ Settings: whether summary rows sit below their detail and summary columns
+/// right of it. A changed direction moves each collapsed group's mark (+) to its new summary line.
 pub(super) fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
     let si = target_sheet(s, p)?;
     edit(s, |cx| {
