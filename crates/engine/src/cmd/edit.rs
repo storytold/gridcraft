@@ -25,10 +25,10 @@ pub(crate) use cell::{check_arg_counts, input_to_cell, json_to_input, parse_type
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste};
 use fill::{auto_fill, fill_dir, fill_series, flash_fill};
-#[cfg(test)]
-use find::replace_ci;
 pub(crate) use find::wildcard;
 use find::{find, replace};
+#[cfg(test)]
+use find::{replace_ci, replace_wildcard};
 pub(super) use go_to::go_to;
 pub use go_to::go_to_names;
 use go_to::go_to_special;
