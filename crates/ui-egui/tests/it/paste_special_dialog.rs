@@ -75,3 +75,13 @@ fn french_shows_the_dialog_translated_and_none_as_the_operation() {
     assert!(h.get_by_label("Collage spécial").query_by_label_contains("Annuler").is_some(), "no Annuler in the dialog");
     assert!(h.query_by_label("None").is_none());
 }
+
+#[test]
+fn english_shows_none_without_the_context_prefix() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "en"})).unwrap();
+    h.run_steps(3);
+    let dialog = h.get_by_role_and_label(egui::accesskit::Role::Window, "Paste Special");
+    assert!(dialog.query_by_label("None").is_some(), "no None in the dialog");
+    assert!(h.query_all_by_label_contains("Paste Special|").next().is_none(), "the context prefix shows");
+}
