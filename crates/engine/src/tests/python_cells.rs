@@ -263,3 +263,36 @@ fn a_macro_counts_python_code_as_data_and_a_blocked_spill_as_no_write() {
     assert!(e.contains("F2") && e.contains("H2") && !e.contains("J2"), "{e}");
     assert_eq!(code(&s, 0, "F2").as_deref(), Some("1"), "nothing was changed");
 }
+
+#[test]
+fn replace_edits_a_python_cells_code_and_keeps_it_a_python_cell() {
+    let mut s = s();
+    plant(&mut s, 0, "A1", "x = 1\nx");
+    {
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("A1").unwrap()).unwrap();
+        Arc::make_mut(cell.py.as_mut().unwrap()).object = true;
+        d.wb = Arc::new(wb);
+    }
+    let r = s.execute("edit.replace", json!({"what": "x", "with": "y"})).unwrap();
+    assert_eq!(r["replaced"], 1);
+    assert_eq!(code(&s, 0, "A1").as_deref(), Some("y = 1\ny"));
+    let d = s.doc().unwrap();
+    let cell = d.wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap();
+    assert!(cell.py.as_ref().unwrap().object, "the return type is kept");
+    assert_eq!(cell.value, Value::Error(gridcraft_core::CellError::Blocked));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(code(&s, 0, "A1").as_deref(), Some("x = 1\nx"));
+}
+
+#[test]
+fn replace_leaves_python_code_that_would_no_longer_fit() {
+    let mut s = s();
+    let long = "a".repeat(gridcraft_model::python::MAX_FORMULA_CHARS / 2);
+    plant(&mut s, 0, "A1", &long);
+    let r = s.execute("edit.replace", json!({"what": "a", "with": "bb"})).unwrap();
+    assert_eq!(r["replaced"], 0);
+    assert_eq!(r["skipped"], 1);
+    assert_eq!(code(&s, 0, "A1").as_deref(), Some(long.as_str()));
+}

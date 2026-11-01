@@ -129,7 +129,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook}",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),
