@@ -2,6 +2,13 @@
 
 A small, dependency-free PDF 1.7 writer for vector drawing and RGBA images.
 
+## System fonts
+
+`set_unicode_font_loader(pdf_unicode_fonts)` enables bounded native TrueType fallback loading for
+Greek and Cyrillic. `system_cell_font_candidates(bold, italic)` supplies the same installed cell-font
+candidate order to the desktop UI, without introducing toolkit dependencies. No fonts are bundled
+by this crate; WebAssembly returns no filesystem-loaded fallback faces.
+
 ## API migration
 
 The geometry-taking methods now use `Point` and `Rect` values to name their coordinates, and

@@ -103,6 +103,21 @@ Omit `path` to receive PDF bytes as base64. Fonts apply only to that export. Inv
 fonts and missing glyphs are tool errors; no dialog opens and no output is written. See
 [CLI PDF fonts](cli.md#pdf-fonts) for limits, examples and shaping restrictions.
 
+MCP font paths may name any regular file readable by the engine process, including absolute paths
+outside the current working directory. Relative paths resolve in that process's working directory;
+`mcp --connect` uses the desktop process's filesystem and working directory. MCP does not implement
+client workspace roots or a directory sandbox. Treat access to this server as access to its local
+file commands, including `file.open`, rather than as access limited to a workbook folder. Run it
+with OS filesystem restrictions when connecting an agent that must only see selected directories.
+Restricting font paths alone would not restrict the other file commands.
+
+Accepted fonts are embedded whole, so PDF recipients receive the entire source font, including
+its metadata and any additional tables. Each face is limited to 64 MiB and the total explicit font
+input to 256 MiB per export, with at most 32 named families. Restricted-licence and bitmap-only
+outline embedding (`OS/2.fsType`) are rejected before output; the caller must also hold the rights
+to distribute any accepted font. Macro-initiated font reads additionally require the existing
+[macro file-access permission and approval](macros.md).
+
 ## Embedding
 
 `gridcraft-mcp` is a library: `Server::new(Box::new(Headless::new()))` or

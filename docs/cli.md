@@ -93,8 +93,10 @@ variable-font axis selection; use static faces and scripts that need no complex 
 files are bundled or added to the repository.
 
 Without explicit fonts, Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
-registered system TrueType fallback from #1555. Text that fallback cannot cover retains the
-existing non-embedded CID path, whose rendering depends on the PDF viewer's fonts.
+registered system TrueType fallback shared with the desktop. The loader lives in the dependency-free
+PDF crate; building the headless CLI does not require the UI crate or its windowing dependencies.
+Text that fallback cannot cover retains the existing non-embedded CID path, whose rendering
+depends on the PDF viewer's fonts.
 
 ## `run`
 

@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod system_fonts;
 mod truetype;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -26,6 +27,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 
+pub use system_fonts::{pdf_unicode_fonts, system_cell_font_candidates};
 pub use truetype::{MAX_FONT_BYTES, UnicodeFont};
 
 /// Maximum number of explicitly mapped workbook families in one export.

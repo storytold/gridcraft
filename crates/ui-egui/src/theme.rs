@@ -22,11 +22,8 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visua
 
 mod font_fallback;
 mod font_setup;
-mod pdf;
 
-pub use pdf::pdf_unicode_fonts;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use pdf::{pdf_font_covers_greek_or_cyrillic, read_pdf_font};
+pub use gridcraft_engine::pdf::pdf_unicode_fonts;
 
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]

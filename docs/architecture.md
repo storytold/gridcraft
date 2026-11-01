@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -52,8 +52,9 @@ including tests, 2026-10-10.
 PDF export keeps command validation and document construction in `engine/cmd/print.rs`;
 layout, drawing, text, objects and headers/footers live in its child modules. Each uses the
 same document-local font set for rendering and measurement. PDF drawing uses the writer's
-`Point`/`Rect` geometry API, including the origin of each rotated fallback run. The native fallback provider lives
-in `ui-egui/theme/pdf.rs`, using the shared system-font candidates and bounded file reads.
+`Point`/`Rect` geometry API, including the origin of each rotated fallback run. The native fallback
+provider and shared cell-font candidates live in `pdf/system_fonts.rs`, using bounded file reads. Desktop font setup and the headless CLI share
+this dependency-free provider; the CLI does not depend on `ui-egui` or a windowing toolkit.
 Header/footer expansion retains ordered font/style runs (up to 40,000 UTF-8 bytes per section).
 PDF fallback loading retains up to four faces: primary and alternate regular/bold pairs.
 A face covering both Greek and Cyrillic wins; otherwise text is split into covered runs,
@@ -169,6 +170,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Move native PDF fallback loading and shared cell-font candidates into the dependency-free PDF crate; remove the CLI UI dependency; document MCP filesystem authority |
 | 2026-10-31 | minor | Classify explicit PDF fonts as local file reads in macro approval, with or without an output path; preserve sandbox denial without permission |
 | 2026-10-29 | trivial | Reconcile PDF font export architecture with the upstream macro engine and hidden macro storage |
 | 2026-10-28 | minor | Reconcile custom PDF fonts with upstream explicit imports, Clippy gates and Point/Rect drawing arguments; preserve mixed-script rotated run origins and font regressions |
