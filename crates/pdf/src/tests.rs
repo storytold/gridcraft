@@ -332,3 +332,27 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
     Ok(())
 }
+
+#[test]
+fn shared_images_are_written_once() -> Result<(), Box<dyn Error>> {
+    let mut d = PdfDoc::new();
+    let logo = d.add_image(&[200, 10, 10, 255].repeat(4), [2, 2]).ok_or("logo")?;
+    let unused = d.add_image(&[0; 16], [2, 2]).ok_or("unused")?;
+    assert!(d.add_image(&[1, 2, 3], [4, 4]).is_none(), "too short");
+    let mut other = PdfDoc::new();
+    let foreign = other.add_image(&[255; 16], [2, 2]).ok_or("foreign")?;
+    for _ in 0..3 {
+        let p = d.add_page(200.0, 200.0);
+        p.image_shared(Rect::new(10.0, 10.0, 40.0, 40.0), logo);
+        p.image_shared(Rect::new(60.0, 10.0, 40.0, 40.0), foreign); // another document's: ignored
+    }
+    let _ = unused;
+    let pdf = d.finish();
+    check_xref(&pdf)?;
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "the logo once, the unused image not at all");
+    assert_eq!(text.matches("/Sh1 Do").count(), 3);
+    assert_eq!(text.matches("/Sh1 ").count() - text.matches("/Sh1 Do").count(), 3, "each page lists it");
+    assert!(!text.contains("/Sh2"));
+    Ok(())
+}

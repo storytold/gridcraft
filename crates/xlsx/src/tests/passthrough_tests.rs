@@ -910,6 +910,25 @@ fn header_and_footer_pictures_survive_a_save() {
     }
 }
 
+#[test]
+fn header_and_footer_pictures_are_read_for_printing() {
+    let (wb, _) = read_xlsx(&header_picture_package()).unwrap();
+    // Read from the file, and again after a save renamed the kept parts.
+    let (again, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    for book in [&wb, &again] {
+        let kept = book.sheet(0).unwrap().preserved.clone().expect("the header drawing is kept");
+        let got: Vec<_> =
+            crate::header_footer_pictures(&kept).into_iter().map(|p| (p.page, p.footer, p.section, p.width, p.height, p.data.to_vec())).collect();
+        assert_eq!(
+            got,
+            [
+                (gridcraft_model::HfPage::Odd, false, 0, 120.0, 40.0, LOGO.to_vec()),
+                (gridcraft_model::HfPage::Odd, true, 1, 80.0, 20.0, SIGNATURE.to_vec()),
+            ]
+        );
+    }
+}
+
 /// The shape blocks a VML drawing claims (`<o:idmap data>`) and the blocks of its shape ids
 /// (`_x0000_s1025` is in block 1).
 fn vml_blocks(vml: &str) -> (Vec<u64>, Vec<u64>) {
