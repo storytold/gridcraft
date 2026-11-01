@@ -172,10 +172,12 @@ fn session() -> Session {
     s
 }
 
-/// A session with the file at `path` open, wired for web imports.
+/// A session with the file at `path` open, wired for web imports. Saved connections with
+/// "refresh on open" set sync here (the file is the caller's own, given on the command line).
 fn open(path: &str) -> Result<Session, String> {
     let mut s = session();
     exec(&mut s, "file.open", json!({"path": path}))?;
+    let _ = gridcraft_engine::cmd::web::refresh_connections_on_open(&mut s, true);
     Ok(s)
 }
 

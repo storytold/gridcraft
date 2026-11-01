@@ -85,6 +85,12 @@ pub struct WebQuery {
     /// When the connection last synced, in ms since the epoch; `None` until the first sync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_synced: Option<u64>,
+    /// Excel's "Refresh data when opening the file": the connection syncs on open. Off by
+    /// default, and a workbook opened from a file or bytes (not this session's own save)
+    /// never auto-refreshes regardless \u{2014} a stranger's workbook must not make the
+    /// recipient's machine fetch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_on_open: bool,
 }
 
 /// A table column's binding to an XML map (`<xmlColumnPr>`).

@@ -117,7 +117,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   (`data.fromDatabase`, `data.relationships` missing). From Web (`data.fromWeb`) fetches an https
   page, lists its detected tables in a Navigator dialog and loads the selected one into a new
   table sheet, saving the connection; `data.webRefresh` re-fetches and rewrites the table in
-  place (desktop and CLI). **Estimate:** 50–90 h.
+  place, with Excel's "Refresh data when opening the file" per connection (`data.webQuerySet`,
+  only for a workbook the session or the host trusts — a file from elsewhere never fetches on
+  open) (desktop and CLI). **Estimate:** 45–85 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the

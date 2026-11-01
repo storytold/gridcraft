@@ -145,6 +145,7 @@ pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {
                     "sheet": live.as_ref().map(|(_, s)| s).unwrap_or(&q.sheet),
                     "url": q.url, "table": q.table,
                     "last_synced": q.last_synced.unwrap_or(0), "web": true,
+                    "refresh_on_open": q.refresh_on_open,
                 })
             })
             .collect();

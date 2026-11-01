@@ -42,9 +42,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refresh Web Table",
             ["Data", "Queries & Connections"],
             None,
-            "{url? | name?: the saved connection (default: all)} → re-fetches and rewrites the imported table(s) in place",
+            "{url? | name?: the saved connection (default: all), refreshOnOpen?: only the connections that refresh on open} → re-fetches and rewrites the imported table(s) in place",
             has_doc,
             web_refresh
+        ),
+        cmd!(
+            "data.webQuerySet",
+            "Set Web Connection Property",
+            [],
+            None,
+            "{name, refreshOnOpen: bool} → sets a saved connection's properties (Excel's connection properties: \"Refresh data when opening the file\")",
+            has_doc,
+            web_query_set
         ),
     ]
 }
@@ -223,6 +232,7 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
             occurrence,
             sheet: sheet_name.clone(),
             last_synced: Some(synced),
+            refresh_on_open: false,
         };
         edit(s, |cx| {
             cx.wb.web_queries.retain(|x| !(x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)));
@@ -317,11 +327,18 @@ fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
 fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty());
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
+    // Only the connections with Excel's "Refresh data when opening the file" set: the open
+    // path asks for exactly these (see `refresh_connections_on_open`).
+    let on_open = bool_param(p, "refreshOnOpen").unwrap_or(false);
     let queries: Vec<gridcraft_model::WebQuery> = {
         let d = s.doc()?;
         d.wb.web_queries
             .iter()
-            .filter(|q| url.is_none_or(|u| q.url.eq_ignore_ascii_case(u)) && name.is_none_or(|n| q.name.eq_ignore_ascii_case(n)))
+            .filter(|q| {
+                url.is_none_or(|u| q.url.eq_ignore_ascii_case(u))
+                    && name.is_none_or(|n| q.name.eq_ignore_ascii_case(n))
+                    && (!on_open || q.refresh_on_open)
+            })
             .cloned()
             .collect()
     };
@@ -352,6 +369,40 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     Ok(json!({"refreshed": refreshed, "errors": errors}))
+}
+
+/// `data.webQuerySet`: a saved connection's user-facing properties (the connection
+/// properties dialog's checkboxes). `refreshOnOpen` is Excel's "Refresh data when opening
+/// the file".
+fn web_query_set(s: &mut Session, p: &Json) -> Result<Json> {
+    let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("data.webQuerySet", "missing `name`"))?;
+    let on = bool_param(p, "refreshOnOpen").ok_or_else(|| bad("data.webQuerySet", "missing `refreshOnOpen`"))?;
+    edit(s, |cx| {
+        let Some(q) = cx.wb.web_queries.iter_mut().find(|q| q.name.eq_ignore_ascii_case(&name)) else { return Err(EngineError::Other(format!("No saved connection named `{name}`."))) };
+        q.refresh_on_open = on;
+        cx.structural = true;
+        Ok(Json::Null)
+    })
+}
+
+/// Excel's "Refresh data when opening the file": after a workbook opens, every saved
+/// connection with `refresh_on_open` set syncs. Only a workbook this session trusts as its
+/// own (`Trust::Local` \u{2014} saved here, or new in this session) does: a workbook opened
+/// from a file or bytes is someone else's content, and its connections must not make this
+/// machine fetch. The refresh runs only when a fetch source is installed (the CLI and the
+/// desktop app install one; tests and wasm do not). Failures are per-connection errors in
+/// the result, like a manual refresh, never an open failure.
+pub fn refresh_connections_on_open(s: &mut Session, host_trusts_file: bool) -> Json {
+    let trusted = s.active().map(|d| d.trust == crate::Trust::Local || (d.trust == crate::Trust::FromFile && host_trusts_file)).unwrap_or(false);
+    let has_source = s.web_source.is_some();
+    let any = s.active().map(|d| d.wb.web_queries.iter().any(|q| q.refresh_on_open)).unwrap_or(false);
+    if !trusted || !has_source || !any {
+        return json!({"refreshed": 0, "errors": []});
+    }
+    match s.execute("data.webRefresh", json!({"refreshOnOpen": true})) {
+        Ok(r) => r,
+        Err(e) => json!({"refreshed": 0, "errors": [{"error": e.to_string()}]}),
+    }
 }
 
 /// Re-fetch result over the connection's table: clear its range, write the new rows and
@@ -1220,6 +1271,79 @@ mod tests {
         let r = s.execute("data.webRefresh", json!({})).unwrap();
         assert_eq!(r["refreshed"], 1, "the grown refresh is not refused by stale checkbox state");
         assert!(r["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    /// Excel's "Refresh data when opening the file": a connection with the property set
+    /// syncs when `refresh_connections_on_open` runs after the workbook opens, and the
+    /// refresh preserves the table's safeguards (in-place rewrite, per-connection errors).
+    fn a_connection_with_refresh_on_open_syncs_when_the_workbook_opens() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The old page's value, replaced by the refresh.
+        assert_eq!(a1(&s, "B2"), "12.5");
+        // The user opts the connection in (the Q&C pane's checkbox).
+        s.execute("data.webQuerySet", json!({"name": "prices", "refreshOnOpen": true})).unwrap();
+        // The page changed underneath.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>Z</td><td>99</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        // The open path: a Local-trust workbook (this session's own) refreshes.
+        let r = refresh_connections_on_open(&mut s, false);
+        assert_eq!(r["refreshed"], 1, "the opted-in connection synced (errors: {})", r["errors"]);
+        assert_eq!(a1(&s, "B2"), "99", "the table was rewritten in place");
+        // Not opted in: nothing refreshes.
+        s.execute("data.webQuerySet", json!({"name": "prices", "refreshOnOpen": false})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>Y</td><td>55</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = refresh_connections_on_open(&mut s, false);
+        assert_eq!(r["refreshed"], 0, "a connection without the property does not refresh");
+        assert_eq!(a1(&s, "B2"), "99", "the table is untouched");
+    }
+
+    #[test]
+    /// A workbook opened from a file never auto-refreshes, whatever its connections say:
+    /// the trust gate (FromFile without the host's say-so) stops a stranger's workbook from
+    /// making the recipient's machine fetch.
+    fn a_stranger_s_workbook_never_auto_refreshes() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        s.execute("data.webQuerySet", json!({"name": "prices", "refreshOnOpen": true})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>EVIL</td><td>0</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        // The document is re-marked as opened from a file (a stranger's workbook).
+        let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = fetches.clone();
+        s.web_source = Some(Arc::new(move |req: &WebRequest| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::webquery::extract_tables("<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>EVIL</td><td>0</td></tr></table>", req.max_rows, req.max_cols))
+        }));
+        // FromFile trust, host does not vouch for it: no fetch.
+        if let Some(d) = s.active_mut() {
+            d.trust = crate::Trust::FromFile;
+        }
+        let r = refresh_connections_on_open(&mut s, false);
+        assert_eq!(r["refreshed"], 0, "nothing refreshed");
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 0, "no fetch was made for a stranger's workbook");
+        assert_eq!(a1(&s, "B2"), "12.5", "the table is untouched");
+        // The host vouching for the file (the user opened their own file in the app): it refreshes.
+        let r = refresh_connections_on_open(&mut s, true);
+        assert_eq!(r["refreshed"], 1, "a host-trusted file refreshes (errors: {})", r["errors"]);
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 1, "exactly one fetch");
     }
 
     #[test]

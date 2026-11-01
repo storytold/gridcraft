@@ -22,6 +22,17 @@ impl SheetApp {
             self.ui.recent.truncate(20);
         }
         self.show_open_warnings(r);
+        // Excel's "Refresh data when opening the file": connections opted in sync now. The
+        // desktop app is a user action on their own machine (File \u{25b8} Open, the Recent
+        // list), so the file is trusted to refresh; the wasm build installs no fetch source,
+        // so the hook is a no-op there.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let res = gridcraft_engine::cmd::web::refresh_connections_on_open(&mut self.session, true);
+            if let Some(e) = res["errors"].as_array().and_then(|a| a.first()) {
+                self.message = Some(("From Web".into(), format!("Refresh on open: {}", e["error"].as_str().unwrap_or_default())));
+            }
+        }
     }
 
     /// Turns the `warnings` a `file.open` result carries into an info-bar notice, choosing the
