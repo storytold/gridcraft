@@ -58,21 +58,29 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     // resolved addresses are checked, not the name: `https://attacker.example` pointing at
     // `192.168.0.5` is refused, not just a literal `192.168.0.5`. Every resolved address must
     // be a public one; a name with mixed records (one public, one private) is refused too.
-    // Redirects are not followed (max_redirects(0) below), so this one resolution is the only
-    // place a connection can be made to.
-    let host = host_of(&req.url);
-    let mut addrs = std::net::ToSocketAddrs::to_socket_addrs(&*host).map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?;
-    if addrs.any(|a| {
-        let ip = a.ip();
-        ip.is_loopback() || ip.is_unspecified() || is_private_or_shared(&ip)
-    }) {
+    // The passing addresses are kept and handed to the agent as its resolver, so ureq
+    // connects only to an address that passed this check and never resolves the name again
+    // (a name that flipped to a private address between the two lookups would otherwise reach
+    // the private one). Redirects are not followed (max_redirects(0) below), so this is the
+    // only place a connection can be made from.
+    let (host, port) = host_and_port(&req.url)?;
+    let validated: Vec<std::net::SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
+        .map_err(|e| format!("The address \u{2018}{host}\u{2019} could not be resolved: {e}"))?
+        .filter(|a| {
+            let ip = canonical(a.ip());
+            !ip.is_loopback() && !ip.is_unspecified() && !is_private_or_shared(&ip)
+        })
+        .collect();
+    if validated.is_empty() {
         return Err(format!("\u{2018}{host}\u{2019} is an address on this machine or its network, and can\u{2019}t be imported from."));
     }
-    let agent = ureq::Agent::new_with_config(
+    let agent = ureq::Agent::with_parts(
         ureq::config::Config::builder()
             .max_redirects(0)
             .timeout_global(Some(std::time::Duration::from_secs(gridcraft_engine::webquery::DEFAULT_TIMEOUT_SECS)))
             .build(),
+        ureq::unversioned::transport::DefaultConnector::default(),
+        FixedResolver(validated),
     );
     let resp = agent
         .get(&req.url)
@@ -150,19 +158,64 @@ fn meta_charset(bytes: &[u8]) -> Option<String> {
     None
 }
 
-/// The URL's `host:port`, as `to_socket_addrs` takes it: the authority without userinfo,
-/// resolved here so the SSRF gate can check where the name actually points.
-fn host_of(url: &str) -> String {
+/// The URL's host and port, as `to_socket_addrs` takes the pair: the authority without
+/// userinfo, an explicit port kept and https's 443 when the URL has none (the `&str` form
+/// requires a port, so a bare hostname would fail to resolve). Bracketed IPv6 keeps its
+/// brackets, which the pair form accepts.
+fn host_and_port(url: &str) -> Result<(String, u16), String> {
     let authority = url.trim_start().trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
-    // A bare hostname resolves on the default https port; bracketed IPv6 keeps its brackets,
-    // which `to_socket_addrs` accepts, and an explicit port is passed through.
-    if host.starts_with('[') || host.contains(':') && !host.split(':').nth(1).is_some_and(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty()) {
-        host.to_string()
-    } else if let Some((h, port)) = host.rsplit_once(':') {
-        format!("{h}:{port}")
-    } else {
-        host.to_string()
+    if let Some(rest) = host.strip_prefix('[') {
+        // [v6]:port or [v6]
+        let Some((v6, after)) = rest.split_once(']') else { return Err("The address is not a valid URL.".into()) };
+        let port = match after.strip_prefix(':') {
+            Some(p) => p.parse::<u16>().map_err(|_| "The address's port is not valid.".to_string())?,
+            None if after.is_empty() => 443,
+            _ => return Err("The address is not a valid URL.".into()),
+        };
+        return Ok((format!("[{v6}]"), port));
+    }
+    // host, or host:port. A colon that is not a port separator is a bad address, not a pair.
+    match host.split_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
+            Ok((h.to_string(), p.parse::<u16>().map_err(|_| "The address's port is not valid.".to_string())?))
+        }
+        Some(_) => Err("The address is not a valid URL.".into()),
+        None => Ok((host.to_string(), 443)),
+    }
+}
+
+/// An address as the refusal rules see it: an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`)
+/// is the IPv4 address it stands for, so the IPv4 rules (loopback, link-local, private) cover
+/// the mapped form too.
+fn canonical(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => std::net::IpAddr::V4(v4),
+            None => std::net::IpAddr::V6(v6),
+        },
+        v4 => v4,
+    }
+}
+
+/// The agent's resolver: the addresses the SSRF gate validated, and nothing else. ureq never
+/// resolves the hostname again, so the destination it connects to cannot differ from the
+/// checked one.
+#[derive(Debug)]
+struct FixedResolver(Vec<std::net::SocketAddr>);
+
+impl ureq::unversioned::resolver::Resolver for FixedResolver {
+    fn resolve(&self, _uri: &ureq::http::Uri, _config: &ureq::config::Config, _timeout: ureq::unversioned::transport::NextTimeout) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let mut out = <Self as ureq::unversioned::resolver::Resolver>::empty(self);
+        for a in &self.0 {
+            if out.try_push(*a).is_err() {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(out)
     }
 }
 
@@ -247,14 +300,44 @@ mod tests {
     }
 
     #[test]
-    /// The host a URL is resolved against: the authority without userinfo, with an explicit
-    /// port kept and a bare name left to the default https port.
-    fn the_host_is_the_authority_without_userinfo() {
-        assert_eq!(host_of("https://example.com/table.html"), "example.com");
-        assert_eq!(host_of("https://example.com:8443/x"), "example.com:8443");
-        assert_eq!(host_of("https://user:pass@example.com/x"), "example.com");
-        assert_eq!(host_of("https://[2001:db8::1]/x"), "[2001:db8::1]");
-        assert_eq!(host_of("https://[2001:db8::1]:9443/x"), "[2001:db8::1]:9443");
+    /// The host and port a URL is resolved against: the authority without userinfo, an
+    /// explicit port kept, https's 443 when the URL has none (a bare hostname must resolve,
+    /// not fail for a missing port), and bracketed IPv6 with its port or the default.
+    fn the_host_and_port_resolve_a_bare_hostname() {
+        assert_eq!(host_and_port("https://example.com/table.html").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 443)));
+        assert_eq!(host_and_port("https://example.com:8443/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 8443)));
+        assert_eq!(host_and_port("https://user:pass@example.com/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("example.com", 443)));
+        assert_eq!(host_and_port("https://[2001:db8::1]/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("[2001:db8::1]", 443)));
+        assert_eq!(host_and_port("https://[2001:db8::1]:9443/x").as_ref().map(|(h, p)| (h.as_str(), *p)), Ok(("[2001:db8::1]", 9443)));
+        assert!(host_and_port("https://2001:db8::1/x").is_err(), "a bare IPv6 with colons is not a host:port pair");
+    }
+
+    #[test]
+    /// An ordinary URL resolves through the host-and-port path: the pair is accepted by
+    /// `to_socket_addrs`, and (sandbox aside) every resolved address is a real one.
+    fn an_ordinary_url_resolves_through_the_pair() {
+        let (host, port) = host_and_port("https://example.com/table.html").expect("a valid URL parses");
+        assert_eq!(port, 443);
+        // The pair form is what `to_socket_addrs` needs; an empty result would mean the
+        // `&str`-form bug (a bare hostname, no port) had come back.
+        let addrs: Vec<_> = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)).expect("the pair resolves").collect();
+        assert!(!addrs.is_empty(), "an ordinary hostname resolves to at least one address");
+        assert!(addrs.iter().all(|a| a.port() == 443));
+    }
+
+    #[test]
+    /// An IPv4-mapped IPv6 address is the IPv4 address it stands for, so the IPv4 refusal
+    /// rules cover the mapped forms: mapped loopback, private and link-local are refused.
+    fn ipv4_mapped_addresses_are_refused_as_their_ipv4_form() {
+        for text in ["::ffff:127.0.0.1", "::ffff:10.1.2.3", "::ffff:192.168.0.5", "::ffff:169.254.169.254", "::ffff:0.0.0.0"] {
+            let ip: std::net::IpAddr = text.parse().expect("a mapped address parses");
+            let c = canonical(ip);
+            assert!(c.is_loopback() || c.is_unspecified() || is_private_or_shared(&c), "{text} must be refused");
+        }
+        // A mapped public address still passes, and a real (non-mapped) IPv6 is untouched.
+        let pub_mapped = canonical("::ffff:93.184.216.34".parse::<std::net::IpAddr>().unwrap());
+        assert!(!(pub_mapped.is_loopback() || pub_mapped.is_unspecified() || is_private_or_shared(&pub_mapped)), "a mapped public address passes");
+        assert!(matches!(canonical("2606:2800:220:1::1".parse::<std::net::IpAddr>().unwrap()), std::net::IpAddr::V6(_)), "a real IPv6 stays IPv6");
     }
 
     #[test]
