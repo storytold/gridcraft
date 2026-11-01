@@ -13,7 +13,7 @@ use serde_json::{Value as Json, json};
 use super::sheet::{rewrite, shift_cell_features};
 use super::{
     CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, cell_param_on, cmd, edit,
-    f64_param, has_doc, locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+    f64_param, has_doc, locked_cell_error, multiple_areas, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
 };
 use crate::selection::current_region;
 
@@ -225,6 +225,9 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
         return target_range(s, p);
     }
     let d = s.doc()?;
+    if d.selection.ranges.len() > 1 {
+        return Err(multiple_areas());
+    }
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let sel = d.selection.current();
     if !sel.is_single() {
