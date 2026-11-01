@@ -129,6 +129,49 @@ cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sa
 You need [trunk](https://trunk-rs.github.io/trunk/) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
 
+A same-origin parent can embed the editor with `?host=parent` and open complete native JSON
+with `gridcraft:open` (`name: "workbook.json"`, `bytes: ArrayBuffer`). Add an optional
+`requestId` for a correlated `gridcraft:opened` reply (`requestId`, `document`, `revision`, or
+`requestId`, `error`). It is sent only after the engine actually imports the workbook, not when
+bytes are queued; overlapping correlated imports are rejected. Unsaved work and pending native
+drafts refuse the import before they are committed or replaced. Wait for this reply before
+associating a document with a host save destination. After `gridcraft:ready`,
+send `gridcraft:export-native` with an opaque string `requestId`; `gridcraft:native-exported`
+returns that ID, the exported `document` and `revision`, and complete native JSON `bytes`, or `error`.
+The revision identifies the state after any pending draft was committed. Export commits pending drafts
+through the engine and leaves the unsaved state intact: the host remains responsible for durable
+storage. `gridcraft:changed` reports every active document or pending cell/text-box draft change,
+including further edits while already dirty. Revisions are bounded opaque string equality tokens,
+never JavaScript numbers. An idle host may request export without Enter; the engine flushes its
+pending drafts before the export reply and corresponding changed event identify the same state. `gridcraft:validate-native` (`requestId`, `bytes`) returns
+`gridcraft:native-validated` (`requestId`, `valid`, `error`) without changing the document.
+Validation accepts at most 32 MiB, checked before copying the input bytes. `gridcraft:closed`
+reports that no workbook is active.
+These messages are accepted only from the same-origin parent. They do not grant permission to
+store a document or turn the ordinary XLSX Save action into a durable acknowledgement.
+
+Hosts that durably store native snapshots can opt into `?host=parent&save=managed`.
+Workbook Save (including Ctrl+S) then sends `gridcraft:save-request` (`document`, `revision`)
+and leaves unsaved changes intact. Export a native snapshot using a fresh `requestId` unique
+across frame reloads. After storing it durably, send `gridcraft:save-ack` with that exact
+`requestId`, `document`, and `revision` from `gridcraft:native-exported`. Only the latest
+export can be acknowledged. A matching acknowledgement records the exported workbook as the
+saved baseline; edits made after that export remain unsaved. Old or foreign acknowledgements
+are ignored. Without `save=managed`, ordinary XLSX Save behavior remains unchanged.
+
+For an opaque sandboxed iframe, use `?host=port&parent_origin=https%3A%2F%2Fhost.example`
+(and `&save=managed` for durable native saves). Serve it at a pinned
+`/b/<64 lowercase hex digits>/index.html` path; a prefix before `/b/` is allowed.
+The public assets must permit cross-origin loading from the opaque frame. The editor sends only
+`{type:"gridcraft:hello", protocol:1, bundle}` over the window channel, addressed to the
+configured canonical HTTP(S) parent origin. The parent must check the iframe source, opaque
+origin and expected bundle pin, then send `{type:"gridcraft:connect", protocol:1, bundle}`
+with exactly one transferred MessagePort. Only the exact parent and origin can connect, once.
+All existing document requests and notifications then use structured objects on that private
+port, including transferred ArrayBuffer bytes up to 32 MiB. Subsequent window messages are
+ignored. The origin and bundle handshake bind the transport; they grant no storage authority
+or runtime credentials. The legacy `host=parent` mode retains its existing same-origin policy.
+
 ### Ribbon access keys
 
 Press and release **left Alt** on Windows/Linux/BSD, or press **F10** on any platform,
