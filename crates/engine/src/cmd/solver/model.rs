@@ -469,11 +469,11 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         (EVALS_NAME, "maxEvaluations"),
     ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
-            model[key] = json!(v);
+            model[key] = number(v);
         }
     }
     if let Some(v) = get("solver_tol").and_then(|v| num_text(&v)) {
-        model["integerOptimality"] = json!(percent(v));
+        model["integerOptimality"] = number(percent(v));
     }
     if let Some(v) = get("solver_rbv") {
         model["requireBounds"] = json!(v.trim() != "2");
@@ -512,7 +512,7 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         "nonNegative": m.non_negative,
         "method": method,
         "maxEvaluations": m.max_evals,
-        "integerOptimality": percent(m.gap),
+        "integerOptimality": number(percent(m.gap)),
     });
     let e = &m.evo;
     out["populationSize"] = json!(e.population);
@@ -700,4 +700,11 @@ fn percent(fraction: f64) -> f64 {
     let p = fraction * 100.0;
     let rounded = (p * 1e10).round() / 1e10;
     if rounded.is_finite() { rounded } else { p }
+}
+
+/// A number read from a hidden name as JSON: a whole number as an integer, so the Solver dialog
+/// shows 20000 and not 20000.0.
+fn number(v: f64) -> Json {
+    // Whole numbers below 2^53 are exact as integers.
+    if v.fract() == 0.0 && v.abs() < 9_007_199_254_740_992.0 { json!(v as i64) } else { json!(v) }
 }

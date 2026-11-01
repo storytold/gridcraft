@@ -823,6 +823,10 @@ fn solver_options_are_saved_with_the_model() {
     let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 10", "A1:A2 bin"], "method": "evolutionary", "maxEvaluations": "3000", "integerOptimality": 5, "convergence": 0.001, "generationsWithoutImprovement": 20, "mutationRate": "0.1"});
     let r = s.execute("data.solver", p).unwrap();
     assert!(r["evaluations"].as_u64().unwrap() <= 3001, "{r}");
+    // The solve's own result gives whole numbers as integers too.
+    for k in ["maxEvaluations", "integerOptimality", "generationsWithoutImprovement", "populationSize", "randomSeed"] {
+        assert!(r["model"][k].is_i64() || r["model"][k].is_u64(), "{k}: {r}");
+    }
     // The options survive XLSX in the hidden names, as given or as text.
     let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
     s.execute("file.open", json!({"name": "o.xlsx", "base64": b64})).unwrap();
@@ -830,6 +834,11 @@ fn solver_options_are_saved_with_the_model() {
     let f = |k: &str| m[k].as_f64();
     assert_eq!((f("maxEvaluations"), f("integerOptimality"), f("convergence")), (Some(3000.0), Some(5.0), Some(0.001)), "{m}");
     assert_eq!((f("generationsWithoutImprovement"), f("mutationRate")), (Some(20.0), Some(0.1)));
+    // Whole numbers read back as integers, so the Solver dialog shows 3000 and not 3000.0.
+    for k in ["maxEvaluations", "integerOptimality", "generationsWithoutImprovement", "populationSize", "randomSeed"] {
+        assert!(m[k].is_i64(), "{k}: {m}");
+    }
+    assert_eq!(m["maxEvaluations"].to_string(), "3000");
     // Out-of-range options are clamped, not refused.
     let r = s.execute("data.solver", json!({"saved": true, "maxEvaluations": "1e300", "integerOptimality": -4})).unwrap();
     assert_eq!((r["model"]["maxEvaluations"].as_f64(), r["model"]["integerOptimality"].as_f64()), (Some(200_000.0), Some(0.0)));
