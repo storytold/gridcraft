@@ -295,6 +295,11 @@ impl DocWindows {
     /// of the window that has focus gets the documents opened from it.
     fn show_tabs(&mut self, app: &mut SheetApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.sync_tabs(app, ctx);
+        // Working in the main window makes it the window new documents join; without this, after
+        // undocking a tab every new workbook kept landing in the undocked window.
+        if ui.ctx().input(|i| i.focused) {
+            self.focused = Focus::Root;
+        }
         // Main window.
         if let Some(active) = self.root.active {
             app.show_window(active);
