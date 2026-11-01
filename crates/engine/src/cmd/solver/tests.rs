@@ -562,6 +562,29 @@ fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
 }
 
 #[test]
+fn load_model_refuses_a_range_with_a_cell_without_a_formula() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3"], "method": "simplex"});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": model})).unwrap()["range"], "H1:H6");
+    // A range with empty cells after the model loads it.
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1:H9"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24", "B3 <= 6", "A1 <= 3"]), "{loaded}");
+    s.execute("data.solverReset", json!({})).unwrap();
+    // A constraint overwritten by a constant would drop that constraint; a gap before the
+    // options row would drop the options. Both are refused, naming the cell.
+    for (cell, input) in [("H4", "7"), ("H5", "")] {
+        let before = formula(&s, cell);
+        set(&mut s, &[(cell, input)]);
+        let e = s.execute("data.solverLoadModel", json!({"from": "H1:H6"})).unwrap_err().to_string();
+        assert!(e.contains(cell), "{e}");
+        assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null(), "{cell}");
+        set(&mut s, &[(cell, &format!("={before}"))]);
+    }
+    assert!(s.execute("data.solverLoadModel", json!({"from": "H1:H6"})).is_ok());
+}
+
+#[test]
 fn load_model_keeps_the_evolutionary_convergence_and_generations() {
     let mut s = s();
     set(&mut s, &[("B1", "=ABS(A1-3)")]);

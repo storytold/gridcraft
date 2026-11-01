@@ -105,7 +105,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Model",
             [],
             None,
-            "{from: \"H1:H6\" (a range on the active sheet; one cell reads down to the first cell without a formula)} → {model}. Reads a model written by Save Model and makes it the sheet's Solver model.",
+            "{from: \"H1:H6\" (a range on the active sheet; one cell reads down to the first cell without a formula; a range needs a formula in every cell up to its last formula, and may end in empty cells)} → {model}. Reads a model written by Save Model and makes it the sheet's Solver model.",
             has_doc,
             load_model_cells
         ),

@@ -108,6 +108,21 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"range": range.a1()}))
 }
 
+/// The formulas of a model range, in order. Every cell up to the last formula must hold one: a
+/// cell without a formula there (a constraint overwritten by a constant, say) would shift the
+/// rows below it and drop a constraint or the options. Empty cells after the last formula are
+/// allowed.
+fn cells_with_formulas(r: RangeRef, formula: impl Fn(CellRef) -> Option<String>) -> Result<Vec<String>> {
+    let cells: Vec<(CellRef, Option<String>)> = r.iter().map(|c| (c, formula(c))).collect();
+    let end = cells.iter().rposition(|(_, f)| f.is_some()).map_or(0, |i| i + 1);
+    let mut rows = Vec::with_capacity(end);
+    for (c, f) in cells.into_iter().take(end) {
+        let f = f.ok_or_else(|| EngineError::Other(format!("{} holds no formula, so the range isn't a model saved with Save Model.", c.a1())))?;
+        rows.push(f);
+    }
+    Ok(rows)
+}
+
 /// `data.solverLoadModel`: makes a model written by Save Model the active sheet's model.
 pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
@@ -127,7 +142,7 @@ pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
         if r.count() > cap as u64 {
             return Err(EngineError::Other(format!("The range is too large for a saved model (at most {cap} cells).")));
         }
-        r.iter().filter_map(formula).collect()
+        cells_with_formulas(r, formula)?
     };
     let params = parse_model_formulas(&rows)?;
     let model = parse_model(s, &params)?;
