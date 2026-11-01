@@ -1,5 +1,9 @@
 use super::draw::{Block, Look, rgb_of};
-use super::*;
+use super::{
+    Baseline, CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, ReadingOrder, Sheet, Style, StyleTable, TextDirection, Underline,
+    VAlign, Value,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
@@ -72,9 +76,62 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
+fn text_direction(order: ReadingOrder) -> TextDirection {
+    match order {
+        ReadingOrder::Context => TextDirection::Context,
+        ReadingOrder::LeftToRight => TextDirection::LeftToRight,
+        ReadingOrder::RightToLeft => TextDirection::RightToLeft,
+    }
+}
+
+fn text_align(align: HAlign, value: &Value, right_to_left_text: bool) -> HAlign {
+    match align {
+        HAlign::General => match value {
+            Value::Number(_) => HAlign::Right,
+            Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ if right_to_left_text => HAlign::Right,
+            _ => HAlign::Left,
+        },
+        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
+        HAlign::Justify | HAlign::Fill => HAlign::Left,
+        other => other,
+    }
+}
+
 /// Is a cell free for text to overflow into?
 fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
+}
+
+fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+    let (mut clip_l, mut clip_r) = bounds;
+    let grow = |dir: i64, mut remaining: f32| -> f32 {
+        let mut ext = 0.0;
+        let mut col = c.col as i64 + dir;
+        while remaining > 0.0 && col >= 0 && col < MAX_COLS as i64 {
+            let nc = CellRef::new(c.row, col as u32);
+            if !empty_for_overflow(sh, nc, merges) {
+                break;
+            }
+            let width = sh.col_width(nc.col) * k;
+            ext += width;
+            remaining -= width;
+            col += dir;
+            if ext > 20_000.0 {
+                break;
+            }
+        }
+        ext
+    };
+    match align {
+        HAlign::Right => clip_l -= grow(-1, need),
+        HAlign::Center => {
+            clip_l -= grow(-1, need / 2.0);
+            clip_r += grow(1, need / 2.0);
+        }
+        _ => clip_r += grow(1, need),
+    }
+    (clip_l, clip_r)
 }
 
 /// Unscaled width of the empty Center Across Selection cells right of `c`, which its text is centred over too.
@@ -92,16 +149,17 @@ pub(super) fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, m
     ext
 }
 
-pub(super) fn draw_text(
-    pg: &mut Page,
-    b: &Block,
-    c: CellRef,
-    l: &Look,
-    rect: (f32, f32, f32, f32),
-    merged: bool,
-    merges: &[RangeRef],
-    limits: (f32, f32),
-) {
+pub(super) struct TextPlacement<'a> {
+    pub cell: CellRef,
+    pub look: &'a Look,
+    pub rect: (f32, f32, f32, f32),
+    pub merged: bool,
+    pub merges: &'a [RangeRef],
+    pub limits: (f32, f32),
+}
+
+pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+    let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
@@ -144,12 +202,7 @@ pub(super) fn draw_text(
     if text.is_empty() {
         return;
     }
-    let direction = match st.align.reading_order.unwrap_or_default() {
-        ReadingOrder::Context => TextDirection::Context,
-        ReadingOrder::LeftToRight => TextDirection::LeftToRight,
-        ReadingOrder::RightToLeft => TextDirection::RightToLeft,
-    }
-    .resolve(&text);
+    let direction = text_direction(st.align.reading_order.unwrap_or_default()).resolve(&text);
     let mut tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
@@ -160,22 +213,7 @@ pub(super) fn draw_text(
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
-    let h_align = match st.align.h {
-        HAlign::General => {
-            if is_num {
-                HAlign::Right
-            } else if matches!(v, Value::Bool(_) | Value::Error(_)) {
-                HAlign::Center
-            } else if direction == TextDirection::RightToLeft && !sh.right_to_left {
-                HAlign::Right
-            } else {
-                HAlign::Left
-            }
-        }
-        HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
-        HAlign::Justify | HAlign::Fill => HAlign::Left,
-        other => other,
-    };
+    let h_align = text_align(st.align.h, &v, direction == TextDirection::RightToLeft && !sh.right_to_left);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
@@ -212,32 +250,7 @@ pub(super) fn draw_text(
     let (mut clip_l, mut clip_r) = (x, x + w + across);
     if !wrap && !merged && !is_num && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
-        let grow = |dir: i64, mut need: f32| -> f32 {
-            let mut ext = 0.0;
-            let mut col = c.col as i64 + dir;
-            while need > 0.0 && col >= 0 && col < MAX_COLS as i64 {
-                let nc = CellRef::new(c.row, col as u32);
-                if !empty_for_overflow(sh, nc, merges) {
-                    break;
-                }
-                let cw = sh.col_width(nc.col) * b.k;
-                ext += cw;
-                need -= cw;
-                col += dir;
-                if ext > 20_000.0 {
-                    break;
-                }
-            }
-            ext
-        };
-        match h_align {
-            HAlign::Right => clip_l -= grow(-1, need),
-            HAlign::Center => {
-                clip_l -= grow(-1, need / 2.0);
-                clip_r += grow(1, need / 2.0);
-            }
-            _ => clip_r += grow(1, need),
-        }
+        (clip_l, clip_r) = extend_text_bounds(sh, c, merges, b.k, need, h_align, (clip_l, clip_r));
     }
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
@@ -261,7 +274,7 @@ pub(super) fn draw_text(
             let (sn, cs) = angle.sin_cos();
             let (ascent, descent) = extents.unwrap_or((size * 0.8, size * 0.22));
             let ox = if sh.right_to_left { b.mirror_axis - ox - tw * cs - (ascent - descent) * sn } else { ox };
-            pg.text_rotated_with_direction(ox, oy, size, font, color, &t.text, angle, t.direction);
+            pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, color, &t.text, t.direction);
         }
         pg.restore();
         return;
@@ -273,7 +286,7 @@ pub(super) fn draw_text(
         let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
             let cw = gridcraft_pdf::text_width(font, size, ch);
-            pg.text_with_direction(b.text_x(x + (w - cw) / 2.0, cw), yy, size, font, color, ch, direction);
+            pg.text_with_direction(Point::new(b.text_x(x + (w - cw) / 2.0, cw), yy), size, font, color, ch, direction);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -294,7 +307,7 @@ pub(super) fn draw_text(
             continue;
         }
         let lx = b.text_x(lx, lw);
-        pg.text_with_direction(lx, ly, size, font, color, &line.text, line.direction);
+        pg.text_with_direction(Point::new(lx, ly), size, font, color, &line.text, line.direction);
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);

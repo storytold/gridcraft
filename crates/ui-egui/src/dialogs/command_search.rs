@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, Key, SheetApp, json, vec2};
 
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {

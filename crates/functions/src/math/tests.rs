@@ -101,6 +101,11 @@ fn rounding() {
     close(ev2("CEILING", 1.5, 0.1), 1.5);
     close(ev2("CEILING", 0.234, 0.01), 0.24);
     is_err(ev2("CEILING", 2.5, -1.0), Num);
+    // ECMA.CEILING is CEILING under a second name (Excel table from #2776).
+    close(ev2("ECMA.CEILING", 1.5, 1.0), 2.0);
+    close(ev2("ECMA.CEILING", -2.5, -2.0), -4.0);
+    close(ev2("ECMA.CEILING", 2.5, 0.0), 0.0);
+    is_err(ev2("ECMA.CEILING", 1.5, -1.0), Num);
     close(ev2("FLOOR", 3.7, 2.0), 2.0);
     close(ev2("FLOOR", -2.5, -2.0), -2.0);
     close(ev2("FLOOR", -2.5, 2.0), -4.0);
@@ -135,16 +140,22 @@ fn rounding() {
 }
 
 #[test]
-fn mod_tiny_divisor_stays_in_range() {
-    for (x, d) in [(3.0, 1e-300), (-1.0, 1e-300), (3.0, -1e-300), (-1.0, -1e-300)] {
-        match ev2("MOD", x, d) {
-            Value::Number(r) => {
-                assert!(r == 0.0 || (r < 0.0) == (d < 0.0), "MOD({x}, {d}) = {r}");
-                assert!(r.abs() < d.abs(), "MOD({x}, {d}) = {r}");
-            }
-            other => panic!("MOD({x}, {d}) = {other:?}"),
-        }
+fn mod_quotient_limit() {
+    // Excel 16: #NUM! whenever |number / divisor| >= 1.1259E12.
+    for (x, d) in [
+        (3.0, 1e-300),
+        (-1.0, 1e-300),
+        (3.0, -1e-300),
+        (-1.0, -1e-300),
+        (1e15, 7.0),
+        (1e10, 0.001),
+        (1_125_900_000_000.0, 1.0),
+        (-1_125_900_000_000.0, 1.0),
+    ] {
+        is_err(ev2("MOD", x, d), Num);
     }
+    close(ev2("MOD", 1e12 * 7.0 + 3.0, 7.0), 3.0);
+    close(ev2("MOD", 1_125_899_999_999.99, 1.0), 0.989_990_234_375);
 }
 
 #[test]
