@@ -76,6 +76,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),

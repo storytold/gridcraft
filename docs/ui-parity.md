@@ -154,7 +154,8 @@ Insert Hyperlink loads an existing cell link's address, display text and ScreenT
 (#2876). Keeping the display text unchanged preserves the cell's number or formula; Cancel
 keeps the original link and an edit can be undone in one step.
 
-Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
+Format Cells, Insert Function (search, Most Recently Used, All and each category), Find and
+Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
 Seek, Scenario Manager, Data Analysis, Forecast Sheet, Macros (macros, Automate scripts and a
 note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
