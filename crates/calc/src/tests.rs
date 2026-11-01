@@ -2312,3 +2312,42 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+/// `rebuild` and `cells_changed` read formulas through `Formula::with_expr`, which borrows the
+/// cached tree or parses on the fly. The dependency graph must come out the same for formulas that
+/// carry their tree and for formulas that only carry their text (as after loading a file).
+#[test]
+fn graph_built_from_text_only_formulas_matches_cached() {
+    fn run(cached: bool) -> Vec<Value> {
+        let mut t = T::new();
+        t.set("A1", "2");
+        for (at, f) in [("B1", "=A1*10"), ("C1", "=B1+A1"), ("D1", "=SUM(A1:C1)"), ("E1", "=NOPE(")] {
+            // E1 does not parse, so it has no tree either way and only covers the `None` branch.
+            let mut formula = Formula::new(f);
+            if !cached {
+                formula.expr = None;
+            }
+            t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(formula));
+        }
+        t.calc.rebuild(&t.wb);
+        t.calc.recalc_all(&mut t.wb);
+        let mut out: Vec<Value> = ["B1", "C1", "D1", "E1"].iter().map(|a| t.get(a)).collect();
+        // Editing the input must reach the dependents through the rebuilt graph.
+        t.set("A1", "5");
+        out.extend(["B1", "C1", "D1"].iter().map(|a| t.get(a)));
+        // A text-only formula that is rewritten through `cells_changed` joins the graph too.
+        let mut formula = Formula::new("=A1+100");
+        if !cached {
+            formula.expr = None;
+        }
+        t.wb.sheet_mut(0).unwrap().cells.set(c("F1"), Cell::formula(formula));
+        t.calc.cells_changed(&mut t.wb, &[(0, c("F1"))]);
+        t.set("A1", "7");
+        out.push(t.get("F1"));
+        out
+    }
+    let cached = run(true);
+    assert_eq!(cached, run(false));
+    assert_eq!(cached[4], Value::Number(50.0));
+    assert_eq!(cached[7], Value::Number(107.0));
+}
