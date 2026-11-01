@@ -349,3 +349,25 @@ fn unmerging_lets_a_blocked_python_result_spill_again() {
     s.execute("home.unmergeCells", json!({"range": "A2:B2"})).unwrap();
     assert_eq!((super::v(&s, "A1"), super::v(&s, "A2")), (Value::Number(5.0), Value::Number(6.0)), "it spills again");
 }
+
+#[test]
+fn save_model_asks_before_it_writes_over_a_python_cell_that_shows_nothing() {
+    let mut s = s();
+    for (cell, input) in [("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    // H2 is a Python cell whose cached value is empty: its code is still content.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = Arc::make_mut(&mut d.wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_cell(
+            CellRef::parse("H2").unwrap(),
+            Cell { value: Value::Empty, formula: None, style: Default::default(), py: Some(Arc::new(PyCode::new("None"))) },
+        );
+    }
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
+    let e = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model})).unwrap_err().to_string();
+    assert!(e.contains(crate::cmd::analysis::OVERWRITE_ERROR) && e.contains("H2"), "{e}");
+    assert_eq!(code(&s, 0, "H2").as_deref(), Some("None"), "nothing was written");
+}
