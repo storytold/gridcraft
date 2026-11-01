@@ -377,13 +377,15 @@ fn trust_queries(s: &mut Session) -> Result<()> {
 }
 
 /// Asks the host to confirm the workbook's untrusted database queries before any runs: the
-/// dialog lists each distinct connection (without passwords) with the SQL it would run, and OK
-/// refreshes `tname` with `trust`.
+/// dialog lists each distinct connection (without passwords, with the user it connects as) and
+/// the SQL it would run, and OK refreshes `tname` with `trust`.
 fn ask_trust(s: &mut Session, tname: &str) -> Result<()> {
     let mut connections: Vec<String> = vec![];
     let mut queries: Vec<Json> = vec![];
     for q in s.doc()?.wb.db_queries.iter().filter(|q| !q.trusted) {
-        let c = format!("{}: {}", q.driver, crate::datasource::redact(&q.connection));
+        // The drivers connect as `user` when it is set, whatever user the connection names.
+        let user = q.user.as_deref().filter(|u| !u.is_empty()).map(|u| format!(" (user: {u})")).unwrap_or_default();
+        let c = format!("{}: {}{user}", q.driver, crate::datasource::redact(&q.connection));
         let entry = json!({"connection": c, "sql": q.query});
         if !queries.contains(&entry) {
             queries.push(entry);
@@ -878,6 +880,35 @@ mod tests {
         for q in &mut Arc::make_mut(&mut s.doc_mut().unwrap().wb).db_queries {
             q.trusted = false;
         }
+    }
+
+    #[test]
+    fn security_warning_names_the_user_each_query_connects_as() {
+        let (mut s, next, _) = swappable();
+        *next.lock().unwrap() = ints(&["a"], &[&[1]]);
+        let url = "postgres://reader@h/db";
+        for user in [Some("admin"), Some("other"), None, None] {
+            let mut p = json!({"driver": "postgres", "connection": url, "query": "q"});
+            if let Some(u) = user {
+                p["user"] = json!(u);
+            }
+            s.execute("data.fromDatabase", p).unwrap();
+        }
+        as_if_opened(&mut s);
+        s.take_ui_requests();
+        s.execute("data.refresh", json!({})).unwrap();
+        let asked = s.take_ui_requests();
+        let Some(crate::UiRequest::Dialog(_, p)) = asked.first() else { panic!("no dialog: {asked:?}") };
+        // The user field overrides the URL's user, so it is shown; queries that differ only by
+        // user stay apart, identical ones are listed once.
+        assert_eq!(
+            p["queries"],
+            json!([
+                {"connection": "postgres: postgres://reader@h/db (user: admin)", "sql": "q"},
+                {"connection": "postgres: postgres://reader@h/db (user: other)", "sql": "q"},
+                {"connection": "postgres: postgres://reader@h/db", "sql": "q"},
+            ])
+        );
     }
 
     #[test]
