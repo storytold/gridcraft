@@ -406,7 +406,7 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels
         None => None,
     };
     let shapes: Vec<&El> = vml.as_ref().map(|v| v.kids("shape").collect()).unwrap_or_default();
-    // Looked up once per listed control: an index keeps a sheet of many controls linear.
+    // Looked up once per listed control: indexes keep a sheet of many controls linear.
     let mut by_number: HashMap<u64, &El> = HashMap::with_capacity(shapes.len());
     for s in &shapes {
         if let Some(n) = number_of(s) {
@@ -414,6 +414,12 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels
         }
     }
     let shape_of = |n: u64| by_number.get(&n).copied();
+    // The relationships likewise: one per control, looked up by id (the first of a repeated id wins,
+    // as a scan would find it).
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
+    for r in rels {
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
     // Every shape the sheet lists, read here or not.
     let mut listed: HashSet<u64> = HashSet::new();
     for ctl in controls.map(controls_in).unwrap_or_default() {
@@ -424,7 +430,7 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, vml_rid: Option<&str>, rels
         }
         let shape = shape_of(n);
         let vml_props = shape.and_then(props_from_vml);
-        let prop_part = ctl.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone());
+        let prop_part = ctl.attr("id").and_then(|id| rel_by_id.get(id)).map(|r| r.target.clone());
         let file_props = match prop_part {
             Some(t) => cx.pkg.read_xml(&t).ok().flatten().filter(|e| e.name == "formControlPr").map(|e| props_from_ctrl_prop(&e)),
             None => None,
