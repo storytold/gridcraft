@@ -107,6 +107,9 @@ sync_github_name = true
 [people.Plutonium-fream]
 sync_github_name = true
 
+[people.maxm11]
+sync_github_name = true
+
 [people.Cheejyg]
 real_name = "Glenn Chee"
 display_name = "Cheejyg"
