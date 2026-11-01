@@ -191,7 +191,7 @@ impl Diffs {
 /// every checked formula matches and every round trip is clean; 1 otherwise; 2 on a usage error.
 pub fn main(args: &[String]) -> ExitCode {
     let usage = |e: String| {
-        eprintln!("gridcraft-cli: {e}\n{USAGE}");
+        errln!("gridcraft-cli: {e}\n{USAGE}");
         ExitCode::from(2)
     };
     let a = match Args::parse(args, &["tolerance", "max-report"], &["json"]) {

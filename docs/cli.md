@@ -34,6 +34,16 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
 | `version` | Prints `gridcraft-cli <version>`. |
 
+## Output pipes
+
+For the result-printing subcommands (all except the MCP JSON-RPC server), a reader closing stdout suppresses
+further result output. Other stdout write errors still fail with a non-zero exit. Commands continue to completion and retain
+normal success/failure status. This also applies to read-only commands such as `cat`, `check`, `commands` and
+`functions`; closing a pipe is not cancellation. Stop the process explicitly to cancel it. The `mcp` server keeps its protocol-specific stream handling.
+
+`check` computes its file reports before printing them, so piping it to `head` does not limit how many files are
+checked. Use narrower input paths to reduce the work; `--max-report` limits displayed examples, not validation.
+
 ## `run`
 
 ```sh
@@ -45,6 +55,9 @@ gridcraft-cli run [--in FILE | --sample budget|sales|grades] \
 Opens a file (or a sample, or a blank workbook), runs `--cmd` and `--script` steps in the order given, then saves
 `--out` and prints each `--print` range. Each non-null command result is printed as a JSON line unless `--quiet`.
 The first failing step stops the run with a non-zero exit.
+If the reader of a stdout pipe closes early, printed output stops but the run continues, including later steps and a
+requested `--out` save. The exit status is 0 if the work succeeds, or non-zero if it fails. Other stdout write errors
+stop execution with a non-zero exit. Stop the process to cancel the run.
 
 A `--cmd` is `id`, `id={json}` or `id {json}`. A script has one command per line in the same forms, or as JSON objects
 `{"command": "cell.set", "params": {...}}`; blank lines and `#` comments are skipped.
