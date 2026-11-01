@@ -1,6 +1,6 @@
 use super::lp::{Row, Sense};
 use super::model::{Model, Rel, Rhs};
-use super::*;
+use super::{CellRef, Trial, Value};
 
 /// The values the solvers see at a point: the objective and `lhs − rhs` per row.
 #[derive(Clone, Debug)]

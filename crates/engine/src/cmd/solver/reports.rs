@@ -1,7 +1,10 @@
 use super::lp::Outcome;
 use super::model::{Constraint, Goal, Method, Model, Rel, Rhs, parse_model, saved_model};
 use super::problem::{Evaluator, Problem, as_num, build_problem};
-use super::*;
+use super::{
+    Cell, CellRef, Ctx, DEFAULT_EVALS, DocState, EngineError, Json, MAX_EVALS, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad,
+    edit, json, optimise, str_param,
+};
 
 // ---------------------------------------------------------------- reports
 
@@ -226,7 +229,7 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
             ev.target = Some(j);
             ev.evals = 0;
             ev.budget = per;
-            let solve = optimise(&mut ev, m, goal, x, &lo, &hi, &inp.prob.integer, 0.0);
+            let solve = optimise(&mut ev, m, goal, x, super::Bounds { lo: &lo, hi: &hi, integer: &inp.prob.integer }, 0.0);
             ends.push(match solve.outcome {
                 Outcome::Solved(p, _, _) => {
                     let v = p.get(j).copied().unwrap_or(f64::NAN);

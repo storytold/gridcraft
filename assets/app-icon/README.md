@@ -1,7 +1,7 @@
 # GridCraft app icon (PLACEHOLDER)
 
 **This icon is temporary.** Every Crafting App's icon is an engraved creature portrait that the
-product owner makes (craftrules `standards/icon-design.md`); GridCraft's hasn't been made yet.
+product owner makes; GridCraft's hasn't been made yet.
 Until it is, this placeholder stands in: a simple ledger page with a header row, a row-number
 column, a selected cell with its fill handle and a double rule under a total, on a full-bleed
 GridCraft-green tile. It is original geometry written by hand for this repository, deliberately

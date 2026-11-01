@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "GridCraft PDF 1.7 writer with shaped Arabic text, vector drawing and RGBA images"
+readme = "README.md"
 
 [lints]
 workspace = true

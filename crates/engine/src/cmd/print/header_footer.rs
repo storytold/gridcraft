@@ -1,5 +1,5 @@
 use super::layout::SheetLayout;
-use super::*;
+use super::{Font, Page, Value, Workbook};
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
 pub(super) const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
