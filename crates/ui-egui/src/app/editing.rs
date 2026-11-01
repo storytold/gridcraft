@@ -1,4 +1,4 @@
-use super::*;
+use super::{SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.

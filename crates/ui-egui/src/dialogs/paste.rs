@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, Field, Json, Key, SheetApp, Stroke, json, theme, vec2};
 
 /// Paste Special as Excel lays it out: Paste and Operation each in two columns of options, Skip
 /// blanks and Transpose side by side, and Paste Link as a button that pastes at once. The options
@@ -6,7 +6,8 @@ use super::*;
 pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = app.ui.language;
     let t = theme::Tokens::get(ui.ctx());
-    let choices: Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)> = d
+    type Choice = (&'static str, &'static str, Vec<(&'static str, &'static str)>);
+    let choices: Vec<Choice> = d
         .fields
         .iter()
         .filter_map(|f| match f {
