@@ -544,7 +544,7 @@ fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
     let long = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3", "A2 <= 3"]});
     let short = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
     assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": long})).unwrap()["range"], "H1:H7");
-    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": short})).unwrap()["range"], "H1:H4");
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": short, "overwrite": true})).unwrap()["range"], "H1:H4");
     // The old model's last rows are cleared; a formula below it stays.
     for r in 5..=7 {
         assert_eq!(formula(&s, &format!("H{r}")), "", "H{r}");
@@ -556,9 +556,38 @@ fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
     set(&mut s, &[("H5", "=2+2")]);
     let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
     assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24"]), "{loaded}");
-    // Saving over cells that hold no model leaves them as they are.
-    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H8", "model": short})).unwrap()["range"], "H8:H11");
+    // Saving over cells that hold no model leaves the cells below them as they are.
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H8", "model": short, "overwrite": true})).unwrap()["range"], "H8:H11");
     assert_eq!(formula(&s, "H5"), "2+2");
+}
+
+#[test]
+fn save_model_asks_before_it_replaces_data_and_is_one_undo_step() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("H2", "kept"), ("H3", "=1+1")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
+    // A value or a formula in the column: refused, the sheet unchanged, the cell named.
+    let e = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model.clone()})).unwrap_err().to_string();
+    assert!(e.contains(crate::cmd::analysis::OVERWRITE_ERROR) && e.contains("H1:H4") && e.contains("H2"), "{e}");
+    assert_eq!((at(&s, "Sheet1", "H2"), formula(&s, "H3"), formula(&s, "H1")), (Value::text("kept"), "1+1".into(), String::new()));
+    // So is a model saved there before, and `overwrite` only as a true boolean.
+    assert!(s.execute("data.solverSaveModel", json!({"to": "J10", "model": model.clone()})).is_ok());
+    for overwrite in [json!(null), json!(false), json!("true"), json!(1)] {
+        let e = s.execute("data.solverSaveModel", json!({"to": "J10", "model": model.clone(), "overwrite": overwrite})).unwrap_err();
+        assert!(e.to_string().contains(crate::cmd::analysis::OVERWRITE_ERROR), "{overwrite}: {e}");
+    }
+    // overwrite: true replaces the data in one undo step, which brings it all back.
+    let out = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model, "overwrite": true})).unwrap();
+    assert_eq!(out["range"], "H1:H4");
+    assert_eq!((formula(&s, "H1"), formula(&s, "H2"), formula(&s, "H3")), ("MAX($B$1)".into(), "COUNT($A$1:$A$2)".into(), "AND($B$2<=24)".into()));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(
+        (at(&s, "Sheet1", "H2"), formula(&s, "H3"), formula(&s, "H1"), formula(&s, "H4")),
+        (Value::text("kept"), "1+1".into(), String::new(), String::new())
+    );
+    assert_eq!(formula(&s, "J10"), "MAX($B$1)");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(formula(&s, "H2"), "COUNT($A$1:$A$2)");
 }
 
 #[test]
@@ -624,8 +653,9 @@ fn save_model_refuses_a_place_where_the_options_cannot_spill() {
     assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
     // With the row clear the options spill, and saving again at the same cell replaces them.
     set(&mut s, &[("O4", "")]);
-    for _ in 0..2 {
-        assert_eq!(save(&mut s, "H1").unwrap()["range"], "H1:H4");
+    for overwrite in [false, true] {
+        let p = json!({"to": "H1", "model": model.clone(), "overwrite": overwrite});
+        assert_eq!(s.execute("data.solverSaveModel", p).unwrap()["range"], "H1:H4");
         assert_eq!(
             (at(&s, "Sheet1", "H4"), at(&s, "Sheet1", "I4"), at(&s, "Sheet1", "O4")),
             (Value::number(1.0), Value::number(1.0), Value::number(50.0))

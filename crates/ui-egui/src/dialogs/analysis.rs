@@ -182,6 +182,21 @@ fn clear_solver_options(d: &mut Dialog) {
     }
 }
 
+/// Save Model from the Solver Parameters form: writes the form's model down from `range`. A
+/// range that holds data is replaced only with `overwrite`; without it the form asks first.
+fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
+    d.values.remove("askModelOverwrite");
+    let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {
+        Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
+        Err(e) if !overwrite && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
+            d.values.insert("askModelOverwrite".into(), json!(range.trim()));
+            crate::clean_error(&e)
+        }
+        Err(e) => crate::clean_error(&e),
+    };
+    d.values.insert("modelNote".into(), json!(note));
+}
+
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
 /// command; the result opens Solver Results. Reset All clears the form and the sheet's model;
 /// Load/Save reads or writes the model on cells of the sheet.
@@ -314,6 +329,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     }
                     clear_solver_options(d);
                     d.values.remove("modelNote");
+                    d.values.remove("askModelOverwrite");
                 }
                 Err(e) => {
                     d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
@@ -332,6 +348,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             let range = text(d, "modelRange");
             let ready = !range.trim().is_empty();
             if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+                d.values.remove("askModelOverwrite");
                 match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
                     Ok(r) => {
                         if let Some(m) = r.get("model").and_then(Json::as_object) {
@@ -349,13 +366,27 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                 }
             }
             if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
-                let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d)})) {
-                    Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
-                    Err(e) => crate::clean_error(&e),
-                };
-                d.values.insert("modelNote".into(), json!(note));
+                save_solver_model(app, d, &range, false);
             }
         });
+        // Save Model asks before it replaces data in the model range; the question goes when
+        // the range is edited, so Replace writes only where it asked about.
+        let asked = d.values.get("askModelOverwrite").and_then(Json::as_str).map(str::to_string);
+        if asked.as_deref().is_some_and(|a| a != text(d, "modelRange").trim()) {
+            d.values.remove("askModelOverwrite");
+            d.values.remove("modelNote");
+        } else if let Some(asked) = asked {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{asked} already holds data. Replace it with the model?"));
+                if ui.button("Replace").clicked() {
+                    save_solver_model(app, d, &asked, true);
+                }
+                if ui.button("Don't Replace").clicked() {
+                    d.values.remove("askModelOverwrite");
+                    d.values.remove("modelNote");
+                }
+            });
+        }
     }
     let note = text(d, "modelNote");
     if !note.is_empty() {

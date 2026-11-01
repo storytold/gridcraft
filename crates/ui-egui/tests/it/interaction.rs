@@ -833,6 +833,46 @@ fn solver_dialog_saves_loads_and_resets_the_model() {
 }
 
 #[test]
+fn solver_dialog_asks_before_save_model_replaces_data() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("B1", "=3*A1"), ("H2", "kept")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let form = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "modelArea": true, "modelRange": "H1"});
+    h.state_mut().open_dialog("solver", form);
+    h.run_steps(2);
+    let values = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.clone();
+    // Save over data asks first and writes nothing; Don't Replace keeps the data.
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(values(&h).get("askModelOverwrite"), Some(&json!("H1")));
+    assert_eq!(value(&h, "H2"), Value::text("kept"));
+    h.get_by_label("Don't Replace").click();
+    h.run_steps(2);
+    assert_eq!((values(&h).get("askModelOverwrite"), value(&h, "H2")), (None, Value::text("kept")));
+    // Editing the range drops the question, so Replace never writes somewhere else.
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("J1"));
+    h.run_steps(2);
+    assert_eq!(values(&h).get("askModelOverwrite"), None);
+    assert!(h.query_by_label("Replace").is_none());
+    // Replace writes the model in one undo step.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    h.get_by_label("Replace").click();
+    h.run_steps(2);
+    assert_eq!(values(&h).get("modelNote"), Some(&json!("The model was saved to H1:H4.")));
+    assert_eq!(values(&h).get("askModelOverwrite"), None);
+    assert_eq!(value(&h, "H2"), Value::Number(1.0));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(value(&h, "H2"), Value::text("kept"));
+}
+
+#[test]
 fn solver_reset_all_and_load_model_drop_the_old_models_options() {
     let mut s = blank();
     for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {

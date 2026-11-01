@@ -3,9 +3,10 @@
 
 use super::model::{Rhs, is_model_name, model_formulas, parse_model, parse_model_formulas, save_model, saved_model};
 use super::{
-    Cell, CellRef, DefinedName, EngineError, Json, LOAD_CMD, MAX_CONSTRAINTS, RangeRef, Result, SAVE_CMD, Session, Sheet, Value, bad, edit, json,
-    split_sheet, str_param,
+    Cell, CellRef, DefinedName, EngineError, Json, LOAD_CMD, MAX_CONSTRAINTS, RangeRef, Result, SAVE_CMD, Session, Sheet, Value, bad, bool_param,
+    edit, json, split_sheet, str_param,
 };
+use crate::cmd::analysis::OVERWRITE_ERROR;
 use crate::cmd::cell_param_on;
 
 /// Most cells a model written by Save Model takes: the objective, the variables, the options
@@ -106,6 +107,22 @@ fn check_column_spills(sheet: &Sheet, column: RangeRef, ours: &[CellRef]) -> Res
     Ok(())
 }
 
+/// Refused, unless `overwrite`, when a cell of the model's column holds a value or a formula
+/// (a model saved there before included): Save Model then asks before it replaces data, as
+/// Excel does. The message carries [`OVERWRITE_ERROR`], which the dialog turns into its
+/// question.
+fn check_column_empty(sheet: &Sheet, column: RangeRef, overwrite: bool) -> Result<()> {
+    let taken = column.iter().find(|c| sheet.cell(*c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()));
+    match taken {
+        Some(c) if !overwrite => Err(EngineError::Other(format!(
+            "The range {} {OVERWRITE_ERROR} ({} isn't empty); pass overwrite: true to replace it.",
+            column.a1(),
+            c.a1()
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// `data.solverSaveModel`: writes the model on cells of its sheet, in one step. Saving over a
 /// longer model saved at the same cell clears the rest of it, so Load Model reads the new one.
 pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
@@ -147,6 +164,8 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let width = rows.last().map_or(1, |f| options_width(f));
     check_column_spills(sh, range, &ours)?;
     check_options_spill(sh, CellRef::new(last, to.col), width, &ours, &used)?;
+    // Last, so the question is asked only when replacing the data would succeed.
+    check_column_empty(sh, range, bool_param(p, "overwrite").unwrap_or(false))?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let cells: Vec<CellRef> = range.iter().collect();
