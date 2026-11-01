@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            "{page? (1-based), cells?: bool (with page), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height, content: {x, y, width, height}}]} (points; content is where the cells print, inside the margins and moved by Center on Page). With page: {pages, page}; with cells too, page.cells = [{cell, x, y, w, h, merged, borders: {top|right|bottom|left: {width, color, double, dashed}}, lines: [{text, x, baseline, width}], align: left|center|right, size, clip: [left, right]}], placed as the PDF places them",
             has_doc,
             print_preview
         ),
@@ -107,39 +107,25 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
         let k = lay.k();
-        let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
-            let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
-            let rsegs = segments(lay.title_rows, rband);
-            let csegs = segments(lay.title_cols, cband);
-            let content_w = (lay.heading_w + csegs.iter().map(|s| seg_size(sh, *s, false)).sum::<f32>()) * k;
-            let content_h = (lay.heading_h + rsegs.iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
-            let ox = lay.margins[0] + if lay.settings.center_h { ((aw - content_w) / 2.0).max(0.0) } else { 0.0 };
-            let oy = lay.margins[2] + if lay.settings.center_v { ((ah - content_h) / 2.0).max(0.0) } else { 0.0 };
+            let Some(plan) = page_plan(wb, lay, sh, *ri, *ci) else { continue };
+            let (ox, oy) = (plan.content.0, plan.content.1);
             let page_index = doc.page_count();
             let pg = doc.add_page(lay.page_w, lay.page_h);
-            let mut y = oy + lay.heading_h * k;
-            let mut body: Option<Block> = None;
-            for (rsi, rs) in rsegs.iter().enumerate() {
-                let mut x = ox + lay.heading_w * k;
-                for (csi, cs) in csegs.iter().enumerate() {
-                    let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
-                    draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
-                    if lay.settings.headings {
-                        draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
-                    }
-                    x += seg_size(sh, *cs, false) * k;
-                    if rsi + 1 == rsegs.len() && csi + 1 == csegs.len() {
-                        body = Some(b);
-                    }
+            for pb in &plan.blocks {
+                let b = &pb.block;
+                draw_block(pg, b, lay.settings.gridlines, &mut cf);
+                draw_block_links(pg, b, page_index, &mut pending_links);
+                let (x, y) = (b.xs.first().copied().unwrap_or(ox), b.ys.first().copied().unwrap_or(oy));
+                printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: pb.rows, cols: pb.cols, x, y, k });
+                if lay.settings.headings {
+                    draw_headings(pg, b, pb.first_row, pb.first_col, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                 }
-                y += seg_size(sh, *rs, true) * k;
             }
-            if let Some(b) = &body {
-                draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
+            // The body block is the last one (titles come first).
+            if let Some(pb) = plan.blocks.last() {
+                draw_objects(pg, wb, lay.sheet, sh, &pb.block, &mut pics);
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
@@ -168,6 +154,66 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     }
     let n = doc.page_count();
     (doc.finish(), n)
+}
+
+/// One block of a page's (title and body) rows × columns, positioned on the page.
+struct PlannedBlock<'a> {
+    rows: (u32, u32),
+    cols: (u32, u32),
+    /// The block is in the page's first row / column of blocks (it carries the headings).
+    first_row: bool,
+    first_col: bool,
+    block: Block<'a>,
+}
+
+/// Where one page's cells go. The PDF and the print preview both place a page from this, so
+/// the preview cannot drift from what prints (#3059).
+struct PagePlan<'a> {
+    /// The content's left, top, width and height in points: inside the margins and moved by
+    /// Center on Page, headings included.
+    content: (f32, f32, f32, f32),
+    /// Title blocks first; the body block is the last.
+    blocks: Vec<PlannedBlock<'a>>,
+}
+
+fn page_plan<'a>(wb: &'a Workbook, lay: &SheetLayout, sh: &'a Sheet, ri: usize, ci: usize) -> Option<PagePlan<'a>> {
+    let (rband, cband) = (lay.row_bands.get(ri).copied()?, lay.col_bands.get(ci).copied()?);
+    let k = lay.k();
+    let (aw, ah) = lay.avail();
+    let rsegs = segments(lay.title_rows, rband);
+    let csegs = segments(lay.title_cols, cband);
+    let content_w = (lay.heading_w + csegs.iter().map(|s| seg_size(sh, *s, false)).sum::<f32>()) * k;
+    let content_h = (lay.heading_h + rsegs.iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
+    let ox = lay.margins[0] + if lay.settings.center_h { ((aw - content_w) / 2.0).max(0.0) } else { 0.0 };
+    let oy = lay.margins[2] + if lay.settings.center_v { ((ah - content_h) / 2.0).max(0.0) } else { 0.0 };
+    let mut blocks = Vec::with_capacity(rsegs.len() * csegs.len());
+    let mut y = oy + lay.heading_h * k;
+    for (rsi, rs) in rsegs.iter().enumerate() {
+        let mut x = ox + lay.heading_w * k;
+        for (csi, cs) in csegs.iter().enumerate() {
+            let block = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
+            blocks.push(PlannedBlock { rows: *rs, cols: *cs, first_row: rsi == 0, first_col: csi == 0, block });
+            x += seg_size(sh, *cs, false) * k;
+        }
+        y += seg_size(sh, *rs, true) * k;
+    }
+    Some(PagePlan { content: (ox, oy, content_w, content_h), blocks })
+}
+
+/// Most cells one preview page describes.
+const PREVIEW_CELLS: usize = 20_000;
+
+/// The cells one page prints, for the preview: rectangles, borders and text lines in page points.
+fn preview_cells(wb: &Workbook, lay: &SheetLayout, plan: &PagePlan) -> Vec<Json> {
+    let mut cf = match wb.sheet(lay.sheet) {
+        Some(sh) if !sh.cond_formats.is_empty() => Some(crate::cf::CfCache::new()),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for pb in &plan.blocks {
+        draw::preview_block(&pb.block, &mut cf, &mut out, PREVIEW_CELLS);
+    }
+    out
 }
 
 // ---------------------------------------------------------------- commands
@@ -205,15 +251,20 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let opts = PrintOptions::from_params(p, "file.printPreview")?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
+    // `cells` (with `page`) adds what that page prints, placed as the PDF places it.
+    let cells_for = u32_param(p, "page").filter(|_| bool_param(p, "cells") == Some(true)).map(|pg| pg as usize);
     let mut list = Vec::new();
     let mut n = 0usize;
     for lay in &lays {
-        let name = d.wb.sheet(lay.sheet).map(|s| s.name.clone()).unwrap_or_default();
+        let Some(sh) = d.wb.sheet(lay.sheet) else { continue };
+        let name = sh.name.clone();
         for (ri, ci) in &lay.pages {
             n += 1;
             let (Some(rb), Some(cb)) = (lay.row_bands.get(*ri), lay.col_bands.get(*ci)) else { continue };
+            let Some(plan) = page_plan(&d.wb, lay, sh, *ri, *ci) else { continue };
             let r = RangeRef::new(CellRef::new(rb.0, cb.0), CellRef::new(rb.1, cb.1));
-            list.push(json!({
+            let (cx, cy, cw, ch) = plan.content;
+            let mut entry = json!({
                 "page": n,
                 "sheet": name,
                 "range": r.a1(),
@@ -224,7 +275,12 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "orientation": if lay.settings.orientation == Orientation::Landscape { "landscape" } else { "portrait" },
                 "width": lay.page_w,
                 "height": lay.page_h,
-            }));
+                "content": {"x": cx, "y": cy, "width": cw, "height": ch},
+            });
+            if cells_for == Some(n) {
+                entry["cells"] = Json::Array(preview_cells(&d.wb, lay, &plan));
+            }
+            list.push(entry);
         }
     }
     if let Some(page) = u32_param(p, "page") {
