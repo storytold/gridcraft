@@ -16,7 +16,7 @@ pub(super) fn editor_width(text_w: f32, cell_w: f32, size: f32) -> f32 {
 }
 
 /// Draws the in-cell editor, growing and wrapping with its text, mirroring for right-to-left sheets, choosing contrasting caret ink and clipping cells hidden under frozen panes.
-pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut gridcraft_engine::cf::CfCache) {
     let Some(ed) = app.editor.as_ref() else { return };
     if app.view_key() != Some((ed.doc, ed.sheet)) {
         return;
@@ -51,7 +51,8 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     // The cell's look as the grid paints it (table style, pattern and conditional fills), so the
     // text the editor shows in the cell's font colour stays readable on the same backdrop.
-    let (look, _) = super::cell_paint::look(wb, wb.active_sheet(), sh, cell, &mut gridcraft_engine::cf::CfCache::new());
+    // `cf` is the cache the grid painted with this frame: its statistics are already gathered.
+    let (look, _) = super::cell_paint::look(wb, wb.active_sheet(), sh, cell, cf);
     let fill = look.fill.unwrap_or(Color32::WHITE);
     let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
     let quadrant = Rect::from_min_max(
