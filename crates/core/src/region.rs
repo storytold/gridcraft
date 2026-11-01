@@ -90,8 +90,9 @@ pub struct Region {
     pub weekdays_abbr: [&'static str; 7],
     pub am_pm: [&'static str; 2],
     pub currency: &'static str,
-    /// The currency format with two decimals, as a canonical code. Where it starts with a quote
-    /// the symbol comes before the number, otherwise after.
+    /// The currency format with the currency's usual decimals (two, or none for the yen and the
+    /// won), as a canonical code. Where it starts with a quote the symbol comes before the number,
+    /// otherwise after.
     pub currency_format: &'static str,
     /// The same with no decimals (for a typed whole amount).
     pub currency_format_int: &'static str,
@@ -732,7 +733,8 @@ impl Region {
 
     /// Month number (1–12) for a month name as typed: the full name, the abbreviation (with or
     /// without its period) or any prefix of the full name of three or more letters (`Sept`),
-    /// ignoring case. Names with a day (`1 января`) match too.
+    /// ignoring case. `word` is one word: the genitive form used after a day (`января` in
+    /// `1 января`) matches too, and the caller reads the day itself.
     pub fn month_from_name(&self, word: &str) -> Option<u32> {
         let w = word.trim().to_lowercase();
         // Where the abbreviations end in a period (`сент.`, `janv.`), any abbreviation may be typed
