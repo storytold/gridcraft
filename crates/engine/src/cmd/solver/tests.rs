@@ -518,9 +518,9 @@ fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
     assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
     assert_eq!(model(&s, two).map(|m| m["objective"].clone()), Some(json!("B1")));
     assert_eq!(s.doc().unwrap().wb.names.iter().filter(|n| n.scope.is_none()).count(), 6);
-    // Undo brings the model back; the mask survives XLSX.
+    // Undo brings the model back with its options; the mask survives XLSX.
     s.execute("edit.undo", json!({})).unwrap();
-    assert!(model(&s, one).is_some());
+    assert_eq!(model(&s, one).and_then(|m| m["populationSize"].as_f64()), Some(500.0));
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(model(&s, one), None);
     let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
@@ -708,6 +708,38 @@ fn load_model_refuses_a_range_with_a_cell_without_a_formula() {
         set(&mut s, &[(cell, &format!("={before}"))]);
     }
     assert!(s.execute("data.solverLoadModel", json!({"from": "H1:H6"})).is_ok());
+}
+
+#[test]
+fn load_model_reads_a_bounded_column_and_refuses_malformed_cells() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)")]);
+    let put = |s: &mut Session, col: u32, rows: std::ops::Range<u32>, f: &dyn Fn(u32) -> String| {
+        let d = s.doc_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut d.wb).sheets[0]);
+        for r in rows {
+            sh.set_cell(CellRef::new(r, col), gridcraft_model::Cell::formula(gridcraft_model::Formula::new(&f(r))));
+        }
+    };
+    // A column of formulas far longer than any model: read from its first cell, the read stops
+    // after the most rows a model takes and the column is refused; as a range, it is refused
+    // before any cell is read.
+    put(&mut s, 15, 0..5_000, &|r| format!("{r}+1"));
+    for from in ["P1", "P1:P5000", "P1:P1048576", "A1:XFD1048576"] {
+        assert!(s.execute("data.solverLoadModel", json!({"from": from})).is_err(), "{from}");
+    }
+    // Malformed and hostile cells and ranges: an error each, never a panic, no model.
+    let bad = ["AND(", "{", "{1e400,2", "MAX(Nope!A1)", "COUNT($A$1:$A$2", "AND($B$1<=", "MAX($B$1)&\"x\""];
+    put(&mut s, 17, 0..bad.len() as u32, &|r| bad[r as usize].to_string());
+    put(&mut s, 18, 0..1, &|_| format!("AND({})", "(".repeat(10_000)));
+    for r in 1..=bad.len() {
+        assert!(s.execute("data.solverLoadModel", json!({"from": format!("R{r}")})).is_err(), "R{r}");
+    }
+    for from in ["S1", "", ":", "P1:", "H0", "Sheet9!H1", "'Sheet1'!R1:R7", "R7:R1"] {
+        assert!(s.execute("data.solverLoadModel", json!({"from": from})).is_err(), "{from}");
+    }
+    assert!(s.execute("data.solverLoadModel", json!({"from": 7})).is_err());
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
 }
 
 #[test]
