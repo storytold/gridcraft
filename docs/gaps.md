@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-30 · **Change:** minor (§12: From Database; earlier: §8: PivotTable Enable show details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (§12: From Database driver features; earlier: §12: From Database) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -116,7 +116,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No Power Query editor, connections, From Web/folder sources, relationships or data model
   (`data.fromWeb`, `data.relationships` missing). From Database (`data.fromDatabase`) runs one
   SQL query, or a table and its chosen columns, against PostgreSQL, MySQL/MariaDB, SQLite or ODBC
-  (desktop and CLI, ODBC behind the `odbc` feature) into a new table sheet. The table keeps its
+  (desktop and CLI; each driver is a cargo feature, PostgreSQL, MySQL and SQLite on by default,
+  ODBC off) into a new table sheet. The table keeps its
   query in the workbook (custom XML part, no password), and Data › Refresh / Refresh All run it
   again in place; connections can be saved in the preferences. No query editor yet (#1206, #1318).
   **Estimate:** 55–95 h.
@@ -188,6 +189,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | §12: From Database drivers are cargo features (`postgres`, `mysql`, `sqlite` on by default, `odbc` off); the security warning for queries read from a file shows each statement and the user it connects as |
 | 2026-10-30 | minor | §12: From Database (`data.fromDatabase`): SQL import from PostgreSQL, MySQL/MariaDB, SQLite, ODBC; the table keeps its query (`data.refresh`, Refresh All), table/column picker, saved connections (#1206) |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
