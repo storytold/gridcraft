@@ -1989,6 +1989,7 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.15.0"
 dependencies = [
+ "gridcraft-dax",
  "gridcraft-engine",
  "gridcraft-mcp",
  "log",
@@ -2005,6 +2006,13 @@ dependencies = [
  "js-sys",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gridcraft-dax"
+version = "0.12.1"
+dependencies = [
  "thiserror 2.0.21",
 ]
 
