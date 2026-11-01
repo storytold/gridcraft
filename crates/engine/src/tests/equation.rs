@@ -57,6 +57,14 @@ fn insert_refuses_missing_bad_or_hostile_source() {
     let e = s.execute("insert.equation", json!({"latex": format!("{}x{}", "{".repeat(40), "}".repeat(40))})).unwrap_err().to_string();
     assert!(e.contains("nest"), "{e}");
     assert!(s.doc().unwrap().wb.active().unwrap().shapes.is_empty());
+    // `equation.edit` is the other way a source reaches the layout engine; it has the same caps,
+    // and a refused edit leaves the equation as it was.
+    let id = insert(&mut s, json!({"latex": "x"}));
+    let e = s.execute("equation.edit", json!({"id": id, "latex": "x".repeat(5000)})).unwrap_err().to_string();
+    assert!(e.contains("4096"), "{e}");
+    let e = s.execute("equation.edit", json!({"id": id, "latex": format!("{}x{}", "{".repeat(40), "}".repeat(40))})).unwrap_err().to_string();
+    assert!(e.contains("nest"), "{e}");
+    assert_eq!(equation(&s, id).text, "x");
 }
 
 #[test]
