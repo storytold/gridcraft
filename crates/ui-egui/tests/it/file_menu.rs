@@ -622,6 +622,73 @@ fn save_changes_cancel_overrides_a_mixed_answer_without_waiting_for_the_held_key
 }
 
 #[test]
+fn save_changes_font_gate_cancels_focused_gestures_before_the_ui_resumes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut failures = Vec::new();
+    for pending in [false, true] {
+        for answer in [egui::Key::Y, egui::Key::N] {
+            let dir = std::env::temp_dir().join(format!("gridcraft-font-gate-{}-{pending}-{answer:?}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("Book.xlsx");
+            let pause = Arc::new(AtomicBool::new(false));
+            let capture = pause.clone();
+            let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+                move |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    // Skip this pass through the real font gate while retaining focus.
+                    if capture.swap(false, Ordering::Relaxed) {
+                        app.fonts_ready = false;
+                    }
+                    app.ui(ui);
+                },
+                crate::common::prepare(SheetApp::new(crate::support::blank_session(), Services::default())),
+            );
+            h.run_steps(4);
+            h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+            h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+            let doc = h.state().session.doc().unwrap();
+            let (uid, before, revision, undo) = (doc.uid, doc.wb.clone(), doc.revision, doc.undo.len());
+            request_window_close(&mut h);
+            h.input_mut().focused = true;
+            let held = if pending { if answer == egui::Key::Y { egui::Key::N } else { egui::Key::Y } } else { answer };
+            h.key_down(held);
+            h.run_steps(1);
+            if pending {
+                h.key_press(answer);
+                h.run_steps(2);
+                assert_eq!(h.state().session.doc().unwrap().uid, uid, "the chosen answer waits for the other key");
+                h.key_up(held);
+            }
+            pause.store(true, Ordering::Relaxed);
+            h.step();
+            if !pending {
+                h.key_up(held);
+            }
+            h.run_steps(3);
+            let preserved = h
+                .state()
+                .session
+                .doc()
+                .is_ok_and(|d| d.uid == uid && d.is_dirty() && Arc::ptr_eq(&before, &d.wb) && d.revision == revision && d.undo.len() == undo);
+            let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+            let not_saved = on_disk.active().unwrap().value(CellRef::new(0, 0)) == Value::Empty;
+            let asking = h.state().dialog.as_ref().map(|d| d.name()) == Some("saveChanges");
+            if !preserved || !not_saved || !asking {
+                failures.push(format!("pending={pending} answer={answer:?}: preserved={preserved}, not_saved={not_saved}, asking={asking}"));
+            } else {
+                h.key_press(answer);
+                let sent = step_commands(&mut h);
+                assert!(sent.contains(&egui::ViewportCommand::Close), "a fresh {answer:?} works after the font gate, pending={pending}");
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "font-gated passes replayed stale answers: {failures:?}");
+}
+
+#[test]
 fn save_changes_focus_loss_cancels_a_pending_answer_even_when_the_ui_cannot_paint() {
     use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -187,7 +187,7 @@ impl SheetApp {
         let ctx = ui.ctx().clone();
         if !self.fonts_ready || self.fonts_rebind {
             if let Some(dialog) = self.dialog.as_mut() {
-                dialog.cancel_unfocused_save_changes(&ctx);
+                dialog.cancel_save_changes();
             }
             ctx.request_repaint();
             return;

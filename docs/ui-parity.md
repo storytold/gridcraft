@@ -197,6 +197,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Save Changes clears armed and queued keyboard answers whenever font loading skips dialog input, including while the window stays focused; fresh input works after the dialog returns (#2572) |
 | 2026-11-01 | minor | Save Changes retains the requested Y/N/Esc answer bindings when the UI language changes; locale-specific button mnemonics are not inferred (#2572) |
 | 2026-10-31 | minor | Save Changes yields its keyboard answers to manual-update checking, newest-version and failed-result cards, clears armed/pending answers through their first and dismissal passes, and accepts fresh input after they close (#2572) |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |

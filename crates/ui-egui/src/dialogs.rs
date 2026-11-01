@@ -105,9 +105,9 @@ impl Dialog {
         &self.name
     }
 
-    /// Input can lose focus during a font-gated pass that never draws the dialog.
-    pub(crate) fn cancel_unfocused_save_changes(&mut self, ctx: &egui::Context) {
-        if self.name == "saveChanges" && !ctx.input(save_changes_focused) {
+    /// A font-gated pass cannot process the dialog's answer gesture.
+    pub(crate) fn cancel_save_changes(&mut self) {
+        if self.name == "saveChanges" {
             self.save_changes_armed = None;
             self.save_changes_pending = None;
         }
