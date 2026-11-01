@@ -281,22 +281,44 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
 /// connection, and a later block's `</connection>` never ends an earlier self-closing one.
 fn block_end(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
-    let mut depth = 1usize;
+    // Depth 0 = outside the element; the first tag is the connection's own opener, and the
+    // walk returns when it closes (self-closing at once, or its `</connection>`).
+    let mut depth = 0usize;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
             i += 1;
             continue;
         }
-        let Some(gt) = s[i..].find('>').map(|g| i + g) else { break };
+        // A comment between tags is skipped whole: its text may hold anything.
+        if s[i..].starts_with("<!--") {
+            let Some(end) = s[i..].find("-->").map(|e| i + e + 3) else { break };
+            i = end;
+            continue;
+        }
+        // The tag's end: a `>` inside a quoted attribute value is not it.
+        let mut gt = None;
+        let mut quote = 0u8;
+        for (j, &b) in bytes[i..].iter().enumerate() {
+            match (quote, b) {
+                (0, b'"') | (0, b'\'') => quote = b,
+                (q, b) if q == b => quote = 0,
+                (0, b'>') => {
+                    gt = Some(i + j);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(gt) = gt else { break };
         let tag = &s[i..=gt];
         if tag.ends_with("/>") {
-            // Self-closing: opens nothing, so it closes the element it is only when the
-            // depth it sits at is the block's own (the first tag of a self-closing block).
-            if depth == 1 {
+            // Self-closing: opens nothing. At depth 0 it is the connection's own opener.
+            if depth == 0 {
                 return Some(gt + 1);
             }
         } else if tag.starts_with("</") {
+            // A closing tag: at depth 1 it closes the connection itself.
             depth -= 1;
             if depth == 0 {
                 return Some(gt + 1);

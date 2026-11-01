@@ -175,3 +175,31 @@ fn a_foreign_self_closing_connection_is_kept_by_the_depth_scan() {
     assert!(text.contains("name=\"Flags\" type=\"4\""), "the foreign self-closing connection is kept verbatim");
     assert!(!text.contains("gone.example"), "our old connection from the file is replaced");
 }
+
+#[test]
+/// The depth scan is XML-aware: a `>` inside a quoted attribute value is not the tag's
+/// end, and a comment inside a connection block does not confuse the depth walk.
+fn the_depth_scan_handles_quoted_angle_brackets_and_comments() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="a>b &amp; c" type="4"><!-- a comment with </connection> inside --></connection><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains(r#"name="a>b &amp; c""#), "the foreign connection with a quoted > in its name is kept verbatim");
+    assert!(text.contains("a comment with </connection> inside"), "the comment inside the block is kept");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+    assert_eq!(text.matches("<connection ").count(), 2, "exactly two connections");
+}
