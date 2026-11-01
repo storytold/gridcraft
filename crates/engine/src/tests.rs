@@ -3127,6 +3127,44 @@ fn chart_data(s: &mut Session) {
     .unwrap();
 }
 
+/// The values and category labels a chart on the active sheet plots.
+fn plotted(s: &Session) -> (Vec<Option<f64>>, Vec<String>) {
+    let d = s.doc().unwrap();
+    let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &d.wb.active().unwrap().charts[0]);
+    (data.series[0].values.clone(), data.categories)
+}
+
+/// Excel plots visible cells only: filtered and hand-hidden rows leave the chart, and "Show data
+/// in hidden rows and columns" (`c:plotVisOnly` off) brings them back, through a file round trip too.
+#[test]
+fn chart_plots_visible_cells_only() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["a", 1], ["b", 2], ["c", 3], ["d", 4], ["e", 5]]})).unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:B6", "at": "D2"})).unwrap();
+    let all = |v: &[f64]| v.iter().map(|n| Some(*n)).collect::<Vec<_>>();
+    assert_eq!(plotted(&s).0, all(&[1.0, 2.0, 3.0, 4.0, 5.0]));
+    // Rows hidden by a filter.
+    s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "custom": {"op": ">", "value": "2"}})).unwrap();
+    assert_eq!(plotted(&s), (all(&[3.0, 4.0, 5.0]), vec!["c".to_string(), "d".into(), "e".into()]));
+    // The option brings them back, and survives the file.
+    let id = s.doc().unwrap().wb.active().unwrap().charts[0].id;
+    s.execute("chart.selectData", json!({"chart": id, "showHiddenData": true})).unwrap();
+    assert_eq!(plotted(&s).0, all(&[1.0, 2.0, 3.0, 4.0, 5.0]));
+    reopen(&mut s);
+    assert!(s.doc().unwrap().wb.active().unwrap().charts[0].show_hidden_data);
+    assert_eq!(plotted(&s).0.len(), 5);
+    s.execute("chart.selectData", json!({"chart": id, "showHiddenData": false})).unwrap();
+    reopen(&mut s);
+    assert!(!s.doc().unwrap().wb.active().unwrap().charts[0].show_hidden_data);
+    assert_eq!(plotted(&s).0, all(&[3.0, 4.0, 5.0]));
+    // A row hidden by hand, with the filter cleared.
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "4:4"})).unwrap();
+    assert_eq!(plotted(&s).1, ["a", "b", "d", "e"]);
+}
+
 #[test]
 fn every_chart_kind_survives_xlsx() {
     use gridcraft_model::ChartKind;

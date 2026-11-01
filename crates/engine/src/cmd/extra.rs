@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Data…",
             ["Chart Design", "Data"],
             None,
-            "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…]}",
+            "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…], showHiddenData?: bool (Hidden and Empty Cells ▸ Show data in hidden rows and columns; default off: visible cells only)}",
             has_doc,
             select_data
         ),

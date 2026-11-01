@@ -77,10 +77,22 @@ fn union_parts(f: &str) -> Option<Vec<&str>> {
 /// Evaluates a series formula to a flat list of values (row-major), capped. A union of
 /// references (`(A1:A3,A5)`, as PivotCharts use) is read part by part.
 fn eval_list(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Value> {
-    eval_list_in(wb, sheet, formula, 0)
+    eval_list_in(wb, sheet, formula, 0, false)
 }
 
-fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32) -> Vec<Value> {
+/// Whether the cell at flat (row-major) position `i` of `r` on `sh` is plotted: its row and
+/// column are not hidden (by hand or by a filter).
+fn is_visible(wb: &Workbook, sh: usize, r: &RangeRef, i: usize) -> bool {
+    let w = r.width().max(1) as usize;
+    let Some(sheet) = wb.sheet(sh) else { return true };
+    let at = r.start.offset((i / w) as i64, (i % w) as i64);
+    at.is_none_or(|c| !sheet.is_row_hidden(c.row) && !sheet.is_col_hidden(c.col))
+}
+
+/// `eval_list`, leaving out the cells of hidden rows and columns when `hide` is set (Excel's
+/// "Show data in hidden rows and columns" off). Only plain references are filtered: arrays,
+/// names and other formulas have no cells to hide.
+fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32, hide: bool) -> Vec<Value> {
     let f = formula.trim();
     if f.is_empty() {
         return vec![];
@@ -94,13 +106,23 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32) -> Vec<V
                 break;
             }
             let rest = MAX_POINTS - out.len();
-            out.extend(eval_list_in(wb, sheet, p, depth + 1).into_iter().take(rest));
+            out.extend(eval_list_in(wb, sheet, p, depth + 1, hide).into_iter().take(rest));
         }
         return out;
     }
+    let cells = if hide { parse_ref(wb, sheet, f) } else { None };
     match evaluate(wb, sheet, CellRef::default(), f) {
-        Value::Array(a) => a.iter().take(MAX_POINTS).cloned().collect(),
-        v => vec![v],
+        Value::Array(a) => match cells {
+            Some((sh, r)) if a.data.len() == (r.width() as usize).saturating_mul(r.height() as usize) => {
+                a.iter().enumerate().filter(|(i, _)| is_visible(wb, sh, &r, *i)).map(|(_, v)| v.clone()).take(MAX_POINTS).collect()
+            }
+            _ => a.iter().take(MAX_POINTS).cloned().collect(),
+        },
+        // A single cell: hidden, it is not plotted.
+        v => match cells {
+            Some((sh, r)) if !is_visible(wb, sh, &r, 0) => vec![],
+            _ => vec![v],
+        },
     }
 }
 
@@ -111,8 +133,8 @@ fn to_num(v: &Value) -> Option<f64> {
     }
 }
 
-fn nums(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Option<f64>> {
-    eval_list(wb, sheet, formula).iter().map(to_num).collect()
+fn nums(wb: &Workbook, sheet: usize, formula: &str, hide: bool) -> Vec<Option<f64>> {
+    eval_list_in(wb, sheet, formula, 0, hide).iter().map(to_num).collect()
 }
 
 /// Number format code of the first cell of a reference ("General" when not a reference).
@@ -137,9 +159,11 @@ fn value_text(v: &Value) -> String {
 /// the outer levels of a multi-level axis: a category range wider than a column of values (or
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
-fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    let vals = eval_list(wb, sheet, formula);
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, hide: bool) -> (Vec<String>, Vec<Vec<String>>) {
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
+    // A plain range is read whole and its hidden rows and columns dropped at the end, so the
+    // number formats and multi-level groups still line up with the cells.
+    let vals = eval_list_in(wb, sheet, formula, 0, hide && cells.is_none());
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
     let texts: Vec<String> = vals
         .iter()
@@ -158,22 +182,32 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
             value_text(v)
         })
         .collect();
-    let Some((_, r)) = src else { return (texts, vec![]) };
+    let Some((sheet_ref, r)) = src else { return (texts, vec![]) };
+    let visible_row = |row: usize| !(hide && sheet_ref.is_row_hidden(r.start.row.saturating_add(row as u32)));
+    let visible_col = |col: usize| !(hide && sheet_ref.is_col_hidden(r.start.col.saturating_add(col as u32)));
+    let w = r.width().max(1) as usize;
+    let flat = |texts: Vec<String>| -> Vec<String> {
+        texts.into_iter().enumerate().filter(|(i, _)| visible_row(i / w) && visible_col(i % w)).map(|(_, t)| t).collect()
+    };
     let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
-    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
-    let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
+    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (flat(texts), vec![]) };
+    let h = r.height().max(1) as usize;
     if texts.len() != w.saturating_mul(h) {
-        return (texts, vec![]); // truncated or not a plain block: a flat list
+        return (flat(texts), vec![]); // truncated or not a plain block: a flat list
     }
     let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
-    let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
-    let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
+    let column = |c: usize| (0..h).filter(|&row| visible_row(row)).map(|row| at(row, c)).collect::<Vec<String>>();
+    let row = |rr: usize| (0..w).filter(|&c| visible_col(c)).map(|c| at(rr, c)).collect::<Vec<String>>();
     let outer = levels.outer as usize;
-    if levels.by_columns {
-        (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
+    // The innermost level is the last visible column (row), the outer levels the ones before it.
+    let (lines, list): (Vec<usize>, &dyn Fn(usize) -> Vec<String>) = if levels.by_columns {
+        ((0..w).filter(|&c| visible_col(c)).collect(), &column)
     } else {
-        (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
-    }
+        ((0..h).filter(|&r| visible_row(r)).collect(), &row)
+    };
+    let Some(&inner) = lines.last() else { return (vec![], vec![]) };
+    let outers = (1..=outer).filter_map(|k| lines.len().checked_sub(k + 1)).filter_map(|i| lines.get(i)).map(|&l| list(l)).collect();
+    (list(inner), outers)
 }
 
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
@@ -228,27 +262,34 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
     let mut category_levels = Vec::new();
+    let hide = !chart.show_hidden_data;
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
-        let values = nums(wb, sheet, &s.values);
+        let values = nums(wb, sheet, &s.values, hide);
+        // A series whose cells are all hidden (its column hidden) leaves the chart, legend included.
+        if hide && values.is_empty() && !nums(wb, sheet, &s.values, false).is_empty() {
+            continue;
+        }
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
         let kind = effective_kind(chart.kind, s.kind, i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
-            (Some(f), true) => Some(eval_list(wb, sheet, f)).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect()),
+            (Some(f), true) => {
+                Some(eval_list_in(wb, sheet, f, 0, hide)).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect())
+            }
             _ => None,
         };
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let (c, outer) = category_table(wb, sheet, f, &s.values);
+            let (c, outer) = category_table(wb, sheet, f, &s.values, hide);
             if !c.is_empty() {
                 categories = Some(c);
                 category_levels = outer;
             }
         }
-        let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f));
+        let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f, hide));
         let trendlines = s
             .trendlines
             .iter()

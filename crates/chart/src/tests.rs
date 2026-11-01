@@ -50,6 +50,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        show_hidden_data: false,
     }
 }
 
@@ -953,6 +954,64 @@ fn histogram_boundary_values_match_interval_labels() {
     let h = heights(&[0.0, 5.0, 5.0, 10.0, 15.0]);
     assert_eq!(h.len(), 3);
     assert!((h[0] / h[1] - 3.0).abs() < 0.01 && (h[1] - h[2]).abs() < 0.01, "{h:?}");
+}
+
+#[test]
+fn hidden_rows_and_columns_are_left_out_unless_shown() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for r in 0..4u32 {
+            s.set_value(CellRef::new(r, 0), Value::from(["a", "b", "c", "d"][r as usize]));
+            s.set_value(CellRef::new(r, 1), Value::Number(f64::from(r) + 1.0));
+            s.set_value(CellRef::new(r, 2), Value::Number(f64::from(r) * 10.0));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![
+        Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "Sheet1!$B$1:$B$4".into(), ..Series::default() },
+        Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "Sheet1!$C$1:$C$4".into(), ..Series::default() },
+    ];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(1.0), Some(3.0), Some(4.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+    // A hidden column removes its series, legend entry included.
+    wb.sheet_mut(0).unwrap().cols.insert(2, LineInfo { hidden: true, ..Default::default() });
+    assert_eq!(resolve(&wb, 0, &c).series.len(), 1);
+    c.show_hidden_data = true;
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.len(), 2);
+    assert_eq!(d.series[0].values.len(), 4);
+    assert_eq!(d.categories.len(), 4);
+}
+
+#[test]
+fn hidden_cells_leave_multi_level_categories() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, (y, m)) in [("2023", "jan"), ("", "feb"), ("2024", "jan"), ("", "feb")].iter().enumerate() {
+            if !y.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*y));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*m));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$B$4".into()), values: "Sheet1!$C$1:$C$4".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["jan", "jan", "feb"]);
+    assert_eq!(d.category_levels, vec![vec!["2023".to_string(), "2024".into(), String::new()]]);
+    // The innermost level is the last visible column.
+    wb.sheet_mut(0).unwrap().cols.insert(1, LineInfo { hidden: true, ..Default::default() });
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["2023", "2024", ""]);
+    assert!(d.category_levels.is_empty());
 }
 
 #[test]
