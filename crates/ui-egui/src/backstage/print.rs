@@ -66,6 +66,16 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             let last = pages.len().saturating_sub(1);
             bs.preview_page = bs.preview_page.min(last);
             let Some(page) = pages.get(bs.preview_page) else { return };
+            // What this page prints (borders and text, placed as the PDF places them), fetched
+            // for the shown page only.
+            let cells_key = (key, bs.preview_page);
+            if bs.preview_cells.as_ref().is_none_or(|(k, _)| *k != cells_key) {
+                let mut query = params.clone();
+                query["page"] = json!(bs.preview_page + 1);
+                query["cells"] = json!(true);
+                let detail = app.session.run("file.printPreview", query).ok().and_then(|r| r.get("page").cloned()).unwrap_or(Json::Null);
+                bs.preview_cells = Some((cells_key, detail));
+            }
             // Paper proportions from the preview (points); hostile sizes fall back to Letter.
             let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
             let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
@@ -75,8 +85,8 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
             p.rect_filled(rect, 2.0, t.grid_bg);
             p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
+            if let Some((_, detail)) = &bs.preview_cells {
+                paint_page(p, rect, w, detail, &t);
             }
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
@@ -100,71 +110,69 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
     });
 }
 
-/// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
-const PREVIEW_ROWS: u32 = 200;
-
-const PREVIEW_COLS: u32 = 60;
-
-/// Draws one printed page in miniature: the cells' displayed text at the page's print scale,
-/// inside the sheet's margins. `paper_w` is the page width in points.
-fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
-    let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
-    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
-    // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
+/// Draws one printed page in miniature from what `file.printPreview` (with `cells`) says it
+/// prints: each cell's borders and text lines, at the page positions the PDF uses, so the
+/// margins, Center on Page and merged-cell alignment match the paper (#3059). `paper_w` is the
+/// page width in points.
+fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, t: &Tokens) {
+    let Some(cells) = page.get("cells").and_then(Json::as_array) else { return };
     let per_pt = rect.width() / paper_w;
-    let print_scale =
-        page.get("scale").and_then(Json::as_f64).filter(|s| s.is_finite() && *s > 0.0).map_or(1.0, |s| (s / 100.0) as f32).clamp(0.1, 4.0);
-    let per_px = per_pt * 0.75 * print_scale;
-    let margin =
-        |i: usize, default: f32| sh.print.margins.get(i).copied().filter(|m| m.is_finite()).unwrap_or(default).clamp(0.0, 3.0) * 72.0 * per_pt;
-    let body = Rect::from_min_max(
-        pos2(rect.left() + margin(0, 0.7), rect.top() + margin(2, 0.75)),
-        pos2(rect.right() - margin(1, 0.7), rect.bottom() - margin(3, 0.75)),
-    );
-    if !body.is_positive() {
+    if !per_pt.is_finite() || per_pt <= 0.0 {
         return;
     }
-    let font = theme::ui_font((11.0 * per_pt * print_scale).clamp(3.0, 14.0));
-    let last_row = range.end.row.min(range.start.row.saturating_add(PREVIEW_ROWS));
-    let last_col = range.end.col.min(range.start.col.saturating_add(PREVIEW_COLS));
-    let mut y = body.top();
-    for row in range.start.row..=last_row {
-        let h = sh.row_height(row) * per_px;
-        if h <= 0.0 {
+    let num = |v: &Json, k: &str| v.get(k).and_then(Json::as_f64).map(|f| f as f32).filter(|f| f.is_finite());
+    let at = |x: f32, y: f32| pos2(rect.left() + x * per_pt, rect.top() + y * per_pt);
+    let p = p.with_clip_rect(rect);
+    for c in cells {
+        let (Some(x), Some(y), Some(w), Some(h)) = (num(c, "x"), num(c, "y"), num(c, "w"), num(c, "h")) else { continue };
+        let (tl, br) = (at(x, y), at(x + w, y + h));
+        // Borders: top, right, bottom, left.
+        let borders = c.get("borders");
+        for (side, a, b) in
+            [("top", tl, pos2(br.x, tl.y)), ("right", pos2(br.x, tl.y), br), ("bottom", pos2(tl.x, br.y), br), ("left", tl, pos2(tl.x, br.y))]
+        {
+            let Some(line) = borders.and_then(|bd| bd.get(side)) else { continue };
+            let width = (num(line, "width").unwrap_or(0.5) * per_pt).clamp(0.6, 6.0);
+            let color = line.get("color").and_then(Json::as_str).and_then(|h| egui::Color32::from_hex(h).ok()).unwrap_or(t.cell_text);
+            let stroke = Stroke::new(width, color);
+            if line.get("double").and_then(Json::as_bool) == Some(true) {
+                let off = if a.y == b.y { vec2(0.0, width) } else { vec2(width, 0.0) };
+                p.line_segment([a - off, b - off], stroke);
+                p.line_segment([a + off, b + off], stroke);
+            } else if line.get("dashed").and_then(Json::as_bool) == Some(true) {
+                p.extend(egui::Shape::dashed_line(&[a, b], stroke, 3.0 * width, 2.0 * width));
+            } else {
+                p.line_segment([a, b], stroke);
+            }
+        }
+        // Text lines, anchored on the side they are aligned to (screen glyphs are not the PDF's
+        // widths), and clipped to where the text may overflow.
+        let Some(lines) = c.get("lines").and_then(Json::as_array).filter(|l| !l.is_empty()) else { continue };
+        let size = num(c, "size").unwrap_or(11.0).max(0.0);
+        let font = theme::ui_font((size * per_pt).clamp(2.0, 96.0));
+        let clip = c.get("clip").and_then(Json::as_array);
+        let edge = |i: usize, default: f32| {
+            clip.and_then(|v| v.get(i)).and_then(Json::as_f64).map(|f| f as f32).filter(|f| f.is_finite()).unwrap_or(default)
+        };
+        let clip = Rect::from_min_max(pos2(at(edge(0, x), 0.0).x, tl.y), pos2(at(edge(1, x + w), 0.0).x, br.y)).intersect(rect);
+        if !clip.is_positive() {
             continue;
         }
-        if y >= body.bottom() {
-            break;
-        }
-        let mut x = body.left();
-        for col in range.start.col..=last_col {
-            let w = sh.col_width(col) * per_px;
-            if w <= 0.0 {
+        let painter = p.with_clip_rect(clip);
+        let align = c.get("align").and_then(Json::as_str).unwrap_or("left");
+        for line in lines {
+            let (Some(text), Some(lx), Some(base)) = (line.get("text").and_then(Json::as_str), num(line, "x"), num(line, "baseline")) else {
                 continue;
-            }
-            if x >= body.right() {
-                break;
-            }
-            let cell = gridcraft_engine::core::CellRef::new(row, col);
-            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
-            if !text.is_empty() {
-                let numeric = sh.value(cell).as_f64().is_some();
-                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
-                let mut span = w;
-                if !numeric {
-                    let mut next = col.saturating_add(1);
-                    while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
-                        span += sh.col_width(next) * per_px;
-                        next = next.saturating_add(1);
-                    }
-                }
-                let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
-                let (anchor, at) =
-                    if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
-                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
-            }
-            x += w;
+            };
+            let lw = num(line, "width").unwrap_or(0.0);
+            // The PDF's baseline sits about a third of the font size below the middle of the glyphs.
+            let mid = base - size * 0.33;
+            let (anchor, ax) = match align {
+                "right" => (Align2::RIGHT_CENTER, lx + lw),
+                "center" => (Align2::CENTER_CENTER, lx + lw / 2.0),
+                _ => (Align2::LEFT_CENTER, lx),
+            };
+            painter.text(at(ax, mid), anchor, text, font.clone(), t.cell_text);
         }
-        y += h;
     }
 }

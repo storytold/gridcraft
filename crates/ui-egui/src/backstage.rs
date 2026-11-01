@@ -121,12 +121,17 @@ pub struct Backstage {
     /// Print: the previewed page (0-based).
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    preview: Option<(PreviewKey, Json)>,
+    /// Print: what the previewed page prints (`file.printPreview` with `cells`), for the preview key plus the page.
+    preview_cells: Option<((PreviewKey, usize), Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
 }
+
+/// What a print preview was made for: (document, revision, whole workbook, fit to page).
+type PreviewKey = (u64, u64, bool, bool);
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
@@ -142,6 +147,7 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            preview_cells: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }

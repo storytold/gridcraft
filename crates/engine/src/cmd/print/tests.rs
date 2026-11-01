@@ -581,3 +581,86 @@ fn checkbox_cells_print_as_boxes_not_true_false() {
     assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
     assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
 }
+
+/// A sheet with boxed cells, a merged and centred cell, and Center on Page both ways (#3059).
+fn centred_sheet_with_borders_and_a_merge() -> Session {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Name"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "42"})).unwrap();
+    s.execute("home.borders", json!({"range": "A1:C3", "preset": "all"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "Merged"})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "B5:D7"})).unwrap();
+    s.execute("home.alignMiddle", json!({"range": "B5:D7"})).unwrap();
+    s.execute("home.borders", json!({"range": "B5:D7", "preset": "thickOutside"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"centerH": true, "centerV": true})).unwrap();
+    s
+}
+
+fn preview_cell<'a>(page: &'a Json, a1: &str) -> &'a Json {
+    page["cells"].as_array().unwrap().iter().find(|c| c["cell"] == a1).unwrap_or_else(|| panic!("{a1} is not in the preview: {page}"))
+}
+
+#[test]
+fn the_preview_places_the_content_where_the_pdf_centres_it() {
+    let mut s = centred_sheet_with_borders_and_a_merge();
+    let page = s.execute("file.printPreview", json!({"page": 1, "cells": true})).unwrap()["page"].clone();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let content = &page["content"];
+    let (w, h) = (page["width"].as_f64().unwrap(), page["height"].as_f64().unwrap());
+    let [cx, cy, cw, ch] = ["x", "y", "width", "height"].map(|k| content[k].as_f64().unwrap());
+    // Equal side margins (0.7") and equal top and bottom ones (0.75"): centred on the paper.
+    assert!(((cx + cw / 2.0) - w / 2.0).abs() < 0.5, "horizontally centred: {content} on {w}");
+    assert!(((cy + ch / 2.0) - h / 2.0).abs() < 0.5, "vertically centred: {content} on {h}");
+    assert!(cx > 0.7 * 72.0 + 100.0 && cy > 0.75 * 72.0 + 100.0, "not at the margins: {content}");
+    // The preview's A1 text sits where the PDF prints it.
+    let a1 = preview_cell(&page, "A1");
+    let line = &a1["lines"][0];
+    assert_eq!(line["text"], "Name");
+    let (pdf_x, _) = text_at(&pdf, "Name").unwrap();
+    assert!((line["x"].as_f64().unwrap() as f32 - pdf_x).abs() < 0.01, "preview x {line} vs PDF x {pdf_x}");
+    assert!((a1["x"].as_f64().unwrap() - cx).abs() < 0.01 && (a1["y"].as_f64().unwrap() - cy).abs() < 0.01, "A1 starts the content");
+}
+
+#[test]
+fn the_preview_carries_the_borders_that_print() {
+    let mut s = centred_sheet_with_borders_and_a_merge();
+    let page = s.execute("file.printPreview", json!({"page": 1, "cells": true})).unwrap()["page"].clone();
+    for a1 in ["A1", "B2", "C3", "A3"] {
+        let b = &preview_cell(&page, a1)["borders"];
+        for side in ["top", "right", "bottom", "left"] {
+            assert!(b[side]["width"].as_f64().unwrap() > 0.0, "{a1} {side}: {b}");
+            assert_eq!(b[side]["color"], "#000000");
+        }
+    }
+    // The merged range's outline: its right and bottom come from its last column and row (#376).
+    let m = preview_cell(&page, "B5");
+    assert_eq!(m["merged"], true);
+    let thin = preview_cell(&page, "A1")["borders"]["top"]["width"].as_f64().unwrap();
+    for side in ["top", "right", "bottom", "left"] {
+        assert!(m["borders"][side]["width"].as_f64().unwrap() > thin, "thick {side}: {m}");
+    }
+    // Cells inside the merge and plain empty cells aren't listed.
+    assert!(page["cells"].as_array().unwrap().iter().all(|c| c["cell"] != "C6" && c["cell"] != "E9"));
+}
+
+#[test]
+fn the_preview_centres_merged_text_over_the_merged_range() {
+    let mut s = centred_sheet_with_borders_and_a_merge();
+    let page = s.execute("file.printPreview", json!({"page": 1, "cells": true})).unwrap()["page"].clone();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let m = preview_cell(&page, "B5");
+    let [x, y, w, h] = ["x", "y", "w", "h"].map(|k| m[k].as_f64().unwrap());
+    let one = preview_cell(&page, "A1");
+    assert!(w > 2.5 * one["w"].as_f64().unwrap() && h > 2.5 * one["h"].as_f64().unwrap(), "the merged rect spans B5:D7: {m}");
+    assert_eq!(m["align"], "center");
+    let line = &m["lines"][0];
+    let (lx, lw, base) = (line["x"].as_f64().unwrap(), line["width"].as_f64().unwrap(), line["baseline"].as_f64().unwrap());
+    assert!(((lx + lw / 2.0) - (x + w / 2.0)).abs() < 0.01, "centred across: {m}");
+    let size = m["size"].as_f64().unwrap();
+    assert!((base - size * 0.33 - (y + h / 2.0)).abs() < 1.0, "centred down: {m}");
+    let (pdf_x, _) = text_at(&pdf, "Merged").unwrap();
+    assert!((lx as f32 - pdf_x).abs() < 0.01, "where the PDF prints it");
+    // Without `cells` the page list stays light.
+    let all = s.execute("file.printPreview", json!({})).unwrap();
+    assert!(all["pageList"][0].get("cells").is_none() && all["pageList"][0]["content"].is_object());
+}

@@ -1,10 +1,11 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
-use super::text::{TextPlacement, draw_text};
+use super::text::{TextPlacement, draw_text, lay_text};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, HAlign, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
     Workbook, split_sheet,
 };
+use serde_json::{Value as Json, json};
 
 // ---------------------------------------------------------------- drawing
 
@@ -218,29 +219,44 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, start: Point, end: 
     let color = rgb_of(b.color, wb).unwrap_or([0, 0, 0]);
     if b.style == BorderStyle::Double {
         let off = 1.0 * k;
-        let lw = (0.75 * k).max(0.2);
+        let lw = border_width(b, k);
         let (dx, dy) = if (y0 - y1).abs() < 0.001 { (0.0, off) } else { (off, 0.0) };
         pg.stroke_line(x0 - dx, y0 - dy, x1 - dx, y1 - dy, lw, color);
         pg.stroke_line(x0 + dx, y0 + dy, x1 + dx, y1 + dy, lw, color);
         return;
     }
-    let lw = (b.style.width() * k).clamp(0.25, 6.0);
+    let lw = border_width(b, k);
     pg.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), lw, color, &border_dash(b.style, k));
 }
 
-/// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+/// A cell a block prints: its look and its rectangle on the page (a merged range's, for its anchor).
+pub(super) struct PrintedCell {
+    pub(super) cell: CellRef,
+    pub(super) look: Look,
+    pub(super) rect: (f32, f32, f32, f32),
+    pub(super) merged: bool,
+}
+
+/// The cells of a block that print something, with the merges that touch it and the block's
+/// page rectangle; `None` for a block with no area. The PDF and the print preview both use it.
+pub(super) struct BlockCells {
+    pub(super) bounds: (f32, f32, f32, f32),
+    pub(super) merges: Vec<RangeRef>,
+    pub(super) cells: Vec<PrintedCell>,
+}
+
+pub(super) fn block_cells(b: &Block, cf: &mut Option<crate::cf::CfCache>) -> Option<BlockCells> {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
-        return;
+        return None;
     }
     let block = b.range();
     let sh = b.sh;
     let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&block)).copied().collect();
     let covered = |c: CellRef| merges.iter().any(|m| m.contains(c));
     // Cells worth visiting.
-    let cells: Vec<CellRef> = if block.count() <= DENSE_BLOCK {
+    let visit: Vec<CellRef> = if block.count() <= DENSE_BLOCK {
         block.iter().filter(|c| !covered(*c)).collect()
     } else {
         let mut set: Vec<CellRef> = sh.cells.iter_range(block).map(|(c, _)| c).collect();
@@ -250,18 +266,6 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         set.retain(|c| !covered(*c));
         set
     };
-    pg.save();
-    pg.clip_rect(bx, by, bw, bh);
-    if gridlines {
-        let grey = [0xB0, 0xB0, 0xB0];
-        let lw = (0.35 * b.scale).clamp(0.1, 0.5);
-        for x in &b.xs {
-            pg.stroke_line(*x, by, *x, by + bh, lw, grey);
-        }
-        for y in &b.ys {
-            pg.stroke_line(bx, *y, bx + bw, *y, lw, grey);
-        }
-    }
     // Cheap pre-filter: blank, unstyled cells outside tables and conditional formats draw nothing.
     let skip = |c: &CellRef| {
         sh.cond_formats.is_empty()
@@ -269,7 +273,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             && sh.style_id(*c) == StyleId::DEFAULT
             && (sh.tables.is_empty() || sh.table_at(*c).is_none())
     };
-    let looks: Vec<(CellRef, Look)> = cells
+    let cells = visit
         .iter()
         .filter(|c| !skip(c))
         .chain(merges.iter().map(|m| &m.start))
@@ -282,22 +286,116 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
                 || l.style.borders != Borders::default()
                 || l.style.num_fmt.as_str() == "checkbox"
         })
+        .map(|(cell, look)| match merges.iter().find(|m| m.start == cell) {
+            Some(m) => PrintedCell { cell, look, rect: b.rect(*m), merged: true },
+            None => PrintedCell { cell, look, rect: b.rect(RangeRef::cell(cell)), merged: false },
+        })
         .collect();
-    let rect_of = |c: CellRef| -> (f32, f32, f32, f32, bool) {
-        match merges.iter().find(|m| m.start == c) {
-            Some(m) => {
-                let (x, y, w, h) = b.rect(*m);
-                (x, y, w, h, true)
-            }
-            None => {
-                let (x, y, w, h) = b.rect(RangeRef::cell(c));
-                (x, y, w, h, false)
-            }
+    Some(BlockCells { bounds: (bx, by, bw, bh), merges, cells })
+}
+
+impl PrintedCell {
+    /// The cell's top, right, bottom and left borders as printed. A merged range takes its right
+    /// edge from its last column and its bottom edge from its last row, where Excel stores them.
+    pub(super) fn edges(&self, b: &Block, merges: &[RangeRef]) -> [BorderLine; 4] {
+        let bd = &self.look.style.borders;
+        let (right, bottom) = match merges.iter().find(|m| m.start == self.cell).filter(|_| self.merged) {
+            Some(m) => (
+                b.wb.styles.get(b.sh.style_id(CellRef::new(m.start.row, m.end.col))).borders.right,
+                b.wb.styles.get(b.sh.style_id(CellRef::new(m.end.row, m.start.col))).borders.bottom,
+            ),
+            None => (bd.right, bd.bottom),
+        };
+        [bd.top, right, bottom, bd.left]
+    }
+}
+
+/// Stroke width of a printed border line, in points (a double line is two of these).
+fn border_width(b: &BorderLine, k: f32) -> f32 {
+    if b.style == BorderStyle::Double { (0.75 * k).max(0.2) } else { (b.style.width() * k).clamp(0.25, 6.0) }
+}
+
+/// What one block prints, for the print preview: each cell's rectangle, its edge borders and
+/// its text lines, in page points, placed exactly as the PDF places them (#3059). At most
+/// `cap` cells are added to `out`.
+pub(super) fn preview_block(b: &Block, cf: &mut Option<crate::cf::CfCache>, out: &mut Vec<Json>, cap: usize) {
+    let Some(bc) = block_cells(b, cf) else { return };
+    let (bx, _, bw, _) = bc.bounds;
+    let hex = |c: Rgb| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    for pc in &bc.cells {
+        if out.len() >= cap {
+            return;
         }
-    };
+        let (x, y, w, h) = pc.rect;
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        let mut borders = serde_json::Map::new();
+        for (side, line) in ["top", "right", "bottom", "left"].into_iter().zip(pc.edges(b, &bc.merges)) {
+            if line.is_none() {
+                continue;
+            }
+            let color = rgb_of(line.color, b.wb).unwrap_or([0, 0, 0]);
+            borders.insert(
+                side.into(),
+                json!({"width": border_width(&line, b.k), "color": hex(color), "double": line.style == BorderStyle::Double, "dashed": !border_dash(line.style, b.k).is_empty()}),
+            );
+        }
+        let placement = TextPlacement { cell: pc.cell, look: &pc.look, rect: pc.rect, merged: pc.merged, merges: &bc.merges, limits: (bx, bx + bw) };
+        let laid = if b.sh.cell_pictures.contains_key(&pc.cell) || checkbox_state(&pc.look, &b.sh.value(pc.cell)).is_some() {
+            None
+        } else {
+            lay_text(b, placement)
+        };
+        // Rotated and stacked text is listed as plain lines (the preview draws it upright).
+        let (lines, size, clip, align) = match &laid {
+            Some(t) => (
+                t.placed().map(|l| json!({"text": l.text, "x": l.x, "baseline": l.baseline, "width": l.width})).collect::<Vec<_>>(),
+                t.size,
+                t.clip,
+                match t.h_align {
+                    HAlign::Right => "right",
+                    HAlign::Center => "center",
+                    _ => "left",
+                },
+            ),
+            None => (Vec::new(), 0.0, (x, x + w), "left"),
+        };
+        if borders.is_empty() && lines.is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "cell": pc.cell.a1(),
+            "x": x, "y": y, "w": w, "h": h,
+            "merged": pc.merged,
+            "borders": borders,
+            "lines": lines,
+            "align": align,
+            "size": size,
+            "clip": [clip.0, clip.1],
+        }));
+    }
+}
+
+/// Draws the cells of a block: fills, gridlines, data bars, borders and text.
+pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+    let Some(BlockCells { bounds: (bx, by, bw, bh), merges, cells }) = block_cells(b, cf) else { return };
+    let sh = b.sh;
+    pg.save();
+    pg.clip_rect(bx, by, bw, bh);
+    if gridlines {
+        let grey = [0xB0, 0xB0, 0xB0];
+        let lw = (0.35 * b.scale).clamp(0.1, 0.5);
+        for x in &b.xs {
+            pg.stroke_line(*x, by, *x, by + bh, lw, grey);
+        }
+        for y in &b.ys {
+            pg.stroke_line(bx, *y, bx + bw, *y, lw, grey);
+        }
+    }
     // Fills (merged blocks hide the gridlines inside them).
-    for (c, l) in &looks {
-        let (x, y, w, h, merged) = rect_of(*c);
+    for PrintedCell { look: l, rect: (x, y, w, h), merged, .. } in &cells {
+        let (x, y, w, h, merged) = (*x, *y, *w, *h, *merged);
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
@@ -316,38 +414,33 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         }
     }
     // Borders.
-    for (c, l) in &looks {
-        let (x, y, w, h, merged) = rect_of(*c);
+    for pc in &cells {
+        let (x, y, w, h) = pc.rect;
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        let bd = &l.style.borders;
-        let (right, bottom) = match merges.iter().find(|m| m.start == *c).filter(|_| merged) {
-            Some(m) => (
-                b.wb.styles.get(sh.style_id(CellRef::new(m.start.row, m.end.col))).borders.right,
-                b.wb.styles.get(sh.style_id(CellRef::new(m.end.row, m.start.col))).borders.bottom,
-            ),
-            None => (bd.right, bd.bottom),
-        };
-        draw_border(pg, &bd.top, b.wb, Point::new(x, y), Point::new(x + w, y), b.k);
+        let bd = &pc.look.style.borders;
+        let [top, right, bottom, left] = pc.edges(b, &merges);
+        draw_border(pg, &top, b.wb, Point::new(x, y), Point::new(x + w, y), b.k);
         draw_border(pg, &bottom, b.wb, Point::new(x, y + h), Point::new(x + w, y + h), b.k);
-        draw_border(pg, &bd.left, b.wb, Point::new(x, y), Point::new(x, y + h), b.k);
+        draw_border(pg, &left, b.wb, Point::new(x, y), Point::new(x, y + h), b.k);
         draw_border(pg, &right, b.wb, Point::new(x + w, y), Point::new(x + w, y + h), b.k);
         draw_border(pg, &bd.diag_down, b.wb, Point::new(x, y), Point::new(x + w, y + h), b.k);
         draw_border(pg, &bd.diag_up, b.wb, Point::new(x, y + h), Point::new(x + w, y), b.k);
     }
     // Text.
-    for (c, l) in &looks {
-        let (x, y, w, h, merged) = rect_of(*c);
+    for pc in &cells {
+        let (x, y, w, h) = pc.rect;
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(picture) = sh.cell_pictures.get(c) {
+        if let Some(picture) = sh.cell_pictures.get(&pc.cell) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
-        } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
+        } else if let Some(on) = checkbox_state(&pc.look, &sh.value(pc.cell)) {
             draw_checkbox(pg, (x, y, w, h), b.k, on);
         } else {
-            draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
+            let placement = TextPlacement { cell: pc.cell, look: &pc.look, rect: pc.rect, merged: pc.merged, merges: &merges, limits: (bx, bx + bw) };
+            draw_text(pg, b, placement);
         }
     }
     pg.restore();

@@ -124,17 +124,68 @@ pub(super) struct TextPlacement<'a> {
     pub limits: (f32, f32),
 }
 
-pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+/// How a cell's text is laid out on the page. The PDF draws it, and the print preview places
+/// its lines where the PDF does (#3059).
+pub(super) struct LaidText {
+    pub(super) lines: Vec<String>,
+    pub(super) size: f32,
+    font: Font,
+    color: [u8; 3],
+    /// Rotation as stored (0 = none, 255 = stacked).
+    pub(super) rot: i16,
+    /// The horizontal span the text is clipped to (it overflows into empty neighbours).
+    pub(super) clip: (f32, f32),
+    pub(super) h_align: HAlign,
+    rect: (f32, f32, f32, f32),
+    pad: f32,
+    indent: f32,
+    across: f32,
+    first_baseline: f32,
+    line_h: f32,
+    underline: Underline,
+    strike: bool,
+}
+
+/// One horizontal line of text as placed on the page: its left edge, baseline and width.
+pub(super) struct PlacedLine<'a> {
+    pub(super) text: &'a str,
+    pub(super) x: f32,
+    pub(super) baseline: f32,
+    pub(super) width: f32,
+}
+
+impl LaidText {
+    /// Each horizontal line where it is drawn; lines wholly outside the cell are left out.
+    pub(super) fn placed(&self) -> impl Iterator<Item = PlacedLine<'_>> {
+        let (x, y, w, h) = self.rect;
+        self.lines.iter().enumerate().filter_map(move |(i, line)| {
+            let lw = gridcraft_pdf::text_width(self.font, self.size, line);
+            let lx = match self.h_align {
+                HAlign::Right => x + w - self.pad - lw - self.indent,
+                HAlign::Center => x + (w + self.across - lw) / 2.0,
+                _ => x + self.pad + self.indent,
+            };
+            let ly = self.first_baseline + i as f32 * self.line_h;
+            if ly - self.size > y + h || ly < y - self.line_h {
+                return None;
+            }
+            Some(PlacedLine { text: line, x: lx, baseline: ly, width: lw })
+        })
+    }
+}
+
+/// Lays out a cell's text as it prints, or `None` when the cell prints no text.
+pub(super) fn lay_text(b: &Block, placement: TextPlacement<'_>) -> Option<LaidText> {
     let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
     let v = sh.value(c);
     if v.is_empty() || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
-        return;
+        return None;
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
-        return;
+        return None;
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
@@ -166,7 +217,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         text = text.replace(['\n', '\r'], " ");
     }
     if text.is_empty() {
-        return;
+        return None;
     }
     let mut tw = gridcraft_pdf::text_width(font, size, &text);
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
@@ -204,32 +255,54 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         let need = tw + 2.0 * pad + indent - w;
         (clip_l, clip_r) = extend_text_bounds(sh, c, merges, b.k, need, h_align, (clip_l, clip_r));
     }
-    let clip_l = clip_l.max(limits.0);
-    let clip_r = clip_r.min(limits.1);
+    Some(LaidText {
+        lines,
+        size,
+        font,
+        color,
+        rot,
+        clip: (clip_l.max(limits.0), clip_r.min(limits.1)),
+        h_align,
+        rect,
+        pad,
+        indent,
+        across,
+        first_baseline,
+        line_h,
+        underline: st.font.underline,
+        strike: st.font.strike,
+    })
+}
+
+pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+    let Some(t) = lay_text(b, placement) else { return };
+    let (x, y, w, h) = t.rect;
+    let (size, font, color, line_h, pad, rot) = (t.size, t.font, t.color, t.line_h, t.pad, t.rot);
+    let (clip_l, clip_r) = t.clip;
     pg.save();
     pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
-    if rotated {
+    if rot != 0 && rot != 255 {
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
         // Wrapped lines stack rightward for upward text and leftward for downward text, so
         // downward text starts its first line far enough in for the last to end at the left pad.
         let deg = (rot as f32).clamp(-90.0, 90.0);
         let angle = -deg.to_radians();
-        let last = lines.len().saturating_sub(1) as f32;
-        for (i, t) in lines.iter().enumerate() {
+        let last = t.lines.len().saturating_sub(1) as f32;
+        for (i, line) in t.lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
                 (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
+            pg.text_rotated(Point::new(ox, oy), size, font, color, line, angle);
         }
         pg.restore();
         return;
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
+        let chars: Vec<char> = t.lines.concat().chars().take(500).collect();
         let mut yy = y + pad + size * 0.8;
         for ch in chars {
             let s = ch.to_string();
@@ -243,26 +316,16 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         pg.restore();
         return;
     }
-    for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
-        let lx = match h_align {
-            HAlign::Right => x + w - pad - lw - indent,
-            HAlign::Center => x + (w + across - lw) / 2.0,
-            _ => x + pad + indent,
-        };
-        let ly = first_baseline + i as f32 * line_h;
-        if ly - size > y + h || ly < y - line_h {
-            continue;
-        }
+    for PlacedLine { text: line, x: lx, baseline: ly, width: lw } in t.placed() {
         pg.text(lx, ly, size, font, color, line);
-        if st.font.underline != Underline::None {
+        if t.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
-            if matches!(st.font.underline, Underline::Double | Underline::DoubleAccounting) {
+            if matches!(t.underline, Underline::Double | Underline::DoubleAccounting) {
                 pg.stroke_line(lx, ly + size * 0.24, lx + lw, ly + size * 0.24, uw, color);
             }
         }
-        if st.font.strike {
+        if t.strike {
             pg.stroke_line(lx, ly - size * 0.3, lx + lw, ly - size * 0.3, (size * 0.06).max(0.2), color);
         }
     }
