@@ -716,6 +716,18 @@ mod spill_tests {
     }
 
     #[test]
+    fn canceling_a_formula_draft_does_not_change_the_validated_cell() {
+        let mut app = app();
+        app.run("data.validation", json!({"range": "A1", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+        let before = app.session.active().unwrap().wb.clone();
+        app.begin_edit(Some("=11".into()), false);
+        app.cancel_edit();
+        assert!(app.editor.is_none());
+        assert_eq!(app.session.mode, gridcraft_engine::Mode::Ready);
+        assert_eq!(app.session.active().unwrap().wb, before);
+    }
+
+    #[test]
     fn spill_ownership_follows_recalculation_and_obstructions() {
         let mut app = app();
         set(&mut app, "D1", "2");
