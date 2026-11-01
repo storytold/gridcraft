@@ -216,6 +216,11 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// The Shapes gallery's pick (an `insert.shape` kind) waiting on the sheet: a drag draws it
+    /// from the press to the release point, a click inserts it at its default size (#2904).
+    pub shape_tool: Option<String>,
+    /// Where the drag drawing `shape_tool` began (sheet points).
+    pub shape_from: Option<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):

@@ -602,6 +602,24 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// Mirrored left to right (`a:xfrm flipH`): a line runs from the anchor's top-right corner.
+    #[serde(default)]
+    pub flip_h: bool,
+    /// Mirrored top to bottom (`a:xfrm flipV`): a line runs from the anchor's bottom corner.
+    #[serde(default)]
+    pub flip_v: bool,
+}
+
+impl Shape {
+    /// A Line's or Arrow's start and end points, relative to the anchor's top-left corner in
+    /// sheet points: the drawing goes from the start to the end (where an Arrow's head is), the
+    /// flips choosing which corners of the anchor box they are.
+    pub fn line_ends(&self) -> ([f32; 2], [f32; 2]) {
+        let (w, h) = (self.anchor.width, self.anchor.height);
+        let (x0, x1) = if self.flip_h { (w, 0.0) } else { (0.0, w) };
+        let (y0, y1) = if self.flip_v { (h, 0.0) } else { (0.0, h) };
+        ([x0, y0], [x1, y1])
+    }
 }
 
 /// Horizontal alignment of a shape's text (`a:pPr algn`).

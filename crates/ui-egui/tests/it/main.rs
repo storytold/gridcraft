@@ -61,6 +61,7 @@ mod interaction;
 mod interface_scale;
 mod keyboard_shortcuts;
 mod keytips_generated;
+mod line_shape_drag;
 mod macro_editor;
 mod macros_ui;
 mod menu_hover;

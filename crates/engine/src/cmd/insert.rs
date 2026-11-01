@@ -128,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Shapes",
             ["Insert", "Illustrations"],
             None,
-            "{kind: rectangle|roundedRectangle|ellipse|triangle|line|arrow|textBox, at?, width?, height?, text?, fill?, line?}",
+            "{kind: rectangle|roundedRectangle|ellipse|triangle|line|arrow|textBox, at?, dx?, dy?, width?, height?, flipH?, flipV?, text?, fill?, line?}",
             has_doc,
             insert_shape
         ),
@@ -1104,6 +1104,8 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         "textBox" => ShapeKind::TextBox,
         _ => ShapeKind::Rectangle,
     };
+    let line_like = matches!(kind, ShapeKind::Line | ShapeKind::Arrow);
+    let min_side = if line_like { 0.0 } else { SHAPE_MIN_SIDE };
     let d = s.doc()?;
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
@@ -1119,16 +1121,22 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         kind,
         anchor: Anchor {
             cell: at,
-            dx: 0.0,
-            dy: 0.0,
-            width: f64_param(p, "width").unwrap_or(144.0) as f32,
-            height: f64_param(p, "height").unwrap_or(if kind == ShapeKind::Line { 0.0 } else { 96.0 }) as f32,
+            dx: f64_param(p, "dx").unwrap_or(0.0).clamp(0.0, SHAPE_SIZE_MAX) as f32,
+            dy: f64_param(p, "dy").unwrap_or(0.0).clamp(0.0, SHAPE_SIZE_MAX) as f32,
+            // A vertical line is zero points wide and a horizontal one zero high; other shapes
+            // keep at least a point each way, so a flat drag doesn't make an empty box.
+            width: f64_param(p, "width").unwrap_or(144.0).clamp(min_side, SHAPE_SIZE_MAX) as f32,
+            height: f64_param(p, "height").unwrap_or(if line_like { 0.0 } else { 96.0 }).clamp(min_side, SHAPE_SIZE_MAX) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
         },
         fill,
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        // A line runs from the anchor's top-left to its bottom-right corner unless flipped
+        // (`a:xfrm flipH`/`flipV`): a line drawn up or to the left is a flipped one.
+        flip_h: bool_param(p, "flipH").unwrap_or(false),
+        flip_v: bool_param(p, "flipV").unwrap_or(false),
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {
@@ -1136,6 +1144,11 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(json!({"shape": id}))
     })
 }
+
+/// The largest offset or side, in points, `insert.shape` takes (as `object.move` does).
+const SHAPE_SIZE_MAX: f64 = 10_000.0;
+/// The smallest side, in points, of a shape other than a line or arrow.
+const SHAPE_MIN_SIDE: f64 = 1.0;
 
 /// A text box holds at most as many characters as a cell.
 const SHAPE_TEXT_MAX_CHARS: usize = 32_767;
@@ -1736,6 +1749,8 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::Auto,
         text: name,
         format: Default::default(),
+        flip_h: false,
+        flip_v: false,
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {

@@ -95,6 +95,8 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,
         format: Default::default(),
+        flip_h: false,
+        flip_v: false,
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);
@@ -150,9 +152,13 @@ fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
         ink.kind = kind;
         ink.fill = if kind == ShapeKind::Line { color } else { Color::Auto };
         ink.text = String::new();
-        if kind == ShapeKind::Line && pts.first().zip(pts.last()).is_some_and(|(a, b)| a[1] > b[1]) {
-            // Lines are drawn top-left to bottom-right; keep the stroke direction simple.
-        }
+        // A line keeps the stroke's direction: from where it began to where it ended.
+        let (flip_h, flip_v) = match (pts.first(), pts.last()) {
+            (Some(a), Some(b)) if kind == ShapeKind::Line => (a[0] > b[0], a[1] > b[1]),
+            _ => (false, false),
+        };
+        ink.flip_h = flip_h;
+        ink.flip_v = flip_v;
         Ok(json!({"kind": format!("{kind:?}")}))
     })
 }

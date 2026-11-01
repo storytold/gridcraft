@@ -183,7 +183,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NSC", Entry::Finish(Action::Pending("insert.screenshot"))), // pending; Excel: Screenshot Menu; Screenshot; reserved until the command lands
     ("NSD", Entry::Finish(Action::Command("insert.chart"))), // Excel: Combo Chart; Combo (kind TBD)
     ("NSF", Entry::Finish(Action::Command("insert.slicer"))), // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
-    ("NSH", Entry::Finish(Action::Command("insert.shape"))), // Excel: Shapes
+    ("NSH", Entry::Finish(Action::Control("ui.shapeTool"))), // Excel: Shapes; opens the Shapes gallery; the picked shape arms the pointer (ui.shapeTool) and is drawn by dragging
     ("NSP", Entry::Finish(Action::Command("insert.recommendedPivotTables"))), // Excel: Recommended PivotTables
     ("NST", Entry::Finish(Action::Pending("insert.timeline"))), // pending; Excel: Timeline; insert.timeline missing (gap #8); reserved until the command lands
     ("NSZ", Entry::Finish(Action::Command("insert.pivotChart"))), // Excel: PivotChart; PivotChart; reserved until the command lands

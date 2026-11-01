@@ -100,6 +100,9 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if handle_draw_tool(app, &input) {
         return;
     }
+    if handle_shape_tool(app, &input) {
+        return;
+    }
     // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
     // button resets it. Runs before the generic object select/drag so tiles stay clickable.
     if primary_clicked
@@ -250,6 +253,150 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
     }
     false
+}
+
+/// A logical grid point in sheet points (through the cell under it, so frozen panes map right).
+fn sheet_point(geo: &Geo, sh: &Sheet, p: Pos2) -> [f32; 2] {
+    let c = geo.cell_at(sh, p);
+    [sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z, sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z]
+}
+
+/// A sheet point on screen (mirrored on right-to-left sheets), for previews.
+fn screen_point(geo: &Geo, sh: &Sheet, q: [f32; 2]) -> Pos2 {
+    let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
+    geo.mirror_pos(pos2(geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z, geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z))
+}
+
+/// How far (sheet points, each way) the pointer must travel for a shape press to be a drag;
+/// a shorter one is a click that inserts the shape at its default size.
+const SHAPE_CLICK: f32 = 2.0;
+
+/// Where a shape drag from `from` to `to` (both inside the sheet) ends: with Shift a line snaps
+/// to the nearest 15° and any other shape to a square, as in Excel, shortened when the snapped end
+/// would fall before the sheet's first row or column.
+fn shape_drag_end(from: [f32; 2], to: [f32; 2], line: bool, shift: bool) -> [f32; 2] {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    if !shift {
+        return to;
+    }
+    let from = [from[0].max(0.0), from[1].max(0.0)];
+    if line {
+        let step = 15f32.to_radians();
+        let angle = (dy.atan2(dx) / step).round() * step;
+        // Snapped angles that are multiples of 90° land exactly on the axis.
+        let (s, c) = angle.sin_cos();
+        let snap = |v: f32| if v.abs() < 1e-6 { 0.0 } else { v };
+        let dir = [snap(c), snap(s)];
+        // Keep the angle, and only as much length as fits before the sheet's origin.
+        let mut len = dx.hypot(dy);
+        for (start, d) in from.iter().zip(dir) {
+            if d < 0.0 {
+                len = len.min(start / -d);
+            }
+        }
+        [(from[0] + len * dir[0]).max(0.0), (from[1] + len * dir[1]).max(0.0)]
+    } else {
+        let mut side = dx.abs().max(dy.abs());
+        for (start, d) in from.iter().zip([dx, dy]) {
+            if d < 0.0 {
+                side = side.min(*start);
+            }
+        }
+        [(from[0] + side.copysign(dx)).max(0.0), (from[1] + side.copysign(dy)).max(0.0)]
+    }
+}
+
+/// The `insert.shape` parameters for a shape drawn from `from` to `to` (sheet points), or
+/// clicked at `from` (`to` is `None`: the default size there): the box they span, and for a line
+/// or arrow the flips that make it run from `from` to `to` as seen. On a right-to-left sheet
+/// (`rtl`) objects are not mirrored, only placed mirrored, so a drag towards higher sheet x runs
+/// to the left on screen.
+fn drawn_shape_params(sh: &Sheet, kind: &str, from: [f32; 2], to: Option<[f32; 2]>, rtl: bool) -> serde_json::Value {
+    let clicked = to.is_none();
+    let to = to.unwrap_or(from);
+    let (x0, y0) = (from[0].min(to[0]).max(0.0), from[1].min(to[1]).max(0.0));
+    let cell = CellRef::new(sh.row_at(y0 as f64), sh.col_at(x0 as f64));
+    let mut params = json!({
+        "kind": kind,
+        "at": cell.a1(),
+        "dx": (x0 - sh.col_left(cell.col) as f32).max(0.0),
+        "dy": (y0 - sh.row_top(cell.row) as f32).max(0.0),
+        "width": (to[0] - from[0]).abs(),
+        "height": (to[1] - from[1]).abs(),
+    });
+    if clicked {
+        if let Some(m) = params.as_object_mut() {
+            m.remove("width");
+            m.remove("height");
+        }
+    } else if matches!(kind, "line" | "arrow") {
+        params["flipH"] = json!(if rtl { to[0] > from[0] } else { to[0] < from[0] });
+        params["flipV"] = json!(to[1] < from[1]);
+    }
+    params
+}
+
+/// The pointer armed by the Shapes gallery: a drag draws the shape from the press to the release
+/// point (Shift snaps), a click inserts it at its default size, and Esc disarms it.
+fn handle_shape_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
+    let Some(kind) = app.grid.shape_tool.clone() else { return false };
+    let (geo, sh, resp, pos) = (input.geo, input.sheet, input.response, input.position);
+    let ctx = input.context.clone();
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        app.grid.shape_tool = None;
+        app.grid.shape_from = None;
+        return true;
+    }
+    let line = matches!(kind.as_str(), "line" | "arrow");
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && let Some(p) = input.press_origin.map(|p| geo.mirror_pos(p)).or(pos)
+        && geo.in_cells(p)
+    {
+        app.grid.shape_from = Some(sheet_point(geo, sh, p));
+    }
+    let Some(from) = app.grid.shape_from else {
+        if input.primary_clicked
+            && input.in_cells
+            && let Some(p) = pos
+        {
+            finish_shape(app, drawn_shape_params(sh, &kind, sheet_point(geo, sh, p), None, geo.rtl));
+            return true;
+        }
+        return input.in_cells;
+    };
+    // The release point inside the sheet decides click or drag; the snapped and fitted end is
+    // what the preview shows and the insert uses.
+    let raw = pos.map(|p| sheet_point(geo, sh, p.clamp(geo.cells.min, geo.cells.max)));
+    let to = raw.map(|raw| shape_drag_end(from, raw, line, input.modifiers.shift));
+    if resp.dragged()
+        && let Some(to) = to
+    {
+        let (a, b) = (screen_point(geo, sh, from), screen_point(geo, sh, to));
+        let stroke = Stroke::new(1.5, Tokens::get(&ctx).accent);
+        if line {
+            input.ui.painter().line_segment([a, b], stroke);
+        } else {
+            input.ui.painter().rect_stroke(Rect::from_two_pos(a, b), 0.0, stroke, egui::StrokeKind::Middle);
+        }
+    }
+    if resp.drag_stopped() || !input.any_pointer_down {
+        app.grid.shape_from = None;
+        if let (Some(raw), Some(to)) = (raw, to) {
+            let dragged = (raw[0] - from[0]).abs() >= SHAPE_CLICK || (raw[1] - from[1]).abs() >= SHAPE_CLICK;
+            finish_shape(app, drawn_shape_params(sh, &kind, from, dragged.then_some(to), geo.rtl));
+        }
+    }
+    true
+}
+
+/// Inserts the drawn shape, selects it and disarms the pointer.
+fn finish_shape(app: &mut SheetApp, params: serde_json::Value) {
+    app.grid.shape_tool = None;
+    app.grid.shape_from = None;
+    match app.run("insert.shape", params) {
+        Ok(r) => app.selected_chart = r.get("shape").and_then(serde_json::Value::as_u64).and_then(|id| u32::try_from(id).ok()),
+        Err(e) => app.toast = Some((e, crate::now_ms())),
+    }
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {

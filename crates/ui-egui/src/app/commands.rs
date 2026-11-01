@@ -3,6 +3,9 @@ use super::{
     formula_locale, i18n, json, now_ms, printing,
 };
 
+/// The kinds `ui.shapeTool` arms the pointer with (those of the Insert › Shapes gallery).
+pub(crate) const SHAPE_TOOL_KINDS: [&str; 7] = ["rectangle", "roundedRectangle", "ellipse", "triangle", "line", "arrow", "textBox"];
+
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -55,6 +58,12 @@ impl SheetApp {
         // Requests the command made (a dialog, a draft) belong to the window it left active.
         self.follow_active_window();
         self.after_engine();
+        // A Draw tool (pen, eraser, Select Objects) and an armed shape both own the next drag:
+        // the newer one wins.
+        if !self.session.draw_tool.is_empty() || id == "draw.lasso" {
+            self.grid.shape_tool = None;
+            self.grid.shape_from = None;
+        }
         if id == "formulas.autoSum"
             && let Some(ed) = self.editor.as_mut()
             && ed.text.starts_with('=')
@@ -134,6 +143,28 @@ impl SheetApp {
     }
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
+    /// `ui.shapeTool`: arms the pointer with an Insert › Shapes kind (rectangle without one), so
+    /// the next drag on the sheet draws it; `{on: false}` disarms. Arming turns the pen and the
+    /// eraser off, so the drag draws the shape, not ink.
+    fn arm_shape_tool(&mut self, p: &Json) -> Result<Json, String> {
+        self.grid.shape_from = None;
+        if p.get("on").and_then(Json::as_bool) == Some(false) {
+            self.grid.shape_tool = None;
+            return Ok(json!({"kind": null}));
+        }
+        let kind = match p.get("kind") {
+            None | Some(Json::Null) => "rectangle",
+            Some(k) => {
+                k.as_str().filter(|k| SHAPE_TOOL_KINDS.contains(k)).ok_or_else(|| format!("`kind` must be one of {}", SHAPE_TOOL_KINDS.join(", ")))?
+            }
+        };
+        if !self.session.draw_tool.is_empty() {
+            self.session.run("draw.pen", json!({"on": false})).map_err(|e| e.to_string())?;
+        }
+        self.grid.shape_tool = Some(kind.to_string());
+        Ok(json!({"kind": kind}))
+    }
+
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
             "app.checkForUpdates" | "help.checkForUpdates" => {
@@ -142,6 +173,7 @@ impl SheetApp {
             }
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
+            "ui.shapeTool" => self.arm_shape_tool(p),
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
                 Ok(Json::Null)
