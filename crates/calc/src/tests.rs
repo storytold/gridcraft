@@ -2389,3 +2389,26 @@ fn horizontal_lookup_arrays_and_wildcards() {
     t.set("D1", "=HLOOKUP(\"Missing\",A1:B3,2,FALSE)");
     assert_eq!(t.get("D1"), Value::Error(CellError::NA));
 }
+
+/// A one-cell search vector remains a vector when the table has result cells beside it.
+#[test]
+fn lookup_single_error_key_vector_matches_array_semantics() {
+    let mut t = T::new();
+    t.set("A1", "=1/0");
+    t.set("B1", "42");
+    t.set("A2", "42");
+    for (name, range, array) in [("VLOOKUP", "A1:B1", "{#DIV/0!,42}"), ("HLOOKUP", "A1:A2", "{#DIV/0!;42}")] {
+        for mode in ["FALSE", "TRUE"] {
+            for (key, index, expected) in
+                [("1", "2", CellError::NA), ("1", "3", CellError::Ref), ("1", "0", CellError::Value), ("#VALUE!", "2", CellError::Value)]
+            {
+                let reference = format!("={name}({key},{range},{index},{mode})");
+                let array = format!("={name}({key},{array},{index},{mode})");
+                assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), &array), Value::Error(expected), "{array}");
+                assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), &reference), Value::Error(expected), "{reference}");
+            }
+            let single = format!("={name}(1,A1,1,{mode})");
+            assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), &single), Value::Error(CellError::Div0), "{single}");
+        }
+    }
+}
