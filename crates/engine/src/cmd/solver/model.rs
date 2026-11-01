@@ -1,6 +1,6 @@
 use super::{
-    CMD, CellRef, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef, Result, Session, Workbook,
-    bad, bool_param, f64_param, json, split_sheet, str_param,
+    CMD, CellRef, DEFAULT_EVALS, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_EVALS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef,
+    Result, Session, Workbook, bad, bool_param, f64_param, json, split_sheet, str_param,
 };
 
 // ---------------------------------------------------------------- model
@@ -128,6 +128,10 @@ pub(super) struct Model {
     pub(super) non_negative: bool,
     pub(super) method: Method,
     pub(super) evo: EvoOptions,
+    /// The evaluation limit (in place of Excel's iterations and time limits).
+    pub(super) max_evals: u64,
+    /// Integer Optimality, as a fraction.
+    pub(super) gap: f64,
 }
 
 /// Cells of `"B2:B4,D1"` on one sheet (row-major per area, in order), at most `cap`.
@@ -288,7 +292,17 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
         "evolutionary" | "evo" | "genetic" => Method::Evolutionary,
         m => return Err(bad(CMD, format!("unknown method `{m}` (grg, simplex or evolutionary)"))),
     };
-    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p) })
+    let num = |k: &str| p.get(k).and_then(Json::as_f64).or_else(|| str_param(p, k).and_then(num_text)).filter(|v| v.is_finite());
+    let max_evals = num("maxEvaluations").filter(|v| *v >= 1.0).map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
+    // Integer Optimality is in percent: "5" and "5%" both mean 5 % (number parsing would read
+    // "5%" as 0.05).
+    let percent = p
+        .get("integerOptimality")
+        .and_then(Json::as_f64)
+        .or_else(|| str_param(p, "integerOptimality").and_then(|t| num_text(t.trim().trim_end_matches('%'))))
+        .filter(|v| v.is_finite());
+    let gap = percent.map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p), max_evals, gap })
 }
 
 /// Whether a `data.solver` result status is a solution the Sensitivity report can describe: an
@@ -319,8 +333,9 @@ pub fn sensitivity_applies(p: &Json) -> bool {
 
 // ---------------------------------------------------------------- saved model
 
-fn ref_text(sheet_name: &str, cells: &str) -> String {
-    let q = crate::pivot::quote_sheet(sheet_name);
+/// `"B2:B4,D1"` as absolute references, each qualified by `sheet_name` when given.
+fn abs_text(sheet_name: Option<&str>, cells: &str) -> String {
+    let q = sheet_name.map(|n| format!("{}!", crate::pivot::quote_sheet(n))).unwrap_or_default();
     cells
         .split(',')
         .map(str::trim)
@@ -328,16 +343,49 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
         .filter_map(|part| {
             let r = RangeRef::parse(split_sheet(part).1.trim())?;
             let abs = |c: CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row as u64 + 1);
-            Some(if r.is_single() { format!("{q}!{}", abs(r.start)) } else { format!("{q}!{}:{}", abs(r.start), abs(r.end)) })
+            Some(if r.is_single() { format!("{q}{}", abs(r.start)) } else { format!("{q}{}:{}", abs(r.start), abs(r.end)) })
         })
         .collect::<Vec<_>>()
         .join(",")
 }
 
+fn ref_text(sheet_name: &str, cells: &str) -> String {
+    abs_text(Some(sheet_name), cells)
+}
+
+/// The evaluation limit and the generations without improvement have no Excel equivalent:
+/// Excel's `solver_itr` counts iterations (100 by default) and `solver_mni` seconds, so a
+/// workbook from Excel would cut GridCraft's search short. They are saved under GridCraft's own
+/// names, which Excel ignores.
+const EVALS_NAME: &str = "gridcraft_solver_evals";
+const STALL_NAME: &str = "gridcraft_solver_stall";
+
+/// The names of a saved model after `solver_`, as Excel's Solver writes them (GridCraft writes
+/// some of them). Saving a model and Reset All remove these and no other `solver_` names.
+const SOLVER_KEYS: [&str; 28] = [
+    "adj", "cvg", "drv", "eng", "est", "itr", "lin", "mip", "mni", "mrt", "msl", "neg", "nod", "num", "nwt", "opt", "pre", "rbv", "rlx", "rsd",
+    "scl", "sho", "ssz", "tim", "tol", "typ", "val", "ver",
+];
+
+/// Whether `name` is one of the names of a saved model: Excel's Solver names (`solver_opt`,
+/// `solver_lhs1` and so on) and GridCraft's own. A user's name such as `solver_budget` is not.
+pub(super) fn is_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if name == EVALS_NAME || name == STALL_NAME {
+        return true;
+    }
+    let Some(key) = name.strip_prefix("solver_") else { return false };
+    if SOLVER_KEYS.contains(&key) {
+        return true;
+    }
+    // One name per constraint: solver_lhs1, solver_rel1, solver_rhs1, …
+    ["lhs", "rel", "rhs"].iter().filter_map(|p| key.strip_prefix(p)).any(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The model as hidden names scoped to its sheet (replacing any saved before).
 pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
     let Some(sheet_name) = wb.sheet(m.sheet).map(|s| s.name.clone()) else { return };
-    wb.names.retain(|n| !(n.scope == Some(m.sheet) && n.name.to_ascii_lowercase().starts_with("solver_")));
+    wb.names.retain(|n| !(n.scope == Some(m.sheet) && is_model_name(&n.name)));
     let mut put = |name: String, formula: String| {
         wb.names.push(DefinedName { name, scope: Some(m.sheet), formula, comment: String::new(), hidden: true });
     };
@@ -375,26 +423,31 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
         Method::Evolutionary => "3",
     };
     put("solver_eng".into(), eng.into());
-    if m.method == Method::Evolutionary {
-        put("solver_ssz".into(), m.evo.population.to_string());
-        put("solver_mrt".into(), m.evo.mutation.to_string());
-        put("solver_rsd".into(), m.evo.seed.to_string());
-        put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
-    }
+    put(EVALS_NAME.into(), m.max_evals.to_string());
+    put("solver_tol".into(), m.gap.to_string());
+    // The Evolutionary options are kept whatever the method, as Solver Options sets them, so
+    // switching methods doesn't lose them.
+    put("solver_ssz".into(), m.evo.population.to_string());
+    put("solver_mrt".into(), m.evo.mutation.to_string());
+    put("solver_rsd".into(), m.evo.seed.to_string());
+    put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
+    put("solver_cvg".into(), m.evo.convergence.to_string());
+    put(STALL_NAME.into(), m.evo.stall.to_string());
     put("solver_ver".into(), "3".into());
 }
 
 /// The saved model of a sheet as `data.solver` params, if any.
+///
+/// A sheet's own (sheet-level) model wins over one saved as workbook-level names, and its names
+/// are read alone, so the two never mix. A sheet-level `solver_opt` of `""` (written by Reset
+/// All over a workbook-level model) means the sheet has no model.
 pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
-    let get = |n: &str| {
-        wb.names
-            .iter()
-            .find(|d| d.name.eq_ignore_ascii_case(n) && (d.scope == Some(sheet) || d.scope.is_none()))
-            .map(|d| d.formula.trim().trim_start_matches('=').to_string())
-    };
+    let named = |n: &str, scope: Option<usize>| wb.names.iter().find(|d| d.name.eq_ignore_ascii_case(n) && d.scope == scope);
+    let scope = if named("solver_opt", Some(sheet)).is_some() { Some(sheet) } else { None };
+    let get = |n: &str| named(n, scope).map(|d| d.formula.trim().trim_start_matches('=').to_string());
     let local = |t: String| -> String { t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",") };
     let objective = local(get("solver_opt")?);
-    if objective.is_empty() {
+    if objective.trim_matches('"').trim().is_empty() {
         return None;
     }
     let goal = match get("solver_typ").as_deref().map(str::trim) {
@@ -433,10 +486,20 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         "nonNegative": get("solver_neg").as_deref().map(str::trim) != Some("2"),
         "method": method,
     });
-    for (name, key) in [("solver_ssz", "populationSize"), ("solver_mrt", "mutationRate"), ("solver_rsd", "randomSeed")] {
+    for (name, key) in [
+        ("solver_ssz", "populationSize"),
+        ("solver_mrt", "mutationRate"),
+        ("solver_rsd", "randomSeed"),
+        ("solver_cvg", "convergence"),
+        (STALL_NAME, "generationsWithoutImprovement"),
+        (EVALS_NAME, "maxEvaluations"),
+    ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
-            model[key] = json!(v);
+            model[key] = number(v);
         }
+    }
+    if let Some(v) = get("solver_tol").and_then(|v| num_text(&v)) {
+        model["integerOptimality"] = number(percent(v));
     }
     if let Some(v) = get("solver_rbv") {
         model["requireBounds"] = json!(v.trim() != "2");
@@ -474,15 +537,200 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         "constraints": constraints,
         "nonNegative": m.non_negative,
         "method": method,
+        "maxEvaluations": m.max_evals,
+        "integerOptimality": number(percent(m.gap)),
     });
-    if m.method == Method::Evolutionary {
-        let e = &m.evo;
-        out["populationSize"] = json!(e.population);
-        out["mutationRate"] = json!(e.mutation);
-        out["randomSeed"] = json!(e.seed);
-        out["convergence"] = json!(e.convergence);
-        out["generationsWithoutImprovement"] = json!(e.stall);
-        out["requireBounds"] = json!(e.require_bounds);
-    }
+    let e = &m.evo;
+    out["populationSize"] = json!(e.population);
+    out["mutationRate"] = json!(e.mutation);
+    out["randomSeed"] = json!(e.seed);
+    out["convergence"] = json!(e.convergence);
+    out["generationsWithoutImprovement"] = json!(e.stall);
+    out["requireBounds"] = json!(e.require_bounds);
     out
+}
+
+// ---------------------------------------------------------------- model on cells
+
+/// The cells Save Model writes, top to bottom, as formula text.
+pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
+    let one_area = |t: &str| !t.contains(',');
+    let mut rows = Vec::with_capacity(m.cons.len() + 3);
+    let obj = abs_text(None, &m.objective.a1());
+    rows.push(match m.goal {
+        Goal::Max => format!("=MAX({obj})"),
+        Goal::Min => format!("=MIN({obj})"),
+        Goal::Value(v) => format!("={obj}={}", gridcraft_core::number_to_text(v)),
+    });
+    rows.push(format!("=COUNT({})", abs_text(None, &m.vars_text)));
+    for c in &m.cons {
+        if !one_area(&c.lhs_text) || !one_area(&c.rhs_text) {
+            return Err(EngineError::Other("Save Model needs each side of a constraint to be one range.".into()));
+        }
+        let lhs = abs_text(None, &c.lhs_text);
+        rows.push(match (c.rel, &c.rhs) {
+            (Rel::Int, _) => format!("=AND({lhs}=INT({lhs}))"),
+            (Rel::Bin, _) => format!("=AND(({lhs}=0)+({lhs}=1))"),
+            (rel, Rhs::Cells(_)) => format!("=AND({lhs}{}{})", rel.text(), abs_text(None, &c.rhs_text)),
+            (rel, Rhs::Const(v)) => format!("=AND({lhs}{}{})", rel.text(), gridcraft_core::number_to_text(*v)),
+            (rel, Rhs::None) => format!("=AND({lhs}{}0)", rel.text()),
+        });
+    }
+    let e = &m.evo;
+    let n = gridcraft_core::number_to_text;
+    let eng = match m.method {
+        Method::Grg => 1,
+        Method::Simplex => 2,
+        Method::Evolutionary => 3,
+    };
+    let yes = |b: bool| if b { 1 } else { 2 };
+    rows.push(format!(
+        "={{{eng},{},{},{},{},{},{},{},{},{}}}",
+        yes(m.non_negative),
+        e.population,
+        n(e.mutation),
+        e.seed,
+        yes(e.require_bounds),
+        n(e.convergence),
+        e.stall,
+        m.max_evals,
+        n(percent(m.gap))
+    ));
+    Ok(rows)
+}
+
+/// `NAME(inner)` → inner, ignoring case.
+fn call_args(t: &str, name: &str) -> Option<String> {
+    let head = t.get(..name.len() + 1)?;
+    (head.eq_ignore_ascii_case(&format!("{name}(")) && t.ends_with(')')).then(|| t.get(name.len() + 1..t.len() - 1).map(str::to_string))?
+}
+
+/// References without sheet names or `$`.
+fn local_refs(t: &str) -> String {
+    t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
+}
+
+fn not_a_model() -> EngineError {
+    EngineError::Other("The range doesn't hold a Solver model saved with Save Model.".into())
+}
+
+/// How many values the options row of Save Model holds at least: method, non-negative,
+/// population size, mutation rate, random seed, require bounds, convergence and generations
+/// without improvement.
+const OPTIONS_FIELDS: usize = 8;
+
+/// The options row of Save Model, `{method, non-negative, …}`, into `model`. Refused when it
+/// holds fewer than [`OPTIONS_FIELDS`] values or a value that isn't a number: a row cut short
+/// or edited by hand would otherwise load with default options in place of the saved ones.
+fn read_options_row(model: &mut Json, list: &str) -> Result<()> {
+    let incomplete = || {
+        EngineError::Other(format!(
+            "The model's options row doesn't hold the {OPTIONS_FIELDS} or more numbers Save Model writes, so the range isn't a complete model saved with Save Model."
+        ))
+    };
+    // Every value is checked; only the first ones are kept (the row is one formula, so its
+    // length is bounded by the formula's).
+    let mut v: Vec<f64> = Vec::with_capacity(16);
+    let mut count = 0usize;
+    for t in list.split([',', ';']) {
+        let x = num_text(t).ok_or_else(incomplete)?;
+        count = count.saturating_add(1);
+        if v.len() < 16 {
+            v.push(x);
+        }
+    }
+    if count < OPTIONS_FIELDS {
+        return Err(incomplete());
+    }
+    let get = |k: usize| v.get(k).copied();
+    model["method"] = json!(match get(0).map(|x| x as i64) {
+        Some(2) => "simplex",
+        Some(3) => "evolutionary",
+        _ => "grg",
+    });
+    model["nonNegative"] = json!(get(1) != Some(2.0));
+    for (k, key) in [
+        (2, "populationSize"),
+        (3, "mutationRate"),
+        (4, "randomSeed"),
+        (6, "convergence"),
+        (7, "generationsWithoutImprovement"),
+        (8, "maxEvaluations"),
+        (9, "integerOptimality"),
+    ] {
+        if let Some(x) = get(k) {
+            model[key] = json!(x);
+        }
+    }
+    model["requireBounds"] = json!(get(5) != Some(2.0));
+    Ok(())
+}
+
+/// One constraint row of Save Model (`AND(relation)`) as a `data.solver` constraint.
+fn read_constraint_row(t: String) -> Result<String> {
+    let t = call_args(&t, "AND").unwrap_or(t);
+    if let Some((x, y)) = t.split_once("=INT(").or_else(|| t.split_once("=int(")) {
+        if y.strip_suffix(')') != Some(x) {
+            return Err(not_a_model());
+        }
+        return Ok(format!("{} int", local_refs(x)));
+    }
+    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| x.split_once("=0)+(")).filter(|(a, b)| a == b) {
+        return Ok(format!("{} bin", local_refs(x.0)));
+    }
+    let (l, rel, r) = split_constraint(&t).ok_or_else(not_a_model)?;
+    let r = r.trim_matches('"');
+    Ok(match r.to_ascii_lowercase().as_str() {
+        "integer" => format!("{} int", local_refs(&l)),
+        "binary" => format!("{} bin", local_refs(&l)),
+        _ if num_text(r).is_some() => format!("{} {} {r}", local_refs(&l), rel.text()),
+        _ => format!("{} {} {}", local_refs(&l), rel.text(), local_refs(r)),
+    })
+}
+
+/// Reads formula text written by Save Model back into `data.solver` params.
+pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
+    let body = |t: &str| t.trim().trim_start_matches('=').replace(' ', "");
+    let first = body(rows.first().ok_or_else(not_a_model)?);
+    let (goal, objective, value) = if let Some(o) = call_args(&first, "MAX") {
+        ("max", o, 0.0)
+    } else if let Some(o) = call_args(&first, "MIN") {
+        ("min", o, 0.0)
+    } else {
+        let (o, v) = first.split_once('=').ok_or_else(not_a_model)?;
+        ("value", o.to_string(), num_text(v).ok_or_else(not_a_model)?)
+    };
+    let variables = call_args(&body(rows.get(1).ok_or_else(not_a_model)?), "COUNT").ok_or_else(not_a_model)?;
+    let mut model = json!({"objective": local_refs(&objective), "goal": goal, "value": value, "variables": local_refs(&variables)});
+    let mut constraints = Vec::new();
+    let rest = rows.get(2..).unwrap_or(&[]);
+    for (i, row) in rest.iter().enumerate() {
+        let t = body(row);
+        if let Some(list) = t.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+            // The options: the last row.
+            if i + 1 != rest.len() {
+                return Err(not_a_model());
+            }
+            read_options_row(&mut model, list)?;
+            break;
+        }
+        constraints.push(json!(read_constraint_row(t)?));
+    }
+    model["constraints"] = json!(constraints);
+    Ok(model)
+}
+
+/// Integer Optimality as a percent from its stored fraction. The product is rounded to 1E-10 %,
+/// so a fraction such as 0.07 reads back as 7 and not 7.000000000000001.
+fn percent(fraction: f64) -> f64 {
+    let p = fraction * 100.0;
+    let rounded = (p * 1e10).round() / 1e10;
+    if rounded.is_finite() { rounded } else { p }
+}
+
+/// A number read from a hidden name as JSON: a whole number as an integer, so the Solver dialog
+/// shows 20000 and not 20000.0.
+fn number(v: f64) -> Json {
+    // Whole numbers below 2^53 are exact as integers.
+    if v.fract() == 0.0 && v.abs() < 9_007_199_254_740_992.0 { json!(v as i64) } else { json!(v) }
 }

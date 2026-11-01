@@ -3,8 +3,8 @@ use super::model::{Constraint, Goal, Method, Model, Rel, Rhs, parse_model, saved
 use super::problem::{Evaluator, Problem, as_num, build_problem};
 use super::sensitivity::{sensitivity_refusal, sensitivity_report};
 use super::{
-    Cell, CellRef, Ctx, DEFAULT_EVALS, DocState, EngineError, Json, MAX_EVALS, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad,
-    bool_param, edit, json, optimise, str_param,
+    Cell, CellRef, Ctx, DocState, EngineError, Json, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad, bool_param, edit, json,
+    optimise, str_param,
 };
 
 // ---------------------------------------------------------------- reports
@@ -417,11 +417,7 @@ pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let solution = point("values")?;
     let original = if p.get("original").is_some() { point("original")? } else { solution.clone() };
-    let budget = params
-        .get("maxEvaluations")
-        .and_then(Json::as_f64)
-        .filter(|v| v.is_finite() && *v >= 1.0)
-        .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
+    let budget = model.max_evals;
     let message = str_param(p, "message").unwrap_or("").chars().take(500).collect();
     let inp = ReportInput { model: &model, prob: &prob, original, solution, message, budget };
     let not_optimal = if bool_param(p, "skipNotOptimal").unwrap_or(false) { NotOptimal::Skip { optimum: true } } else { NotOptimal::Refuse };
