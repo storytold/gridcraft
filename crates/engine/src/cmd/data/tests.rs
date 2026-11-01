@@ -507,3 +507,28 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn autofilter_criteria_follow_their_columns_on_column_insert_and_delete() {
+    let offsets = |s: &Session| -> (String, Vec<u32>) {
+        let af = s.doc().unwrap().wb.active().unwrap().autofilter.clone().unwrap();
+        (af.range.a1(), af.criteria.iter().map(|(o, _)| *o).collect())
+    };
+    let setup = || {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b", "c"], [1, 2, "x"], [3, 4, "y"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:C3"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "C", "values": ["x"]})).unwrap();
+        s
+    };
+    let mut s = setup();
+    s.execute("home.insertColumns", json!({"cols": "B"})).unwrap();
+    assert_eq!(offsets(&s), ("A1:D3".to_string(), vec![3]));
+    let mut s = setup();
+    s.execute("home.deleteColumns", json!({"cols": "B"})).unwrap();
+    assert_eq!(offsets(&s), ("A1:B3".to_string(), vec![1]));
+    let mut s = setup();
+    s.execute("home.deleteColumns", json!({"cols": "C"})).unwrap();
+    assert_eq!(offsets(&s), ("A1:B3".to_string(), vec![]));
+}
