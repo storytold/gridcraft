@@ -100,7 +100,7 @@ impl<'a> PassHost<'a> {
     }
 }
 
-/// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
+/// Whether an array result at `k` can't spill: it is in a table (a one-value result is shown there, as in Excel), or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
 /// recalculated in this pass, and so may spill elsewhere now).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
@@ -116,7 +116,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
-        || sh.tables.iter().any(|t| t.range.contains(anchor))
+        || (a.data.len() > 1 && sh.tables.iter().any(|t| t.range.contains(anchor)))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
@@ -128,7 +128,7 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
         CellRef::new(anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)), anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)));
     RangeRef::new(anchor, end) == range
         && !sheet.merges.iter().any(|m| m.intersects(&range))
-        && !sheet.tables.iter().any(|t| t.range.contains(anchor))
+        && (arr.data.len() <= 1 || !sheet.tables.iter().any(|t| t.range.contains(anchor)))
         && range
             .iter()
             .enumerate()
@@ -525,8 +525,11 @@ impl Host for PassHost<'_> {
             }
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
-        // produced some): leave such blocks to `range_values`.
-        if self.spills.keys().any(|a| a.0 == sheet) || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c)) {
+        // produced some): leave such blocks to `range_values`. A one-value result (kept for `C4#`)
+        // fills only its anchor, a formula cell read above, so it doesn't count.
+        if self.spills.iter().any(|(a, arr)| a.0 == sheet && arr.data.len() > 1)
+            || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c))
+        {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
