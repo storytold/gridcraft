@@ -146,8 +146,13 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Merges cells into vertical runs per column (a compact multi-area selection).
-fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
+/// Go To Special's area cap: a result past it is refused before the selection changes, rather
+/// than truncated while the command still reports every match (#1295).
+const MAX_SPECIAL_AREAS: usize = 65_536;
+
+/// Merges cells into vertical runs per column (a compact multi-area selection), or `None` when
+/// the runs would outnumber [`MAX_SPECIAL_AREAS`].
+fn coalesce(cells: &[CellRef]) -> Option<Vec<RangeRef>> {
     let mut sorted = cells.to_vec();
     sorted.sort_by_key(|c| (c.col, c.row));
     let mut out: Vec<RangeRef> = Vec::new();
@@ -160,12 +165,12 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
             last.end.row = c.row;
             continue;
         }
+        if out.len() == MAX_SPECIAL_AREAS {
+            return None;
+        }
         out.push(RangeRef::cell(c));
     }
-    if out.len() > 2000 {
-        out.truncate(2000);
-    }
-    out
+    Some(out)
 }
 
 // ---------------------------------------------------------------- history
