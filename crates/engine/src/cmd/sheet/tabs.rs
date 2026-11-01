@@ -247,7 +247,7 @@ pub(super) fn unhide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     if p.get("sheet").is_none() {
-        let hidden: Vec<String> = s.doc()?.wb.sheets.iter().filter(|s| s.visibility != Visibility::Visible).map(|s| s.name.clone()).collect();
+        let hidden: Vec<String> = s.doc()?.wb.sheets.iter().filter(|s| s.visibility == Visibility::Hidden).map(|s| s.name.clone()).collect();
         if hidden.is_empty() {
             return Err(EngineError::Other("No sheets are hidden.".into()));
         }

@@ -93,6 +93,7 @@ mod selection_scroll;
 mod sheet_navigator;
 mod sheet_tab_rename;
 mod sheet_tabs;
+mod sheet_unhide;
 mod show_objects;
 mod shrink_to_fit;
 mod sort_dialog_columns;

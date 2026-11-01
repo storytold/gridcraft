@@ -2091,6 +2091,7 @@ dependencies = [
  "epaint_default_fonts",
  "gridcraft-chart",
  "gridcraft-engine",
+ "gridcraft-model",
  "gridcraft-xlsx",
  "image",
  "log",

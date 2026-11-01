@@ -35,6 +35,7 @@ zbus = "=5.19.0"
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 epaint_default_fonts = { workspace = true }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+gridcraft-model = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }

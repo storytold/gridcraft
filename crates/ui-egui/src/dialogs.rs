@@ -44,6 +44,7 @@ pub enum Field {
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
+    SheetPicker { key: &'static str, label: &'static str, options: Vec<String> },
     Check { key: &'static str, label: &'static str },
     Note(String),
 }
@@ -417,7 +418,7 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![SheetPicker { key: "sheet", label: "Unhide sheet:", options: opts.clone() }],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
