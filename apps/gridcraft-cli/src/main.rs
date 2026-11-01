@@ -35,16 +35,19 @@ use gridcraft_engine::Session;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
-  gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
-  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
+  gridcraft-cli info <file> [--json] [--refresh]          sheets, used ranges, tables, charts, names
+  gridcraft-cli convert <in> <out> [--sheet NAME] [--refresh]
+                                                          xlsx/csv/tsv/json/html/pdf by extension
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json] [--refresh]
+  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv] [--refresh]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--quiet] [--refresh]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
+  --refresh: refresh the file's saved web connections with \"refresh on open\" set (off
+                     without it; failures are warned on stderr, the command continues)
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
