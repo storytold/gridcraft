@@ -618,4 +618,26 @@ mod tests {
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
     }
+
+    /// A file can use the largest id and the one below it: nothing is free above them, so the free
+    /// ids are the lowest unused ones from 1 (0 is never an object's id), and a large request is
+    /// served in time linear in the count and the ids in use.
+    #[test]
+    fn free_object_ids_come_from_below_when_nothing_is_free_above() {
+        let mut wb = Workbook::new();
+        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.images.push(image(u32::MAX));
+            sh.images.push(image(u32::MAX - 1));
+            sh.images.push(image(0));
+        }
+        assert_eq!(wb.free_object_ids(3), vec![1, 2, 3]);
+        assert_eq!(wb.next_object_id(), 1);
+        // The 100,000 lowest free ids: distinct, ascending, none of them in use.
+        let many = wb.free_object_ids(100_000);
+        assert_eq!(many.len(), 100_000);
+        assert!(many.windows(2).all(|w| w[0] < w[1]), "ascending without repeats");
+        assert!(!many.contains(&0) && !many.contains(&(u32::MAX - 1)) && !many.contains(&u32::MAX));
+        assert_eq!(wb.free_object_ids(0), Vec::<u32>::new());
+    }
 }

@@ -293,3 +293,23 @@ fn bubble_sizes_follow_edits_like_the_other_series_references() {
     s.execute("sheet.rename", json!({"sheet": 0, "name": "Data"})).unwrap();
     assert_eq!(sizes(&s), "Data!$F$2:$F$4", "a renamed sheet is renamed in the bubble sizes");
 }
+
+/// A file can carry an object with the largest id. New objects and a copied sheet's objects then
+/// take free ids instead of the largest one again, so `{kind, id}` still names one object.
+#[test]
+fn object_ids_stay_unique_when_a_file_used_the_largest_id() {
+    let mut s = s();
+    let first = id_of(&s.execute("insert.shape", json!({"kind": "rectangle", "at": "B2"})).unwrap(), "shape");
+    // The file's shape carries the largest id (set on the model, as a loaded file would).
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().shapes.iter_mut().find(|o| o.id == first).unwrap().id = u32::MAX;
+    let second = id_of(&s.execute("insert.shape", json!({"kind": "ellipse", "at": "D2"})).unwrap(), "shape");
+    let third = id_of(&s.execute("insert.shape", json!({"kind": "triangle", "at": "F2"})).unwrap(), "shape");
+    assert!(second != u32::MAX && third != u32::MAX && second != third, "new shapes take free ids, not the largest again: {second}, {third}");
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| sh.shapes.iter().map(|o| o.id)).collect();
+    assert_eq!(ids.len(), 6);
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "every shape id is distinct across both sheets");
+}
