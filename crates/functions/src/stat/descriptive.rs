@@ -33,19 +33,40 @@ pub(super) fn var_p(x: &[f64]) -> R<f64> {
     Ok(devsq(x) / x.len() as f64)
 }
 
-fn sorted(mut v: Vec<f64>) -> Vec<f64> {
+pub(super) fn sorted(mut v: Vec<f64>) -> Vec<f64> {
     v.sort_by(f64::total_cmp);
     v
+}
+
+/// Sorts `v` if it is already monotone in `total_cmp` order (a descending slice is reversed) and
+/// says whether it did. At most two passes, each stopping at the first out-of-order pair, so
+/// unordered data costs next to nothing. Needed because the std sort recognises ascending and
+/// descending runs in O(n) with a small constant; selection is O(n) too but measured 1.2-1.8x
+/// slower on such input.
+fn sorted_if_monotone(v: &mut [f64]) -> bool {
+    if v.is_sorted_by(|a, b| a.total_cmp(b).is_le()) {
+        return true;
+    }
+    if v.is_sorted_by(|a, b| a.total_cmp(b).is_ge()) {
+        v.reverse();
+        return true;
+    }
+    false
 }
 
 pub(super) fn median(v: Vec<f64>) -> R<f64> {
     if v.is_empty() {
         return Err(CellError::Num);
     }
-    let s = sorted(v);
-    let n = s.len();
-    let hi = s.get(n / 2).copied().unwrap_or(0.0);
-    if n % 2 == 1 { Ok(hi) } else { Ok(s.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) }
+    let mut v = v;
+    let n = v.len();
+    if sorted_if_monotone(&mut v) {
+        let hi = v.get(n / 2).copied().unwrap_or(0.0);
+        return if n % 2 == 1 { Ok(hi) } else { Ok(v.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) };
+    }
+    let (lower, hi, _) = v.select_nth_unstable_by(n / 2, f64::total_cmp);
+    let hi = *hi;
+    if n % 2 == 1 { Ok(hi) } else { Ok(lower.iter().copied().max_by(f64::total_cmp).unwrap_or(0.0).midpoint(hi)) }
 }
 
 /// Values occurring at least twice, ordered by first occurrence, with their (equal, maximal) count.
@@ -111,34 +132,54 @@ pub(super) fn max_of(v: &[f64]) -> f64 {
 }
 
 /// k-th largest (k is rounded up like Excel).
-fn kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
+pub(super) fn kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
     let k = k.ceil();
     if k.is_nan() || k < 1.0 || k > v.len() as f64 {
         return Err(CellError::Num);
     }
-    let s = sorted(v);
+    let mut v = v;
     let k = k as usize;
-    let idx = if largest { s.len() - k } else { k - 1 };
-    s.get(idx).copied().ok_or(CellError::Num)
+    let idx = if largest { v.len() - k } else { k - 1 };
+    // Selection instead of a full sort (monotone input is read directly); same total order, so the
+    // same bit pattern as `sorted(v)[idx]`.
+    if sorted_if_monotone(&mut v) {
+        return v.get(idx).copied().ok_or(CellError::Num);
+    }
+    Ok(*v.select_nth_unstable_by(idx, f64::total_cmp).1)
 }
 
-fn interp(s: &[f64], pos: f64) -> R<f64> {
+/// Value at fractional rank `pos` of the sorted data, linearly interpolated, found by selection.
+fn interp(mut v: Vec<f64>, pos: f64) -> R<f64> {
     let i = pos.floor();
     let frac = pos - i;
     let i = i as usize;
-    let lo = *s.get(i).ok_or(CellError::Num)?;
-    match s.get(i + 1) {
-        Some(hi) if frac > 0.0 => Ok(lo + frac * (hi - lo)),
-        _ => Ok(lo),
+    if i >= v.len() {
+        return Err(CellError::Num);
     }
+    if sorted_if_monotone(&mut v) {
+        let lo = v.get(i).copied().ok_or(CellError::Num)?;
+        return match v.get(i + 1) {
+            Some(hi) if frac > 0.0 => Ok(lo + frac * (hi - lo)),
+            _ => Ok(lo),
+        };
+    }
+    let (_, lo, upper) = v.select_nth_unstable_by(i, f64::total_cmp);
+    let lo = *lo;
+    // The next order statistic is the minimum of the upper partition.
+    if frac > 0.0
+        && let Some(hi) = upper.iter().copied().min_by(f64::total_cmp)
+    {
+        return Ok(lo + frac * (hi - lo));
+    }
+    Ok(lo)
 }
 
 pub(super) fn percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
     if v.is_empty() || !(0.0..=1.0).contains(&k) {
         return Err(CellError::Num);
     }
-    let s = sorted(v);
-    interp(&s, k * (s.len() - 1) as f64)
+    let pos = k * (v.len() - 1) as f64;
+    interp(v, pos)
 }
 
 pub(super) fn percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
@@ -150,8 +191,7 @@ pub(super) fn percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
     if pos < 1.0 || pos > n {
         return Err(CellError::Num);
     }
-    let s = sorted(v);
-    interp(&s, pos - 1.0)
+    interp(v, pos - 1.0)
 }
 
 pub(super) fn quartile_inc(v: Vec<f64>, q: f64) -> R<f64> {
