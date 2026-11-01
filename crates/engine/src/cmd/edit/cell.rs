@@ -16,7 +16,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { value: gridcraft_core::cap_value(Value::text(input)), formula: None, style }));
     }
     let is_formula = input.starts_with('=')
         || (input.len() > 1
@@ -53,6 +53,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(cell));
     }
     let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    // Excel cuts typed text to 32,767 characters (after any leading apostrophe is dropped).
+    parsed.value = gridcraft_core::cap_value(parsed.value);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -227,7 +229,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                             style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                         }
-                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
+                        Some(Cell { value: gridcraft_core::cap_value(Value::Text(text.as_str().into())), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };

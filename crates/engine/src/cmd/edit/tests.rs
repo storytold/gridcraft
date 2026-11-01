@@ -127,6 +127,25 @@ fn go_to_keeps_the_references_entered_newest_first() {
 }
 
 #[test]
+fn cell_set_cuts_text_to_32767_characters() {
+    // Excel cuts a 40,000-character entry to 32,767; a formula is left alone.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "é".repeat(40_000)})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=LEN(A1)"})).unwrap();
+    // An apostrophe prefix isn't text, and a text-formatted cell takes `=` as text.
+    s.execute("cell.set", json!({"cell": "B1", "input": format!("'{}", "x".repeat(40_000))})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1", "code": "@"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": format!("={}", "x".repeat(40_000))})).unwrap();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+    for at in ["B1", "C1"] {
+        assert_eq!(get(&mut s, at).as_str().map(|t| t.chars().count()), Some(32_767), "{at}");
+    }
+    assert_eq!(get(&mut s, "A1").as_str().map(|t| t.chars().count()), Some(32_767));
+    assert_eq!(get(&mut s, "A2"), json!(32767.0));
+}
+
+#[test]
 fn cell_set_takes_numbers_for_input_and_value() {
     // #697: a JSON number for `input` used to clear the cell instead of entering it.
     let mut s = Session::new();
@@ -186,6 +205,11 @@ fn set_values_can_store_strings_as_the_text_they_are() {
     assert!(s.execute("range.setValues", json!({"range": "A8", "parse": 0, "values": [["x"]]})).is_err());
     // A line break still turns on Wrap Text.
     s.execute("range.setValues", json!({"range": "A9", "parse": false, "values": [["one\ntwo"]]})).unwrap();
+    // Text stored as given still stops at Excel's 32,767-character cell limit.
+    let long = "x".repeat(40_000);
+    s.execute("range.setValues", json!({"range": "A10", "parse": false, "values": [[long]]})).unwrap();
+    let len = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A10").unwrap()).map(|c| c.value.as_text().map(|t| t.chars().count()));
+    assert_eq!(len.flatten(), Some(32_767));
     assert_eq!(get(&mut s, "A9")["value"], json!("one\ntwo"));
     let d = s.doc().unwrap();
     let sh = d.wb.active().unwrap();
