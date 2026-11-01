@@ -105,7 +105,7 @@ fn every_trendline_kind_round_trips_in_every_chart_group() {
 fn chart_parts(bytes: &[u8]) -> Vec<String> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     let mut names: Vec<String> =
-        (0..z.len()).map(|i| z.name_for_index(i).unwrap().to_string()).filter(|n| n.starts_with("xl/charts/chart")).collect();
+        (0..z.len()).map(|i| z.name_for_index(i).unwrap().unwrap().to_string()).filter(|n| n.starts_with("xl/charts/chart")).collect();
     names.sort();
     names
         .iter()
