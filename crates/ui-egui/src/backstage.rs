@@ -367,12 +367,27 @@ fn split_path(path: &str) -> (String, String) {
 /// Width of the column that tells when a recent workbook was last changed.
 const MODIFIED_W: f32 = 150.0;
 
+fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui) {
+    let Some((label, resources)) = app.services.file_providers.as_ref().and_then(|host| host.recent_entries()) else { return };
+    let lang = app.ui.language;
+    let t = Tokens::get(ui.ctx());
+    section(ui, lang, &format!("{} — {label}", lang.tr("Recent")));
+    if resources.is_empty() {
+        dim(ui, lang.tr("No recent provider files."));
+    }
+    for resource in resources {
+        if ui.button(RichText::new(&resource.name).color(t.text)).on_hover_text(&resource.updated_at).clicked() {
+            app.run_or_alert("file.openProviderResource", json!({"resource":resource.id}));
+        }
+    }
+    ui.separator();
+    dim(ui, lang.tr("Recent on this device"));
+}
+
 /// Recent workbooks, newest first, each with when it was last changed. Opening one is the user's
 /// explicit choice.
 fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize) {
-    if let Some(host) = &app.services.file_providers {
-        host.recent_ui(ui);
-    }
+    provider_recent_list(app, ui);
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     if app.ui.recent.is_empty() {

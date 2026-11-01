@@ -53,10 +53,18 @@ Never reuse an account namespace for a different account.
    `download` is a terminal fallback result that does not acknowledge provider persistence.
    These outcomes keep unsaved work open. A serialization/filename rejection emits `saveFailed`.
 
-A device choice uses the browser's local download service. A device copy of a provider-bound
-project does not acknowledge provider persistence or replace that binding. As with the normal
-browser fallback, accepting a download does not prove the browser wrote it to physical disk.
+A device choice uses the browser's local download service. Accepting that service only starts
+the picker or download: it never marks a workbook clean, including a workbook not yet bound to
+a provider. It does not replace an existing provider binding. A later picker cancellation or
+write failure cannot acknowledge persistence; the editor keeps the unsaved-changes signal.
 Exports remain local copies and never mark a provider project saved.
+
+Provider Recent rows use the UI command `file.openProviderResource` with `{ "resource": id }`.
+The control channel exposes it through `engine.execute` and lists its current enablement in
+`engine.commands`; the CLI's `send` and MCP/control clients can use that same route. It queues
+the existing account-scoped `openRequest`, opens no local dialog and accepts no filesystem path.
+The host still supplies bytes for that request. Refused clicks use the normal persistent alert
+UI, while the Backstage panel owns the theme and the separate provider/device sections.
 
 Supported Save packages: **XLSX, XLSM and native JSON**.
 

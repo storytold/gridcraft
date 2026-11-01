@@ -423,26 +423,11 @@ impl Host {
             "resources":s.resources, "documents":s.documents, "pending":s.busy()})
     }
 
-    /// Native Home/Open view, separate from paths belonging to this device.
-    pub(crate) fn recent_ui(&self, ui: &mut egui::Ui) {
-        let (label, resources) = {
-            let s = self.state();
-            let Some(identity) = s.identity.as_ref().filter(|_| s.enabled) else { return };
-            (identity.label.clone(), s.resources.clone())
-        };
-        ui.heading(format!("Recent — {label}"));
-        if resources.is_empty() {
-            ui.weak("No recent provider files.");
-        }
-        for resource in resources {
-            if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked()
-                && let Err(error) = self.request_open(&resource.id)
-            {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-        }
-        ui.separator();
-        ui.weak("Recent on this device");
+    /// Read-only account-scoped rows; the app owns rendering, commands and persistent feedback.
+    pub(crate) fn recent_entries(&self) -> Option<(String, Vec<Resource>)> {
+        let s = self.state();
+        let identity = s.identity.as_ref().filter(|_| s.enabled)?;
+        Some((identity.label.clone(), s.resources.clone()))
     }
 }
 

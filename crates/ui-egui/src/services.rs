@@ -13,6 +13,7 @@ pub struct Services {
     /// Trusted host capability, disconnected and inactive by default.
     pub file_providers: Option<crate::file_providers::Host>,
     /// Device copies bypass provider persistence and the optional legacy parent-frame writer.
+    /// `Ok(())` means download started, not that a picker or asynchronous write completed.
     pub provider_download: Option<ProviderDownload>,
     /// Desktop: discover configured printers on a worker.
     pub printers: Option<printing::Discover>,

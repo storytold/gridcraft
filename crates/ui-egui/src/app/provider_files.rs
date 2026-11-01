@@ -1,13 +1,22 @@
-//! Optional provider saves are UI operations; engine and control-channel calls stay local.
+//! Optional provider persistence is UI state; ordinary engine file commands stay local.
 
 use crate::file_providers::{Capture, Command, Host};
 use crate::{SheetApp, json};
 
 impl SheetApp {
+    pub(super) fn open_provider_resource(&self, params: &crate::Json) -> Result<crate::Json, String> {
+        let resource = params.get("resource").and_then(crate::Json::as_str).ok_or("Missing provider resource ID")?;
+        let host = self.services.file_providers.as_ref().ok_or("No file provider is configured")?;
+        let request = host.request_open(resource)?;
+        Ok(json!({"pending":"fileProvider","requestId":request}))
+    }
+
     pub(crate) fn choose_provider_save(&mut self, save_as: bool) -> bool {
         let Some(host) = self.services.file_providers.clone().filter(|host| host.enabled()) else { return false };
         if let Err(error) = self.settle_drafts() {
-            self.alert(error);
+            if !self.message.as_ref().is_some_and(|(_, message)| *message == error) {
+                self.alert(error);
+            }
             return true;
         }
         self.store_view_state();
@@ -89,7 +98,7 @@ impl SheetApp {
                     self.alert(error);
                 }
             }
-            Ok((revision, bytes)) => {
+            Ok((_, bytes)) => {
                 let result = self
                     .services
                     .provider_download
@@ -98,11 +107,9 @@ impl SheetApp {
                     .and_then(|download| download(&name, &bytes));
                 match result {
                     Ok(()) => {
-                        if !host.bound(doc) {
-                            self.provider_mark_saved(doc, revision);
-                        }
+                        // The browser accepted the download; its picker/write can still fail.
                         host.finish_device(&request);
-                        self.toast = Some((format!("Downloaded {name}"), crate::now_ms()));
+                        self.toast = Some((format!("Download started for {name}"), crate::now_ms()));
                     }
                     Err(error) => {
                         host.failed(&request, &error);
@@ -269,5 +276,126 @@ mod tests {
         assert!(app.session.active().unwrap().is_dirty());
         assert_eq!(app.editor.as_ref().unwrap().text, "After capture");
         assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+    }
+
+    #[test]
+    fn refused_provider_save_keeps_the_validation_rules_title_and_draft() {
+        let (mut app, host) = app();
+        app.follow_active_window();
+        app.session
+            .run(
+                "data.validation",
+                json!({"range":"A1","type":"whole","operator":"between","formula1":"1","formula2":"2",
+                    "errorStyle":"stop","errorTitle":"Quantity rule","errorMessage":"Use one or two"}),
+            )
+            .unwrap();
+        app.begin_edit(Some("9".into()), false);
+        assert!(app.choose_provider_save(false));
+        assert_eq!(app.message, Some(("Quantity rule".into(), "Use one or two".into())));
+        assert_eq!(app.editor.as_ref().unwrap().text, "9");
+        assert!(host.take_events().is_empty(), "a refused draft must not start a save chooser");
+    }
+
+    #[test]
+    fn a_started_or_failed_device_download_never_acknowledges_workbook_persistence() {
+        for bound in [false, true] {
+            for accepted in [false, true] {
+                let (mut app, host) = app();
+                if bound {
+                    let (request, _) = save(&mut app, &host);
+                    host.result(request, "saved".into(), "stored-workbook".into()).unwrap();
+                    app.provider_tick();
+                    app.session.run("cell.set", json!({"cell":"B2","input":"Later edit"})).unwrap();
+                }
+                let delivered = std::rc::Rc::new(std::cell::Cell::new(false));
+                let observed = delivered.clone();
+                app.services.provider_download = Some(Box::new(move |_, bytes| {
+                    assert!(!bytes.is_empty());
+                    observed.set(true);
+                    if accepted { Ok(()) } else { Err("The download was refused".into()) }
+                }));
+                assert!(app.choose_provider_save(false));
+                let dialog = host.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
+                let request = dialog.metadata["requestId"].as_str().unwrap();
+                host.resolve_dialog(request, "device", "Device.xlsx").unwrap();
+                app.provider_tick();
+                let doc = app.session.active().unwrap();
+                assert!(delivered.get());
+                assert!(doc.is_dirty(), "starting a picker or fallback is not a durable write");
+                assert_eq!(host.bound(doc.uid), bound);
+                assert!(!host.pending_for(doc.uid));
+                assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+            }
+        }
+    }
+
+    fn resource_list(host: &Host) {
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "recent-book".into(), name: "Recent.xlsx".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn provider_recent_open_is_discoverable_and_reachable_through_the_control_command() {
+        let (mut app, host) = app();
+        resource_list(&host);
+        let ctx = egui::Context::default();
+        let discovery = crate::control::handle(&mut app, &ctx, "engine.commands", &json!({"search":"openProviderResource"}));
+        let crate::control::Outcome::Done(commands) = discovery else {
+            panic!("command discovery must be synchronous");
+        };
+        assert!(commands["result"].as_array().unwrap().iter().any(|entry| entry["id"] == "file.openProviderResource" && entry["enabled"] == true));
+        let crate::control::Outcome::Done(open) = crate::control::handle(
+            &mut app,
+            &ctx,
+            "engine.execute",
+            &json!({"command":"file.openProviderResource","params":{"resource":"recent-book"}}),
+        ) else {
+            panic!("opening a provider resource queues a host read, not a screenshot");
+        };
+        assert_eq!(open["ok"], true);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "openRequest");
+        assert_eq!(events[0].metadata["resourceId"], "recent-book");
+        assert_eq!(events[0].metadata["requestId"], open["result"]["requestId"]);
+        assert_eq!(events[0].metadata["namespace"], "account");
+        assert!(app.run("file.openProviderResource", json!({"resource":"forged"})).is_err());
+        assert!(host.take_events().is_empty());
+    }
+
+    #[test]
+    fn refused_provider_recent_open_uses_persistent_message_feedback() {
+        let (mut app, host) = app();
+        resource_list(&host);
+        for _ in 0..16 {
+            host.request_open("recent-book").unwrap();
+        }
+        host.take_events();
+        app.run_or_alert("file.openProviderResource", json!({"resource":"recent-book"}));
+        let message = app.message.clone().expect("the refusal must be visible after the click frame");
+        assert!(message.1.contains("too many pending provider reads"));
+        app.provider_tick();
+        assert_eq!(app.message, Some(message));
+        assert!(host.take_events().is_empty());
+    }
+
+    #[test]
+    fn disabled_provider_rows_and_command_stay_inactive() {
+        let (mut app, host) = app();
+        resource_list(&host);
+        assert_eq!(host.recent_entries().unwrap().1[0].id, "recent-book");
+        host.set_enabled(false).unwrap();
+        assert!(host.recent_entries().is_none());
+        let discovery = crate::control::handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search":"openProviderResource"}));
+        let crate::control::Outcome::Done(commands) = discovery else {
+            panic!("command discovery must be synchronous");
+        };
+        assert!(commands["result"].as_array().unwrap().iter().any(|entry| entry["id"] == "file.openProviderResource" && entry["enabled"] == false));
+        assert!(app.run("file.openProviderResource", json!({"resource":"recent-book"})).is_err());
+        assert!(host.take_events().is_empty());
     }
 }
