@@ -3,6 +3,11 @@ use super::{
     block, bool_param, edit, json, rewrite, shift_cell_features, str_param, target_range, target_sheet, with,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- tables
 
 pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {

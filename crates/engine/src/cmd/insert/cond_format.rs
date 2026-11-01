@@ -3,6 +3,11 @@ use super::{
     ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet, u32_param,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- conditional formatting
 
 fn preset_style(name: &str) -> Style {
