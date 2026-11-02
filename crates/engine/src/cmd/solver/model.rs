@@ -166,14 +166,30 @@ fn num_text(t: &str) -> Option<f64> {
     gridcraft_core::parse::parse_number_text(t.trim()).filter(|v| v.is_finite())
 }
 
-/// Splits `"B5 <= 10"` / `"B2 int"` into (lhs, relation, rhs).
+/// `t` split at the first `pat` outside quoted sheet names: `'A<=B'!$C$1 <= 5` splits at the
+/// second `<=`. A doubled quote inside a name (`'O''Brien<=1'!A1`) toggles the quoted state
+/// twice, as in [`split_areas`], so it doesn't end the name.
+fn split_unquoted<'a>(t: &'a str, pat: &str) -> Option<(&'a str, &'a str)> {
+    let mut quoted = false;
+    for (i, c) in t.char_indices() {
+        if c == '\'' {
+            quoted = !quoted;
+        } else if !quoted && t.get(i..).is_some_and(|rest| rest.starts_with(pat)) {
+            return Some((t.get(..i)?, t.get(i.saturating_add(pat.len())..)?));
+        }
+    }
+    None
+}
+
+/// Splits `"B5 <= 10"` / `"B2 int"` into (lhs, relation, rhs). A relation's characters inside
+/// a quoted sheet name (`'A<=B'!$C$1 <= 5`) are part of the name.
 fn split_constraint(t: &str) -> Option<(String, Rel, String)> {
     for op in ["<=", ">=", "=<", "=>", "≤", "≥", "=="] {
-        if let Some((a, b)) = t.split_once(op) {
+        if let Some((a, b)) = split_unquoted(t, op) {
             return Some((a.trim().into(), Rel::parse(op)?, b.trim().into()));
         }
     }
-    if let Some((a, b)) = t.split_once('=') {
+    if let Some((a, b)) = split_unquoted(t, "=") {
         return Some((a.trim().into(), Rel::Eq, b.trim().into()));
     }
     let lower = t.trim().to_ascii_lowercase();
@@ -673,13 +689,13 @@ fn read_options_row(model: &mut Json, list: &str) -> Result<()> {
 /// One constraint row of Save Model (`AND(relation)`) as a `data.solver` constraint.
 fn read_constraint_row(t: String) -> Result<String> {
     let t = call_args(&t, "AND").unwrap_or(t);
-    if let Some((x, y)) = t.split_once("=INT(").or_else(|| t.split_once("=int(")) {
+    if let Some((x, y)) = split_unquoted(&t, "=INT(").or_else(|| split_unquoted(&t, "=int(")) {
         if y.strip_suffix(')') != Some(x) {
             return Err(not_a_model());
         }
         return Ok(format!("{} int", local_refs(x)));
     }
-    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| x.split_once("=0)+(")).filter(|(a, b)| a == b) {
+    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| split_unquoted(x, "=0)+(")).filter(|(a, b)| a == b) {
         return Ok(format!("{} bin", local_refs(x.0)));
     }
     let (l, rel, r) = split_constraint(&t).ok_or_else(not_a_model)?;
@@ -701,7 +717,7 @@ pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
     } else if let Some(o) = call_args(&first, "MIN") {
         ("min", o, 0.0)
     } else {
-        let (o, v) = first.split_once('=').ok_or_else(not_a_model)?;
+        let (o, v) = split_unquoted(&first, "=").ok_or_else(not_a_model)?;
         ("value", o.to_string(), num_text(v).ok_or_else(not_a_model)?)
     };
     let variables = call_args(&body(rows.get(1).ok_or_else(not_a_model)?), "COUNT").ok_or_else(not_a_model)?;
