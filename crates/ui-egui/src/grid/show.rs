@@ -1,4 +1,3 @@
-#[cfg(test)]
 use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
@@ -358,7 +357,9 @@ fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoo
         let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
+        let from = Trace::key(app);
         let _ = app.session.run("view.zoom", json!({"percent": z}));
+        Trace::keep_through_zoom(app, from);
         zooming.glide = (z != to).then_some((to, z));
         ui.ctx().request_repaint();
     }
@@ -944,5 +945,26 @@ mod trace_arrow_tests {
         let revisions: Vec<u64> = app.session.documents().iter().map(|d| d.revision).collect();
         assert_eq!(revisions[0], revisions[1]);
         assert!(arrows(&mut app).1.is_empty(), "Book1's arrows are not drawn on Book2");
+    }
+
+    #[test]
+    fn precedent_arrows_stay_through_a_zoom() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        app.run("view.zoom", json!({"percent": 75})).unwrap();
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines, [(center(&app, &geo, "B2"), center(&app, &geo, "F7"))], "#3097");
+        // Zooming another sheet leaves them too, and they are back on returning to their sheet.
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        app.run("view.zoom", json!({"percent": 200})).unwrap();
+        assert!(arrows(&mut app).1.is_empty());
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines, [(center(&app, &geo, "B2"), center(&app, &geo, "F7"))]);
     }
 }
