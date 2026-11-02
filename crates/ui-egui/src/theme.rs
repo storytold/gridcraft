@@ -117,6 +117,10 @@ pub struct Tokens {
     /// The ovals Data › Data Validation › Circle Invalid Data draws around invalid cells. A sheet
     /// colour.
     pub sheet_invalid_circle: Color32,
+    /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
+    /// between cells showing an error. Sheet colours.
+    pub sheet_trace_arrow: Color32,
+    pub sheet_trace_error: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -151,6 +155,9 @@ const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
 const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
 /// Circle Invalid Data's ovals, the same in both themes (the sheet stays white).
 const SHEET_INVALID_CIRCLE: Color32 = rgb(0xE0201B);
+/// Trace arrows on the sheet, the same in both themes.
+const SHEET_TRACE_ARROW: Color32 = rgb(0x1F5FC9);
+const SHEET_TRACE_ERROR: Color32 = rgb(0xD13438);
 
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -250,6 +257,8 @@ impl Tokens {
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
             sheet_invalid_circle: SHEET_INVALID_CIRCLE,
+            sheet_trace_arrow: SHEET_TRACE_ARROW,
+            sheet_trace_error: SHEET_TRACE_ERROR,
         }
     }
 
@@ -402,6 +411,8 @@ mod contrast_tests {
             add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
         }
         add("validation circle on sheet", t.sheet_invalid_circle, t.grid_bg, GLYPH);
+        add("trace arrow on sheet", t.sheet_trace_arrow, t.grid_bg, GLYPH);
+        add("trace error arrow on sheet", t.sheet_trace_error, t.grid_bg, GLYPH);
         // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
         add("breakpoint on window", t.breakpoint, t.window, GLYPH);
         add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
@@ -447,6 +458,7 @@ mod contrast_tests {
             (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
         );
         assert_eq!(l.sheet_invalid_circle, d.sheet_invalid_circle);
+        assert_eq!((l.sheet_trace_arrow, l.sheet_trace_error), (d.sheet_trace_arrow, d.sheet_trace_error));
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
         }
