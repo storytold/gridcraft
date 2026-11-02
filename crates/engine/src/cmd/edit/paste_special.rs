@@ -73,7 +73,8 @@ fn copy_merges(
 }
 
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
+    let clip = super::clipboard::paste_source(s, p)?;
+    let external = clip.doc_uid == 0;
     let what = match str_param(p, "what").unwrap_or("all") {
         "all" => What::All,
         "formulas" => What::Formulas,
@@ -91,6 +92,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let skip_blanks = bool_param(p, "skipBlanks").unwrap_or(false);
     let transpose = bool_param(p, "transpose").unwrap_or(false);
     let link = bool_param(p, "link").unwrap_or(false);
+    if link && external {
+        return Err(EngineError::Other("Paste Link needs cells copied in GridCraft; text from another app can't be linked.".into()));
+    }
     if link && !clip.areas.is_empty() {
         return Err(EngineError::Other("This action won't work on multiple selections.".into()));
     }
@@ -241,8 +245,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     apply_operation(&op, &old, &mut new);
                 }
             }
-            // The copied cell's validation rule replaces whatever rule the destination had.
-            if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
+            // The copied cell's validation rule replaces whatever rule the destination had. Text
+            // from another app has no rules and leaves the destination's, as typing does.
+            if !link && !external && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
                 let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
                 let sh = cx.sheet_mut(dest_sheet)?;
                 crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);

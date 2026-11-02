@@ -5,7 +5,7 @@ use gridcraft_model::{Cell, Formula, StyleId};
 use serde_json::{Value as Json, json};
 
 use super::{
-    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_clipboard, has_doc,
+    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_doc,
     locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
 };
 use crate::selection::{current_region, jump};
@@ -86,8 +86,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Special…",
             ["Home", "Clipboard"],
             Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-            has_clipboard,
+            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?, at?, text?: \"tab-separated text from the system clipboard, pasted when it isn't GridCraft's own copy\", html?: \"its HTML flavour\"}",
+            has_doc,
             paste_special
         ),
         cmd!(noundo "edit.clearClipboard", "Cancel Copy", [], Some("Escape"), "{}", has_doc, clear_clipboard),
