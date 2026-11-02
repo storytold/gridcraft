@@ -38,10 +38,17 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
 }
 
 /// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
+/// When the rule's top-left cell goes, its relative formulas are rewritten for the new top-left
+/// cell, so the cells left keep checking the same cells.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
     for dv in validations.iter_mut() {
+        let before = RangeRef::top_left(&dv.ranges);
         for cut in cuts {
             dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        }
+        if let (Some(from), Some(to)) = (before, RangeRef::top_left(&dv.ranges)) {
+            dv.f1 = move_rule_formula(&dv.f1, from, to);
+            dv.f2 = dv.f2.take().map(|f| move_rule_formula(&f, from, to));
         }
     }
     validations.retain(|d| !d.ranges.is_empty());
