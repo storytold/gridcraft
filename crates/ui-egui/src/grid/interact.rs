@@ -109,10 +109,14 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
-    // button resets it. Runs before the generic object select/drag so tiles stay clickable.
+    // button resets it. Runs before the generic object select/drag so tiles stay clickable, but
+    // only when the slicer is what the press lands on: a form control over a tile (Ctrl or
+    // Cmd+clicked, or clicked while selected, so `form_controls::interact` left the click) and a
+    // selected object's handle keep the generic path, which selects, moves or resizes them.
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
+        && object_under(app, geo, sh, p).is_some_and(|(o, _, handle)| o.kind == ObjKind::Slicer && handle.is_none())
         && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
@@ -135,10 +139,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
-        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
-        let handle = on_handle.map(|(.., h)| h);
+        let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
-            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
+            && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
@@ -542,6 +546,15 @@ fn handle_cell_double_click(app: &mut SheetApp, input: &InteractionInput<'_>, c:
         return true;
     }
     false
+}
+
+/// What a press at `p` lands on, for slicer tiles and the generic object handling alike, so the
+/// z-order decides once: the selected object's handle (handles reach a little past the frame and
+/// win over hit-testing), else the topmost object under `p` and its rect.
+fn object_under(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, Option<crate::objects::Handle>)> {
+    crate::chartview::selected_handle(app, geo, sh, p)
+        .map(|(o, r, h)| (o, r, Some(h)))
+        .or_else(|| crate::chartview::hit(app, geo, sh, p).map(|(o, r)| (o, r, None)))
 }
 
 fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput<'_>) {
