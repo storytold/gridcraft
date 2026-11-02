@@ -18,11 +18,7 @@ impl SheetApp {
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let mut params = params;
-        if id == "home.borders"
-            && params.as_object().is_some()
-            && params.get("color").is_none()
-            && params.get("preset").is_some()
-        {
+        if id == "home.borders" && params.as_object().is_some() && params.get("color").is_none() && params.get("preset").is_some() {
             params["color"] = json!(self.grid.last_border_color.clone());
         }
         let switches_window = id.starts_with("window.")
