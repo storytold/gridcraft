@@ -171,7 +171,8 @@ pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sh
 /// workbook back, so no empty sheet or half-written table is left behind.
 fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool, occurrence: usize) -> Result<Json> {
     let rows = json_rows(table);
-    if rows.is_empty() {
+    let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
+    if rows.is_empty() || w == 0 {
         return Err(EngineError::Other("The table is empty.".into()));
     }
     s.execute("home.insertSheet", json!({"name": sheet_name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
@@ -179,7 +180,6 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
     let sheet = r.wb.active_sheet.get();
     let sheet_name = r.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
     s.execute("range.setValues", json!({"range": "A1", "sheet": sheet, "values": rows}))?;
-    let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
     let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(table.rows.len() as u32 - 1, w as u32 - 1));
     // The table takes the page table's name (spaces and other characters a table name cannot
     // hold become `_`); a taken name gets a generated one, and the connection saves the name
@@ -274,7 +274,7 @@ fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
                 .map(|c| {
                     if c.is_empty() {
                         Json::Null
-                    } else if would_be_formula(c) {
+                    } else if needs_text_escape(c) {
                         json!(format!("'{c}"))
                     } else {
                         json!(c)
@@ -285,11 +285,13 @@ fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
         .collect()
 }
 
-/// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
-/// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
-/// `input_to_cell` (cmd/edit.rs).
-fn would_be_formula(c: &str) -> bool {
+/// True when typed-input parsing would change `c` into something else: `=` starts a
+/// formula, a leading `'` is the text marker (its removal would make `'90s` import as
+/// `90s`), and `+`/`-`/`@` only in the forms that start one (a plain `-5` stays the number
+/// it is). Mirrors the check in `input_to_cell` (cmd/edit.rs).
+fn needs_text_escape(c: &str) -> bool {
     c.starts_with('=')
+        || c.starts_with('\'')
         || (c.len() > 1
             && c.starts_with(['+', '-', '@'])
             && gridcraft_core::parse::parse_number_text(c).is_none()
@@ -415,10 +417,10 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         return Err(EngineError::Other(format!("The sheet or table of the connection `{}` is gone.", q.name)));
     };
     let rows = json_rows(table);
-    if rows.is_empty() {
+    let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
+    if rows.is_empty() || w == 0 {
         return Err(EngineError::Other("The table is empty.".into()));
     }
-    let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
     // The fetched header names, as the edit below spells them.
     let page_headers: Vec<String> = (0..w)
         .map(|i| {
@@ -1517,5 +1519,22 @@ mod tests {
             .unwrap();
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "B");
+    }
+#[test]
+    /// Page text that begins with an apostrophe imports with the apostrophe: typed input
+    /// would read `'` as its text marker and store `90s` for a page cell of `'90s`, which
+    /// no longer matches the page. The escape doubles the marker, and parsing takes one off.
+    fn a_leading_apostrophe_survives_the_import() {
+        let mut s = session_with_source();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Note</th></tr><tr><td>'90s</td><td>=SUM(1)</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        assert_eq!(a1(&s, "A2"), "'90s", "the apostrophe is stored, not stripped");
+        assert_eq!(a1(&s, "B2"), "=SUM(1)", "the formula-looking text is stored as text");
     }
 }

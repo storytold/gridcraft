@@ -449,8 +449,8 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
     let x = crate::xml::parse(data).ok()?;
-    let mut id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0) + 1;
-    for q in &wb.web_queries {
+    let first_id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0) + 1;
+    for (id, q) in (first_id..).zip(&wb.web_queries) {
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
         let tid = q.table_id.unwrap_or(0);
         let synced = q.last_synced.unwrap_or(0);
@@ -465,7 +465,6 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
             crate::xml::esc_attr(&q.sheet),
             tid,
             synced);
-        id += 1;
     }
     w.push_str("</connections>");
     Some(w)

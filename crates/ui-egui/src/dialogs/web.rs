@@ -210,12 +210,16 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
 pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     let mut url = get("url");
+    // Enter in the URL field was Go; the same key press must not also be Load (the OK button
+    // handler checks the raw key, not its own focus).
+    let mut went = false;
     egui::Grid::new("fw").show(ui, |ui| {
         ui.label("URL:");
         let field = ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).hint_text("https://example.com/table.html"));
         // Enter in the field is Go: Excel's dialog submits on it, and a user pasting a URL
         // should not have to reach for the button.
         if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !url.trim().is_empty() {
+            went = true;
             d.values.insert("url".into(), json!(url.trim()));
             d.values.insert("preview_url".into(), json!(url.trim()));
             d.values.insert("tables".into(), Json::Null);
@@ -291,6 +295,10 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
     d.values.insert("url".into(), json!(url.clone()));
     let mut load = true;
     ok_cancel(ui, confirm, &mut load);
+    // Enter in the URL field was Go; the same key press must not also be Load.
+    if went {
+        *confirm = false;
+    }
     if *confirm && url.trim().is_empty() {
         // OK with no address: stay open and say so, instead of closing with nothing.
         app.message = Some(("From Web".into(), "Enter an https:// address first.".into()));
