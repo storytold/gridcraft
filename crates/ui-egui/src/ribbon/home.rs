@@ -893,10 +893,10 @@ mod popup_open_flag_tests {
 
         ctx.data_mut(|d| d.insert_temp(id, true));
         assert!(consume_border_line_color_open(&ctx, id, false));
-        assert_eq!(ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false), false);
+        assert!(!ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false));
         assert!(!consume_border_line_color_open(&ctx, id, false));
 
         assert!(consume_border_line_color_open(&ctx, id, true));
-        assert_eq!(ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false), false);
+        assert!(!ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false));
     }
 }
