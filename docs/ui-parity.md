@@ -185,7 +185,9 @@ that opens another dialog over it, and a scripted `ui.dialog.cancel` put the she
 from before picking back; OK (and `ui.dialog.confirm`, for a dialog whose OK runs a command;
 Goal Seek presses its own OK and is scripted with `data.goalSeek`) puts them back before its
 command runs and then stays where the command leaves things, so a Data Analysis report written
-to a new sheet stays in view. A text-box draft left open on the sheet picked on is saved before
+to a new sheet stays in view. Solver's Reset All, Load, Save and Replace go back the same way
+before they run, since they act on the dialog's sheet, and are refused like OK once that sheet
+was deleted. A text-box draft left open on the sheet picked on is saved before
 the sheet changes, as any sheet switch saves it; when it cannot be saved (a script showed
 another sheet meanwhile), OK does not run its command and the dialog stays open with the
 reason, while Cancel still closes the dialog, shows the reason and leaves the draft and the

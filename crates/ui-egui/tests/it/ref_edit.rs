@@ -1451,3 +1451,101 @@ fn a_copy_of_the_dialogs_sheet_is_not_the_dialogs_sheet_once_the_original_is_del
     assert_eq!(wb.sheets[1].value(CellRef::parse("B2").unwrap()).as_f64(), Some(1.0), "the copy is untouched");
     assert_eq!(selection(&h), (0, "B5".into()));
 }
+
+/// `two_sheets` with a Solver model solved and saved on each sheet: Sheet1's B5 = B2 * 3 + 4 to
+/// 25 by changing B2, and Rates' A2 = A1 * 2 to 10 by changing A1.
+fn two_solver_models() -> Session {
+    let mut s = two_sheets();
+    s.execute("data.solver", json!({"objective": "B5", "goal": "value", "value": 25, "variables": "B2"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*2"})).unwrap();
+    s.execute("data.solver", json!({"objective": "A2", "goal": "value", "value": 10, "variables": "A1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    s
+}
+
+/// How many hidden `solver_*` names hold the model of sheet `sheet`.
+fn model_names(h: &H, sheet: usize) -> usize {
+    h.state().session.active().unwrap().wb.names.iter().filter(|n| n.scope == Some(sheet) && n.name.starts_with("solver_")).count()
+}
+
+/// Picks `cell` (not A1, which is that sheet's own selection and so no pick) on Rates into
+/// Solver's constraint cell box, then expands the dialog, leaving Rates shown: the state after a
+/// cross-sheet pick.
+fn pick_on_rates(h: &mut H, cell: &str) {
+    click_button(h, "Collapse dialog", 2);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    drag(h, cell, cell);
+    assert_eq!(field(h, "newLhs"), format!("Rates!${}${}", &cell[..1], &cell[1..]));
+    key(h, Key::Escape, Modifiers::NONE);
+    assert_eq!(selection(h).0, 1, "Rates is still shown");
+}
+
+#[test]
+fn solver_reset_all_after_a_cross_sheet_pick_clears_the_dialogs_sheets_model() {
+    let mut h = harness(two_solver_models());
+    let rates_names = model_names(&h, 1);
+    assert!(model_names(&h, 0) > 0 && rates_names > 0, "both sheets hold a model");
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    pick_on_rates(&mut h, "C3");
+    // Reset All clears the model of the dialog's sheet, not the sheet shown by the pick.
+    h.get_by_label("Reset All").click();
+    h.run_steps(3);
+    assert_eq!(model_names(&h, 0), 0, "the dialog's sheet's model is cleared");
+    assert_eq!(model_names(&h, 1), rates_names, "the other sheet's model is untouched");
+    assert_eq!(selection(&h), (0, "B5".into()), "back on the dialog's sheet and selection");
+    assert_eq!(field(&h, "objective"), "", "the form is reset");
+}
+
+#[test]
+fn solver_save_model_after_a_cross_sheet_pick_writes_the_dialogs_sheet() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("solver", json!({"objective": "B5", "variables": "B2"}));
+    h.run_steps(4);
+    h.get_by_label("Load/Save").click();
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
+    h.run_steps(2);
+    pick_on_rates(&mut h, "C3");
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    let h1 = |h: &H, sheet: usize| h.state().session.active().unwrap().wb.sheets[sheet].value(CellRef::parse("H1").unwrap());
+    assert!(!h1(&h, 0).is_empty(), "the model is written on the dialog's sheet");
+    assert!(h1(&h, 1).is_empty(), "nothing is written on the sheet shown by the pick");
+    assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
+    // Saving where the model already is asks first; Replace, after another cross-sheet pick,
+    // writes the dialog's sheet too.
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Replace").is_some(), "the range holds the model: asked before replacing");
+    pick_on_rates(&mut h, "C4");
+    h.get_by_label("Replace").click();
+    h.run_steps(3);
+    assert!(!h1(&h, 0).is_empty());
+    assert!(h1(&h, 1).is_empty(), "Replace does not write the sheet shown by the pick");
+    assert_eq!(selection(&h).0, 0);
+}
+
+#[test]
+fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
+    let mut s = two_sheets();
+    // A model saved in cells from H1 of Sheet1, the dialog's sheet; Rates holds nothing there.
+    s.execute("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B5", "goal": "value", "value": 25, "variables": "B2"}})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "", "variables": ""}));
+    h.run_steps(4);
+    h.get_by_label("Load/Save").click();
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
+    h.run_steps(2);
+    pick_on_rates(&mut h, "C3");
+    h.get_by_label("Load").click();
+    h.run_steps(3);
+    assert!(field(&h, "objective").contains("B5"), "the model of the dialog's sheet is loaded: {:?}", field(&h, "objective"));
+    assert!(field(&h, "variables").contains("B2"), "{:?}", field(&h, "variables"));
+    assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
+}

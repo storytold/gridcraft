@@ -405,6 +405,23 @@ fn clear_solver_options(d: &mut Dialog) {
 
 /// Save Model from the Solver Parameters form: writes the form's model down from `range`. A
 /// range that holds data is replaced only with `overwrite`; without it the form asks first.
+/// Before one of Solver's commands other than Solve runs from the form (Reset All, Load, Save,
+/// Replace): the dialog's sheet must be there and shown again, as `dialogs::show` requires for
+/// Solve, since the commands act on the active sheet and read references without a sheet name
+/// against it. Shows the reason and answers `false` when the command must not run: the sheet
+/// was deleted, or it cannot be shown again (a draft on the picked sheet could not be saved).
+fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
+    if home_sheet_deleted(app, d) {
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        return false;
+    }
+    if let Err(e) = end_pick(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        return false;
+    }
+    true
+}
+
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
     d.values.remove("askModelOverwrite");
     let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {
@@ -539,7 +556,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("Reset All").clicked() {
+        if ui.button("Reset All").clicked() && at_home(app, d) {
             match app.run("data.solverReset", json!({})) {
                 Ok(_) => {
                     for (k, v) in [
@@ -580,7 +597,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             ref_edit(app, ui, d, "modelRange", RefLabel::By(l.id), 170.0);
             let range = text(d, "modelRange");
             let ready = !range.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() && at_home(app, d) {
                 d.values.remove("askModelOverwrite");
                 match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
                     Ok(r) => {
@@ -598,7 +615,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     }
                 }
             }
-            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() && at_home(app, d) {
                 save_solver_model(app, d, &range, false);
             }
         });
@@ -611,7 +628,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         } else if let Some(asked) = asked {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("{asked} already holds data. Replace it with the model?"));
-                if ui.button("Replace").clicked() {
+                if ui.button("Replace").clicked() && at_home(app, d) {
                     save_solver_model(app, d, &asked, true);
                 }
                 if ui.button("Don't Replace").clicked() {
