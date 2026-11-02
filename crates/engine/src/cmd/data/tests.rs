@@ -483,14 +483,15 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 #[test]
 fn list_validation_from_date_cells_shows_formatted_labels() {
     // Source cells formatted as dates must appear in the dropdown as `Jan-26`, not the serial
-    // `46023`. The picker commits value-preserving input (not the lossy label), so a mid-month
-    // `mmm-yy` source keeps its day.
+    // `46023`. The picker commits the underlying number (not the lossy label), so a mid-month
+    // `mmm-yy` source keeps its day, and a % source stays `1.5` on a % destination.
     let mut s = Session::new();
     s.new_workbook();
     for (cell, input, code) in [
         ("K1", "2026-01-15", "mmm-yy"),
         ("K2", "46054", "mmm-yy"),
         ("K3", "46023", "d-mmm-yy"),
+        ("K4", "1.5", "0%"),
     ] {
         s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
         s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
@@ -498,16 +499,20 @@ fn list_validation_from_date_cells_shows_formatted_labels() {
     s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "$K$1:$K$3"})).unwrap();
     s.execute("formulas.defineName", json!({"name": "Months", "refersTo": "=Sheet1!$K$1:$K$2"})).unwrap();
     s.execute("data.validation", json!({"range": "B1", "type": "list", "formula1": "Months"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "$K$4"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1", "code": "0%"})).unwrap();
 
     let wb = s.doc().unwrap().wb.clone();
     let sh = wb.active().unwrap();
     let a1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "A1")).unwrap();
     let b1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "B1")).unwrap();
+    let c1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "C1")).unwrap();
     assert_eq!(list_items(&wb, 0, a1), ["Jan-26", "Feb-26", "1-Jan-26"]);
     assert_eq!(list_items(&wb, 0, b1), ["Jan-26", "Feb-26"]);
+    assert_eq!(list_items(&wb, 0, c1), ["150%"]);
     let choices = list_choices(&wb, 0, a1);
     assert_eq!(choices[0].0, "Jan-26");
-    assert_eq!(choices[0].1, "2026-01-15", "mmm-yy label must not be the commit text");
+    assert!(choices[0].1.is_number(), "date choices commit the serial, not the label: {}", choices[0].1);
     let mid_month = sh.value(CellRef::parse("K1").unwrap());
 
     let at = CellRef::parse("A1").unwrap();
@@ -516,11 +521,16 @@ fn list_validation_from_date_cells_shows_formatted_labels() {
     assert!(check_validation(&wb, 0, at, "46023").is_none(), "raw serial of a source date still matches");
     assert!(check_validation(&wb, 0, at, "Pending").is_some());
 
-    // Picker path: commit `input`, not `display`.
-    s.execute("cell.set", json!({"cell": "A1", "input": choices[0].1})).unwrap();
+    // Picker path for numbers: range.setValues with the JSON number (exact value).
+    s.execute("range.setValues", json!({"range": "A1", "values": [[choices[0].1]]})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(at), mid_month, "selecting Jan-26 keeps 15 Jan, not the 1st");
     assert!(check_validation(&s.doc().unwrap().wb, 0, at, &sh.input_text(at)).is_none());
+
+    let pct = list_choices(&s.doc().unwrap().wb, 0, c1);
+    assert_eq!(pct[0].0, "150%");
+    s.execute("range.setValues", json!({"range": "C1", "values": [[pct[0].1]]})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(1.5));
 }
 
 #[test]

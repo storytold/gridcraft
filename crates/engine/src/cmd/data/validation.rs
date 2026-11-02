@@ -145,12 +145,15 @@ fn list_source(f: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
 
-/// One list-validation choice: the label the dropdown shows, the text `cell.set` should receive
-/// (so a `mmm-yy` label does not collapse a mid-month date to the 1st), and the underlying value
-/// (so checking accepts the label, the serial, or the same stored value).
+/// Cap on non-empty list choices from a range source (dropdown + validation). Counts items, not
+/// cells, so leading blanks do not hide later values.
+const LIST_ITEMS_CAP: usize = 100_000;
+
+/// One list-validation choice: the label the dropdown shows, and the underlying value (so checking
+/// accepts the label, the serial, or the same stored value, and the picker can commit the value
+/// without re-parsing a lossy label).
 struct ListEntry {
     display: String,
-    input: String,
     value: Value,
 }
 
@@ -159,53 +162,27 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     list_entries(wb, sheet, dv).into_iter().map(|e| e.display).collect()
 }
 
-/// Dropdown choices as `(display, input)`: show `display`, commit with `cell.set` using `input`.
-/// For date cells formatted `mmm-yy`, `display` is `Jan-26` while `input` is a value-preserving
-/// form such as `2026-01-15` (from [`crate::display::edit_text`]), not the lossy label.
-pub fn list_choices(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<(String, String)> {
-    list_entries(wb, sheet, dv).into_iter().map(|e| (e.display, e.input)).collect()
+/// Dropdown choices as `(display, commit)`: show `display`; write `commit` with `range.setValues`
+/// (JSON numbers/bools) or `cell.set` (strings). Numbers are committed as values so a percentage
+/// destination does not re-scale `1.5` → `0.015`, and a mid-month `mmm-yy` label does not become
+/// the 1st of the month.
+pub fn list_choices(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<(String, Json)> {
+    list_entries(wb, sheet, dv)
+        .into_iter()
+        .map(|e| {
+            let commit = match &e.value {
+                Value::Number(n) => json!(n),
+                Value::Bool(b) => json!(b),
+                Value::Text(t) => json!(t.as_ref()),
+                Value::Error(err) => json!(err.as_str()),
+                Value::Empty | Value::Array(_) => json!(e.display.as_str()),
+            };
+            (e.display, commit)
+        })
+        .collect()
 }
 
-/// Text that `cell.set` can take so the stored value matches `value` under `code` (ISO when a
-/// date format would not read back, as [`crate::display::edit_text`] does for constants).
-fn value_list_input(wb: &Workbook, value: &Value, code: &str) -> String {
-    let Value::Number(n) = value else {
-        return value.display();
-    };
-    if !crate::display::number_format(code).is_date() {
-        return value.display();
-    }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
-    let shown = crate::display::format(value, code, wb).text;
-    if reads_back(&shown) {
-        return shown;
-    }
-    let Some(dt) = gridcraft_core::date::datetime_from_serial(wb.date_system, *n) else {
-        return value.display();
-    };
-    let time = format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second);
-    // Keep the same ISO shapes as `display::edit_text`.
-    let date = format!("{:04}-{:02}-{:02}", dt.year, dt.month, dt.day);
-    let iso = if *n < 1.0 {
-        time
-    } else if n.fract() == 0.0 {
-        date
-    } else {
-        format!("{date} {time}")
-    };
-    if reads_back(&iso) { iso } else { value.display() }
-}
-
-/// Commit text for a source cell: prefer `edit_text` for constants; for formulas, commit the
-/// evaluated value (not the formula text) so the picker copies the value Excel-style.
-fn cell_list_input(wb: &Workbook, sh: &gridcraft_model::Sheet, c: CellRef, value: &Value) -> String {
-    if sh.cell(c).is_none_or(|cell| cell.formula.is_none()) {
-        return crate::display::edit_text(wb, sh, c);
-    }
-    value_list_input(wb, value, wb.styles.get(sh.style_id(c)).num_fmt.as_str())
-}
-
-/// List choices with display label, commit text, and stored value.
+/// List choices with display label and stored value.
 fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> {
     let f = dv.f1.trim();
     if is_literal_list(f) {
@@ -220,7 +197,7 @@ fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> 
             .filter(|x| !x.is_empty())
             .map(|display| {
                 let value = Value::text(display.as_str());
-                ListEntry { input: display.clone(), display, value }
+                ListEntry { display, value }
             })
             .collect();
     }
@@ -229,18 +206,17 @@ fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> 
     // (a date serial shows as `Jan-26`, not `46023`).
     if let Some(areas) = gridcraft_calc::evaluate_areas(wb, sheet, at, f) {
         let mut out = Vec::new();
-        for a in areas {
+        'areas: for a in areas {
             let Some(sh) = wb.sheet(a.sheet) else { continue };
-            for c in a.range.iter().take(100_000) {
+            for c in a.range.iter() {
                 let value = sh.value(c);
                 if value.is_empty() {
                     continue;
                 }
-                out.push(ListEntry {
-                    display: crate::display::value_text(wb, sh, c),
-                    input: cell_list_input(wb, sh, c, &value),
-                    value,
-                });
+                out.push(ListEntry { display: crate::display::value_text(wb, sh, c), value });
+                if out.len() >= LIST_ITEMS_CAP {
+                    break 'areas;
+                }
             }
         }
         return out;
@@ -250,15 +226,10 @@ fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> 
             .data
             .iter()
             .filter(|v| !v.is_empty())
-            .map(|v| {
-                let display = v.display();
-                ListEntry { input: display.clone(), display, value: v.clone() }
-            })
+            .take(LIST_ITEMS_CAP)
+            .map(|v| ListEntry { display: v.display(), value: v.clone() })
             .collect(),
-        v if !v.is_empty() && !v.is_error() => {
-            let display = v.display();
-            vec![ListEntry { input: display.clone(), display, value: v }]
-        }
+        v if !v.is_empty() && !v.is_error() => vec![ListEntry { display: v.display(), value: v }],
         _ => vec![],
     }
 }
