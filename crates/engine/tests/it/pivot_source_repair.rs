@@ -277,3 +277,43 @@ fn repair_rejects_calculated_field_collisions_and_invalid_dependencies_atomicall
         assert_eq!(value(&s, "I6"), Value::Number(40.0));
     }
 }
+
+/// A source field renamed like an existing calculation cannot silently become that calculation.
+#[test]
+fn repair_rejects_ambiguous_previous_source_value_identity() {
+    for duplicate in [false, true] {
+        let mut s = source();
+        let old_source = if duplicate {
+            s.execute("range.setValues", json!({"range":"E1","values":[["Extra"],[10],[20]]})).unwrap();
+            "Sheet1!$A$1:$E$3"
+        } else {
+            OLD_SOURCE
+        };
+        add_report(&mut s, old_source, "Repair1", "G10");
+        let name = if duplicate { "Unused2" } else { "Margin" };
+        s.execute("pivot.calculatedField", json!({"pivot":"Repair1","name":name,"formula":"=Amount*0.5","values":false})).unwrap();
+        if duplicate {
+            s.execute("cell.set", json!({"cell":"E1","input":"Unused"})).unwrap();
+        } else {
+            s.execute("range.setValues", json!({"range":"D1","values":[["Margin"],[10],[20]]})).unwrap();
+        }
+        s.execute("pivot.addField", json!({"pivot":"Repair1","field":name,"area":"values"})).unwrap();
+        assert_eq!(value(&s, "I13"), Value::Number(30.0), "the retained value currently uses source records");
+        rejects_without_edit(&mut s, "pivot.changeSource", json!({"pivot":"Repair1","source":REPAIRED_SOURCE}), "calculated field");
+        assert_eq!(pivot_source(&s, "Repair1"), old_source);
+        assert_eq!(value(&s, "I13"), Value::Number(30.0));
+    }
+}
+
+/// Missing source metadata must not make the repair guess whether a value is calculated.
+#[test]
+fn repair_does_not_guess_calculated_identity_after_source_name_is_deleted() {
+    let mut s = source();
+    s.execute("formulas.defineName", json!({"name":"SourceData","refersTo":OLD_SOURCE})).unwrap();
+    add_report(&mut s, "SourceData", "Repair1", "F3");
+    s.execute("pivot.calculatedField", json!({"pivot":"Repair1","name":"Margin","formula":"=Amount*0.5"})).unwrap();
+    s.execute("formulas.deleteName", json!({"name":"SourceData"})).unwrap();
+    rejects_without_edit(&mut s, "pivot.changeSource", json!({"pivot":"Repair1","source":REPAIRED_SOURCE}), "cannot identify calculated field");
+    assert_eq!(pivot_source(&s, "Repair1"), "SourceData");
+    assert_eq!(value(&s, "H6"), Value::Number(20.0));
+}

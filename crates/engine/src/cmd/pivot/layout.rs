@@ -261,8 +261,21 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "missing `source`"));
     }
     let source = source_param(s, p)?;
+    let (si, pi) = find_pivot(s, p)?;
+    let previous_headers = {
+        let wb = &s.doc()?.wb;
+        let old = wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+        pv::resolve_source(wb, &old.source, si).and_then(|(sheet, range)| pv::source_headers(wb, sheet, range)).ok()
+    };
     update_with_source(s, p, Some(&source), |pt, src, _| {
         let calculated = validate_replacement_calculated_fields(pt, src)?;
+        for value in &pt.values {
+            if calculated.index(&value.source_col).is_some()
+                && previous_headers.as_ref().is_none_or(|headers| headers.iter().any(|h| h.eq_ignore_ascii_case(&value.source_col)))
+            {
+                return Err(bad(C, format!("cannot identify calculated field `{}` separately from the previous source", value.source_col)));
+            }
+        }
         let mut dropped: Vec<String> = vec![];
         let keep = |name: &str, dropped: &mut Vec<String>| {
             let ok = src.col(name).is_some();

@@ -73,13 +73,13 @@ reproduction uses the existing engine command through the CLI and requires no na
 cargo test -p gridcraft-engine --test it pivot_source_repair
 ```
 
-Eight tests generate their workbooks in Rust and cover four imported reports with blank
+Ten tests generate their workbooks in Rust and cover four imported reports with blank
 unused headers, a deleted defined source name, invalid replacement rejection without changing
 the workbook or history, blank replacement rejection for both parameter names with a valid
 active selection and an existing redo branch, protection and occupied report cells, undo/redo,
 and repeated XLSX save/open/refresh. This repair is independent of date parsing and GETPIVOTDATA support.
 
-The branch is aligned with upstream `main` at `488f9982`. The eight regressions
+The branch is aligned with upstream `main` at `488f9982`. The ten regressions
 run in the consolidated engine integration-test binary, without changing the repair
 contract. The desktop-theme compatibility fix is already supplied by upstream.
 
@@ -111,3 +111,12 @@ preserve the source, rendered values, workbook identity and undo/redo history.
 
 Two generated regressions cover direct/chained calculated values across undo, save/open
 and refresh, plus collisions and missing dependencies. Both fail before the correction.
+
+
+Source and calculated values share a name-based storage representation. Repair also
+checks the previous source's canonical headers, including generated duplicate-name
+suffixes, before retaining a calculated value. If its identity is ambiguous, or the
+old source can no longer be resolved and a calculated value is selected, repair fails
+without editing anything. Restore the old source reference/headers first so identity
+can be verified; the command never substitutes a formula for an absent source field.
+Reading the old headers does not read its records or relax normal header/work limits.
