@@ -357,7 +357,6 @@ fn format(s: &mut Session, p: &Json) -> Result<Json> {
     let number = c.kind != ControlKind::Button;
     let write = number && (given.is_some() || p.get("min").is_some() || p.get("max").is_some() || p.get("step").is_some());
     let (value, link) = (c.value, c.link.clone());
-    let out = control_json(&c);
     s.grouped("Format Control", |s| {
         edit(s, |cx| {
             if let Some(slot) = cx.sheet_mut(sheet)?.controls.get_mut(i) {
@@ -368,8 +367,12 @@ fn format(s: &mut Session, p: &Json) -> Result<Json> {
         if write {
             write_link(s, sheet, link.as_deref(), value)?;
         }
-        Ok(out)
-    })
+        Ok(())
+    })?;
+    // The reply is the control as committed: a new link to a cell holding another number has
+    // moved its value there.
+    let (_, _, c) = find(s, CMD, p)?;
+    Ok(control_json(&c))
 }
 
 /// Commands a button never runs, beyond the macro policy's lists: a button has no way to show

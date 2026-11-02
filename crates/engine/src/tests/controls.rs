@@ -118,6 +118,22 @@ fn editing_the_linked_cell_moves_the_control() {
 }
 
 #[test]
+fn format_replies_with_the_value_a_new_link_gives() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C5", "input": "30"})).unwrap();
+    let c = id(&s.execute("insert.slider", json!({"link": "B1", "max": 100, "value": 10})).unwrap());
+    // Relinked to a cell that holds another number, the control takes that number, and the reply
+    // says so, as control.list does.
+    let r = s.execute("control.format", json!({"id": c, "link": "C5"})).unwrap();
+    assert_eq!(control(&s, c).value, 30);
+    assert_eq!(r["value"], json!(30), "{r}");
+    assert_eq!(r["link"], json!("$C$5"), "{r}");
+    // A given value is written to the new link and replied as given.
+    let r = s.execute("control.format", json!({"id": c, "link": "D6", "value": 44})).unwrap();
+    assert_eq!((r["value"].clone(), v(&s, "D6")), (json!(44), Value::Number(44.0)));
+}
+
+#[test]
 fn links_follow_inserted_rows() {
     let mut s = s();
     let c = id(&s.execute("insert.slider", json!({"at": "E2", "link": "B3", "value": 40})).unwrap());
