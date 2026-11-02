@@ -1,4 +1,5 @@
 use super::calc::formula_text;
+use super::drawings;
 use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
 use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
@@ -28,6 +29,7 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
         Err(e) => return RoundTrip { error: Some(format!("reading the written file failed: {e}")), categories: vec![package.done()] },
     };
     let mut categories = diff_workbooks(wb, &back, opts);
+    categories.push(drawings::compare(source, &bytes, opts.max_report));
     categories.push(package.done());
     RoundTrip { error: None, categories }
 }

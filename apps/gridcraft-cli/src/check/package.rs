@@ -1,10 +1,10 @@
 use super::*;
 
 /// Largest package part read while validating a written package.
-const MAX_XML_PART: u64 = 64 * 1024 * 1024;
+pub(super) const MAX_XML_PART: u64 = 64 * 1024 * 1024;
 
 /// Most zip entries looked at while validating a written package.
-const MAX_ENTRIES: usize = 200_000;
+pub(super) const MAX_ENTRIES: usize = 200_000;
 
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
 /// a cache Excel rebuilds, and GridCraft never writes it.
@@ -58,7 +58,7 @@ fn attr<'a>(attrs: &'a [(String, String)], k: &str) -> Option<&'a str> {
 }
 
 /// Lower-cased part name without a leading slash: OPC part names compare case-insensitively.
-fn part_key(name: &str) -> String {
+pub(super) fn part_key(name: &str) -> String {
     name.trim_start_matches('/').to_ascii_lowercase()
 }
 
@@ -84,7 +84,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Resolves a relationship target against the source part's directory.
-fn resolve_target(source_dir: &str, target: &str) -> String {
+pub(super) fn resolve_target(source_dir: &str, target: &str) -> String {
     let target = percent_decode(target.split('#').next().unwrap_or(target));
     let joined = match target.strip_prefix('/') {
         Some(abs) => abs.to_string(),
@@ -104,7 +104,7 @@ fn resolve_target(source_dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
-type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
+pub(super) type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 
 fn zip_names(zip: &mut Zip<'_>) -> Vec<String> {
     (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string())).collect()
