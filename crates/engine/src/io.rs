@@ -835,16 +835,29 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
     }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+    // `sync_all` before the rename: without it a power loss right after the rename can leave
+    // the new name pointing at an empty or truncated file while the old workbook is gone.
+    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| f.sync_all()).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    drop(f);
     std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
-    })
+    })?;
+    // Make the rename itself durable. Best effort: the workbook is already in place, so a
+    // directory that can't be opened or synced (some file systems) is not a failed save.
+    #[cfg(unix)]
+    {
+        let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
