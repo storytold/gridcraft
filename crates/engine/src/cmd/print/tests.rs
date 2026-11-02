@@ -855,6 +855,20 @@ fn print_preview_lists_the_pages_of_a_range_under_their_numbers() {
 }
 
 #[test]
+fn a_page_range_counts_the_pages_in_the_sheets_page_order() {
+    let mut s = s();
+    let rows: Vec<Vec<Json>> = (0..60).map(|r| (0..15).map(|c| json!(r * 100 + c)).collect()).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({"from": 2, "to": 3})).unwrap();
+    let listed: Vec<(u64, &str)> =
+        pv["pageList"].as_array().unwrap().iter().map(|p| (p["page"].as_u64().unwrap(), p["range"].as_str().unwrap())).collect();
+    // Over, then down: page 2 is the top right of the four, page 3 the bottom left.
+    assert_eq!(listed, [(2, "K1:O45"), (3, "A46:J60")]);
+    assert_eq!(pv["total"], 4);
+}
+
+#[test]
 fn page_range_params_that_are_not_page_numbers_are_clear_errors() {
     let mut s = paged_book();
     for cmd in ["file.exportPdf", "file.print", "file.printPreview"] {
