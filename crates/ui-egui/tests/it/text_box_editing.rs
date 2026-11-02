@@ -153,7 +153,7 @@ fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     let (mut h, id) = fixture();
     edit_box(&mut h, id);
     h.check_accessibility();
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id));
     let anchor = shape(&h, id).anchor;
     let start = shape_rect(&h, id).min + vec2(5.0, 10.0);
     drag(&mut h, start, start + vec2(60.0, 0.0));
@@ -185,15 +185,15 @@ fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() 
     h.run_steps(45);
     let p = shape_rect(&h, id).center();
     click(&mut h, p);
-    assert_eq!(h.state().selected_chart, Some(group_id), "single-click selection is promoted to the group");
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(group_id), "single-click selection is promoted to the group");
     assert!(group_frame_painted(&h, group_id), "single-click group selection paints the group frame");
     click(&mut h, p);
-    assert_eq!(h.state().selected_chart, Some(id), "editing selects the member needed by the editor");
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id), "editing selects the member needed by the editor");
     assert_eq!(h.state().text_box_editor.as_ref().map(|e| e.id), Some(id), "editing targets the raw group member");
     replace(&mut h, "Updated grouped text");
     let outside = cell_center(&h, "J15");
     click(&mut h, outside);
-    assert_eq!(h.state().selected_chart, None, "clicking a cell clears the group selection");
+    assert_eq!(h.state().selected_object, None, "clicking a cell clears the group selection");
     let sheet = h.state().session.doc().unwrap().wb.active().unwrap();
     let members = sheet.drawing_group(group_id).unwrap().members.clone();
     assert_eq!(sheet.shapes.iter().find(|s| s.id == id).unwrap().text, "Updated grouped text");
@@ -215,9 +215,9 @@ fn escape_restores_group_selection_after_grouped_text_edit() {
     let p = shape_rect(&h, id).center();
     click(&mut h, p);
     click(&mut h, p);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id));
     key(&mut h, Key::Escape, Modifiers::NONE);
-    assert_eq!(h.state().selected_chart, Some(group_id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(group_id));
 }
 
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {

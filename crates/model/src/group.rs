@@ -151,7 +151,7 @@ impl Sheet {
     }
 
     /// The anchor of a chart, picture or shape (`None` for a group or a missing object).
-    pub fn object_anchor(&self, r: DrawingRef) -> Option<Anchor> {
+    pub fn drawing_anchor(&self, r: DrawingRef) -> Option<Anchor> {
         match r {
             DrawingRef::Chart(id) => self.charts.iter().find(|o| o.id == id).map(|o| o.anchor),
             DrawingRef::Image(id) => self.images.iter().find(|o| o.id == id).map(|o| o.anchor),
@@ -163,7 +163,7 @@ impl Sheet {
     /// An object's box; a group's is the box around its members. `None` when the object is
     /// missing or a group holds none.
     pub fn drawing_rect(&self, r: DrawingRef) -> Option<ObjectRect> {
-        self.drawing_rect_with(r, &|o| self.object_anchor(o).map(|a| self.anchor_rect(&a)))
+        self.drawing_rect_with(r, &|o| self.drawing_anchor(o).map(|a| self.anchor_rect(&a)))
     }
 
     /// [`Sheet::drawing_rect`] with the boxes of charts, pictures and shapes from `leaf` (a
@@ -234,7 +234,7 @@ impl Sheet {
                 DrawingRef::Group(g) if !groups.contains(&g) => groups.push(g),
                 DrawingRef::Group(_) => {}
                 leaf => {
-                    if let Some(a) = self.object_anchor(leaf) {
+                    if let Some(a) = self.drawing_anchor(leaf) {
                         leaves.push((leaf, a));
                     }
                 }
@@ -248,7 +248,7 @@ impl Sheet {
         }
         for (leaf, a) in leaves {
             let na = self.rect_anchor(map_rect(from, to, self.anchor_rect(&a)), a.mode);
-            if let Some(slot) = self.object_anchor_mut(leaf) {
+            if let Some(slot) = self.drawing_anchor_mut(leaf) {
                 *slot = na;
             }
         }
@@ -265,7 +265,7 @@ impl Sheet {
     pub fn set_group_anchor_mode(&mut self, id: u32, mode: AnchorMode) {
         let contents = self.group_contents(id);
         for r in &contents {
-            if let Some(a) = self.object_anchor_mut(*r) {
+            if let Some(a) = self.drawing_anchor_mut(*r) {
                 a.mode = mode;
             }
         }
@@ -281,10 +281,8 @@ impl Sheet {
         self.charts.retain(|o| !has(DrawingRef::Chart(o.id)));
         self.images.retain(|o| !has(DrawingRef::Image(o.id)));
         self.shapes.retain(|o| !has(DrawingRef::Shape(o.id)));
+        self.remove_from_group(DrawingRef::Group(id));
         self.groups.retain(|g| g.id != id && !has(DrawingRef::Group(g.id)));
-        for g in &mut self.groups {
-            g.members.retain(|m| *m != DrawingRef::Group(id));
-        }
     }
 
     /// Takes `r` out of the groups holding it, leaving the rest of each group grouped (Excel
@@ -310,7 +308,7 @@ impl Sheet {
         }
     }
 
-    fn object_anchor_mut(&mut self, r: DrawingRef) -> Option<&mut Anchor> {
+    fn drawing_anchor_mut(&mut self, r: DrawingRef) -> Option<&mut Anchor> {
         match r {
             DrawingRef::Chart(id) => self.charts.iter_mut().find(|o| o.id == id).map(|o| &mut o.anchor),
             DrawingRef::Image(id) => self.images.iter_mut().find(|o| o.id == id).map(|o| &mut o.anchor),
@@ -327,7 +325,16 @@ mod tests {
 
     fn shape(id: u32, x: f64, y: f64, sh: &Sheet) -> Shape {
         let anchor = sh.rect_anchor(ObjectRect { x, y, w: 20.0, h: 10.0 }, AnchorMode::MoveOnly);
-        Shape { id, kind: ShapeKind::Rectangle, anchor, fill: Color::Auto, line: Color::Auto, text: String::new(), format: ShapeFormat::default() }
+        Shape {
+            id,
+            kind: ShapeKind::Rectangle,
+            anchor,
+            fill: Color::Auto,
+            line: Color::Auto,
+            text: String::new(),
+            format: ShapeFormat::default(),
+            math: crate::EquationCache::default(),
+        }
     }
 
     fn sheet_with_nested_group() -> Sheet {
@@ -408,7 +415,7 @@ mod tests {
         let leaf = |r| {
             calls.set(calls.get() + 1);
             assert!(calls.get() < 100, "the group's members were measured over and over");
-            sh.object_anchor(r).map(|a| sh.anchor_rect(&a))
+            sh.drawing_anchor(r).map(|a| sh.anchor_rect(&a))
         };
         let r = sh.drawing_rect_with(DrawingRef::Group(4), &leaf).unwrap_or_default();
         assert_eq!((r.x, r.y, r.w, r.h), (100.0, 50.0, 70.0, 30.0));
