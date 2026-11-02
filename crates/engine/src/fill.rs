@@ -171,10 +171,12 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                             cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
                             cell.value = Value::Empty;
                         }
-                    } else if let Some(v) = match per_cell.get(src_i) {
-                        Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
-                        None => pattern.value(step, forward, src_cells.len()),
-                    } {
+                    } else if cell.py.is_none()
+                        && let Some(v) = match per_cell.get(src_i) {
+                            Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
+                            None => pattern.value(step, forward, src_cells.len()),
+                        }
+                    {
                         cell.value = v;
                     }
                     cell.style = style;
@@ -296,7 +298,8 @@ impl Pattern {
 
     fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
-        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
+        // Formulas and Python cells copy.
+        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
             return Pattern::Copy;
         }
         // Numbers.
@@ -598,7 +601,7 @@ pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<
                 break;
             }
             let c = if rows { CellRef::new(lane, r.start.col + i) } else { CellRef::new(r.start.row + i, lane) };
-            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style }));
+            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style, py: None }));
         }
     }
     let sh = cx.sheet_mut(sheet)?;
@@ -657,7 +660,7 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, out) in &writes {
-        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
+        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style, py: None });
     }
     for (c, _) in writes {
         cx.touch(sheet, c);

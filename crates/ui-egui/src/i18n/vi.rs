@@ -158,6 +158,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Kiểm tra lỗi",
         "Trace Error" => "Truy tìm lỗi",
         "Circular References" => "Tham chiếu vòng",
+        "Python Mode" => "Chế độ Python",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
