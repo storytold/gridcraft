@@ -27,6 +27,11 @@ pub(super) struct RefBoxes {
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
     refocus: bool,
+    /// The target box was drawn this frame. A box the dialog stops showing (another view of the
+    /// dialog, a hidden area, a constraint operator that takes no value) is no longer picked
+    /// into, so a selection made meanwhile does not land in it once it is shown again (see
+    /// [`window_shown`]).
+    target_drawn: bool,
     /// The reference box the dialog is collapsed to.
     pub(super) collapsed: Option<String>,
     /// Where the expanded dialog was last drawn: the collapsed dialog keeps its top-left corner,
@@ -358,14 +363,20 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
 }
 
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
-/// into a reference box when another text field of the dialog takes the keyboard. A collapsed
-/// dialog shows no other field, so its box keeps picking whatever else is clicked (the Name Box,
-/// the formula bar, the ribbon): only Escape, Enter or the expand button end that state.
+/// into a reference box when the box was not drawn (the dialog stopped showing it) or when
+/// another text field of the dialog takes the keyboard. A collapsed dialog shows no other field,
+/// so its box keeps picking whatever else is clicked (the Name Box, the formula bar, the
+/// ribbon): only Escape, Enter or the expand button end that state.
 pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
     if !collapsed {
         d.refs.rect = rect;
     }
     d.refs.was_collapsed = collapsed;
+    // The box compares the grid selection with the one it last saw only while it is drawn: a
+    // hidden box would take a selection made meanwhile when it comes back.
+    if !std::mem::take(&mut d.refs.target_drawn) {
+        d.refs.target = None;
+    }
     if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
         d.refs.target = None;
     }
@@ -479,6 +490,9 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             ui.memory_mut(|m| m.request_focus(id));
         }
     });
+    if d.refs.target.as_deref() == Some(key) {
+        d.refs.target_drawn = true;
+    }
     d.values.insert(key.into(), json!(s));
 }
 

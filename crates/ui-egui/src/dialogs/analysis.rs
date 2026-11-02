@@ -565,13 +565,10 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             }
         }
         let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
+        // Hiding the area ends picking into Model Range, as a box that is not drawn is no longer
+        // picked into (`ref_edit::window_shown`).
         if ui.selectable_label(shown, "Load/Save").clicked() {
             d.values.insert("modelArea".into(), json!(!shown));
-            // Hiding the area ends picking into Model Range, so a later selection on the grid
-            // doesn't go into a box that isn't shown.
-            if shown && d.refs.target.as_deref() == Some("modelRange") {
-                d.refs.target = None;
-            }
         }
         if ui.button("Options").clicked() {
             open_solver_options(d);

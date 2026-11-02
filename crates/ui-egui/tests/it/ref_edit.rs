@@ -1324,3 +1324,54 @@ fn one_undo_step_that_renames_a_saved_sheet_and_reuses_its_old_name_follows_the_
     assert!(wb.sheets[2].value(CellRef::parse("B2").unwrap()).is_empty(), "the new Sheet1 is untouched");
     assert_eq!(selection(&h), (0, "B5".into()));
 }
+
+#[test]
+fn solver_options_end_picking_into_a_box_the_view_hides() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "B2", "B3");
+    assert_eq!(field(&h, "variables"), "$B$2:$B$3");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    // The Options view hides every reference box; the dialog is not modal, so the grid still
+    // takes a selection meanwhile.
+    h.get_by_label("Options").click();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Collapse dialog").count(), 0, "no reference box is shown");
+    drag(&mut h, "C3", "C3");
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(3);
+    assert_eq!(field(&h, "variables"), "$B$2:$B$3", "the selection made while the box was hidden is not a pick");
+    // Picking ended when the box went: a later selection does not go into it either.
+    drag(&mut h, "D4", "D4");
+    assert_eq!(field(&h, "variables"), "$B$2:$B$3");
+}
+
+#[test]
+fn an_int_constraint_ends_picking_into_the_hidden_constraint_value_box() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 3);
+    assert_eq!(collapsed(&h).as_deref(), Some("newRhs"));
+    drag(&mut h, "D4", "D4");
+    assert_eq!(field(&h, "newRhs"), "$D$4");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    // int and bin take no constraint value: the box goes while it is being picked into.
+    h.get_by_label("Constraint Operator").click();
+    h.run_steps(3);
+    h.get_by_label("int").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Constraint Value").is_none(), "the box is hidden");
+    drag(&mut h, "E5", "E5");
+    assert_eq!(field(&h, "newRhs"), "$D$4", "nothing lands in the hidden box");
+    // Shown again with another operator, the box keeps its value and is not picked into.
+    h.get_by_label("Constraint Operator").click();
+    h.run_steps(3);
+    h.get_by_label("<=").click();
+    h.run_steps(3);
+    assert_eq!(field(&h, "newRhs"), "$D$4", "the selection made while hidden is not a pick");
+    drag(&mut h, "F6", "F6");
+    assert_eq!(field(&h, "newRhs"), "$D$4");
+}
