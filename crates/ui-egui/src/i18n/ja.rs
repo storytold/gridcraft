@@ -995,6 +995,21 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Merge Styles", "スタイルの結合"),
+    ("Style", "スタイル"),
+    ("Style name:", "スタイル名:"),
+    ("Merge styles from:", "スタイルの結合元:"),
+    (
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again.",
+        "ほかに開いているブックがありません。使いたいスタイルのあるブックを開いてから、もう一度 [スタイルの結合] を選んでください。",
+    ),
+    ("{name} has styles with the same names as this workbook:", "{name} には、このブックと同じ名前のスタイルがあります:"),
+    (
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others.",
+        "{name} のスタイルで置き換えますか? [いいえ] を選ぶと、このブックのスタイルを残し、ほかのスタイルを結合します。",
+    ),
+    ("Yes", "はい"),
+    ("No", "いいえ"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
@@ -1148,6 +1163,8 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
+    ("New Cell Style…", "新しいセルのスタイル…"),
+    ("Merge Styles…", "スタイルの結合…"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

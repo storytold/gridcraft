@@ -536,6 +536,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Stoppen",
         "New Macro" => "Nieuwe macro",
         "Show" => "Weergeven",
+        "New Cell Style…" => "Nieuwe celstijl…",
+        "Merge Styles…" => "Stijlen samenvoegen…",
+        "Merge Styles" => "Stijlen samenvoegen",
+        "Style" => "Stijl",
+        "Style name:" => "Stijlnaam:",
+        "Merge styles from:" => "Stijlen samenvoegen uit:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Er is geen andere werkmap geopend. Open de werkmap met de gewenste stijlen en kies daarna opnieuw Stijlen samenvoegen."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} heeft stijlen met dezelfde namen als deze werkmap:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Vervangen door de stijlen uit {name}? Nee behoudt de stijlen van deze werkmap en voegt de andere samen."
+        }
+        "Yes" => "Ja",
+        "No" => "Nee",
         _ => return None,
     })
 }

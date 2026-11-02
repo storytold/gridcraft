@@ -111,6 +111,10 @@ pub(super) fn draw_border(s: &mut Session, p: &Json) -> Result<Json> {
 
 pub(super) fn new_cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("home.newCellStyle", "missing `name`"))?.to_string();
+    // A file has no place for a style without a name.
+    if name.trim().is_empty() {
+        return Err(bad("home.newCellStyle", "type a name for the style"));
+    }
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let c = cell_param(s, p, "fromCell")?.unwrap_or(d.selection.active);
@@ -119,6 +123,65 @@ pub(super) fn new_cell_style(s: &mut Session, p: &Json) -> Result<Json> {
         cx.wb.cell_styles.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
         cx.wb.cell_styles.push((name.clone(), style.clone()));
         Ok(json!({"name": name}))
+    })
+}
+
+/// The open workbook `from` names: its name as the title bar shows it (`Book2`, `Budget.xlsx`, or
+/// without the extension), ignoring case, or its id ([`crate::DocState::uid`]).
+fn source_workbook(s: &Session, from: Option<&Json>) -> Result<usize> {
+    const ID: &str = "home.mergeStyles";
+    let docs = s.documents();
+    match from {
+        None | Some(Json::Null) => Err(bad(ID, "missing `from` (the open workbook to merge styles from)")),
+        Some(Json::Number(n)) => n.as_u64().and_then(|uid| s.document_index(uid)).ok_or_else(|| bad(ID, format!("no open workbook has id {n}"))),
+        Some(Json::String(name)) => {
+            let wanted = name.trim();
+            let name = wanted.to_lowercase();
+            let find = |same: &dyn Fn(&str) -> bool| -> Vec<usize> {
+                docs.iter().enumerate().filter(|(_, d)| same(&d.display_title())).map(|(i, _)| i).collect()
+            };
+            let mut hits = find(&|title| title.to_lowercase() == name);
+            if hits.is_empty() {
+                hits = find(&|title| std::path::Path::new(title).file_stem().and_then(|x| x.to_str()).is_some_and(|x| x.to_lowercase() == name));
+            }
+            match hits.as_slice() {
+                [i] => Ok(*i),
+                [] => Err(bad(ID, format!("no open workbook is called `{wanted}`"))),
+                _ => Err(bad(ID, format!("several open workbooks are called `{wanted}`: give its id"))),
+            }
+        }
+        Some(_) => Err(bad(ID, "`from` must be the name or id of an open workbook")),
+    }
+}
+
+/// Home › Cell Styles › Merge Styles: copies another open workbook's cell styles into the active
+/// one ([`crate::cmd::format::merge_cell_styles`]), as one undo step. Cells keep the formats they
+/// have: a cell doesn't remember the style it was given.
+pub(super) fn merge_styles(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "home.mergeStyles";
+    let keep = match p.get("sameNames") {
+        None | Some(Json::Null) => false,
+        Some(v) => match v.as_str() {
+            Some("replace") => false,
+            Some("keep") => true,
+            _ => return Err(bad(ID, "`sameNames` must be replace or keep")),
+        },
+    };
+    let i = source_workbook(s, p.get("from"))?;
+    let d = s.doc()?;
+    let source = s.documents().get(i).ok_or_else(|| bad(ID, "no such workbook"))?;
+    if source.uid == d.uid {
+        return Err(bad(ID, "a workbook can't merge styles from itself; choose another open workbook"));
+    }
+    let merge = crate::cmd::format::merge_cell_styles(&d.wb.cell_styles, &source.wb.cell_styles, &d.wb.theme, keep);
+    let out = json!({"from": source.display_title(), "added": &merge.added, "replaced": &merge.replaced, "kept": &merge.kept});
+    // Nothing to change: no undo step, and the workbook doesn't become unsaved.
+    if !merge.changes() {
+        return Ok(out);
+    }
+    edit(s, |cx| {
+        cx.wb.cell_styles = merge.styles;
+        Ok(out)
     })
 }
 

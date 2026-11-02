@@ -985,6 +985,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Запис",
         "New Macro" => "Новий макрос",
         "Show" => "Показати",
+        "New Cell Style…" => "Створити стиль клітинки…",
+        "Merge Styles…" => "Об'єднати стилі…",
+        "Merge Styles" => "Об'єднання стилів",
+        "Style" => "Стиль",
+        "Style name:" => "Ім'я стилю:",
+        "Merge styles from:" => "Об'єднати стилі з:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Інші книги не відкрито. Відкрийте книгу з потрібними стилями, а потім знову виберіть «Об'єднати стилі»."
+        }
+        "{name} has styles with the same names as this workbook:" => "У книзі {name} є стилі з тими самими іменами, що й у цій книзі:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Замінити їх стилями з {name}? «Ні» зберігає стилі цієї книги й об'єднує решту."
+        }
+        "Yes" => "Так",
+        "No" => "Ні",
         _ => return None,
     })
 }

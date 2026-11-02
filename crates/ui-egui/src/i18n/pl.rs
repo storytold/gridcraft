@@ -981,6 +981,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Rejestrowanie",
         "New Macro" => "Nowe makro",
         "Show" => "Pokaż",
+        "New Cell Style…" => "Nowy styl komórki…",
+        "Merge Styles…" => "Scal style…",
+        "Merge Styles" => "Scal style",
+        "Style" => "Styl",
+        "Style name:" => "Nazwa stylu:",
+        "Merge styles from:" => "Scal style z:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Nie jest otwarty żaden inny skoroszyt. Otwórz skoroszyt z potrzebnymi stylami, a następnie ponownie wybierz polecenie Scal style."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} zawiera style o takich samych nazwach jak ten skoroszyt:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Zastąpić je stylami z {name}? Nie zachowuje style tego skoroszytu i scala pozostałe."
+        }
+        "Yes" => "Tak",
+        "No" => "Nie",
         _ => return None,
     })
 }

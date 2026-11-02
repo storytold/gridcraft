@@ -4,12 +4,12 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 276 / 292 commands implemented (94.5%).**
+**Overall: 277 / 293 commands implemented (94.5%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 11 | 11 | 100% |
-| Home | 94 | 94 | 100% |
+| Home | 95 | 95 | 100% |
 | Insert | 17 | 25 | 68% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
@@ -40,7 +40,7 @@ Implemented:
 - `file.properties` Properties (Info)
 - `file.options` Options (Options)
 
-## Home (94 / 94, 100%)
+## Home (95 / 95, 100%)
 
 Implemented:
 
@@ -90,6 +90,7 @@ Implemented:
 - `home.formatAsTable` Format as Table (Styles)
 - `home.cellStyle` Cell Styles (Styles)
 - `home.newCellStyle` New Cell Style (Styles)
+- `home.mergeStyles` Merge Styles (Styles)
 - `home.insertCells` Insert Cells (Cells)
 - `home.insertRows` Insert Sheet Rows (Cells)
 - `home.insertColumns` Insert Sheet Columns (Cells)

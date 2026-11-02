@@ -987,6 +987,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Gravando",
         "New Macro" => "Nova Macro",
         "Show" => "Mostrar",
+        "New Cell Style…" => "Novo Estilo de Célula…",
+        "Merge Styles…" => "Mesclar Estilos…",
+        "Merge Styles" => "Mesclar Estilos",
+        "Style" => "Estilo",
+        "Style name:" => "Nome do estilo:",
+        "Merge styles from:" => "Mesclar estilos de:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Nenhuma outra pasta de trabalho está aberta. Abra a pasta de trabalho com os estilos desejados e escolha Mesclar Estilos novamente."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} tem estilos com os mesmos nomes desta pasta de trabalho:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Substituí-los pelos estilos de {name}? Não mantém os estilos desta pasta de trabalho e mescla os demais."
+        }
+        "Yes" => "Sim",
+        "No" => "Não",
         _ => return None,
     })
 }

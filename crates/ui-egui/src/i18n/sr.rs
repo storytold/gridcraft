@@ -456,6 +456,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Zaustavi",
         "New Macro" => "Novi makro",
         "Show" => "Prikaži",
+        "New Cell Style…" => "Novi stil ćelije…",
+        "Merge Styles…" => "Objedini stilove…",
+        "Merge Styles" => "Objedinjavanje stilova",
+        "Style" => "Stil",
+        "Style name:" => "Ime stila:",
+        "Merge styles from:" => "Objedini stilove iz:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Nijedna druga radna sveska nije otvorena. Otvorite radnu svesku sa željenim stilovima, a zatim ponovo izaberite Objedini stilove."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} ima stilove sa istim imenima kao ova radna sveska:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Zameniti ih stilovima iz {name}? Ne zadržava stilove ove radne sveske i objedinjuje ostale."
+        }
+        "Yes" => "Da",
+        "No" => "Ne",
         _ => return None,
     })
 }

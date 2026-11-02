@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Home › Cell Styles: the workbook's custom styles, New Cell Style… and Merge Styles…; ribbon catalog count 277 / 293; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
+separately in [parity-checklist.md](parity-checklist.md) (277 / 293).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -172,6 +172,15 @@ or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) and selects
 New Formatting Rule's formula box points like the formula bar: a click on the grid writes the
 cell's absolute reference at the caret (`=$B$2`) and a drag a range, leaving the selection the rule
 applies to as it is (#2348). Other dialogs' reference fields don't take clicks yet.
+Home › Cell Styles lists the workbook's own styles under Custom, above the built-in ones, and ends
+with New Cell Style… (a name for a style made from the active cell's formats) and Merge Styles….
+Merge Styles lists the other open workbooks; OK copies the chosen one's cell styles into the
+active workbook as one undo step (`home.mergeStyles`). Where both have a style of the same name
+and the two differ, it asks first: Yes takes the chosen workbook's, No keeps this workbook's and
+merges the rest, Cancel goes back to the list. Built-in styles take the chosen workbook's version,
+changed or not, as in Excel. Not like Excel: cells formatted with a style keep their look after
+the merge, because a GridCraft cell doesn't remember its style, and the Normal format of cells
+without a format of their own is not merged. With no other workbook open, the dialog says so.
 
 ## Accessibility
 
@@ -196,6 +205,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Home › Cell Styles: the gallery lists the workbook's custom styles under Custom and draws each style as the workbook defines it; New Cell Style… and Merge Styles… at its end (`home.mergeStyles`: another open workbook's styles, with a question about styles of the same name); ribbon catalog count 276 / 292 → 277 / 293 |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |

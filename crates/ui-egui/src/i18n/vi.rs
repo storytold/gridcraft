@@ -428,6 +428,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Dừng",
         "New Macro" => "Macro Mới",
         "Show" => "Hiện",
+        "New Cell Style…" => "Kiểu ô mới…",
+        "Merge Styles…" => "Hợp nhất kiểu…",
+        "Merge Styles" => "Hợp nhất kiểu",
+        "Style" => "Kiểu",
+        "Style name:" => "Tên kiểu:",
+        "Merge styles from:" => "Hợp nhất kiểu từ:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Không có sổ làm việc nào khác đang mở. Hãy mở sổ làm việc có các kiểu bạn muốn, rồi chọn lại Hợp nhất kiểu."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} có các kiểu trùng tên với sổ làm việc này:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Thay thế chúng bằng các kiểu từ {name}? Không sẽ giữ các kiểu của sổ làm việc này và hợp nhất các kiểu còn lại."
+        }
+        "Yes" => "Có",
+        "No" => "Không",
         _ => return None,
     })
 }

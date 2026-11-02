@@ -10,6 +10,7 @@ use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
+use super::styles::merge_styles;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
@@ -96,6 +97,18 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 m.remove("stop");
             }
         }
+        // The workbook (by name, or by id when another open one has the same name) and the answer
+        // about styles with the same names.
+        "mergeStyles" => {
+            let mut m = Map::new();
+            if let Some(from) = d.values.get("source").filter(|x| !x.is_null()).or(d.values.get("from")) {
+                m.insert("from".into(), from.clone());
+            }
+            if let Some(answer) = d.values.get("sameNames").filter(|x| x.is_string()) {
+                m.insert("sameNames".into(), answer.clone());
+            }
+            v = Json::Object(m);
+        }
         "defineName" => {
             if let Some(m) = v.as_object_mut() {
                 for key in ["scope", "oldScope"] {
@@ -179,6 +192,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "mergeStyles" => merge_styles(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),

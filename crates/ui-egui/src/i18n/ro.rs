@@ -1043,6 +1043,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Înregistrare",
         "New Macro" => "Macrocomandă nouă",
         "Show" => "Afișare",
+        "New Cell Style…" => "Stil de celulă nou…",
+        "Merge Styles…" => "Îmbinare stiluri…",
+        "Merge Styles" => "Îmbinare stiluri",
+        "Style" => "Stil",
+        "Style name:" => "Nume stil:",
+        "Merge styles from:" => "Îmbinare stiluri din:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Nu este deschis niciun alt registru de lucru. Deschideți registrul de lucru cu stilurile dorite, apoi alegeți din nou Îmbinare stiluri."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} conține stiluri cu aceleași nume ca acest registru de lucru:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Le înlocuiți cu stilurile din {name}? Nu păstrează stilurile acestui registru de lucru și le îmbină pe celelalte."
+        }
+        "Yes" => "Da",
+        "No" => "Nu",
         _ => return None,
     })
 }

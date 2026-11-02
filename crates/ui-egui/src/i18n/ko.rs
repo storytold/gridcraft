@@ -457,6 +457,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "중지",
         "New Macro" => "새 매크로",
         "Show" => "표시",
+        "New Cell Style…" => "새 셀 스타일…",
+        "Merge Styles…" => "스타일 병합…",
+        "Merge Styles" => "스타일 병합",
+        "Style" => "스타일",
+        "Style name:" => "스타일 이름:",
+        "Merge styles from:" => "스타일을 가져올 통합 문서:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "열려 있는 다른 통합 문서가 없습니다. 원하는 스타일이 있는 통합 문서를 연 다음 스타일 병합을 다시 선택하세요."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name}에 이 통합 문서와 이름이 같은 스타일이 있습니다:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "{name}의 스타일로 바꾸시겠습니까? 아니요를 선택하면 이 통합 문서의 스타일을 유지하고 나머지를 병합합니다."
+        }
+        "Yes" => "예",
+        "No" => "아니요",
         _ => return None,
     })
 }

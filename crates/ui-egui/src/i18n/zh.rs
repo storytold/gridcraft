@@ -449,6 +449,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "停止",
         "New Macro" => "新建宏",
         "Show" => "显示",
+        "New Cell Style…" => "新建单元格样式…",
+        "Merge Styles…" => "合并样式…",
+        "Merge Styles" => "合并样式",
+        "Style" => "样式",
+        "Style name:" => "样式名：",
+        "Merge styles from:" => "合并样式来源：",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "没有打开其他工作簿。请打开包含所需样式的工作簿，然后再次选择“合并样式”。"
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} 中有与此工作簿同名的样式：",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "是否用 {name} 中的样式替换它们？选择“否”将保留此工作簿的样式，并合并其余样式。"
+        }
+        "Yes" => "是",
+        "No" => "否",
         _ => return None,
     })
 }
