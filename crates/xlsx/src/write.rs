@@ -15,6 +15,14 @@ pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 pub const XML_DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 
+/// GridCraft's private extension namespace and the ext uri its From Web connection data
+/// travels under (Excel ignores an ext whose uri it does not know, and keeps the part).
+pub const GC_NS: &str = "https://gridcraft.app/ns/webquery";
+/// The Markup Compatibility namespace (`mc:Ignorable` and friends) whose attributes on a
+/// kept root must survive a merge, however their prefix is spelled.
+pub const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+pub const GC_URI: &str = "{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}";
+
 pub const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 pub const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
@@ -123,6 +131,9 @@ pub struct Out {
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
     pub table_id: u32,
+    /// Table ids already emitted to the package: a model id is kept only the first time it
+    /// appears (a duplicate or zero id gets a fresh unused one), so `table/@id` stays unique.
+    pub used_table_ids: std::collections::HashSet<u32>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -257,6 +268,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         comments: 0,
         persons: vec![],
         table_id: 0,
+        used_table_ids: Default::default(),
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
@@ -275,7 +287,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels)?;
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
@@ -340,6 +352,37 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // Workbook-level parts.
     let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
+    // Saved From Web connections (Excel's connections.xml, a type-5 web-query connection per
+    // imported table; `refreshOnLoad` is the per-connection "refresh on open"). The parts
+    // Excel's own attributes cannot hold — the page table name, its occurrence, the target
+    // sheet, the table's stable id, the last sync — ride in a GridCraft extension element,
+    // the same way chartex stows its private names. A workbook with none stays exactly as it
+    // was: no part, no relationship.
+    // The input file's own connections part (a foreign database query) keeps its place: a
+    // kept part already holds the name, and a zip entry cannot repeat, so the model's
+    // connections wait for a save that has the part to itself. (The round trip reads them
+    // back from the part the next open, whichever wrote it.)
+    if !wb.web_queries.is_empty() && !out.kept.has_connections() {
+        let mut c = format!("{XML_DECL}<connections xmlns=\"{NS_MAIN}\" xmlns:gc=\"{GC_NS}\">");
+        for (i, q) in wb.web_queries.iter().enumerate() {
+            let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
+            let id = q.table_id.unwrap_or(0);
+            let synced = q.last_synced.unwrap_or(0);
+            let _ = write!(c,
+                "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{GC_URI}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+                i + 1,
+                crate::xml::esc_attr(&q.name),
+                crate::xml::esc_attr(&q.url),
+                crate::xml::esc_attr(&q.table),
+                q.occurrence,
+                crate::xml::esc_attr(&q.sheet),
+                id,
+                synced);
+        }
+        c.push_str("</connections>");
+        out.part("xl/connections.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"), c.into_bytes());
+        wb_rels.add("connections", "connections.xml");
+    }
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
     if !out.python_scripts.is_empty() {
@@ -464,9 +507,11 @@ fn write_sheets(
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> Result<(String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter), IoError> {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
-    let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
+    // A kept-part merge that cannot run (the connections part and the model's web queries)
+    // fails the save rather than writing stale bytes.
+    let kept = crate::passthrough::write_workbook(wb, wb_rels, out)?;
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
@@ -493,7 +538,7 @@ fn write_sheets(
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    Ok((sheets_xml, kept, pivots))
 }
 
 fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {

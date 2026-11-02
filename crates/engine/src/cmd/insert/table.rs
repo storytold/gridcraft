@@ -201,7 +201,7 @@ pub(super) fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json>
 }
 
 /// Writes the totals row cells (labels and SUBTOTAL formulas).
-fn write_totals(sh: &mut Sheet, ti: usize) {
+pub(crate) fn write_totals(sh: &mut Sheet, ti: usize) {
     let Some(t) = sh.tables.get(ti).cloned() else { return };
     if !t.totals_row {
         return;
@@ -285,6 +285,9 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = cx.sheet_mut(si)?.tables.get_mut(ti) {
             t.name = name.clone();
         }
+        // A saved From Web connection to this table follows the rename.
+        let sheet = cx.wb.sheet(si).map(|sh| sh.name.clone()).unwrap_or_default();
+        crate::cmd::web::rename_connection(&mut cx.wb, &sheet, &old, &name);
         // Structured references follow the rename.
         for i in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =

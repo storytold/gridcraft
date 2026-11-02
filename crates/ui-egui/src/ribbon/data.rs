@@ -7,6 +7,40 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    let web = big_button(ui, Icon::Table, "From\nWEB", "Import a table from a web page (From Web)", false);
+    control_keytip(app, ui, &web, "data.fromWeb");
+    if web.clicked() {
+        app.open_dialog("fromWeb", json!({}));
+    }
+    ui.vertical(|ui| {
+        let qc = small_button(ui, Icon::Redo, "", "Queries & Connections (saved web tables, one-click Sync)", false);
+        control_keytip(app, ui, &qc, "data.queriesConnections");
+        if qc.clicked() {
+            app.open_dialog("queriesConnections", json!({}));
+        }
+        let ra = small_button(ui, Icon::Redo, "", "Refresh All (re-sync every saved web table)", false);
+        control_keytip(app, ui, &ra, "data.webRefresh");
+        if ra.clicked() {
+            // The fetch runs in the background (the ribbon keeps responding); the app-level
+            // poll applies and reports it. Per-connection failures come back as `errors` on a
+            // successful result, which `act`'s alert path never shows.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let urls: Vec<String> = app.session.active().map(|d| d.wb.web_queries.iter().map(|q| q.url.clone()).collect()).unwrap_or_default();
+                if urls.is_empty() {
+                    app.message = Some(("Refresh All".into(), "No saved connections. Import a table with Data ▸ From Web to create one.".into()));
+                } else {
+                    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                    app.start_fetch(&refs, ("data.webRefresh", json!({})));
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            match app.run("data.webRefresh", json!({})) {
+                Ok(r) => crate::dialogs::report_refresh_all(app, &r),
+                Err(e) => app.message = Some(("Refresh All".into(), crate::clean_error(&e))),
+            }
+        }
+    });
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

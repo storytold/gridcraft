@@ -107,6 +107,7 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"sheet": r["name"], "rows": rows.len(), "cols": w}))
 }
 
+/// `data.fromTableRange`: the selected block as CSV text into a copy of its sheet.
 pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let r = target_range(s, p)?;
     let d = s.doc()?;
@@ -116,9 +117,11 @@ pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
 }
 
+/// `data.queriesConnections`: the saved From Web connections (source, last sync) followed by
+/// the workbook's imported tables — the Queries & Connections pane's list.
 pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
-    Ok(Json::Array(
+    let tables: Vec<Json> =
         d.wb.sheets
             .iter()
             .flat_map(|sh| {
@@ -126,6 +129,25 @@ pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {
                     .iter()
                     .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1)}))
             })
-            .collect(),
-    ))
+            .collect();
+    // The saved From Web connections, with the source and the last sync the pane shows. The
+    // sheet and name are resolved from the live table (by its stable id) so the pane and "Go to
+    // table" follow renames even in workbooks saved before connections tracked them.
+    let web: Vec<Json> =
+        d.wb.web_queries
+            .iter()
+            .map(|q| {
+                let live = q.table_id.and_then(|id| {
+                    d.wb.sheets.iter().find_map(|sh| sh.tables.iter().find(|t| t.id == id).map(|t| (t.name.clone(), sh.name.clone())))
+                });
+                json!({
+                    "name": live.as_ref().map(|(n, _)| n).unwrap_or(&q.name),
+                    "sheet": live.as_ref().map(|(_, s)| s).unwrap_or(&q.sheet),
+                    "url": q.url, "table": q.table,
+                    "last_synced": q.last_synced.unwrap_or(0), "web": true,
+                    "refresh_on_open": q.refresh_on_open,
+                })
+            })
+            .collect();
+    Ok(Json::Array([web, tables].concat()))
 }

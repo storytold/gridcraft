@@ -22,6 +22,22 @@ impl SheetApp {
             self.ui.recent.truncate(20);
         }
         self.show_open_warnings(r);
+        // Excel's "Refresh data when opening the file": connections opted in sync now. The
+        // desktop app is a user action on their own machine (File \u{25b8} Open, the Recent
+        // list), so the file is host-trusted and may fetch; the refresh runs as a background
+        // fetch (a blocking call here would freeze the UI for up to the fetch timeout per
+        // connection), and the app-level poller reports its result. The wasm build installs
+        // no fetch source, so it never refreshes on open.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let urls: Vec<String> = self.session.active().map(|d| {
+                d.wb.web_queries.iter().filter(|q| q.refresh_on_open).map(|q| q.url.clone()).collect()
+            }).unwrap_or_default();
+            if !urls.is_empty() {
+                let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                self.start_fetch(&refs, ("data.webRefresh", json!({"refreshOnOpen": true})));
+            }
+        }
     }
 
     /// Turns the `warnings` a `file.open` result carries into an info-bar notice, choosing the

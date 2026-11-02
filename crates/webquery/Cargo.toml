@@ -1,0 +1,19 @@
+[package]
+name = "gridcraft-webquery"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
+description = "Web table import (Data > Get Data > From Web): fetch a page and extract its tables. Native only."
+
+[dependencies]
+gridcraft-engine = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+encoding_rs = "0.8"
+
+[lints]
+workspace = true
