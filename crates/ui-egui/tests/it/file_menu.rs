@@ -419,8 +419,11 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(wb.active().unwrap().value(CellRef::new(1, 1)), Value::text("saved_with_y"));
     let _ = std::fs::remove_dir_all(&dir);
+}
 
-    // 3. Quitting multiple workbooks: single-key 'N' answers one workbook per key press
+#[test]
+fn save_changes_dialog_held_key_repeat_ignored() {
+    // Quitting multiple workbooks: single-key 'N' answers one workbook per key press
     let mut h = harness(Services::default());
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "first"})).unwrap();
     h.state_mut().run("file.new", serde_json::json!({})).unwrap();
@@ -471,8 +474,11 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     let sent = press_dialog_key(&mut h, egui::Key::D, egui::Modifiers::NONE);
     assert!(sent.contains(&egui::ViewportCommand::Close));
     assert!(h.state().dialog.is_none());
+}
 
-    // 4. Focused "Don't Save" button does not hijack Enter key; Enter still answers Save
+#[test]
+fn save_changes_dialog_button_focus_and_space() {
+    // Focused "Don't Save" button does not hijack Enter key; Enter still answers Save
     let dir = std::env::temp_dir().join(format!("gridcraft-enter-focus-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("FocusTest.xlsx").to_string_lossy().into_owned();
@@ -496,7 +502,7 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("keep_this"));
     let _ = std::fs::remove_dir_all(&dir);
 
-    // 5. Space key on focused "Don't Save" button activates it
+    // Space key on focused "Don't Save" button activates it
     let dir = std::env::temp_dir().join(format!("gridcraft-space-focus-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("SpaceTest.xlsx").to_string_lossy().into_owned();
@@ -519,8 +525,11 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     let (wb, _) = gridcraft_engine::io::open_bytes("SpaceTest.xlsx", &std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
     let _ = std::fs::remove_dir_all(&dir);
+}
 
-    // 6. Escape key cancels the dialog, keeping the workbook and window open
+#[test]
+fn save_changes_dialog_cancel_and_physical_key() {
+    // Escape key cancels the dialog, keeping the workbook and window open
     let mut h = harness(Services::default());
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_unsaved"})).unwrap();
     h.run_steps(2);
@@ -532,7 +541,7 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     assert!(h.state().dialog.is_none(), "Escape closes the Save Changes dialog");
     assert_eq!(h.state().session.documents().len(), 1, "workbook stays open");
 
-    // 7. Single-key 'C' cancels the dialog
+    // Single-key 'C' cancels the dialog
     request_window_close(&mut h);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
 
@@ -541,7 +550,7 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     assert!(h.state().dialog.is_none(), "'C' closes the Save Changes dialog");
     assert_eq!(h.state().session.documents().len(), 1, "workbook stays open");
 
-    // 8. Physical key layout match: physical Key::Y triggers Save even under alternative logical layout
+    // Physical key layout match: physical Key::Y triggers Save even under alternative logical layout
     let dir = std::env::temp_dir().join(format!("gridcraft-phys-key-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("PhysLayout.xlsx").to_string_lossy().into_owned();
