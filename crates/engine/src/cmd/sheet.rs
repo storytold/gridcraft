@@ -521,7 +521,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
-        if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+        if sh.cells.iter_range(doomed).any(|(_, x)| x.has_content()) {
             return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
