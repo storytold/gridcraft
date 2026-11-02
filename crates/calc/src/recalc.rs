@@ -31,7 +31,9 @@ use pass_host::{PassHost, spills_as_before};
 /// Formulas in a level below this count stay on one thread.
 const PARALLEL_MIN: usize = 512;
 /// Formulas of a multi-threaded level evaluated first on the main thread before workers start.
-const WARM_UP: usize = 64;
+/// Formulas calculated on the caller before workers start. This scheduler has no
+/// shared lookup cache to fill, so leaving them on the caller only slows the level.
+const WARM_UP: usize = 0;
 
 /// Calculation threads for `calc`: one on wasm, when multi-threaded calculation is off, or when
 /// the machine has one processor; else the manual count or every processor, at most 64.

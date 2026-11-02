@@ -271,6 +271,7 @@ fn eval_flat_scalar(wb: &Workbook, sheet: usize, expr: &Expr, prior: &HashMap<Ke
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[inline]
 fn eval_flat_scalar_at(
     wb: &Workbook,
     sheet: usize,
@@ -330,6 +331,7 @@ fn eval_flat_scalar_at(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 fn fold_stored_ref(
     wb: &Workbook,
@@ -383,6 +385,7 @@ fn fold_stored_ref(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 fn eval_flat_agg(
     wb: &Workbook,
