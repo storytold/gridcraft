@@ -337,7 +337,8 @@ fn leads_to_network(path: &Path, depth: u8) -> bool {
 }
 
 /// The target of the link in a cell: its stored hyperlink, or the first argument of a cell whose
-/// formula is `=HYPERLINK(link, …)`, evaluated. `external` is the stored link's mark ([`classify_link`]).
+/// formula is `=HYPERLINK(link, …)`, evaluated. `external` is the stored link's mark ([`classify_link`]); a
+/// formula's link leaves the workbook unless it names a defined name or a table.
 pub fn link_at(wb: &Workbook, sheet: usize, at: CellRef) -> Option<(String, bool)> {
     let sh = wb.sheet(sheet)?;
     if let Some(h) = sh.hyperlinks.get(&at) {
@@ -349,7 +350,12 @@ pub fn link_at(wb: &Workbook, sheet: usize, at: CellRef) -> Option<(String, bool
         return None;
     }
     match gridcraft_calc::recalc::evaluate_expr(wb, sheet, at, args.first()?) {
-        gridcraft_core::Value::Text(t) if !t.trim().is_empty() => Some((t.to_string(), true)),
+        gridcraft_core::Value::Text(t) if !t.trim().is_empty() => {
+            // As in the Insert Hyperlink dialog, a defined name or a table is a place in this workbook.
+            let target = t.trim();
+            let external = wb.name(target, sheet).is_none() && wb.table(target).is_none();
+            Some((t.to_string(), external))
+        }
         _ => None,
     }
 }

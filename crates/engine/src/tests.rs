@@ -4597,6 +4597,24 @@ fn link_open_refuses_every_scheme_but_http_https_mailto_and_local_files() {
 }
 
 #[test]
+fn a_formula_link_to_a_defined_name_or_table_goes_there_instead_of_opening_a_file() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Price", "refersTo": "=Sheet1!$D$7"})).unwrap();
+    s.execute("insert.table", json!({"range": "F1:G3", "name": "Sales"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=HYPERLINK(\"Price\",\"p\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=HYPERLINK(\"Sales\",\"t\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=HYPERLINK(\"Missing.txt\",\"f\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "A1"})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "D7");
+    s.execute("link.open", json!({"cell": "A2"})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "F2");
+    assert!(s.take_ui_requests().is_empty(), "nothing was handed to the system");
+    // A bare file name is still a file (here an unsaved workbook: no folder to take it from).
+    assert!(s.execute("link.open", json!({"cell": "A3"})).is_err());
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn link_open_opens_existing_local_files_and_folders_but_not_programs() {
     #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
