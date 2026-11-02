@@ -246,6 +246,21 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pythonMode" => {
+                // `{"on": true}` starts Python mode on the active cell (or switches the edit in
+                // progress to it), `{"on": false}` leaves it; without `on` it switches. A start
+                // that is refused (a locked cell, a cell inside a spill, hidden code) is an error
+                // with the reason, not `{"on": false}`.
+                let on = self.editor.as_ref().is_some_and(|e| e.python);
+                let want = p.get("on").and_then(Json::as_bool).unwrap_or(!on);
+                if want != on {
+                    self.toggle_python_mode();
+                    if want && !self.editor.as_ref().is_some_and(|e| e.python) {
+                        return Some(Err(self.python_mode_refused()));
+                    }
+                }
+                Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -293,6 +308,7 @@ impl SheetApp {
                 }
             }
         }
+        self.follow_open_draft();
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
