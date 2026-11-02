@@ -1084,30 +1084,15 @@ pub(crate) mod tests {
 
     #[test]
     fn thread_count_respects_workbook_settings() {
-        let off = gridcraft_model::CalcSettings {
-            multi_threaded: false,
-            ..Default::default()
-        };
+        let off = gridcraft_model::CalcSettings { multi_threaded: false, ..Default::default() };
         assert_eq!(super::thread_count(&off), 1);
-        let manual = gridcraft_model::CalcSettings {
-            threads: 3,
-            ..Default::default()
-        };
+        let manual = gridcraft_model::CalcSettings { threads: 3, ..Default::default() };
         assert_eq!(super::thread_count(&manual), 3);
-        let every = gridcraft_model::CalcSettings {
-            threads: 0,
-            ..Default::default()
-        };
-        let expected = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1)
-            .clamp(1, 64);
+        let every = gridcraft_model::CalcSettings { threads: 0, ..Default::default() };
+        let expected = std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1).clamp(1, 64);
         assert_eq!(super::thread_count(&every), expected);
         assert!(super::thread_count(&every) > 1);
-        let capped = gridcraft_model::CalcSettings {
-            threads: 1000,
-            ..Default::default()
-        };
+        let capped = gridcraft_model::CalcSettings { threads: 1000, ..Default::default() };
         assert_eq!(super::thread_count(&capped), 64);
     }
 
