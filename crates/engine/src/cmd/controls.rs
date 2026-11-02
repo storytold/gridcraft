@@ -571,7 +571,7 @@ pub(crate) fn sync_linked_values(wb: &mut Workbook) {
 // ---------------------------------------------------------------- xlsx
 
 /// The hidden-data key of the button actions xlsx has no place for.
-const ACTIONS_KEY: &str = "control_actions";
+pub(crate) const ACTIONS_KEY: &str = "control_actions";
 
 /// A button's action that xlsx carries itself: a macro on the selection (`macro="[0]!Name"`).
 fn plain(a: &ControlAction) -> bool {
@@ -604,11 +604,11 @@ pub(crate) fn with_action_names(wb: &Workbook) -> Result<Option<Workbook>> {
 }
 
 /// After a file is opened: gives buttons back the actions kept in the hidden name, and removes
-/// it. Entries that don't parse, or don't match a button, are dropped: the button at the stored
-/// place must have the stored name and anchor cell (another application may have added, removed
-/// or reordered controls), and must not have been given another macro since (a stored macro
-/// action comes back only on a button that still runs that macro, a stored command only on one
-/// the file gives no macro).
+/// it. Entries that don't parse, or don't match a button, are dropped: an entry must carry the
+/// button's name and anchor cell, the button at the stored place must have that name and anchor
+/// cell (another application may have added, removed or reordered controls), and it must not
+/// have been given another macro since (a stored macro action comes back only on a button that
+/// still runs that macro, a stored command only on one the file gives no macro).
 pub(crate) fn load_action_names(wb: &mut Workbook) {
     let Some(items) = stash::get_json(wb, ACTIONS_KEY) else { return };
     stash::remove(wb, ACTIONS_KEY);
@@ -624,8 +624,8 @@ pub(crate) fn load_action_names(wb: &mut Workbook) {
         let text = |k: &str| item.get(k).and_then(Json::as_str);
         let same = |c: &FormControl| {
             c.kind == ControlKind::Button
-                && text("name").is_none_or(|n| n == c.display_name())
-                && text("at").is_none_or(|a| a == c.anchor.cell.a1())
+                && text("name").is_some_and(|n| n == c.display_name())
+                && text("at").is_some_and(|a| a == c.anchor.cell.a1())
                 && match (&c.action, &action) {
                     (None, ControlAction::Command { .. }) => true,
                     (Some(ControlAction::Macro { name: now, .. }), ControlAction::Macro { name: kept, .. }) => now.eq_ignore_ascii_case(kept),

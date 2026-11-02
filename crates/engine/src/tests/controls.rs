@@ -429,6 +429,44 @@ fn a_kept_button_action_comes_back_only_on_the_same_button() {
     assert_eq!(cleared.sheets[0].controls[0].action, actions(&wb)[0], "the command comes back");
 }
 
+/// An entry of the hidden name must carry the button's name and anchor cell (the writer always
+/// stores both): a hand-edited entry without either, or with something else there, is dropped
+/// like an unparsable one, so it cannot pin its action onto whatever button sits at that index.
+#[test]
+fn a_kept_action_without_the_buttons_name_or_anchor_is_dropped() {
+    use crate::cmd::controls::{ACTIONS_KEY, load_action_names, with_action_names};
+    use crate::cmd::stash;
+    let mut s = s();
+    s.execute("insert.button", json!({"at": "D2", "text": "Run", "command": "cell.set", "params": {"cell": "A9", "input": "cmd"}})).unwrap();
+    let stored = with_action_names(&s.doc().unwrap().wb).unwrap().unwrap();
+    let items = stash::get_json(&stored, ACTIONS_KEY).unwrap();
+    assert!(items[0]["name"].is_string() && items[0]["at"].is_string(), "the writer stores both keys: {items}");
+    // As the file brings a command button back: with no action.
+    let kept = |items: &Json| {
+        let mut wb = stored.clone();
+        wb.sheet_mut(0).unwrap().controls[0].action = None;
+        stash::remove(&mut wb, ACTIONS_KEY);
+        stash::set_json(&mut wb, ACTIONS_KEY, items).unwrap();
+        load_action_names(&mut wb);
+        assert!(stash::get(&wb, ACTIONS_KEY).is_none(), "the hidden name is removed");
+        wb.sheets[0].controls[0].action.clone()
+    };
+    let edited = |key: &str, value: Option<Json>| {
+        let mut items = items.clone();
+        let entry = items[0].as_object_mut().unwrap();
+        match value {
+            Some(v) => entry.insert(key.to_string(), v),
+            None => entry.remove(key),
+        };
+        items
+    };
+    assert_eq!(kept(&edited("name", None)), None, "no `name`");
+    assert_eq!(kept(&edited("at", None)), None, "no `at`");
+    assert_eq!(kept(&edited("name", Some(json!(1)))), None, "`name` is not text");
+    assert_eq!(kept(&edited("at", Some(Json::Null))), None, "`at` is null");
+    assert!(matches!(kept(&items), Some(ControlAction::Command { .. })), "the writer's own entry still comes back");
+}
+
 /// The saved xlsx bytes of `s`'s workbook.
 fn saved_xlsx(s: &mut Session) -> Vec<u8> {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
