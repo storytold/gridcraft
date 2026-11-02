@@ -308,13 +308,29 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     ui.collapsing("Size", |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
         let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
-        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
-        let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(40.0..=4000.0));
-        let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(40.0..=4000.0));
+        let current = (chart.anchor.width, chart.anchor.height);
+        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or(current);
+        // A file can make a chart larger than the 4,000 points a field otherwise reaches. The
+        // range keeps such a size, so the field shows it instead of clamping it to 4,000.
+        let range = |v: f32| 40.0..=v.max(4000.0);
+        let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(range(current.0)));
+        let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(range(current.1)));
         if a.drag_stopped() || a.lost_focus() || b.drag_stopped() || b.lost_focus() {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
             if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.run_or_alert("chart.set", json!({"chart": id, "width": w, "height": h}));
+                // Only an edited dimension is sent: the other keeps what the chart has, however
+                // large a file made it.
+                let mut params = serde_json::Map::new();
+                params.insert("chart".into(), json!(id));
+                if w != current.0 {
+                    params.insert("width".into(), json!(w));
+                }
+                if h != current.1 {
+                    params.insert("height".into(), json!(h));
+                }
+                if params.len() > 1 {
+                    app.run_or_alert("chart.set", Json::Object(params));
+                }
             }
         } else if a.dragged() || a.has_focus() || b.dragged() || b.has_focus() {
             ui.data_mut(|d| d.insert_temp(draft, (w, h)));

@@ -974,11 +974,19 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     };
     // Re-anchor at the cell under the new top-left.
     let nc = CellRef::new(sh.row_at(y0 as f64), sh.col_at(x0 as f64));
-    let params = json!({
+    let mut params = json!({
         "kind": obj.kind.name(), "id": obj.id, "at": nc.a1(),
         "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32,
-        "width": x1 - x0, "height": y1 - y0,
     });
+    // Only a handle changes the size. A body move sends none, so the engine keeps whatever the
+    // object has: a file can make it larger than `object.move` accepts for a new size, and
+    // moving it must not shrink it to that limit.
+    if handle.is_some()
+        && let Some(p) = params.as_object_mut()
+    {
+        p.insert("width".into(), json!(x1 - x0));
+        p.insert("height".into(), json!(y1 - y0));
+    }
     let revision = app.session.active().map(|d| d.revision);
     let _ = app.session.run("object.move", params);
     if stepped {
