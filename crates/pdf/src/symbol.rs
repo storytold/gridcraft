@@ -2,10 +2,12 @@
 //!
 //! Source: the character codes and glyph advance widths ("C" and "WX" values) of Adobe's Core 14
 //! AFM metrics file for Symbol (`Symbol.afm`, version 001.008), and the Unicode values of its glyph
-//! names from Adobe's published Symbol encoding table (`symbol.txt`, Unicode mapping of the
-//! Symbol encoding). Adobe distributes the Core 14 metrics with permission to use, copy and
-//! distribute them for any purpose (the notice is quoted in `metrics.rs`). Only the numbers are
-//! reproduced here, typed in from the public metrics; no AFM file is included. The stretchable
+//! names from Unicode, Inc.'s `symbol.txt` ("Adobe Symbol Encoding to Unicode", table version
+//! 1.0). Adobe distributes the Core 14 metrics with permission to use, copy and distribute them
+//! for any purpose (the notice is quoted in `metrics.rs`); Unicode, Inc. grants the right to use
+//! the information in its file in products supporting the Unicode Standard (its notice is
+//! recorded in `ATTRIBUTION.md`). Only the numbers are reproduced here, typed in from the public
+//! tables; neither file is included. The stretchable
 //! bracket, brace and integral pieces (codes 0xE6 to 0xEF and 0xF3 to 0xFE) and the sans-serif
 //! duplicates of the registered, copyright and trademark signs are left out of the Unicode map:
 //! they have no Unicode counterpart of their own.
