@@ -2,6 +2,7 @@ use super::cell_paint::{
     Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
+use super::focus::paint_focus_bands;
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
 use super::{
@@ -98,6 +99,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) workbook: &'a Workbook,
     pub(crate) sheet_index: usize,
     pub(crate) sheet: &'a Sheet,
+    /// The active cell, for the Focus Cell bands.
+    pub(crate) active: CellRef,
     pub(crate) rows: (u32, u32),
     pub(crate) cols: (u32, u32),
     pub(crate) cf: &'a mut CfCache,
@@ -117,6 +120,8 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     paint_gridlines(&quadrant);
     let cells = visible_cells(&quadrant);
     let looks = paint_backgrounds(&mut quadrant, &cells, &merges);
+    // Focus Cell: the active cell's row and column, over the fills and under the text.
+    paint_focus_bands(&quadrant, None);
     let outside = outside_text_cells(&mut quadrant, &merges);
     paint_cells(&mut quadrant, &looks, &outside, &merges);
     paint_borders(&mut quadrant, &looks, &merges);
@@ -309,6 +314,12 @@ fn paint_checkbox(p: &egui::Painter, rect: Rect, z: f32, on: bool) {
     }
 }
 
+/// Clears the gridlines under overflowing text. The Focus Cell tint goes on again there.
+fn clear_overflow(q: &QuadrantPaint<'_>, area: Rect) {
+    q.painter.rect_filled(area, 0.0, q.tokens.grid_bg);
+    paint_focus_bands(q, Some(area));
+}
+
 fn text_overflows_cell(numeric: bool, value: &Value, rotation: i16, width: f32, rect_width: f32, pad: f32) -> bool {
     !numeric && !matches!(value, Value::Number(_)) && rotation.abs() != 90 && width > rect_width - 2.0 * pad
 }
@@ -329,7 +340,6 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let wb = q.workbook;
     let si = q.sheet_index;
     let sh = q.sheet;
-    let t = q.tokens;
     let z = geo.z;
     let (c0, c1) = q.cols;
     let in_merge = |cell| merges.iter().find(|m| m.contains(cell)).copied();
@@ -477,10 +487,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
             let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
             if extra_l.width() > 0.0 {
-                p.rect_filled(extra_l, 0.0, t.grid_bg);
+                clear_overflow(q, extra_l);
             }
             if extra_r.width() > 0.0 {
-                p.rect_filled(extra_r, 0.0, t.grid_bg);
+                clear_overflow(q, extra_r);
             }
         }
     }

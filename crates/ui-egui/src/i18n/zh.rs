@@ -215,6 +215,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "字号",
         "Gridlines" => "网格线",
         "Headings" => "标题",
+        "Focus Cell" => "聚焦单元格",
         "Zoom" => "缩放",
         "Magnification" => "缩放比例",
         "Fit selection" => "恰好容纳选定区域",

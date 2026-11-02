@@ -215,6 +215,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "글꼴 크기",
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
+        "Focus Cell" => "셀 포커스",
         "Zoom" => "확대/축소",
         "Magnification" => "배율",
         "Fit selection" => "선택 영역에 맞춤",

@@ -215,6 +215,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Размер шрифта",
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
+        "Focus Cell" => "Фокус на ячейке",
         "Zoom" => "Масштаб",
         "Magnification" => "Масштаб",
         "Fit selection" => "По выделению",

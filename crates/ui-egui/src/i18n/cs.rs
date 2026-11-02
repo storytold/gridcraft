@@ -194,6 +194,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Velikost písma",
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
+        "Focus Cell" => "Zaostřit buňku",
         "Zoom" => "Lupa",
         "Magnification" => "Měřítko",
         "Fit selection" => "Přizpůsobit výběru",

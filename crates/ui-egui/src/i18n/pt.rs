@@ -212,6 +212,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Tamanho da fonte",
         "Gridlines" => "Linhas de Grade",
         "Headings" => "Títulos",
+        "Focus Cell" => "Focar célula",
         "Zoom" => "Zoom",
         "Fit selection" => "Ajustar seleção",
         "100%" => "100%",

@@ -4642,6 +4642,100 @@ fn paste_special_validation_moves_relative_references() {
 }
 
 #[test]
+fn view_focus_cell_toggles_the_sheet_flag() {
+    let mut s = s();
+    assert!(!s.doc().unwrap().wb.active().unwrap().focus_cell, "off by default");
+    assert_eq!(s.execute("view.focusCell", json!({})).unwrap()["on"], json!(true));
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell);
+    assert_eq!(s.execute("view.focusCell", json!({})).unwrap()["on"], json!(false));
+    assert!(!s.doc().unwrap().wb.active().unwrap().focus_cell);
+}
+
+#[test]
+fn view_focus_cell_explicit_on_does_not_toggle() {
+    let mut s = s();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell);
+    s.execute("view.focusCell", json!({"on": false})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().focus_cell);
+}
+
+#[test]
+fn view_focus_cell_is_undoable() {
+    let mut s = s();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().focus_cell);
+}
+
+#[test]
+fn view_focus_cell_is_per_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Second"})).unwrap();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell, "on for the active sheet");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().focus_cell, "off for the other sheet");
+}
+
+#[test]
+fn view_focus_cell_color_sets_the_sheet_color() {
+    let mut s = s();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell_color.is_none(), "theme default by default");
+    let out = s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    assert_eq!(out["color"], json!("#5FC8D8"));
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)));
+    s.execute("view.focusCellColor", json!({"color": "default"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell_color.is_none());
+}
+
+#[test]
+fn view_focus_cell_color_rejects_a_bad_hex() {
+    let mut s = s();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    let bad = [
+        json!({"color": "#12345"}),
+        json!({"color": "#fff"}),
+        json!({"color": "#GGGGGG"}),
+        json!({"color": ""}),
+        json!({"color": "#+12345"}),
+        json!({"color": "#-12345"}),
+        json!({"color": 0x5FC8D8}),
+        json!({"color": null}),
+        json!({"color": true}),
+        json!({"color": ["#5FC8D8"]}),
+        json!({}),
+    ];
+    for params in bad {
+        assert!(s.execute("view.focusCellColor", params.clone()).is_err(), "{params} is not a color");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "the old color stays");
+}
+
+#[test]
+fn view_focus_cell_color_is_undoable() {
+    let mut s = s();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().focus_cell_color.is_none());
+}
+
+#[test]
+fn a_copied_sheet_keeps_focus_cell() {
+    let mut s = s();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets.len(), 2);
+    for sheet in &wb.sheets {
+        assert!(sheet.focus_cell, "{} keeps the tint", sheet.name);
+        assert_eq!(sheet.focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "{} keeps the color", sheet.name);
+    }
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {

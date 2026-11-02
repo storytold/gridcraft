@@ -210,6 +210,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Veličina fonta",
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
+        "Focus Cell" => "Fokus na ćeliju",
         "Zoom" => "Uvećanje",
         "Magnification" => "Uvećanje",
         "Fit selection" => "Uklopi izbor",
