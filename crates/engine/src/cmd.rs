@@ -40,7 +40,11 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Ribbon/menu placement, e.g. `["Home", "Font"]`. Empty = not in menus.
     pub menu: &'static [&'static str],
+    /// Portable notation: `Cmd` is ⌘ on macOS and Ctrl elsewhere.
     pub shortcut: Option<&'static str>,
+    /// macOS override when its key differs. Equal to `shortcut` marks a Mac-only shortcut
+    /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
     pub run: Run,
@@ -54,10 +58,30 @@ pub struct CommandInfo {
     pub label: &'static str,
     pub menu: Vec<&'static str>,
     pub shortcut: Option<&'static str>,
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+impl CommandInfo {
+    /// Format the portable shortcut notation for the runtime operating system.
+    pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
+        let keys = if mac {
+            self.shortcut_mac.or(self.shortcut)
+        } else if self.shortcut_mac.is_some() && self.shortcut_mac == self.shortcut {
+            // An identical Mac override marks a Mac-only display shortcut.
+            // The portable field remains unchanged for legacy CLI consumers.
+            None
+        } else {
+            self.shortcut
+        }?;
+        if mac {
+            return Some(keys.to_owned());
+        }
+        Some(keys.split('+').map(|part| if part == "Cmd" { "Ctrl" } else { part }).collect::<Vec<_>>().join("+"))
+    }
 }
 
 impl CommandSpec {
@@ -68,6 +92,7 @@ impl CommandSpec {
             label: self.label,
             menu: self.menu.to_vec(),
             shortcut: self.shortcut,
+            shortcut_mac: self.shortcut_mac,
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
@@ -118,13 +143,13 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -180,6 +205,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -197,6 +223,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
