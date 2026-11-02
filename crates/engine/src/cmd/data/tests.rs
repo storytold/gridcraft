@@ -554,7 +554,8 @@ fn autofilter_value_lists_and_equality_ignore_surrounding_spaces() {
         let card_entries: Vec<_> = choices.iter().filter(|(text, _)| text.trim().eq_ignore_ascii_case("Card")).collect();
         assert_eq!(card_entries.len(), 1, "{choices:?}");
         assert!(card_entries[0].1, "{choices:?}");
-        assert!(choices.iter().any(|(text, on)| text == " " && !on), "{choices:?}");
+        assert!(!choices.iter().any(|(text, _)| text.trim().is_empty()), "{choices:?}");
+        assert_eq!(choices.iter().filter(|(text, _)| text == "(Blanks)").count(), 1, "{choices:?}");
         assert!(choices.iter().any(|(text, on)| text == "(Blanks)" && !on), "{choices:?}");
     }
 
