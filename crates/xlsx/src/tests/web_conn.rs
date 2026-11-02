@@ -288,9 +288,8 @@ fn a_root_declared_prefix_survives_removing_the_last_web_query() {
     let mut pkg = crate::package::Package::open(&bytes2).expect("opens");
     let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
     let text = String::from_utf8_lossy(&part);
-    if !text.contains("xmlns:xel=") { panic!("PART:\n{text}"); }
+    assert!(text.contains("xmlns:xel="), "the root keeps its xel binding: {text}");
     assert!(text.contains("<xel:connection"), "the prefixed foreign connection is kept");
-    assert!(true);
     // The stale GridCraft connection from the fixture: gone by name, and no extension
     // marker left (the GC_URI check also proves the fixture's marker matches the real
     // constant - a mismatched fixture marker would make `Old` look foreign and kept).
@@ -611,4 +610,31 @@ fn a_markup_compatibility_attribute_survives_the_rebuild() {
     assert!(text.contains("mc:Ignorable=\"x16\""), "the markup-compatibility attribute is kept: {text}");
     assert!(text.contains("name=\"prices\""), "our connection is merged in");
     assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+}
+
+#[test]
+/// A foreign-only connections part in an unsupported encoding (Latin-1 bytes, say) does
+/// not fail an open-and-save: the model has nothing to merge into it (no GridCraft marker
+/// in the bytes, no web queries in the model), so the part is kept exactly as it was.
+fn a_non_utf8_foreign_only_part_does_not_fail_the_save() {
+    use gridcraft_model::preserved::*;
+    // Latin-1 text: not valid UTF-8, not BOM-marked, not UTF-16.
+    let xml: &[u8] = b"<connections xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><connection id=\"1\" name=\"Caf\xe9\" type=\"4\"/></connections>";
+    assert!(std::str::from_utf8(xml).is_err(), "the fixture is not UTF-8");
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    // No web queries in the model: the save must succeed and keep the part byte for byte.
+    let bytes = write_xlsx(&wb).expect("the save succeeds");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    assert_eq!(&part[..], &xml[..], "the foreign part in its own encoding is kept byte for byte");
 }

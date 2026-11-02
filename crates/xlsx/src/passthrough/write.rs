@@ -388,7 +388,17 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
     // still merges, rather than failing every open-and-save with the part in it.
     let decoded = crate::xml::to_utf8(data);
-    let raw = std::str::from_utf8(&decoded).map_err(|_| IoError::Format("the connections part is not text in a supported encoding".into()))?;
+    // A part in an unsupported encoding is not necessarily a failure: `to_utf8` only
+    // converts BOM-marked or detectable UTF-16, and other bytes pass through. When the
+    // model has nothing to write and the ORIGINAL BYTES hold no GridCraft marker (checked
+    // before the UTF-8 conversion), the part is foreign-only in an unknown encoding and is
+    // kept exactly as it is, rather than failing every open-and-save on it. With something
+    // of ours to write, an unreadable part is an honest save error.
+    let raw = match std::str::from_utf8(&decoded) {
+        Ok(raw) => raw,
+        Err(_) if wb.web_queries.is_empty() && !data.windows(crate::write::GC_URI.len()).any(|w| w == crate::write::GC_URI.as_bytes()) => return Ok(None),
+        Err(_) => return Err(IoError::Format("the connections part is not text in a supported encoding".into())),
+    };
     // Nothing of ours in the part and nothing to write: leave the file's part alone (a
     // foreign-only connections.xml is never rewritten, byte for byte).
     if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
