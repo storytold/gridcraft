@@ -145,8 +145,44 @@ fn list_source(f: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
 
-/// List entries of a list validation (literal or from a range).
+/// Cap on non-empty list choices from a range source (dropdown + validation). Counts items, not
+/// cells, so leading blanks do not hide later values.
+const LIST_ITEMS_CAP: usize = 100_000;
+
+/// One list-validation choice: the label the dropdown shows, and the underlying value (so checking
+/// accepts the label, the serial, or the same stored value, and the picker can commit the value
+/// without re-parsing a lossy label).
+struct ListEntry {
+    display: String,
+    value: Value,
+}
+
+/// List labels of a list validation (literal or from a range).
 pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+    list_entries(wb, sheet, dv).into_iter().map(|e| e.display).collect()
+}
+
+/// Dropdown choices as `(display, commit)`: show `display`; the picker writes `commit` so numbers
+/// keep their raw value (no percent rescale / lossy date reparse) and text keeps leading zeros /
+/// a leading `=` (see `list_picker`).
+pub fn list_choices(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<(String, Json)> {
+    list_entries(wb, sheet, dv)
+        .into_iter()
+        .map(|e| {
+            let commit = match &e.value {
+                Value::Number(n) => json!(n),
+                Value::Bool(b) => json!(b),
+                Value::Text(t) => json!(t.as_ref()),
+                Value::Error(err) => json!(err.as_str()),
+                Value::Empty | Value::Array(_) => json!(e.display.as_str()),
+            };
+            (e.display, commit)
+        })
+        .collect()
+}
+
+/// List choices with display label and stored value.
+fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> {
     let f = dv.f1.trim();
     if is_literal_list(f) {
         // A quoted list is a string literal: `""` inside stands for one `"`.
@@ -154,12 +190,62 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
             Some(body) => body.replace("\"\"", "\""),
             None => f.trim_matches('"').to_string(),
         };
-        return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+        return items
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .map(|display| {
+                let value = Value::text(display.as_str());
+                ListEntry { display, value }
+            })
+            .collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
+    // A range, name or table source: walk stored cells and spills (not every blank address), so a
+    // sparse `A1:P1000000` with one value near the end does not stall the dropdown. Each option
+    // uses that cell's number format (a date serial shows as `Jan-26`, not `46023`).
+    if let Some(areas) = gridcraft_calc::evaluate_areas(wb, sheet, at, f) {
+        let mut out = Vec::new();
+        'areas: for a in areas {
+            let Some(sh) = wb.sheet(a.sheet) else { continue };
+            let push = |out: &mut Vec<ListEntry>, c: CellRef, value: Value| {
+                if value.is_empty() {
+                    return false;
+                }
+                out.push(ListEntry { display: crate::display::value_text(wb, sh, c), value });
+                out.len() >= LIST_ITEMS_CAP
+            };
+            for (c, cell) in sh.cells.iter_range(a.range) {
+                let value = if !cell.value.is_empty() || cell.formula.is_some() {
+                    cell.value.clone()
+                } else {
+                    // Style-only stored cell: value may come from a spill.
+                    sh.spill.get(&c).cloned().unwrap_or(Value::Empty)
+                };
+                if push(&mut out, c, value) {
+                    break 'areas;
+                }
+            }
+            for (c, v) in sh.spill.range(a.range.start..=a.range.end) {
+                if !a.range.contains(*c) || sh.cells.get(*c).is_some() {
+                    continue;
+                }
+                if push(&mut out, *c, v.clone()) {
+                    break 'areas;
+                }
+            }
+        }
+        return out;
+    }
     match gridcraft_calc::evaluate(wb, sheet, at, f) {
-        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
-        v if !v.is_empty() && !v.is_error() => vec![v.display()],
+        Value::Array(a) => a
+            .data
+            .iter()
+            .filter(|v| !v.is_empty())
+            .take(LIST_ITEMS_CAP)
+            .map(|v| ListEntry { display: v.display(), value: v.clone() })
+            .collect(),
+        v if !v.is_empty() && !v.is_error() => vec![ListEntry { display: v.display(), value: v }],
         _ => vec![],
     }
 }
@@ -193,7 +279,15 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => {
+            // Accept the dropdown label, the raw General text of the source value, or the same
+            // underlying value (so a date cell with input_text `46023` still matches `Jan-26`).
+            list_entries(wb, sheet, dv).iter().any(|e| {
+                e.display.eq_ignore_ascii_case(input)
+                    || e.value.display().eq_ignore_ascii_case(input)
+                    || (!e.value.is_empty() && !v.is_empty() && gridcraft_core::compare(&e.value, &v) == std::cmp::Ordering::Equal)
+            })
+        }
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;

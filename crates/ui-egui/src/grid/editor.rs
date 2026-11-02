@@ -114,7 +114,10 @@ pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
     rows * row_h + (rows - 1.0) * gap
 }
 
-/// Draws the validation list popup, choosing above/below and left/right placement for RTL, and applies the clicked item with `cell.set`.
+/// Draws the validation list popup, choosing above/below and left/right placement for RTL, and
+/// applies the clicked item with a value-preserving write: numbers/bools via `range.setValues`,
+/// plain text via `range.setValues`/`parse: false`, and `=…` text via `cell.set` with a forcing
+/// apostrophe. Locked cells on a protected sheet are refused first, as `cell.set` does.
 pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
     let Some(d) = app.session.active() else { return };
@@ -125,7 +128,8 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         app.grid.list_picker = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
+    // Show formatted labels; commit the underlying value (not a re-parsed label).
+    let items = gridcraft_engine::cmd::data::list_choices(&wb, si, &dv);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
@@ -143,12 +147,32 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
             egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
-                for it in &items {
+                for (display, commit) in &items {
                     if ui
-                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
+                        .add(egui::Button::new(display.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
                         .clicked()
                     {
-                        app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
+                        if let Some(m) = app.session.locked_cell_message(si, c) {
+                            app.message = Some(("GridCraft".into(), m));
+                        } else {
+                            match commit {
+                                // Raw values: no percent rescale / date reparse.
+                                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[commit]]}));
+                                }
+                                // Text as given. `parse: false` keeps `00123` text, but a leading
+                                // `=` is still a formula in that API — force text with `'`.
+                                serde_json::Value::String(text) if text.starts_with('=') => {
+                                    app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": format!("'{text}")}));
+                                }
+                                serde_json::Value::String(text) => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[text]], "parse": false}));
+                                }
+                                _ => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[display.as_str()]], "parse": false}));
+                                }
+                            }
+                        }
                         close = true;
                     }
                 }
