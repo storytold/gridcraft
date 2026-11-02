@@ -108,6 +108,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Testo in\ncolonne",
         "Link" => "Collegamento",
         "Symbol" => "Simbolo",
+        "Equation" => "Equazione",
+        "Insert New Equation..." => "Inserisci nuova equazione",
         "Sparklines" => "Sparkline",
         "Checkbox" => "Casella di controllo",
         "Insert checkboxes in the selected cells" => "Inserisci caselle di controllo nelle celle selezionate",

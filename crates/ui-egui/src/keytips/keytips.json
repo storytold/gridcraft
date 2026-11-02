@@ -1081,11 +1081,10 @@
   },
   {
    "seq": "NE",
-   "kind": "command",
-   "target": "insert.equation",
-   "pending": true,
-   "excel": "Equations",
-   "note": "Equations; reserved until the command lands"
+   "kind": "dialog",
+   "target": "equation",
+   "excel": "Equation",
+   "note": "the Equation split button's main half opens the editor"
   },
   {
    "seq": "NF",

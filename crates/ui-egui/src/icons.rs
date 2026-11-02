@@ -104,6 +104,8 @@ pub enum Icon {
     Note,
     TextBox,
     Symbol,
+    /// An equation: a radical sign over an italic x.
+    Equation,
     Sparkline,
     Checkbox,
     Function,
@@ -607,6 +609,10 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.text(8.0, 8.0, "A", 8.0, c, (false, false));
         }
         Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, (false, false)),
+        Icon::Equation => {
+            g.line(&[(1.5, 9.0), (3.5, 8.0), (5.5, 13.5), (8.5, 2.5), (14.5, 2.5)], c, 1.2);
+            g.text(11.0, 8.5, "x", 8.0, blue, (false, true));
+        }
         Icon::Function => g.text(8.0, 8.0, "fx", 11.0, c, (false, true)),
         Icon::Name => {
             g.rect(1.5, 4.0, 13.0, 8.0, None, Some(c));

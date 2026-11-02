@@ -26,6 +26,64 @@ fn python_tokens() {
 }
 
 #[test]
+fn underline_splits_sections_at_the_mark() {
+    let t = Tokens::light();
+    let font = FontId::new(12.0, FontFamily::Monospace);
+    let marked = |job: &egui::text::LayoutJob| -> Vec<String> {
+        job.sections
+            .iter()
+            .filter(|s| s.format.underline.width > 0.0)
+            .map(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].to_string())
+            .collect()
+    };
+    let mut job = layout_job("a + \\foo", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 4..8, t.danger);
+    assert_eq!(marked(&job), vec!["\\foo"]);
+    let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+    assert_eq!(total, job.text.len(), "sections still cover the text");
+    // An empty mark at the end underlines the last character; out-of-range marks are clamped.
+    let mut job = layout_job("x^", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 2..2, t.danger);
+    assert_eq!(marked(&job), vec!["^"]);
+    let mut job = layout_job("\u{e9}", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 50..99, t.danger);
+    assert!(job.sections.iter().any(|s| s.format.underline.width > 0.0));
+}
+
+#[test]
+fn a_stale_mark_inside_a_multibyte_char_snaps_to_char_boundaries() {
+    // The editor's mark comes from the text before this frame's edit: `a\foo` had its error at
+    // 1..5, then an `é` (two bytes) was typed at the start, so byte 1 is inside it.
+    let t = Tokens::light();
+    let font = FontId::new(12.0, FontFamily::Monospace);
+    let ctx = egui::Context::default();
+    for text in ["\u{e9}\\foo", "\u{e9}\u{e9}\u{4e2d}x", "\u{1F600}", "a\u{e9}"] {
+        for start in 0..=text.len() + 1 {
+            for end in 0..=text.len() + 1 {
+                let mut job = layout_job(text, Lang::Latex, &font, t.text, &t.syntax, 200.0);
+                underline(&mut job, start..end, t.danger);
+                for s in &job.sections {
+                    let r = s.byte_range.start.0..s.byte_range.end.0;
+                    assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end), "{text:?} {start}..{end}: {r:?}");
+                }
+                let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+                assert_eq!(total, text.len(), "sections still cover {text:?}");
+                // Laying the job out slices the text at every section: it must not panic.
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let _ = ui.fonts_mut(|f| f.layout_job(job.clone()));
+                });
+                out.textures_delta.clear();
+            }
+        }
+    }
+    let mut job = layout_job("\u{e9}\\foo", Lang::Latex, &font, t.text, &t.syntax, 200.0);
+    underline(&mut job, 1..5, t.danger);
+    let marked: Vec<&str> =
+        job.sections.iter().filter(|s| s.format.underline.width > 0.0).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
+    assert_eq!(marked.concat(), "\u{e9}\\fo", "the mark grows out to the whole characters it touches");
+}
+
+#[test]
 fn latex_tokens() {
     let s = spans("\\frac{a^2}{3} % half\n\\{", Lang::Latex);
     assert_eq!(

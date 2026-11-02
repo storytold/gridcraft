@@ -68,7 +68,7 @@ impl SheetApp {
             capture_epoch: 0,
             capture_geometry: None,
             capture_geometry_from_raw: false,
-            selected_chart: None,
+            selected_object: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,

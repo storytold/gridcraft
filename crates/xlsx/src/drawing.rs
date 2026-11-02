@@ -1,5 +1,10 @@
-//! DrawingML spreadsheet drawings (`xl/drawings/drawingN.xml`): anchors, pictures, shapes and
-//! chart frames.
+//! DrawingML spreadsheet drawings (`xl/drawings/drawingN.xml`): anchors, pictures, shapes,
+//! equations and chart frames.
+//!
+//! An equation is written as `mc:AlternateContent`: the `a14` choice is a text box holding the
+//! equation as Office Math (`a14:m`), the fallback the same text box holding the LaTeX as plain
+//! text. Both carry the source in `descr="gridcraft:latex:…"`, which wins on reading; without it,
+//! Office Math in the subset `omml` reads is converted back to LaTeX.
 
 use std::fmt::Write as _;
 
@@ -127,15 +132,21 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
-        // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
-        // fallback.
+        // Objects in markup-compatibility blocks: the first choice (chartex frames, or Office Math
+        // that converts to LaTeX), else the fallback.
         let objs: Vec<&El> = a
             .children
             .iter()
             .flat_map(|o| match o.name.as_str() {
                 "AlternateContent" => o
                     .child("Choice")
-                    .filter(|c| c.child("graphicFrame").is_some())
+                    .filter(|c| {
+                        // Office Math is taken only when the box holds one equation that
+                        // converts: otherwise the fallback (a picture or text from the writer)
+                        // keeps everything visible.
+                        c.child("graphicFrame").is_some()
+                            || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
+                    })
                     .or_else(|| o.child("Fallback"))
                     .map(|c| c.children.iter().collect())
                     .unwrap_or_default(),
@@ -220,6 +231,32 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         "rightArrow" => ShapeKind::Arrow,
         _ => ShapeKind::Rectangle,
     };
+    // An equation: GridCraft's own source while the marker in the description still matches the
+    // body (another application that edits the Office Math, as Excel does, leaves the description
+    // alone), else the Office Math converted back to LaTeX. A body without Office Math (the
+    // plain-text fallback of an equation outside the subset) keeps the source.
+    let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
+    let tb = obj.child("txBody");
+    let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
+    let source = match (has_math, described_source(descr)) {
+        (true, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker) => Some(src.to_string()),
+        (true, _) => tb.and_then(crate::omml::equation_source),
+        (false, Some((_, src))) => Some(src.to_string()),
+        (false, None) => None,
+    };
+    if let Some(text) = source {
+        let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
+        return Some(Shape {
+            id: 0,
+            kind: ShapeKind::Equation,
+            anchor,
+            fill: Color::Auto,
+            line: ink,
+            text,
+            format: Default::default(),
+            math: Default::default(),
+        });
+    }
     let fill = sp.child("solidFill").and_then(dml_color).unwrap_or_default();
     let line = ln.and_then(|l| l.child("solidFill")).and_then(dml_color).unwrap_or_default();
     let text = obj
@@ -230,7 +267,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         .unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format })
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, math: Default::default() })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -269,7 +306,87 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
     f
 }
 
+/// The `descr` prefix that carries an equation's LaTeX source, as
+/// `gridcraft:latex:<marker>:<source>`: the marker is [`crate::omml::body_marker`] of the text
+/// body written beside it, 16 hex digits.
+const LATEX_DESCR: &str = "gridcraft:latex:";
+
+/// The marker and source of a `gridcraft:latex:<marker>:<source>` description; `None` for any
+/// other description, a malformed marker or a blank source.
+fn described_source(descr: &str) -> Option<(&str, &str)> {
+    let rest = descr.strip_prefix(LATEX_DESCR)?;
+    let (marker, src) = (rest.get(..16)?, rest.get(17..)?);
+    (rest.as_bytes().get(16) == Some(&b':') && marker.bytes().all(|b| b.is_ascii_hexdigit()) && !src.trim().is_empty()).then_some((marker, src))
+}
+
+/// The colour of the first run (DrawingML `rPr` with a fill) under `e`.
+fn first_run_color(e: &El, depth: usize) -> Option<Color> {
+    if depth > 12 {
+        return None;
+    }
+    if e.name == "rPr"
+        && let Some(c) = e.child("solidFill").and_then(dml_color)
+    {
+        return Some(c);
+    }
+    e.children.iter().find_map(|c| first_run_color(c, depth + 1))
+}
+
 // ---------------------------------------------------------------- writing
+
+/// An equation shape (inside the anchor): Office Math with a plain-text fallback when the source
+/// is in the subset OMML covers, else the plain-text box alone. Both carry the source.
+fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
+    // The font size the equation is drawn at (it scales with its frame), in points.
+    let size_pt = sh
+        .math
+        .get(&sh.text)
+        .and_then(Result::ok)
+        .map(|l| {
+            let (w, h) = (l.width.max(0.01), l.total_height().max(0.01));
+            ((sh.anchor.width - 8.0) / w).min((sh.anchor.height - 8.0) / h) * 72.0 / 96.0
+        })
+        .filter(|v| v.is_finite() && *v >= 1.0)
+        .unwrap_or(11.0)
+        .min(409.0);
+    let fill = srgb(&sh.line, theme).map(|c| format!("<a:solidFill>{c}</a:solidFill>")).unwrap_or_default();
+    let sz = (size_pt * 100.0).round() as u32;
+    // The marker of the body written beside the source goes into the description; the reader
+    // takes the source only while the file's body still matches it.
+    let tx = |body: &str| {
+        format!(
+            "<xdr:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" rtlCol=\"0\" anchor=\"ctr\" anchorCtr=\"1\"/><a:lstStyle/>{body}</xdr:txBody>"
+        )
+    };
+    let marker = |tx: &str| crate::xml::parse(tx.as_bytes()).map(|e| crate::omml::body_marker(&e)).unwrap_or_else(|_| "0".repeat(16));
+    let sp = |tx: &str, marker: &str| {
+        format!(
+            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
+            id - 1,
+            esc_attr(&format!("{LATEX_DESCR}{marker}:{}", sh.text)),
+            xfrm(&sh.anchor, "a:xfrm")
+        )
+    };
+    let plain: String = sh
+        .text
+        .split('\n')
+        .map(|line| format!("<a:p><a:pPr algn=\"ctr\"/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr><a:t>{}</a:t></a:r></a:p>", esc(line)))
+        .collect();
+    match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
+        Ok(omml) => {
+            let math = format!(
+                "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\"/></a:p>"
+            );
+            let _ = write!(
+                s,
+                "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent>",
+                sp(&tx(&math), &marker(&tx(&math))),
+                sp(&tx(&plain), &marker(&tx(&math)))
+            );
+        }
+        Err(_) => s.push_str(&sp(&tx(&plain), &marker(&tx(&plain)))),
+    }
+}
 
 /// The opening `<xdr:twoCellAnchor>` for a model anchor, carrying Excel's `editAs` when the mode
 /// is not the default: omitted for "Move and size with cells", `editAs="oneCell"` for "Move but
@@ -366,6 +483,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     xfrm(&ch.anchor, "xdr:xfrm")
                 );
             }
+            Obj::Shape(sh) if sh.kind == ShapeKind::Equation => {
+                let (open, close) = anchor_open(sheet, &sh.anchor);
+                close_tag = close;
+                s.push_str(&open);
+                write_equation(&mut s, sh, id, theme);
+            }
             Obj::Shape(sh) => {
                 let (open, close) = anchor_open(sheet, &sh.anchor);
                 close_tag = close;
@@ -382,7 +505,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     ShapeKind::Ellipse => ("ellipse", false),
                     ShapeKind::Triangle => ("triangle", false),
                     ShapeKind::Line | ShapeKind::Arrow => ("line", false),
-                    ShapeKind::TextBox => ("rect", true),
+                    // Equations are written by `write_equation`; this arm keeps the match whole.
+                    ShapeKind::TextBox | ShapeKind::Equation => ("rect", true),
                     ShapeKind::Icon | ShapeKind::Ink => ("rect", false),
                 };
                 let _ = write!(

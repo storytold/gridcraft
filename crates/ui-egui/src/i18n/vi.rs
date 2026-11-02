@@ -112,6 +112,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tách\ncột",
         "Link" => "Liên kết",
         "Symbol" => "Ký hiệu",
+        "Equation" => "Phương trình",
+        "Insert New Equation..." => "Chèn phương trình mới",
         "Sparklines" => "Biểu đồ thu nhỏ",
         "Checkbox" => "Hộp kiểm",
         "Insert checkboxes in the selected cells" => "Chèn hộp kiểm vào các ô đã chọn",

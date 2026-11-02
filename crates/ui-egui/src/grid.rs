@@ -131,12 +131,15 @@ pub enum Drag {
         grab: CellRef,
         to: Option<CellRef>,
     },
+    /// Moving a floating object, or resizing it from one of its eight handles.
     Object {
-        kind: &'static str,
-        id: u32,
+        obj: gridcraft_engine::model::ObjRef,
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
-        resize: bool,
+        handle: Option<crate::objects::Handle>,
+        /// This drag has made its undo step; later frames merge into it, and never into the
+        /// step of an earlier drag.
+        stepped: bool,
     },
 }
 

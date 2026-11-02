@@ -392,12 +392,12 @@ fn delete_key_removes_the_selected_chart() {
 
     click_cell(&mut h, "C10");
     click_chart(&mut h, id);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
     assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty());
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_chart(), None);
     assert_eq!(value(&h, "A1"), Value::Number(1.0));
 }
 
@@ -412,7 +412,7 @@ fn inserted_chart_is_selected_so_delete_removes_it() {
 
     let id = h.state_mut().run("insert.chart", json!({"type": "column"})).unwrap()["chart"].as_u64().unwrap() as u32;
     h.run_steps(2);
-    assert_eq!(h.state().selected_chart, Some(id), "the new chart is selected");
+    assert_eq!(h.state().selected_chart(), Some(id), "the new chart is selected");
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
@@ -621,7 +621,7 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
     assert!(h.state().dialog.is_none());
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::Pie]);
-    assert!(h.state().selected_chart.is_some(), "the new chart is selected");
+    assert!(h.state().selected_chart().is_some(), "the new chart is selected");
 
     // Without numbers there is nothing to recommend: a message, no dialog.
     h.state_mut().session.run("selection.set", json!({"range": "A1:A4"})).unwrap();
@@ -680,7 +680,7 @@ fn select_data_dialog_sets_the_category_axis_labels() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Year", "Sales"], [2020, 5], [2021, 7], [2022, 9]]})).unwrap();
     let id = s.execute("insert.chart", json!({"range": "A1:B4", "type": "line"})).unwrap()["chart"].as_u64().unwrap();
     let mut h = harness(s);
-    h.state_mut().selected_chart = Some(id as u32);
+    h.state_mut().select_object_id(Some(id as u32));
     h.state_mut().open_dialog("selectData", json!({"chart": id}));
     h.run_steps(2);
     let d = h.state_mut().dialog.as_mut().unwrap();

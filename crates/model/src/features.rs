@@ -589,6 +589,9 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// An equation: `Shape::text` holds its LaTeX source, `Shape::line` its ink colour
+    /// (`Color::Auto` for the sheet's text colour) and `Shape::math` its cached layout.
+    Equation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -602,6 +605,144 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// An equation's layout, rebuilt from `text` and never saved.
+    #[serde(skip)]
+    pub math: EquationCache,
+}
+
+/// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
+/// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
+/// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
+/// path can reach the layout engine.
+///
+/// An entry answers only for the source it was built from, compared in full: a hash match alone
+/// is not enough, so two sources whose hashes collide never share a layout. A source over
+/// [`gridcraft_math::MAX_SOURCE_BYTES`] never lays out, so [`EquationCache::get`] answers for it
+/// by its length alone, with [`gridcraft_math::SOURCE_TOO_LONG`], and an entry built from one holds
+/// neither the source nor its hash: a painter asking every frame about a source of megabytes read
+/// from a file does no work on it.
+#[derive(Clone, Debug, Default)]
+pub struct EquationCache {
+    /// A hash of the source the entry was built from (a quick first check).
+    key: u64,
+    /// The source's length in bytes.
+    len: usize,
+    /// The source itself, when it is within the length cap.
+    source: Option<std::sync::Arc<str>>,
+    layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
+}
+
+impl PartialEq for EquationCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn source_key(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    #[cfg(test)]
+    equation_cache_tests::HASHES.with(|h| h.set(h.get() + 1));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+impl EquationCache {
+    /// Whether this entry was built from `src`. Over the cap the length is the match (an entry for
+    /// such a source is always the same error); within it, the hash and then the source itself.
+    fn holds(&self, src: &str) -> bool {
+        if self.layout.is_none() || self.len != src.len() {
+            return false;
+        }
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return self.source.is_none();
+        }
+        self.key == source_key(src) && self.source.as_deref() == Some(src)
+    }
+
+    /// Makes this the entry for `src`, with `layout`. A source over the cap is neither copied nor
+    /// hashed.
+    fn store(&mut self, src: &str, layout: Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>) {
+        let within = src.len() <= gridcraft_math::MAX_SOURCE_BYTES;
+        self.key = if within { source_key(src) } else { 0 };
+        self.len = src.len();
+        self.source = within.then(|| std::sync::Arc::from(src));
+        self.layout = Some(layout);
+    }
+
+    /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
+    /// for this source. A source over [`gridcraft_math::MAX_SOURCE_BYTES`] is answered at once,
+    /// whatever the entry holds, by its length alone.
+    pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if src.len() > gridcraft_math::MAX_SOURCE_BYTES {
+            return Some(Err(&*gridcraft_math::SOURCE_TOO_LONG));
+        }
+        if !self.holds(src) {
+            return None;
+        }
+        self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
+    }
+
+    /// Lays `src` out again unless the cache already holds its layout. True when it did.
+    pub fn refresh(&mut self, src: &str) -> bool {
+        if self.holds(src) {
+            return false;
+        }
+        self.store(src, gridcraft_math::layout(src).map(std::sync::Arc::new));
+        true
+    }
+
+    /// Records that `src` was not laid out, and why, without running the layout engine.
+    pub fn refuse(&mut self, src: &str, message: &str) {
+        self.store(src, Err(gridcraft_math::MathError { span: None, message: message.to_string() }));
+    }
+}
+
+/// The kinds of floating object a sheet holds. Commands name an object by kind and
+/// workbook-unique id (`{kind: "chart", id}`); [`ObjKind::name`] is that parameter's spelling.
+/// Equations are stored as shapes ([`ShapeKind::Equation`]) but select, open and delete as their
+/// own kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Slicer,
+    Equation,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 5] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Equation];
+
+    /// The name used in command parameters.
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Slicer => "slicer",
+            ObjKind::Equation => "equation",
+        }
+    }
+
+    /// The kind named `s` (any letter case).
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
 }
 
 /// Horizontal alignment of a shape's text (`a:pPr algn`).
@@ -735,5 +876,77 @@ mod trendline_forecast_tests {
         assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
+    }
+}
+
+#[cfg(test)]
+mod equation_cache_tests {
+    use super::{EquationCache, source_key};
+
+    thread_local! {
+        /// How many sources `source_key` has hashed on this thread.
+        pub(super) static HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn glyphs(c: &EquationCache, src: &str) -> Option<String> {
+        let list = c.get(src)?.ok()?;
+        Some(list.items.iter().filter_map(|i| if let gridcraft_math::Item::Glyph(g) = i { Some(g.ch) } else { None }).collect())
+    }
+
+    #[test]
+    fn a_hash_collision_never_returns_another_sources_layout() {
+        let (a, b) = ("x^2", "y^3");
+        let mut c = EquationCache::default();
+        assert!(c.refresh(a));
+        assert_eq!(glyphs(&c, a).as_deref(), Some("x2"));
+        // Forge a collision: the entry claims `b`'s hash; `b` has `a`'s length, so only the
+        // full comparison tells them apart.
+        c.key = source_key(b);
+        assert!(c.get(b).is_none(), "`b` is a miss, not `a`'s layout");
+        assert!(c.refresh(b), "`b` is laid out afresh");
+        assert_eq!(glyphs(&c, b).as_deref(), Some("y3"));
+        assert!(c.get(a).is_none(), "the entry is `b`'s now");
+        // A refusal does not answer for a colliding source either.
+        c.refuse(a, "not laid out");
+        c.key = source_key(b);
+        assert!(c.get(b).is_none());
+    }
+
+    #[test]
+    fn sources_over_the_cap_are_not_copied_hashed_or_laid_out() {
+        let long = "x".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        let mut c = EquationCache::default();
+        HASHES.with(|h| h.set(0));
+        assert!(matches!(c.get(&long), Some(Err(e)) if e.message.contains("4096")), "answered before any refresh");
+        assert!(c.refresh(&long));
+        assert!(c.source.is_none(), "an over-cap source is not kept");
+        assert_eq!(c.key, 0, "nor hashed");
+        assert!(matches!(c.get(&long), Some(Err(_))));
+        assert!(!c.refresh(&long), "still cached");
+        let other = "y".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        assert!(matches!(c.get(&other), Some(Err(_))), "another over-cap source gets the same answer");
+        assert_eq!(HASHES.with(|h| h.get()), 0, "nothing over the cap is hashed");
+        // Within the cap the lookup is unchanged: a hash, then the source compared in full.
+        assert!(c.refresh("x"));
+        assert!(c.get("x").is_some_and(|r| r.is_ok()));
+        assert!(HASHES.with(|h| h.get()) >= 2);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+    fn a_source_of_a_megabyte_is_looked_up_without_being_read() {
+        // The sheet painter asks the cache every frame and the PDF export every draw; a source
+        // read from a file can be megabytes, and the lookup must not scan it each time.
+        let big = "l".repeat(1 << 20);
+        let mut c = EquationCache::default();
+        c.refuse(&big, "budget");
+        HASHES.with(|h| h.set(0));
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            assert!(matches!(c.get(&big), Some(Err(_))));
+        }
+        let took = start.elapsed();
+        assert_eq!(HASHES.with(|h| h.get()), 0, "a thousand lookups read nothing");
+        assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 }

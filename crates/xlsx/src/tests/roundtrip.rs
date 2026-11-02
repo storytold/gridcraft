@@ -351,6 +351,7 @@ fn sample() -> Workbook {
         alt: "Logo \"x\"".into(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
         anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
@@ -360,6 +361,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 12,
         kind: ShapeKind::Arrow,
         anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
@@ -369,6 +371,7 @@ fn sample() -> Workbook {
         format: Default::default(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 13,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },

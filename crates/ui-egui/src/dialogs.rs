@@ -69,7 +69,7 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
-    focus_initialized: bool,
+    pub(crate) focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
     /// The linked cell's initial display text; unchanged text must not replace a number or formula.
@@ -616,6 +616,7 @@ impl Dialog {
                 }
                 d
             }
+            "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",

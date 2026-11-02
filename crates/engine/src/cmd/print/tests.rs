@@ -174,6 +174,14 @@ fn first_and_even_pages_print_their_own_headers() {
     assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
 }
 
+/// The y position of the first `(text) Tj` in a PDF (PDF space: larger is higher on the page).
+fn text_y(pdf: &[u8], text: &str) -> Option<f32> {
+    let s = String::from_utf8_lossy(pdf);
+    let before = &s[..s.find(&format!("({text}) Tj"))?];
+    let tm = before.rfind(" Tm")?;
+    before[..tm].rsplit([' ', '\n']).next()?.parse().ok()
+}
+
 /// The x position and font size of the first `(text) Tj` in a PDF.
 fn text_at(pdf: &[u8], text: &str) -> Option<(f32, f32)> {
     let s = String::from_utf8_lossy(pdf);
@@ -580,4 +588,114 @@ fn checkbox_cells_print_as_boxes_not_true_false() {
     assert_eq!(text.matches("(TRUE) Tj").count(), 1, "the checked box printed as TRUE");
     assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
     assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
+}
+
+#[test]
+fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
+    use super::objects::{MAX_FALLBACK_LINES, fallback_lines};
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    // A file can carry a source the layout engine refuses: two lines here, in a frame 100 px
+    // (75 pt) tall, which holds six 12 pt lines.
+    let with_source = |text: &str| {
+        let mut wb = (*s.doc().unwrap().wb).clone();
+        if let Some(sh) = wb.sheet_mut(0) {
+            for x in sh.shapes.iter_mut() {
+                x.text = text.into();
+                x.anchor.height = 100.0;
+            }
+        }
+        let mut t = Session::new();
+        t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+        pdf_of(&mut t, json!({})).0
+    };
+    let pdf = with_source("frac{\nsecond line");
+    assert!(contains(&pdf, "(frac{) Tj"), "the first line is its own text run");
+    assert!(contains(&pdf, "(second line) Tj"), "and so is the second");
+    assert!(!contains(&pdf, "(frac{?second line) Tj"), "the newline is not printed as ?");
+    let (y1, y2) = (text_y(&pdf, "frac{").unwrap(), text_y(&pdf, "second line").unwrap());
+    assert!(y1 > y2 && y1 - y2 < 13.0, "the second line sits one line below the first: {y1} {y2}");
+    // Lines the frame cannot hold are not printed.
+    let pdf = with_source(&"l\n".repeat(10_000));
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("(l) Tj").count(), 6);
+    // Whatever the frame, the count is capped; a frame too low for one line still shows the first.
+    let tall = "l\n".repeat(10_000);
+    assert_eq!(fallback_lines(&tall, f32::INFINITY, 12.0).count(), MAX_FALLBACK_LINES);
+    assert_eq!(fallback_lines(&tall, 1.0e9, 12.0).count(), MAX_FALLBACK_LINES);
+    assert_eq!(fallback_lines("a\nb\nc", 30.0, 12.0).count(), 2);
+    assert_eq!(fallback_lines("a\nb", 0.0, 12.0).count(), 1);
+    assert_eq!(fallback_lines("a\nb", f32::NAN, 12.0).count(), 1);
+}
+
+#[test]
+fn the_fallback_text_is_clipped_to_the_equation_frame() {
+    // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
+    // 75 pt): the lines are drawn inside a clip of the frame, nested in the block's, so they
+    // cannot run over neighbours, and the clip is lifted again before the next object (a text
+    // box below the equation in the same block) is drawn.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    s.execute("insert.textBox", json!({"at": "B12", "text": "later box"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut().filter(|x| x.kind == gridcraft_model::ShapeKind::Equation) {
+            x.text = format!("frac{{{}", "l".repeat(200));
+            x.anchor.width = 40.0;
+            x.anchor.height = 100.0;
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    let clip = text.find("30 75 re W n").expect("a clip the size of the frame");
+    let run = text.find("(frac{llll").expect("the source line");
+    let later = text.find("(later box) Tj").expect("the text box after the equation");
+    assert!(clip < run && run < later, "clip, then the text, then the later object");
+    // The net number of saved graphics states (`q` less `Q`) before an operator.
+    let depth = |at: usize| text[..at].lines().filter(|l| *l == "q").count() as i64 - text[..at].lines().filter(|l| *l == "Q").count() as i64;
+    assert_eq!(depth(run), depth(clip), "the text is drawn under the frame's clip");
+    assert_eq!(depth(later), depth(clip) - 1, "the later object is drawn with the frame's state restored");
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+fn an_equation_source_of_a_megabyte_prints_a_bounded_excerpt() {
+    // A file can carry a source far past `MAX_SOURCE_BYTES` (the drawing part may be 512 MiB). It
+    // never lays out, so the fallback prints the first 4,096 bytes and does no work on the rest:
+    // the PDF holds one run of that length, not the megabyte, and export takes bounded time.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut() {
+            x.text = "l".repeat(1 << 20);
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let start = std::time::Instant::now();
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let took = start.elapsed();
+    let text = String::from_utf8_lossy(&pdf);
+    let longest = text.split(|c| c != 'l').map(str::len).max().unwrap_or(0);
+    assert_eq!(longest, gridcraft_math::MAX_SOURCE_BYTES, "the run is the excerpt and no more");
+    assert!(pdf.len() < 64 * 1024, "the PDF holds the excerpt, not the megabyte: {} bytes", pdf.len());
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+}
+
+#[test]
+fn equations_print_with_the_symbol_font() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("insert.equation", json!({"latex": "\\sum_{i=1}^{n} \\alpha_i \\le \\infty \\pm \\sqrt{x} \\times \\partial y", "cell": "B2"}))
+        .unwrap();
+    s.execute("insert.equation", json!({"latex": "\\mathbb{R} \\oplus \\text{\u{4E2D}}", "cell": "B8"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/BaseFont /Symbol >>"), "maths symbols use the Symbol font");
+    assert!(contains(&pdf, "/BaseFont /Times-Italic"), "variables are italic");
+    // The summation (0xE5) and alpha (0x61) codes in Symbol.
+    assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
+    // A glyph no standard font has is a [?] box.
+    assert!(contains(&pdf, "(?) Tj"));
 }

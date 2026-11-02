@@ -172,7 +172,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
     // on something the user can't see.
     if crate::chartview::objects_hidden(&wb) {
-        app.selected_chart = None;
+        app.selected_object = None;
     }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(OverlayInput {

@@ -112,6 +112,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Text to\nColumns", "区切り位置"),
     ("Link", "リンク"),
     ("Symbol", "記号"),
+    ("Equation", "数式"),
+    ("Insert New Equation...", "新しい数式の挿入"),
     ("Sparklines", "スパークライン"),
     ("Checkbox", "チェックボックス"),
     ("Insert checkboxes in the selected cells", "選択したセルにチェックボックスを挿入"),

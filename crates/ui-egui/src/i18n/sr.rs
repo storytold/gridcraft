@@ -111,6 +111,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tekst u\nkolone",
         "Link" => "Veza",
         "Symbol" => "Simbol",
+        "Equation" => "Jednačina",
+        "Insert New Equation..." => "Umetni novu jednačinu",
         "Sparklines" => "Mini grafikoni",
         "Checkbox" => "Polje za potvrdu",
         "Insert checkboxes in the selected cells" => "Umetni polja za potvrdu u izabrane ćelije",

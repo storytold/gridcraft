@@ -110,6 +110,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "텍스트\n나누기",
         "Link" => "링크",
         "Symbol" => "기호",
+        "Equation" => "수식",
+        "Insert New Equation..." => "새 수식 삽입",
         "Sparklines" => "스파크라인",
         "Checkbox" => "확인란",
         "Insert checkboxes in the selected cells" => "선택한 셀에 확인란 삽입",

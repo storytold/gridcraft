@@ -158,7 +158,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NCM", Entry::Finish(Action::Dialog("comment"))), // Excel: Excel: New Comment (modern)
     ("NCB", Entry::Finish(Action::Command("insert.checkbox"))), // Excel: Checkbox
     ("ND", Entry::Finish(Action::Control("insert.chart.scatter"))), // Excel: Scatter Chart; Scatter (kind TBD)
-    ("NE", Entry::Finish(Action::Pending("insert.equation"))), // pending; Excel: Equations; Equations; reserved until the command lands
+    ("NE", Entry::Finish(Action::Dialog("equation"))), // Excel: Equation; the Equation split button's main half opens the editor
     ("NF", Entry::Continue),  // Excel: Online Pictures; group level: containment(Picture)
     ("NFP", Entry::Continue), // Excel: From Picture Menu; group level: containment(Picture)
     ("NFPF", Entry::Finish(Action::Command("insert.picture"))), // Excel: Picture From File; containment(Picture)

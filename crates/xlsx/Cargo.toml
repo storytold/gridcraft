@@ -16,6 +16,7 @@ test-support = []
 [dependencies]
 gridcraft-core = { workspace = true }
 gridcraft-formula = { workspace = true }
+gridcraft-math = { workspace = true }
 gridcraft-model = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }

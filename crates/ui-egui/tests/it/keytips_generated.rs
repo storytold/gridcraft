@@ -1143,10 +1143,7 @@ fn keytip_nd_() {
 fn keytip_ne_() {
     let mut h = harness(blank());
     sequence(&mut h, "NE", false);
-    assert!(h.state().dialog.is_none(), "NE must not open a dialog");
-    assert!(h.state().message.is_none(), "NE must not open a message box");
-    assert!(h.state().toast.is_none(), "NE must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "NE must not journal");
+    assert!(h.state().dialog.is_some(), "NE must open the equation dialog");
 }
 
 #[test]

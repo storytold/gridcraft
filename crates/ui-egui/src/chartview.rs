@@ -1,10 +1,10 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures and shapes.
+//! we paint with egui), pictures, shapes, equations and slicers.
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -265,7 +265,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         return painted;
     }
     // Source outlines stay in cell space beneath every floating object.
-    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart == Some(ch.id))
+    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
         && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
     {
         for s in &ch.series {
@@ -332,6 +332,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 }
                 label = false;
             }
+            ShapeKind::Equation => {
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
+                label = false;
+            }
             ShapeKind::Line | ShapeKind::Arrow => {
                 p.line_segment([r.left_top(), r.right_bottom()], Stroke::new(2.0, line));
                 if sp.kind == ShapeKind::Arrow {
@@ -345,9 +349,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if label && !sp.text.is_empty() && !app.editing_text_box(sp.id) {
             paint_shape_text(p, wb, sp, r, geo.z);
         }
-        if label && sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
-            selection_frame(p, r);
-        }
         done(start, r);
     }
     for im in &sh.images {
@@ -360,9 +361,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
-        }
-        if app.selected_chart == Some(im.id) {
-            selection_frame(p, r);
         }
         done(start, r);
     }
@@ -379,12 +377,18 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
-        if app.selected_chart == Some(ch.id) {
-            selection_frame(p, r);
-        }
         done(start, r);
     }
-    paint_slicers(app, p, geo, wb, si, sh);
+    paint_slicers(p, geo, wb, si, sh);
+    // The selected object's frame and handles go over every object, and move with it on a
+    // right-to-left sheet.
+    if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
+        && r.intersects(p.clip_rect())
+    {
+        let start = p.add(egui::Shape::Noop);
+        selection_frame(p, r);
+        done(start, r);
+    }
     painted
 }
 
@@ -421,7 +425,7 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
@@ -454,9 +458,6 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
-        }
-        if app.selected_chart == Some(sl.id) {
-            selection_frame(p, r);
         }
     }
 }
@@ -496,40 +497,61 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 fn selection_frame(p: &Painter, r: Rect) {
     let t = Tokens::get(p.ctx());
     p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
-    for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
+    for h in crate::objects::Handle::ALL {
+        let c = h.pos(r);
         p.circle_filled(c, 4.0, t.sheet_control_bg);
         p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
-    let _ = Align2::CENTER_CENTER;
 }
 
-/// The topmost object under `p`: (kind, id, rect).
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+/// Where object `o` sits on the sheet (logical coordinates), when it exists on `sh`.
+pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
+    sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
+}
+
+/// The resize handle of the selected object under `p`, with the object and its rect. Handles
+/// reach a little outside their object, so they win over [`hit`], but like it only over the cell
+/// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
+/// to them. Nothing while objects are hidden.
+pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let o = app.selected_object?;
+    let r = object_rect(geo, sh, o)?;
+    crate::objects::handle_at(r, p).map(|h| (o, r, h))
+}
+
+/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
+/// charts, pictures and shapes (equations included), each from the top of its stack. Nothing is hit outside the cell
+/// area or while objects are hidden.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("slicer", sl.id, r));
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Slicer, sl.id), r));
         }
     }
     for ch in sh.charts.iter().rev() {
         let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
+        if r.expand(4.0).contains(p) {
+            return Some((ObjRef::new(ObjKind::Chart, ch.id), r));
         }
     }
     for im in sh.images.iter().rev() {
         let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Image, im.id), r));
         }
     }
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
+        if r.expand(3.0).contains(p) {
+            let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
+            return Some((ObjRef::new(kind, s.id), r));
         }
     }
     None
