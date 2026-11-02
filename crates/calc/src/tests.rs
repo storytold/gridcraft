@@ -738,6 +738,23 @@ fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
 }
 
 #[test]
+fn a_full_recalc_keeps_a_former_area_where_it_crosses_into_far_cells() {
+    // As above, with one array at BI14:BO14 and the other at BN13: the former area runs past
+    // column BL, and the array grows into the part beyond it (former areas are indexed by squares
+    // of cells, so the overlap must be found away from the area's first cells too).
+    let mut t = T::new();
+    t.set("J1", "1");
+    t.set("BI14", "=SEQUENCE(1,7)");
+    t.set("BN13", "=SEQUENCE(J1,2)");
+    assert_eq!([t.num("BN13"), t.num("BO13")], [1.0, 2.0]);
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("J1", "5");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("BN13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("BI14"), t.num("BN14"), t.num("BO14")], [1.0, 6.0, 7.0]);
+}
+
+#[test]
 fn a_full_recalc_lays_out_arrays_as_an_automatic_one_when_one_shrinks_for_another() {
     // C1 grows into C3, which A3's array fills, and A3 grows into E3, which E1's array leaves.
     // Automatic recalculation lays them out in reading order with each former area still filled:

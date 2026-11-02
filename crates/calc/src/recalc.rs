@@ -562,21 +562,27 @@ impl Calc {
 #[derive(Default)]
 struct Former {
     areas: HashMap<Key, RangeRef>,
-    /// The cells of `areas`, built when an array first needs more cells than its own former area
-    /// (so each check costs what checking the cells themselves does, however many areas there are).
-    cells: Option<HashSet<Key>>,
+    /// The areas over each [`FORMER_TILE`]-cell square of a sheet, built when an array first needs
+    /// more cells than its own former area. A check looks only at the areas near the array, and the
+    /// index grows with the squares the areas cover, not with their cells: a file's `ref`s may
+    /// declare millions of them.
+    tiles: Option<HashMap<(usize, u32, u32), Vec<Key>>>,
+}
+
+/// The side of [`Former`]'s index squares, in cells.
+const FORMER_TILE: u32 = 64;
+
+/// The index squares `range` overlaps, as (row, column) square numbers.
+fn former_tiles(range: RangeRef) -> impl Iterator<Item = (u32, u32)> {
+    let cols = range.start.col / FORMER_TILE..=range.end.col / FORMER_TILE;
+    (range.start.row / FORMER_TILE..=range.end.row / FORMER_TILE).flat_map(move |r| cols.clone().map(move |c| (r, c)))
 }
 
 impl Former {
-    /// Frees `key`'s former area, as it is laid out now.
+    /// Frees `key`'s former area, as it is laid out now. The index keeps its key; checks skip
+    /// keys whose area is gone.
     fn take(&mut self, key: &Key) -> Option<RangeRef> {
-        let area = self.areas.remove(key)?;
-        if let Some(cells) = &mut self.cells {
-            for cell in area.iter() {
-                cells.remove(&(key.0, cell));
-            }
-        }
-        Some(area)
+        self.areas.remove(key)
     }
 
     /// Whether `range` on `sheet` reaches a former area that is still taken.
@@ -585,8 +591,17 @@ impl Former {
             return false;
         }
         let areas = &self.areas;
-        let cells = self.cells.get_or_insert_with(|| areas.iter().flat_map(|(k, area)| area.iter().map(move |cell| (k.0, cell))).collect());
-        range.iter().any(|cell| cells.contains(&(sheet, cell)))
+        let tiles = self.tiles.get_or_insert_with(|| {
+            let mut tiles: HashMap<(usize, u32, u32), Vec<Key>> = HashMap::default();
+            for (key, area) in areas {
+                for (r, c) in former_tiles(*area) {
+                    tiles.entry((key.0, r, c)).or_default().push(*key);
+                }
+            }
+            tiles
+        });
+        former_tiles(range)
+            .any(|(r, c)| tiles.get(&(sheet, r, c)).is_some_and(|keys| keys.iter().any(|k| areas.get(k).is_some_and(|area| area.intersects(&range)))))
     }
 }
 
