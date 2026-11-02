@@ -1637,3 +1637,131 @@ fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
     assert!(field(&h, "variables").contains("B2"), "{:?}", field(&h, "variables"));
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
 }
+
+/// Shows the sheet at `index` from a script, as a sheet tab click or the control channel does.
+fn show_sheet(h: &mut H, index: usize) {
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": index})).unwrap();
+    h.run_steps(3);
+}
+
+#[test]
+fn a_sheet_shown_before_the_first_pick_is_not_the_dialogs_sheet() {
+    // Goal Seek opened on Sheet1 (B5 selected); Rates is shown before any box picks.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    show_sheet(&mut h, 1);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2:$A$3", "Rates is not the dialog's sheet: the pick carries its name");
+    // Back on the dialog's own sheet, a pick needs no sheet name, and Cancel puts back the
+    // selection the dialog was opened with, not the one picked there.
+    show_sheet(&mut h, 0);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "back on the sheet the dialog was opened on, with its selection");
+}
+
+#[test]
+fn solver_and_data_analysis_keep_the_sheet_they_were_opened_on() {
+    for (name, params, button, key_name) in [("solver", json!({}), 0, "objective"), ("analysisToolPak", json!({"tool": "descriptive"}), 0, "range")] {
+        let mut h = harness(two_sheets());
+        h.state_mut().open_dialog(name, params);
+        h.run_steps(4);
+        show_sheet(&mut h, 1);
+        click_button(&mut h, "Collapse dialog", button);
+        drag(&mut h, "B2", "B2");
+        assert_eq!(field(&h, key_name), "Rates!$B$2", "{name}: a pick on a sheet shown after opening carries its name");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{name}");
+        assert_eq!(selection(&h), (0, "B5".into()), "{name}: Cancel goes back to the sheet it was opened on");
+    }
+}
+
+#[test]
+fn ok_without_a_pick_runs_on_the_sheet_the_dialog_was_opened_on() {
+    // Data Analysis opened on Sheet1, Rates shown, then OK with typed, unqualified references:
+    // they mean Sheet1's cells, and the report lands on Sheet1.
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    show_sheet(&mut h, 1);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("range".into(), json!("B1:B6"));
+    d.values.insert("outputTo".into(), json!("range"));
+    d.values.insert("output".into(), json!("$H$1"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(!wb.sheets[0].value(CellRef::parse("H1").unwrap()).is_empty(), "the report is on the dialog's own sheet");
+    assert!(wb.sheets[1].value(CellRef::parse("H1").unwrap()).is_empty(), "not on the sheet shown when OK was pressed");
+    assert_eq!(selection(&h).0, 0);
+}
+
+#[test]
+fn a_tool_chosen_on_another_sheet_takes_that_sheets_selection_with_its_name() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({}));
+    h.run_steps(4);
+    show_sheet(&mut h, 1);
+    h.state_mut().session.execute("selection.set", json!({"range": "A1:A6"})).unwrap();
+    h.state_mut().dialog.as_mut().unwrap().values.insert("pick".into(), json!("descriptive"));
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert_eq!(field(&h, "range"), "Rates!A1:A6", "the input range keeps the sheet it was selected on");
+}
+
+#[test]
+fn the_opened_sheet_renamed_or_deleted_before_the_first_pick() {
+    // Renamed: still the dialog's sheet, found by identity.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    show_sheet(&mut h, 1);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    show_sheet(&mut h, 0);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the renamed sheet is the dialog's own");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(selection(&h), (0, "B5".into()));
+
+    // Deleted: the sheet shown afterwards does not become the dialog's, so picks carry its name
+    // and OK is refused rather than reading the dialog's references against it.
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates"]);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+}
+
+#[test]
+fn a_dialog_opened_by_the_control_channel_keeps_the_sheet_it_was_opened_on() {
+    let mut h = harness(two_sheets());
+    let r = control(&mut h, "ui.dialog", json!({"name": "goalSeek"}));
+    assert_eq!(r["result"]["dialog"], json!("goalSeek"), "{r}");
+    let r = control(&mut h, "engine.execute", json!({"command": "sheet.activate", "params": {"sheet": 1}}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(selection(&h), (0, "B5".into()), "a scripted cancel goes back to the sheet the dialog was opened on");
+}

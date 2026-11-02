@@ -154,15 +154,15 @@ impl Dialog {
         ref_edit::end_pick(app, self)
     }
 
-    /// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+    /// Whether the dialog's own sheet is protected, for a dialog with reference boxes and while
     /// that sheet exists (the sheet [`Self::end_pick`] shows again); `None` otherwise.
     pub(crate) fn home_sheet_protected(&self, app: &SheetApp) -> Option<bool> {
         ref_edit::home_sheet_protected(app, self)
     }
 
-    /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
-    /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
-    /// nothing to refer to.
+    /// Whether the sheet a dialog with reference boxes was opened on was deleted while it was
+    /// open: OK is then refused with [`SHEET_DELETED`], since references without a sheet name
+    /// have nothing to refer to.
     pub(crate) fn home_sheet_deleted(&mut self, app: &SheetApp) -> bool {
         ref_edit::home_sheet_deleted(app, self)
     }
@@ -261,7 +261,7 @@ impl Dialog {
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
-        let d = match name {
+        let mut d = match name {
             "insertCells" => Dialog::form(
                 "insertCells",
                 "Insert",
@@ -1110,6 +1110,7 @@ impl Dialog {
             }
             _ => return None,
         };
+        ref_edit::record_home(app, &mut d);
         Some(d)
     }
 }
