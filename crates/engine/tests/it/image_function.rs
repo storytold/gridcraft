@@ -115,6 +115,8 @@ fn image_formula_and_picture_survive_xlsx_round_trip() {
     let a1 = CellRef::parse("A1").unwrap();
     assert!(sheet.cell_pictures.contains_key(&a1));
     assert!(sheet.cell(a1).and_then(|c| c.formula.as_ref()).is_some());
+    // The value under the picture is IMAGE's result, the alt text, before any recalculation.
+    assert_eq!(sheet.value(a1), Value::from("Logo"));
 }
 
 #[test]

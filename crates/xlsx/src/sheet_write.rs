@@ -720,7 +720,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         let _ = write!(s, " s=\"{style}\"");
     }
     if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture, cell.and_then(|x| x.formula.as_ref()).is_none());
+        let vm = out.cell_pictures.index(picture);
         let _ = write!(s, " t=\"e\" vm=\"{vm}\">");
         if let Some(f) = cell.and_then(|x| x.formula.as_ref()) {
             let _ = write!(s, "<f>{}</f>", esc(&crate::fmla::to_file(f)));

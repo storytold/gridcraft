@@ -308,3 +308,22 @@ fn oversized_formula_picture_is_left_out_not_fatal() {
     assert!(!sheet.cell_pictures.contains_key(&at("A1")));
     assert!(sheet.cell(at("A1")).and_then(|c| c.formula.as_ref()).is_some());
 }
+
+/// A picture shared by a formula cell and a stored cell is written once, whichever comes first.
+#[test]
+fn picture_shared_by_formula_and_stored_cells_is_written_once() {
+    let mut wb = Workbook::new();
+    let shared = Arc::new(picture(png(), "image/png", "Logo"));
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.set_picture(at("A1"), Arc::clone(&shared));
+    let value = sheet.value(at("A1"));
+    sheet.cells.set(at("A1"), Cell { value, ..Cell::formula(Formula::new("IMAGE(\"https://img.test/logo.png\",\"Logo\")")) });
+    sheet.set_picture(at("A2"), Arc::clone(&shared));
+    let bytes = write_xlsx(&wb).unwrap();
+    let pkg = Package::open(&bytes).unwrap();
+    assert!(pkg.has("xl/media/cellImage1.png") && !pkg.has("xl/media/cellImage2.png"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let pictures = &back.sheet(0).unwrap().cell_pictures;
+    assert!(Arc::ptr_eq(&pictures[&at("A1")], &pictures[&at("A2")]));
+    assert_eq!(back.sheet(0).unwrap().value(at("A1")), Value::from("Logo"));
+}

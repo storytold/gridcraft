@@ -536,9 +536,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
                 cx.warn("some IMAGE pictures were shown fitted to their cells: too many picture sizes in one file");
             }
         }
+        let alt = Value::from(picture.alt.as_str());
         sheet.set_picture(pos, picture);
         if let Some(formula) = formula {
-            let value = sheet.value(pos);
+            // IMAGE returns the alt text under its picture; other picture formulas keep the
+            // picture's scalar fallback.
+            let value = if is_image_call(&formula) { alt } else { sheet.value(pos) };
             sheet.cells.set(pos, Cell { value, formula: Some(Arc::new(formula)), style });
         }
         sheet.set_style(pos, style);
@@ -552,6 +555,11 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 
 /// The sizing an IMAGE formula asks for, read from its literal arguments. Fit when the formula is
 /// not an IMAGE call with literal sizing, height and width, or when they do not make a valid sizing.
+/// Whether the formula is a call to IMAGE.
+fn is_image_call(formula: &Formula) -> bool {
+    formula.expr_arc().is_some_and(|e| matches!(&*e, Expr::Call(name, _) if name == "IMAGE"))
+}
+
 fn image_sizing(formula: &Formula) -> PictureSizing {
     let Some(expr) = formula.expr_arc() else { return PictureSizing::Fit };
     let Expr::Call(name, args) = &*expr else { return PictureSizing::Fit };

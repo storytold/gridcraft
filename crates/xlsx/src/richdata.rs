@@ -261,10 +261,11 @@ pub struct PicturesOut {
     indices: HashMap<*const CellPicture, u32>,
     /// Encoded bytes of `pictures`, against [`MAX_IMAGES_TOTAL`].
     bytes: usize,
-    /// Bytes and count of stored (non-formula) pictures not written yet. They are always written,
-    /// so formula pictures may only use what they leave.
+    /// Stored (non-formula) pictures not written yet, by identity, with their total bytes. They are
+    /// always written, so formula pictures may only use what they leave; a picture is charged once
+    /// whichever cell writes it first.
+    reserved: HashMap<*const CellPicture, usize>,
     reserved_bytes: usize,
-    reserved_count: usize,
 }
 
 impl PicturesOut {
@@ -274,11 +275,15 @@ impl PicturesOut {
     /// Whether `picture` can join the file without [`write`] refusing the workbook: already in it,
     /// or a PNG/JPEG within the per-picture limits that still fits the record and byte budgets.
     pub fn can_add(&self, picture: &Arc<CellPicture>) -> bool {
-        self.indices.contains_key(&Arc::as_ptr(picture))
-            || (image_type(&picture.data).is_some()
-                && picture.data.len() as u64 <= MAX_IMAGE
-                && self.bytes.saturating_add(self.reserved_bytes).saturating_add(picture.data.len()) <= MAX_IMAGES_TOTAL
-                && self.pictures.len().saturating_add(self.reserved_count) < MAX_RECORDS)
+        let key = Arc::as_ptr(picture);
+        if self.indices.contains_key(&key) || self.reserved.contains_key(&key) {
+            // Already written, or already counted in the reservation.
+            return true;
+        }
+        image_type(&picture.data).is_some()
+            && picture.data.len() as u64 <= MAX_IMAGE
+            && self.bytes.saturating_add(self.reserved_bytes).saturating_add(picture.data.len()) <= MAX_IMAGES_TOTAL
+            && self.pictures.len().saturating_add(self.reserved.len()) < MAX_RECORDS
     }
     /// Sets aside room for the workbook's stored pictures (cells without a formula), counted once
     /// each, before any formula picture is admitted.
@@ -289,23 +294,22 @@ impl PicturesOut {
                 if sheet.cell(*cell).is_some_and(|c| c.formula.is_some()) || !seen.insert(Arc::as_ptr(picture)) {
                     continue;
                 }
+                self.reserved.insert(Arc::as_ptr(picture), picture.data.len());
                 self.reserved_bytes = self.reserved_bytes.saturating_add(picture.data.len());
-                self.reserved_count = self.reserved_count.saturating_add(1);
             }
         }
     }
-    /// The rich value index of `picture`; `stored` when it is a cell without a formula, whose room
-    /// [`PicturesOut::reserve_stored`] set aside.
-    pub fn index(&mut self, picture: &Arc<CellPicture>, stored: bool) -> u32 {
+    /// The rich value index of `picture`. The first time a reserved picture is written, from any
+    /// cell, its reservation is released.
+    pub fn index(&mut self, picture: &Arc<CellPicture>) -> u32 {
         let key = Arc::as_ptr(picture);
         if let Some(index) = self.indices.get(&key) {
             return *index;
         }
         let index = self.pictures.len().saturating_add(1) as u32;
         self.bytes = self.bytes.saturating_add(picture.data.len());
-        if stored {
-            self.reserved_bytes = self.reserved_bytes.saturating_sub(picture.data.len());
-            self.reserved_count = self.reserved_count.saturating_sub(1);
+        if let Some(bytes) = self.reserved.remove(&key) {
+            self.reserved_bytes = self.reserved_bytes.saturating_sub(bytes);
         }
         self.pictures.push(picture.clone());
         self.indices.insert(key, index);
