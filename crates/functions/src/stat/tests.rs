@@ -438,7 +438,7 @@ fn discrete() {
     close_tol(ev("POISSON", vec![n(2.0), n(5.0), b(false)]), 0.084224, 1e-5);
     is_err(ev("POISSON.DIST", vec![n(-1.0), n(5.0), b(false)]), CellError::Num);
     is_err(ev("POISSON.DIST", vec![n(-0.1), n(1.0), b(false)]), CellError::Num);
-    close(ev("POISSON.DIST", vec![n(-0.0), n(1.0), b(false)]), (-1.0f64).exp());
+    close(ev("POISSON.DIST", vec![av(Value::Number(-0.0)), n(1.0), b(false)]), (-1.0f64).exp());
     close(ev("POISSON.DIST", vec![n(0.9), n(1.0), b(false)]), (-1.0f64).exp());
     is_err(ev("BINOM.DIST", vec![n(-0.1), n(2.0), n(0.5), b(false)]), CellError::Num);
     is_err(ev("BINOM.DIST", vec![n(0.0), n(-0.1), n(0.5), b(false)]), CellError::Num);
