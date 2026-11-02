@@ -61,6 +61,19 @@ impl<'a> Package<'a> {
         self.read_limited(part, MAX_PART)
     }
 
+    /// Reads a part the reader can do without (the caller warns and goes on when it fails). A read
+    /// that fails partway is charged this part's whole allowance (`maximum`, and the byte that
+    /// detects an overrun) instead of ending the package's: the decompression work stays bounded,
+    /// and the parts read after it still open.
+    pub fn read_optional_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
+        let before = self.total;
+        let read = self.read_limited(part, maximum);
+        if let Err(IoError::Zip(_)) = &read {
+            self.total = before.saturating_add(maximum.min(MAX_PART).saturating_add(1)).min(MAX_TOTAL);
+        }
+        read
+    }
+
     /// Reads a small metadata part without allowing it to expand to the general part limit.
     pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
         let maximum = maximum.min(MAX_PART);
@@ -226,5 +239,28 @@ mod tests {
         assert_eq!(pkg.total, MAX_TOTAL, "the failed read is charged");
         // Oversized repeated attempts stay cheap errors now: no allowance is left to pay for.
         assert!(matches!(pkg.read("b.xml"), Err(IoError::TooLarge(_))));
+    }
+
+    /// A part the reader can do without, damaged inside an intact archive, costs its own
+    /// allowance: the parts after it are still read.
+    #[test]
+    fn a_damaged_optional_part_costs_only_its_allowance() {
+        use std::io::Write as _;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("a.xml", stored).unwrap();
+        w.write_all(b"<a>damaged</a>").unwrap();
+        w.start_file("b.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"hello").unwrap();
+        let mut z = w.finish().unwrap().into_inner();
+        let at = z.windows(7).position(|x| x == b"damaged").unwrap();
+        z[at] ^= 0x20;
+        let mut pkg = Package::open(&z).unwrap();
+        assert!(matches!(pkg.read_optional_limited("a.xml", 1024), Err(IoError::Zip(_))));
+        assert_eq!(pkg.total, 1025, "the failed read is charged its allowance");
+        assert_eq!(pkg.read("b.xml").unwrap().as_deref(), Some(&b"hello"[..]));
+        // An ordinary read of it still ends the package's budget.
+        assert!(pkg.read("a.xml").is_err());
+        assert_eq!(pkg.total, MAX_TOTAL);
     }
 }
