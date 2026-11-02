@@ -79,29 +79,52 @@ fn bracket(s: &str) -> Option<(Seg, &str)> {
     Some((Seg::Index(index), s.get(end + 1..)?))
 }
 
+/// Hard cap on the number of nodes `select` may walk, independent of how many matches it
+/// produces. A path of repeated `..name` segments can visit the same subtree many times.
+const WORK_BUDGET: usize = 1_000_000;
+
 /// Every value the path selects, in document order.
 ///
-/// `limit` caps the number of intermediate matches so a path such as a long chain of `..name`
-/// segments cannot grow without bound on a deeply nested document. Returns `None` when the cap
-/// is exceeded.
+/// `limit` caps the number of intermediate matches and `WORK_BUDGET` caps the traversal work,
+/// so a path such as a long chain of `..name` segments cannot grow without bound on a deeply
+/// nested document. Returns `None` when either cap is exceeded.
 pub(crate) fn select<'a>(doc: &'a Json, path: &[Seg], limit: usize) -> Option<Vec<&'a Json>> {
     let mut current: Vec<&Json> = vec![doc];
+    let mut work: usize = 0;
     for seg in path {
         let mut next: Vec<&Json> = Vec::new();
         for node in &current {
             match seg {
                 Seg::Key(key) => {
+                    work = work.saturating_add(1);
+                    if work > WORK_BUDGET {
+                        return None;
+                    }
                     if let Some(v) = node.member(key) {
                         next.push(v);
                     }
                 }
                 Seg::Index(i) => {
+                    work = work.saturating_add(1);
+                    if work > WORK_BUDGET {
+                        return None;
+                    }
                     if let Some(v) = node.items().get(*i) {
                         next.push(v);
                     }
                 }
-                Seg::Any => next.extend(node.items()),
-                Seg::Deep(key) => descend(node, key, &mut next),
+                Seg::Any => {
+                    work = work.saturating_add(1 + node.items().len());
+                    if work > WORK_BUDGET {
+                        return None;
+                    }
+                    next.extend(node.items());
+                }
+                Seg::Deep(key) => {
+                    if descend(node, key, &mut next, &mut work, WORK_BUDGET, limit) {
+                        return None;
+                    }
+                }
             }
             if next.len() > limit {
                 return None;
@@ -116,24 +139,49 @@ pub(crate) fn select<'a>(doc: &'a Json, path: &[Seg], limit: usize) -> Option<Ve
 }
 
 /// `..key`: the member here, then the same search inside every child. Nesting is bounded by the
-/// reader's depth cap.
-fn descend<'a>(node: &'a Json, key: &str, out: &mut Vec<&'a Json>) {
+/// reader's depth cap. Returns `true` when the traversal or match budget is exhausted.
+fn descend<'a>(
+    node: &'a Json,
+    key: &str,
+    out: &mut Vec<&'a Json>,
+    work: &mut usize,
+    budget: usize,
+    limit: usize,
+) -> bool {
+    *work = work.saturating_add(1);
+    if *work > budget {
+        return true;
+    }
     if let Some(v) = node.member(key) {
         out.push(v);
+        if out.len() > limit {
+            return true;
+        }
     }
     match node {
         Json::Object(items) => {
             for (_, v) in items {
-                descend(v, key, out);
+                if descend(v, key, out, work, budget, limit) {
+                    return true;
+                }
+                if out.len() > limit || *work > budget {
+                    return true;
+                }
             }
         }
         Json::Array(items) => {
             for v in items {
-                descend(v, key, out);
+                if descend(v, key, out, work, budget, limit) {
+                    return true;
+                }
+                if out.len() > limit || *work > budget {
+                    return true;
+                }
             }
         }
         Json::Null | Json::Bool(_) | Json::Number(_) | Json::Text(_) => {}
     }
+    false
 }
 
 #[cfg(test)]
