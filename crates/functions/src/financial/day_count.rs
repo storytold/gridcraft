@@ -40,7 +40,11 @@ pub(super) fn freq_arg(a: &[Arg], i: usize) -> R<f64> {
 }
 
 /// 30/360 day count (US/NASD when `us`, European otherwise).
-fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
+///
+/// US counts as YEARFRAC's basis 0 does: a 31st end date moves to the 30th only after a 30th or
+/// 31st start, so 28 Feb to 31 Mar is 31 days. With `feb_end_caps_31`, an end-of-February start
+/// moves it to the 30th as well (30 days).
+pub(super) fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool, feb_end_caps_31: bool) -> R<f64> {
     let (y1, m1, mut d1) = ymd(sys, s1)?;
     let (y2, m2, mut d2) = ymd(sys, s2)?;
     if us {
@@ -49,13 +53,10 @@ fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
         if feb_end1 && feb_end2 {
             d2 = 30;
         }
-        if feb_end1 {
-            d1 = 30;
-        }
-        if d2 == 31 && d1 >= 30 {
+        if d2 == 31 && (d1 >= 30 || (feb_end1 && feb_end_caps_31)) {
             d2 = 30;
         }
-        if d1 == 31 {
+        if feb_end1 || d1 == 31 {
             d1 = 30;
         }
     } else {
@@ -68,20 +69,26 @@ fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
 /// Days between two dates under a basis.
 pub(super) fn day_count(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     match basis {
-        0 => days360(sys, s1, s2, true),
-        4 => days360(sys, s1, s2, false),
+        0 => days360(sys, s1, s2, true, false),
+        4 => days360(sys, s1, s2, false, false),
         _ => Ok(s2 - s1),
     }
+}
+
+/// `day_count` for the coupon periods of ACCRINT and the odd-period functions, which keep
+/// moving a 31st end date to the 30th after an end-of-February start under basis 0.
+pub(super) fn period_day_count(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
+    if basis == 0 { days360(sys, s1, s2, true, true) } else { day_count(sys, s1, s2, basis) }
 }
 
 /// Year fraction between two dates under a basis (YEARFRAC semantics).
 pub(super) fn year_frac(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     let (s1, s2) = if s1 <= s2 { (s1, s2) } else { (s2, s1) };
     match basis {
-        0 => Ok(days360(sys, s1, s2, true)? / 360.0),
+        0 => Ok(days360(sys, s1, s2, true, false)? / 360.0),
         2 => Ok((s2 - s1) / 360.0),
         3 => Ok((s2 - s1) / 365.0),
-        4 => Ok(days360(sys, s1, s2, false)? / 360.0),
+        4 => Ok(days360(sys, s1, s2, false, false)? / 360.0),
         _ => {
             let (y1, m1, d1) = ymd(sys, s1)?;
             let (y2, m2, d2) = ymd(sys, s2)?;

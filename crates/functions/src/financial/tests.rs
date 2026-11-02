@@ -190,6 +190,45 @@ fn securities() {
     close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
 }
 
+#[test]
+fn basis_0_after_end_of_february() {
+    // 30/360 from the end of February to a 31st is 31 days, as in YEARFRAC (values observed
+    // in Excel).
+    close(ev("COUPDAYBS", vec![d(2008, 3, 31), d(2011, 2, 28), n(1.0), n(0.0)]), 31.0);
+    close(ev("COUPDAYSNC", vec![d(2008, 3, 31), d(2011, 2, 28), n(1.0), n(0.0)]), 329.0);
+    close_tol(ev("PRICE", vec![d(2008, 3, 31), d(2011, 2, 28), n(0.0575), n(0.065), n(100.0), n(1.0), n(0.0)]), 98.05145955, 1e-9);
+    close_tol(ev("ACCRINTM", vec![d(2007, 2, 28), d(2007, 3, 31), n(0.1), n(1000.0), n(0.0)]), 8.611111111, 1e-9);
+    close_tol(ev("DISC", vec![d(2007, 2, 28), d(2011, 3, 31), n(97.975), n(100.0), n(0.0)]), 0.004955812373, 1e-9);
+    close_tol(ev("PRICEMAT", vec![d(2008, 2, 29), d(2009, 8, 31), d(2007, 2, 28), n(0.061), n(0.061), n(0.0)]), 99.48777204, 1e-9);
+    // ACCRINT's coupon periods keep the 30-day count: 28 Feb to 31 Aug is half a year.
+    close_tol(ev("ACCRINT", vec![d(2007, 2, 28), d(2008, 8, 31), d(2008, 2, 29), n(0.1), n(1000.0), n(4.0), n(0.0)]), 99.72222222, 1e-9);
+}
+
+#[test]
+fn days360_us_both_modes() {
+    use super::day_count::days360;
+    let s = |y, m, dd| serial_from_ymd(DateSystem::D1900, y, m, dd).unwrap();
+    // (start, end, days, days with `feb_end_caps_31`)
+    let table = [
+        ((2007, 2, 28), (2007, 3, 31), 31.0, 30.0),
+        ((2008, 2, 29), (2008, 3, 31), 31.0, 30.0),
+        ((2007, 2, 28), (2007, 8, 31), 181.0, 180.0),
+        ((2008, 2, 28), (2008, 3, 31), 33.0, 33.0),
+        ((2007, 2, 28), (2007, 3, 30), 30.0, 30.0),
+        ((2007, 2, 28), (2008, 2, 29), 360.0, 360.0),
+        ((2007, 1, 30), (2007, 3, 31), 60.0, 60.0),
+        ((2007, 1, 31), (2007, 3, 31), 60.0, 60.0),
+        ((2007, 1, 15), (2007, 3, 31), 76.0, 76.0),
+    ];
+    for ((y1, m1, d1), (y2, m2, d2), plain, capped) in table {
+        let (a, b) = (s(y1, m1, d1), s(y2, m2, d2));
+        assert_eq!(days360(DateSystem::D1900, a, b, true, false).unwrap(), plain, "{y1}-{m1}-{d1} to {y2}-{m2}-{d2}");
+        assert_eq!(days360(DateSystem::D1900, a, b, true, true).unwrap(), capped, "{y1}-{m1}-{d1} to {y2}-{m2}-{d2} capped");
+        // The plain count is YEARFRAC's basis 0 in days.
+        close_tol(ev("YEARFRAC", vec![n(a), n(b), n(0.0)]), plain / 360.0, 1e-12);
+    }
+}
+
 fn number(v: Value) -> f64 {
     match v {
         Value::Number(x) => x,
