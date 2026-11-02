@@ -154,6 +154,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Trace Error" => "Truy tìm lỗi",
         "Circular References" => "Tham chiếu vòng",
         "Python Mode" => "Chế độ Python",
         "Evaluate Formula" => "Đánh giá công thức",

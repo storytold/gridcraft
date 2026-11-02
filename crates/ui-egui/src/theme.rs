@@ -121,6 +121,10 @@ pub struct Tokens {
     /// both themes.
     pub sheet_py_tag: Color32,
     pub on_sheet_py_tag: Color32,
+    /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
+    /// between cells showing an error. Sheet colours.
+    pub sheet_trace_arrow: Color32,
+    pub sheet_trace_error: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -153,6 +157,9 @@ const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
 const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
 const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
 const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+/// Trace arrows on the sheet, the same in both themes.
+const SHEET_TRACE_ARROW: Color32 = rgb(0x1F5FC9);
+const SHEET_TRACE_ERROR: Color32 = rgb(0xD13438);
 
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -257,6 +264,8 @@ impl Tokens {
             on_badge: pick(dark, Color32::WHITE, rgb(0x0B1F17)),
             sheet_py_tag: SHEET_PY_TAG,
             on_sheet_py_tag: Color32::WHITE,
+            sheet_trace_arrow: SHEET_TRACE_ARROW,
+            sheet_trace_error: SHEET_TRACE_ERROR,
         }
     }
 
@@ -408,6 +417,8 @@ mod contrast_tests {
         ] {
             add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
         }
+        add("trace arrow on sheet", t.sheet_trace_arrow, t.grid_bg, GLYPH);
+        add("trace error arrow on sheet", t.sheet_trace_error, t.grid_bg, GLYPH);
         // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
         add("breakpoint on window", t.breakpoint, t.window, GLYPH);
         add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
@@ -457,6 +468,7 @@ mod contrast_tests {
             (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),
             (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
         );
+        assert_eq!((l.sheet_trace_arrow, l.sheet_trace_error), (d.sheet_trace_arrow, d.sheet_trace_error));
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
         }

@@ -151,6 +151,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pijlen verwijderen",
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
+        "Trace Error" => "Fout traceren",
         "Circular References" => "Kringverwijzingen",
         "Python Mode" => "Python-modus",
         "Evaluate Formula" => "Formule evalueren",

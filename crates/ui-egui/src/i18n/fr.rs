@@ -157,6 +157,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Supprimer les flèches",
         "Show Formulas" => "Afficher les formules",
         "Error Checking" => "Vérification des erreurs",
+        "Trace Error" => "Repérer une erreur",
         "Circular References" => "Références circulaires",
         "Python Mode" => "Mode Python",
         "Evaluate Formula" => "Évaluation de formule",

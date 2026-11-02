@@ -397,7 +397,11 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 /// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on
 /// sheet `host` to its new form. Every reference-moving edit (insert and delete of lines or cells,
 /// cut-move, sheet rename and delete) runs it, as it adjusts formulas. A literal is only replaced
-/// when the reference it names changed, and text that doesn't parse is kept. A rewrite that would
+/// when the reference it names changed, and text that doesn't parse is kept. A cell's cached
+/// result is kept while its references still name the same data (a rename, a move); a reference
+/// the edit deleted (`#REF!`), or one that grew or shrank (rows or columns inserted or deleted
+/// inside it), leaves the result stale, so the cell is new code (`#BLOCKED!`) and the
+/// recalculation removes its spill. A rewrite that would
 /// make a cell's code longer than one cell holds (a longer sheet name, `Z1` becoming `AA1`) refuses
 /// the whole edit, which then changes nothing: see [`check_python_fits`].
 pub(crate) fn rewrite_python_refs(
@@ -407,33 +411,47 @@ pub(crate) fn rewrite_python_refs(
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };
         let host = sh.name.clone();
-        let mut new_code: Vec<(CellRef, String)> = Vec::new();
+        let mut new_code: Vec<(CellRef, String, bool)> = Vec::new();
         for (c, cell) in sh.cells.iter() {
             let Some(py) = &cell.py else { continue };
+            let mut lost = false;
             let changed = gridcraft_model::python::rewrite_xl(&py.code, |reference| {
                 let expr = gridcraft_formula::parse(reference).ok()?;
                 let before = gridcraft_formula::print(&expr);
                 let after = gridcraft_formula::print(&f(&host, expr));
+                lost |= (after.contains("#REF!") && !before.contains("#REF!")) || area_shape(&before) != area_shape(&after);
                 (after != before).then_some(after)
             });
             if let Some(code) = changed {
                 check_python_fits(&gridcraft_model::PyCode { code: code.clone(), object: py.object, ..Default::default() }, &host, c)?;
-                new_code.push((c, code));
+                new_code.push((c, code, lost));
             }
         }
         if new_code.is_empty() {
             continue;
         }
         let Some(sh) = wb.sheet_mut(si) else { continue };
-        for (c, code) in new_code {
+        for (c, code, lost) in new_code {
             if let Some(cell) = sh.cells.get_mut(c)
                 && let Some(py) = cell.py.as_mut()
             {
-                std::sync::Arc::make_mut(py).code = code;
+                let py = std::sync::Arc::make_mut(py);
+                py.code = code;
+                if lost {
+                    py.output = None;
+                    cell.value = Value::Error(gridcraft_core::CellError::Blocked);
+                }
             }
         }
     }
     Ok(())
+}
+
+/// The rows and columns a printed reference covers (`A1:B3`, `Sheet2!$A$1`, `C:E`), or `None`
+/// for any other form (a name, an error).
+fn area_shape(reference: &str) -> Option<(u32, u32)> {
+    let r = RangeRef::parse(reference.rsplit('!').next()?)?;
+    Some((r.height(), r.width()))
 }
 
 /// Refuses Python code an edit has made longer than one cell holds: the limit `python.set`

@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "화살표 제거",
         "Show Formulas" => "수식 표시",
         "Error Checking" => "오류 검사",
+        "Trace Error" => "오류 추적",
         "Circular References" => "순환 참조",
         "Python Mode" => "Python 모드",
         "Evaluate Formula" => "수식 계산",
