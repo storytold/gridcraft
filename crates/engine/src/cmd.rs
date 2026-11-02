@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod data;
 pub mod draw;
 pub mod edit;
+pub mod equation;
 pub mod extra;
 pub mod file;
 pub mod forecast;
@@ -15,6 +16,7 @@ pub mod inspect;
 pub mod macros;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
 pub mod slicer;
@@ -40,7 +42,11 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Ribbon/menu placement, e.g. `["Home", "Font"]`. Empty = not in menus.
     pub menu: &'static [&'static str],
+    /// Portable notation: `Cmd` is ⌘ on macOS and Ctrl elsewhere.
     pub shortcut: Option<&'static str>,
+    /// macOS override when its key differs. Equal to `shortcut` marks a Mac-only shortcut
+    /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
     pub run: Run,
@@ -54,10 +60,30 @@ pub struct CommandInfo {
     pub label: &'static str,
     pub menu: Vec<&'static str>,
     pub shortcut: Option<&'static str>,
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+impl CommandInfo {
+    /// Format the portable shortcut notation for the runtime operating system.
+    pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
+        let keys = if mac {
+            self.shortcut_mac.or(self.shortcut)
+        } else if self.shortcut_mac.is_some() && self.shortcut_mac == self.shortcut {
+            // An identical Mac override marks a Mac-only display shortcut.
+            // The portable field remains unchanged for legacy CLI consumers.
+            None
+        } else {
+            self.shortcut
+        }?;
+        if mac {
+            return Some(keys.to_owned());
+        }
+        Some(keys.split('+').map(|part| if part == "Cmd" { "Ctrl" } else { part }).collect::<Vec<_>>().join("+"))
+    }
 }
 
 impl CommandSpec {
@@ -68,6 +94,7 @@ impl CommandSpec {
             label: self.label,
             menu: self.menu.to_vec(),
             shortcut: self.shortcut,
+            shortcut_mac: self.shortcut_mac,
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
@@ -118,13 +145,13 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -138,6 +165,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
@@ -149,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
+        v.extend(python::specs());
         v.extend(slicer::specs());
         v.extend(whatif::specs());
         v.extend(forecast::specs());
@@ -180,6 +209,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -197,6 +227,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -374,6 +405,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     };
     let r = f(&mut ctx)?;
     let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    // Equations whose source changed (or that arrived without a layout, as from a paste) are
+    // laid out here, so painting only ever reads the cache.
+    wb.refresh_equations();
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
@@ -490,7 +524,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
+            let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
@@ -506,13 +540,18 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),
