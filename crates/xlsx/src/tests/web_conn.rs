@@ -620,7 +620,7 @@ fn a_non_utf8_foreign_only_part_does_not_fail_the_save() {
     use gridcraft_model::preserved::*;
     // Latin-1 text: not valid UTF-8, not BOM-marked, not UTF-16.
     let xml: &[u8] = b"<connections xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><connection id=\"1\" name=\"Caf\xe9\" type=\"4\"/></connections>";
-    assert!(std::str::from_utf8(xml).is_err(), "the fixture is not UTF-8");
+    assert!(std::str::from_utf8(xml).is_err());
     let mut wb = Workbook::default();
     wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
     wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
@@ -637,4 +637,34 @@ fn a_non_utf8_foreign_only_part_does_not_fail_the_save() {
     let mut pkg = crate::package::Package::open(&bytes).expect("opens");
     let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
     assert_eq!(&part[..], &xml[..], "the foreign part in its own encoding is kept byte for byte");
+}
+
+#[test]
+/// An entity-encoded GridCraft marker (`&#x7b;...` for the ext uri) is ours to the reader,
+/// so the merge's ownership checks match it by parsed value: with the model emptied, the
+/// stale entity-encoded connection is removed, not left behind by a raw-text check.
+fn an_entity_encoded_gridcraft_connection_is_removed() {
+    use gridcraft_model::preserved::*;
+    // The marker, with `{` and `}` spelled as character references.
+    let marker = "&#x7b;b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq&#x7d;";
+    let xml = format!(r#"<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Old" type="5"><extLst><ext uri="{marker}"><gc:webQuery/></ext></extLst></connection></connections>"#).into_bytes();
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    // The model holds nothing: the stale, entity-encoded connection must go.
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(!text.contains("name=\"Old\""), "the entity-encoded GridCraft connection is removed, not kept by the raw-text check: {text}");
+
+    assert!(!text.contains("gridcraftwebq") && !text.contains("&#x7d;"), "no marker survives");
 }

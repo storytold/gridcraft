@@ -384,6 +384,38 @@ fn block_end(s: &str) -> Option<usize> {
 /// every foreign `<connection>` (no GridCraft extension) is copied verbatim, and the
 /// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
 /// when the part does not parse: it is kept exactly as the file held it.
+/// Whether a parsed `<connection>` holds the GridCraft extension. The parser decodes XML
+/// character references, so an entity-encoded `ext/@uri` matches here even where a raw
+/// text search for the literal marker would miss it.
+fn is_gridcraft_connection(connection: &crate::xml::El) -> bool {
+    connection.kids("extLst").any(|ext_lst| ext_lst.kids("ext").any(|ext| ext.attr("uri") == Some(crate::write::GC_URI)))
+}
+
+/// Whether a connections fragment (a single `<connection>` block, or a whole part) holds a
+/// GridCraft connection, by parsed value: an entity-encoded marker does not survive a
+/// raw-text check. The wrapper keeps a bare `<connection>` block parseable, and `descendants`
+/// reaches the connections wherever the fragment leaves them (a whole part nests them under
+/// `<connections>`). A fragment that does not parse holds none (the whole part must parse
+/// for the merge, so this is a block-level fallback).
+fn parses_as_gridcraft(xml: &[u8]) -> bool {
+    crate::xml::parse(format!("<r>{}</r>", String::from_utf8_lossy(xml)).as_bytes()).is_ok_and(|root| descendants(&root, "connection").iter().any(|c| is_gridcraft_connection(c)))
+}
+
+/// Every descendant named `name`, at any depth (`kids` is only one level).
+fn descendants<'a>(el: &'a crate::xml::El, name: &str) -> Vec<&'a crate::xml::El> {
+    let mut out = Vec::new();
+    fn walk<'a>(el: &'a crate::xml::El, name: &str, out: &mut Vec<&'a crate::xml::El>) {
+        for c in &el.children {
+            if c.name == name {
+                out.push(c);
+            }
+            walk(c, name, out);
+        }
+    }
+    walk(el, name, &mut out);
+    out
+}
+
 fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoError> {
     // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
     // still merges, rather than failing every open-and-save with the part in it.
@@ -400,8 +432,10 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         Err(_) => return Err(IoError::Format("the connections part is not text in a supported encoding".into())),
     };
     // Nothing of ours in the part and nothing to write: leave the file's part alone (a
-    // foreign-only connections.xml is never rewritten, byte for byte).
-    if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
+    // foreign-only connections.xml is never rewritten, byte for byte). The marker check is
+    // by parsed value as well: an entity-encoded `ext/@uri` is ours to the reader, and a
+    // raw-text-only check would leave the stale connection in the part.
+    if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) && !parses_as_gridcraft(data) {
         return Ok(None);
     }
     // Foreign connections are kept as the exact bytes the file held: each <connection> block
@@ -450,7 +484,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         let after = &rest[start..];
         let end = block_end(after).ok_or_else(|| IoError::Format("the connections part could not be scanned".into()))?;
         let block = &after[..end];
-        if !block.contains(crate::write::GC_URI) {
+        if !block.contains(crate::write::GC_URI) && !parses_as_gridcraft(block.as_bytes()) {
             foreign.push_str(block);
         }
         rest = &after[end..];

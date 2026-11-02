@@ -638,7 +638,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                         // for the data rows, and one shared style would erase per-cell formats).
                         let style = sh.style_id(at);
                         let shifted = gridcraft_formula::adjust::shift_relative(expr.clone(), row as i64 - (t.range.start.row as i64 + 1), 0);
-                        sh.set_cell(at, gridcraft_model::Cell { formula: Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(shifted))), value: gridcraft_core::Value::Empty, style });
+                        sh.set_cell(at, gridcraft_model::Cell { formula: Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(shifted))), value: gridcraft_core::Value::Empty, style, py: None });
                     }
                 }
                 cx.structural = true;
@@ -658,7 +658,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 for (c, f) in &user_formulas {
                     if new_range.contains(*c) && !kept_new.contains(&c.col) {
                         let style = sh.style_id(*c);
-                        sh.set_cell(*c, gridcraft_model::Cell { formula: Some(f.clone()), value: gridcraft_core::Value::Empty, style });
+                        sh.set_cell(*c, gridcraft_model::Cell { formula: Some(f.clone()), value: gridcraft_core::Value::Empty, style, py: None });
                     }
                 }
                 cx.structural = true;
