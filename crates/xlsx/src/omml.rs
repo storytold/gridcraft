@@ -93,9 +93,11 @@ fn count_math(e: &El, depth: usize) -> usize {
 /// source. What a re-serialisation may change without changing the equation is left out: every
 /// other property (`ctrlPr`, DrawingML run properties such as size and colour), extension lists,
 /// the DrawingML containers (`txBody`, `p`, `r`, `fld`, `lstStyle`), attributes, namespace
-/// prefixes and whitespace between elements; adjacent runs without properties are joined, so
-/// splitting or merging them changes nothing. A text change, an added run, a structural change
-/// or a change to a property the converter reads does.
+/// prefixes and whitespace between elements; adjacent runs without read properties are joined,
+/// so splitting or merging them changes nothing, while a run with one is a unit of its own, as
+/// the converter converts it (it recognises function names per run). A text change, an added
+/// run, a structural change, a change to a property the converter reads or a styled run split in
+/// two does.
 pub fn body_marker(tb: &El) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut text = String::new();
@@ -132,7 +134,18 @@ fn mark(e: &El, h: &mut u64, text: &mut String, depth: usize) {
             continue;
         }
         match c.name.as_str() {
-            "txBody" | "p" | "r" | "fld" | "lstStyle" => mark(c, h, text, depth + 1),
+            "r" => {
+                // A run with a property the converter reads is converted on its own (a function
+                // name such as `sin` is recognised per run), so its text is hashed as a unit: the
+                // property closes the text before it, and the run's end closes its own. Runs
+                // without such properties convert character by character and stay joined.
+                let styled = c.children.iter().any(|p| p.name.ends_with("Pr") && read_properties(&p.name).iter().any(|n| p.child(n).is_some()));
+                mark(c, h, text, depth + 1);
+                if styled {
+                    mark_text(h, text);
+                }
+            }
+            "txBody" | "p" | "fld" | "lstStyle" => mark(c, h, text, depth + 1),
             "t" => text.push_str(&c.text),
             "br" => text.push('\n'),
             name => {
@@ -770,6 +783,21 @@ mod tests {
         assert_ne!(styled("p"), base);
         assert_ne!(styled("p"), styled("b"));
         assert_ne!(styled("p"), body_marker(&tb("<m:r><m:t>x</m:t></m:r><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>+1</m:t></m:r>")));
+        // The converter converts a run with a read property on its own and recognises `sin` per
+        // run, so a styled `sin` split into `s` and `in` (the second styled or not) is a change,
+        // while plain runs convert character by character and may be split or joined freely.
+        let upright = |runs: &[(&str, bool)]| {
+            let xml: String = runs
+                .iter()
+                .map(|(t, p)| format!("<m:r>{}<m:t>{t}</m:t></m:r>", if *p { "<m:rPr><m:sty m:val=\"p\"/></m:rPr>" } else { "" }))
+                .collect();
+            body_marker(&tb(&xml))
+        };
+        assert_ne!(upright(&[("sin", true)]), upright(&[("s", true), ("in", false)]));
+        assert_ne!(upright(&[("sin", true)]), upright(&[("s", true), ("in", true)]));
+        assert_ne!(upright(&[("sin", true), ("x", false)]), upright(&[("s", true), ("inx", false)]));
+        assert_eq!(upright(&[("ab", false)]), upright(&[("a", false), ("b", false)]));
+        assert_eq!(upright(&[("sin", true), ("xy", false)]), upright(&[("sin", true), ("x", false), ("y", false)]));
         let accented =
             |chr: &str| body_marker(&tb(&format!("<m:acc><m:accPr><m:chr m:val=\"{chr}\"/></m:accPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:acc>")));
         assert_ne!(accented("\u{0302}"), accented("\u{0303}"));
