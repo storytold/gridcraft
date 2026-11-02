@@ -597,6 +597,8 @@ impl Chart {
                     | ChartKind::Line
                     | ChartKind::LineMarkers
                     | ChartKind::LineStacked
+                    | ChartKind::LineStacked100
+                    | ChartKind::LineStacked100Markers
                     | ChartKind::Area
                     | ChartKind::AreaStacked
                     | ChartKind::AreaStacked100
