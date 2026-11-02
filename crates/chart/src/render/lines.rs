@@ -54,6 +54,72 @@ pub(super) fn decimate(pts: Vec<[f32; 2]>, max: usize) -> Vec<[f32; 2]> {
     out
 }
 
+/// Decimates the top and baseline of an area chart together at the same horizontal indices so
+/// `area_mesh`'s paired vertical-strip topology (`pts[i]` ↔ `pts[2n - 1 - i]`) is preserved.
+pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize) -> Vec<[f32; 2]> {
+    let n = top.len().min(base.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    if n <= max {
+        let mut poly = top;
+        poly.truncate(n);
+        poly.extend(base.into_iter().take(n).rev());
+        return poly;
+    }
+    let mut keep = Vec::with_capacity(max * 2);
+    let mut i = 0;
+    while i < n {
+        let col = top[i][0].floor();
+        let (start, mut t_mn, mut t_mx, mut b_mn, mut b_mx) = (i, i, i, i, i);
+        let mut k = i + 1;
+        while k < n && top[k][0].floor() == col {
+            if top[k][1] < top[t_mn][1] {
+                t_mn = k;
+            }
+            if top[k][1] > top[t_mx][1] {
+                t_mx = k;
+            }
+            if base[k][1] < base[b_mn][1] {
+                b_mn = k;
+            }
+            if base[k][1] > base[b_mx][1] {
+                b_mx = k;
+            }
+            k += 1;
+        }
+        let mut idx = [start, t_mn, t_mx, b_mn, b_mx, k - 1];
+        idx.sort_unstable();
+        let mut last = usize::MAX;
+        for ix in idx {
+            if ix != last {
+                keep.push(ix);
+                last = ix;
+            }
+        }
+        i = k;
+    }
+    if keep.len() > max * 4 {
+        let step = keep.len() / (max * 2) + 1;
+        let last = keep.last().copied();
+        let mut s: Vec<usize> = keep.into_iter().step_by(step).collect();
+        if let Some(l) = last
+            && s.last() != Some(&l)
+        {
+            s.push(l);
+        }
+        keep = s;
+    }
+    let mut poly = Vec::with_capacity(keep.len() * 2);
+    for &ix in &keep {
+        poly.push(top[ix]);
+    }
+    for &ix in keep.iter().rev() {
+        poly.push(base[ix]);
+    }
+    poly
+}
+
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
 /// each run is interpolated with a Catmull-Rom spline so the line curves through the data points.
 pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, width: f32, smooth: Option<Bx>) {
@@ -154,5 +220,18 @@ mod smooth_tests {
         let out = smooth_run(pts, plot);
         assert!(out.len() > 5);
         assert!(out.iter().all(|p| (0.0..=300.0).contains(&p[0]) && (10.0..=110.0).contains(&p[1])));
+    }
+
+    #[test]
+    fn decimate_area_preserves_paired_vertical_strips() {
+        let top: Vec<[f32; 2]> = (0..1000).map(|i| [i as f32 * 0.25, ((i * 37) % 100) as f32]).collect();
+        let base: Vec<[f32; 2]> = (0..1000).map(|i| [i as f32 * 0.25, 100.0]).collect();
+        let poly = decimate_area(top, base, 64);
+        assert_eq!(poly.len() % 2, 0);
+        let half = poly.len() / 2;
+        for i in 0..half {
+            assert_eq!(poly[i][0], poly[poly.len() - 1 - i][0]);
+            assert_eq!(poly[poly.len() - 1 - i][1], 100.0);
+        }
     }
 }
