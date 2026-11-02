@@ -23,7 +23,7 @@ pub struct WindowUi {
     grid: grid::GridState,
     name_box: Option<String>,
     keytips: keytips::KeyTips,
-    selected_chart: Option<u32>,
+    selected_object: Option<gridcraft_engine::model::ObjRef>,
     tab_run: Option<(u64, usize, u32, CellRef)>,
     open_switch_windows: bool,
     /// The ribbon tab this window shows. A contextual tab depends on this window's selection, so
@@ -65,7 +65,7 @@ impl SheetApp {
             grid,
             name_box,
             keytips,
-            selected_chart,
+            selected_object,
             tab_run,
             open_switch_windows,
             ribbon_tab,
@@ -81,7 +81,7 @@ impl SheetApp {
         std::mem::swap(&mut self.grid, grid);
         std::mem::swap(&mut self.name_box, name_box);
         std::mem::swap(&mut self.keytips, keytips);
-        std::mem::swap(&mut self.selected_chart, selected_chart);
+        std::mem::swap(&mut self.selected_object, selected_object);
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
@@ -143,6 +143,19 @@ impl SheetApp {
         {
             w.dialog = Some(d);
         }
+    }
+
+    /// The window that shows the dialog `name`: the current one or a parked one. A window that has
+    /// closed shows nothing, even while its parked state is still kept.
+    pub(crate) fn window_with_dialog(&self, name: &str) -> Option<u64> {
+        if self.dialog.as_ref().is_some_and(|d| d.name == name) {
+            return self.ui_window;
+        }
+        self.parked
+            .iter()
+            .filter(|(id, w)| w.dialog.as_ref().is_some_and(|d| d.name == name) && self.session.window(**id).is_some())
+            .map(|(id, _)| *id)
+            .min()
     }
 
     /// Whether a window other than the current one has a cell or text-box draft open.

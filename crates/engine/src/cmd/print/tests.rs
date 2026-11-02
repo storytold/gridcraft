@@ -17,6 +17,25 @@ fn contains(hay: &[u8], needle: &str) -> bool {
 }
 
 #[test]
+fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 1234], ["Q2", 5678]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "format": "#,##0.00"})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "at": "D2", "type": "column"})).unwrap();
+    let (off, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    let count = |bytes: &[u8], text: &str| String::from_utf8_lossy(bytes).matches(text).count();
+    s.execute("chart.set", json!({"dataTable": true})).unwrap();
+    let (on, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(count(&on, "(1,234.00) Tj"), count(&off, "(1,234.00) Tj") + 1);
+    assert_eq!(count(&on, "(5,678.00) Tj"), count(&off, "(5,678.00) Tj") + 1);
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1000+111"})).unwrap();
+    let (updated, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert!(!contains(&updated, "(1,234.00) Tj"));
+    assert!(count(&updated, "(1,111.00) Tj") >= 2, "cell and chart data table both print the new value");
+}
+
+#[test]
 fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
@@ -146,6 +165,142 @@ fn wide_sheet_goes_down_then_over() {
     assert_eq!(pv["pageList"][0]["range"], "A1:J45");
     assert_eq!(pv["pageList"][1]["range"], "A46:J60");
     assert_eq!(pv["pageList"][2]["range"], "K1:O45");
+}
+
+/// The ranges of the printed pages, in print order.
+fn page_ranges(s: &mut Session) -> Vec<String> {
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    let list = pv["pageList"].as_array().unwrap();
+    assert_eq!(pv["pages"], list.len());
+    for (i, page) in list.iter().enumerate() {
+        assert_eq!(page["page"], i + 1);
+        assert_eq!(page["pageOrder"], s.doc().unwrap().wb.active().unwrap().print.page_order.id());
+    }
+    list.iter().map(|p| p["range"].as_str().unwrap().to_string()).collect()
+}
+
+/// The content streams of an exported PDF's pages, in page order (pages without pictures are the
+/// file's only streams).
+fn pdf_pages(s: &mut Session) -> Vec<String> {
+    let (pdf, pages) = pdf_of(s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    let streams: Vec<String> = text.split("endstream").filter(|part| part.contains("stream\n")).map(str::to_string).collect();
+    assert_eq!(streams.len() as u64, pages);
+    streams
+}
+
+/// The page order measured in Excel: print area A1:D4 with a row break before row 3 and a column
+/// break before column C, so four pages two tall and two wide, each filled and labelled in its
+/// own colour, with `Page &P of &N` in the footer.
+fn two_by_two_pages() -> Session {
+    let mut s = s();
+    for (range, color, label) in
+        [("A1:B2", "#FF0000", "red"), ("A3:B4", "#00FF00", "green"), ("C1:D2", "#0000FF", "blue"), ("C3:D4", "#FFFF00", "yellow")]
+    {
+        s.execute("home.fillColor", json!({"range": range, "color": color})).unwrap();
+        s.execute("cell.set", json!({"cell": &range[..2], "input": label})).unwrap();
+    }
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:D4", "rowBreaks": [3], "colBreaks": ["C"], "footer": "Page &P of &N"})).unwrap();
+    s
+}
+
+/// The colour of each printed page, read from its fill and label; each page's footer must
+/// number it in print order.
+fn printed_colours(s: &mut Session) -> Vec<&'static str> {
+    let pages = pdf_pages(s);
+    let n = pages.len();
+    pages
+        .iter()
+        .enumerate()
+        .map(|(i, page)| {
+            assert!(page.contains(&format!("(Page {} of {n}) Tj", i + 1)), "page {}: {page}", i + 1);
+            let found: Vec<&str> = [("red", "1 0 0 rg"), ("green", "0 1 0 rg"), ("blue", "0 0 1 rg"), ("yellow", "1 1 0 rg")]
+                .into_iter()
+                .filter(|(label, fill)| page.contains(&format!("({label}) Tj")) && page.contains(&format!("\n{fill}\n")))
+                .map(|(label, _)| label)
+                .collect();
+            assert_eq!(found.len(), 1, "page {}: {found:?}", i + 1);
+            found[0]
+        })
+        .collect()
+}
+
+#[test]
+fn page_order_sets_the_sequence_of_the_pages_as_measured_in_excel() {
+    let mut s = two_by_two_pages();
+    // Down, then over is the default: down the first column of pages, then the next.
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().print.page_order, PageOrder::DownThenOver);
+    assert_eq!(s.execute("pageLayout.pageSetup", json!({})).unwrap()["page_order"], "downThenOver");
+    let down = ["A1:B2", "A3:B4", "C1:D2", "C3:D4"];
+    assert_eq!(page_ranges(&mut s), down);
+    assert_eq!(printed_colours(&mut s), ["red", "green", "blue", "yellow"]);
+    // Over, then down: across the first row of pages, then the next.
+    let r = s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+    assert_eq!(r["page_order"], "overThenDown");
+    let over = ["A1:B2", "C1:D2", "A3:B4", "C3:D4"];
+    assert_eq!(page_ranges(&mut s), over);
+    assert_eq!(printed_colours(&mut s), ["red", "blue", "green", "yellow"]);
+    assert_eq!(s.execute("file.printPreview", json!({"page": 2})).unwrap()["page"]["range"], "C1:D2");
+    // One undo step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(page_ranges(&mut s), down);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(page_ranges(&mut s), over);
+    // Anything but the two orders is refused and changes nothing, even next to a good value.
+    for bad in [json!("sideways"), json!("OverThenDown"), json!(""), json!(2), json!(null), json!(true), json!(["downThenOver"])] {
+        let e = s.execute("pageLayout.pageSetup", json!({"pageOrder": bad, "orientation": "landscape"})).unwrap_err();
+        assert!(e.to_string().contains("pageOrder"), "{bad}: {e}");
+    }
+    let pr = &s.doc().unwrap().wb.active().unwrap().print;
+    assert_eq!((pr.page_order, pr.orientation), (PageOrder::OverThenDown, Orientation::Portrait));
+    assert!(s.take_ui_requests().is_empty(), "a programmatic call never opens a dialog");
+    // First-page and odd/even headers go by the printed sequence too.
+    s.execute(
+        "pageLayout.headerFooter",
+        json!({"header": "&COdd &P", "evenHeader": "&CEven &P", "firstHeader": "&CCover", "differentFirst": true, "differentOddEven": true}),
+    )
+    .unwrap();
+    let pages = pdf_pages(&mut s);
+    for (page, (header, label)) in pages.iter().zip([("Cover", "red"), ("Even 2", "blue"), ("Odd 3", "green"), ("Even 4", "yellow")]) {
+        assert!(page.contains(&format!("({header}) Tj")) && page.contains(&format!("({label}) Tj")), "{header}: {page}");
+    }
+    s.execute("pageLayout.pageSetup", json!({"pageOrder": "downThenOver"})).unwrap();
+    assert_eq!(page_ranges(&mut s), down);
+    let pages = pdf_pages(&mut s);
+    for (page, (header, label)) in pages.iter().zip([("Cover", "red"), ("Even 2", "green"), ("Odd 3", "blue"), ("Even 4", "yellow")]) {
+        assert!(page.contains(&format!("({header}) Tj")) && page.contains(&format!("({label}) Tj")), "{header}: {page}");
+    }
+}
+
+#[test]
+fn page_order_without_breaks_and_with_print_titles() {
+    let mut s = s();
+    // Every cell shows its own address: 60 rows and 15 columns are two pages tall and two wide.
+    let rows: Vec<Vec<Json>> = (1..=60).map(|r| (0..15).map(|c| json!(format!("{}{r}", gridcraft_core::col_to_letters(c)))).collect()).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    for titles in [false, true] {
+        if titles {
+            s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1", "titleCols": "A:A"})).unwrap();
+        }
+        s.execute("pageLayout.pageSetup", json!({"pageOrder": "downThenOver"})).unwrap();
+        let down = page_ranges(&mut s);
+        if !titles {
+            assert_eq!(down, ["A1:J45", "A46:J60", "K1:O45", "K46:O60"]);
+        }
+        s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+        let over = page_ranges(&mut s);
+        assert_eq!(over, [down[0].clone(), down[2].clone(), down[1].clone(), down[3].clone()], "titles: {titles}");
+        // Each printed page starts with its own top-left cell; the title row and column (A1 is in
+        // both) repeat on every page in either order.
+        for (order, ranges) in [("overThenDown", &over), ("downThenOver", &down)] {
+            s.execute("pageLayout.pageSetup", json!({"pageOrder": order})).unwrap();
+            for (i, (page, range)) in pdf_pages(&mut s).iter().zip(ranges.iter()).enumerate() {
+                let top_left = range.split(':').next().unwrap();
+                assert!(page.contains(&format!("({top_left}) Tj")), "{order} page {}: no {top_left}", i + 1);
+                assert_eq!(page.contains("(A1) Tj"), titles || i == 0, "{order} page {}, titles: {titles}", i + 1);
+            }
+        }
+    }
 }
 
 #[test]
@@ -473,6 +628,11 @@ fn hostile_settings_never_panic_and_cap_pages() {
     assert_eq!(pv["pages"].as_u64().unwrap(), MAX_PAGES as u64);
     let r = s.execute("file.exportPdf", json!({})).unwrap();
     assert_eq!(r["pages"], MAX_PAGES);
+    // Over, then down stops at the cap as well, along the first row of pages.
+    s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pages"].as_u64().unwrap(), MAX_PAGES as u64);
+    assert_eq!(pv["pageList"][1]["rows"], pv["pageList"][0]["rows"], "the second page is beside the first");
     s.execute("pageLayout.pageSetup", json!({"fitWidth": 1, "fitHeight": 1, "titleRows": "1:1048576", "titleCols": "A:XFD", "headings": true}))
         .unwrap();
     let pv = s.execute("file.printPreview", json!({})).unwrap();
