@@ -403,8 +403,6 @@ fn clear_solver_options(d: &mut Dialog) {
     d.values.remove("requireBounds");
 }
 
-/// Save Model from the Solver Parameters form: writes the form's model down from `range`. A
-/// range that holds data is replaced only with `overwrite`; without it the form asks first.
 /// Before one of Solver's commands other than Solve runs from the form (Reset All, Load, Save,
 /// Replace): the dialog's sheet must be there and shown again, as `dialogs::show` requires for
 /// Solve, since the commands act on the active sheet and read references without a sheet name
@@ -422,6 +420,8 @@ fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
     true
 }
 
+/// Save Model from the Solver Parameters form: writes the form's model down from `range`. A
+/// range that holds data is replaced only with `overwrite`; without it the form asks first.
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
     d.values.remove("askModelOverwrite");
     let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {

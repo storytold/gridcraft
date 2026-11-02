@@ -629,6 +629,29 @@ fn protect_sheet_opened_while_picking_on_a_protected_sheet_acts_on_the_dialogs_s
 }
 
 #[test]
+fn protection_actions_refuse_a_deleted_dialog_home_without_unprotecting_the_picked_sheet() {
+    for action in ["protectSheet", "unprotectSheet"] {
+        let mut s = two_sheets();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let mut h = harness(s);
+        open_goal_seek(&mut h);
+        click_button(&mut h, "Collapse dialog", 1);
+        h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().session.active().unwrap().wb.active().unwrap().is_protected());
+        h.state_mut().open_dialog(action, json!({}));
+        h.run_steps(3);
+        let message = h.state().message.as_ref().map(|m| m.1.as_str()).unwrap_or("");
+        assert!(message.contains("was deleted"), "{action}: {message}");
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goalSeek"));
+        assert!(h.state().session.active().unwrap().wb.active().unwrap().is_protected(), "{action} must leave Rates protected");
+    }
+}
+
+#[test]
 fn the_protect_sheet_label_follows_the_dialogs_sheet_while_picking_on_another() {
     let mut s = two_sheets();
     s.execute("sheet.activate", json!({"sheet": 1})).unwrap();

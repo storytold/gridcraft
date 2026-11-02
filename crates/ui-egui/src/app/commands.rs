@@ -331,8 +331,13 @@ impl SheetApp {
         if matches!(name, "protectSheet" | "unprotectSheet")
             && let Some(mut d) = self.dialog.take()
         {
-            // The draft was committed above, so the sheet can be shown again.
-            let _ = d.end_pick(self);
+            let error =
+                if d.home_sheet_deleted(self) { Some(dialogs::SHEET_DELETED.into()) } else { d.end_pick(self).err().map(|e| clean_error(&e)) };
+            if let Some(error) = error {
+                self.message = Some((d.title.clone(), error));
+                self.dialog = Some(d);
+                return;
+            }
             self.dialog = Some(d);
         }
         // Every Protect Sheet entry point (ribbon menus, keytips, tab menu) becomes Unprotect Sheet
