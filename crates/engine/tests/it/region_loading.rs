@@ -78,19 +78,37 @@ fn opening_recalculates_cached_dates_in_mdy_dmy_and_ymd_for_both_date_systems() 
 }
 
 #[test]
-/// Preserve v0.9.0's explicit CSV text import while applying the session's formula region.
+/// Preserve explicit CSV text import while applying the selected formula region.
 fn csv_text_import_preserves_identifiers_and_uses_the_selected_formula_region() {
     let csv = gridcraft_engine::io::base64_encode(b"00123,13/01/2026\n");
-    for as_text in [false, true] {
+    let mut s = Session::new();
+    s.prefs.region = "it-IT".into();
+    s.execute("file.open", json!({"name": "regional-dates.csv", "base64": csv, "csvAsText": true})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+    assert!(!s.doc().unwrap().is_dirty(), "opening is not an edit");
+    assert_eq!(value(&s, "A1"), Value::text("00123"));
+    assert_eq!(value(&s, "B1"), Value::text("13/01/2026"));
+    s.execute("cell.set", json!({"cell": "C1", "input": "=MONTH(DATEVALUE(B1))"})).unwrap();
+    assert_eq!(value(&s, "C1"), Value::Number(1.0));
+}
+
+#[test]
+/// Keep main's per-column CSV date inference separate from subsequent regional formula parsing.
+fn csv_automatic_date_inference_remains_independent_of_formula_region() {
+    let csv = gridcraft_engine::io::base64_encode(b"00123,13/01/2026\n");
+    let expected = gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1900, 2026, 1, 13).unwrap();
+    for (region, expected_day) in [("en-US", 1.0), ("it-IT", 2.0)] {
         let mut s = Session::new();
-        s.prefs.region = "it-IT".into();
-        s.execute("file.open", json!({"name": "regional-dates.csv", "base64": csv, "csvAsText": as_text})).unwrap();
-        assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+        s.prefs.region = region.into();
+        s.execute("file.open", json!({"name": "regional-dates.csv", "base64": csv, "csvAsText": false})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.region.tag, region);
         assert!(!s.doc().unwrap().is_dirty(), "opening is not an edit");
-        assert_eq!(value(&s, "A1"), if as_text { Value::text("00123") } else { Value::Number(123.0) });
-        assert_eq!(value(&s, "B1"), Value::text("13/01/2026"));
-        s.execute("cell.set", json!({"cell": "C1", "input": "=MONTH(DATEVALUE(B1))"})).unwrap();
+        assert_eq!(value(&s, "A1"), Value::Number(123.0));
+        assert_eq!(value(&s, "B1"), Value::Number(expected), "CSV's unambiguous DMY column in {region}");
+        s.execute("cell.set", json!({"cell": "C1", "input": "=MONTH(B1)"})).unwrap();
         assert_eq!(value(&s, "C1"), Value::Number(1.0));
+        s.execute("cell.set", json!({"cell": "D1", "input": "=DAY(DATEVALUE(\"02/01/2026\"))"})).unwrap();
+        assert_eq!(value(&s, "D1"), Value::Number(expected_day), "formula text still uses {region}");
     }
 }
 

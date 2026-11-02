@@ -46,11 +46,13 @@ save/open/refresh cycles, MDY/DMY/YMD, pre-open cached formulas and both date sy
 runtime invalidation in several documents, undo/redo returning to the saved state,
 unchanged canonical API input and F2 editing of imported numeric dates.
 
-The branch integrates main at `f6b0cec6`. File opening retains `csvAsText` while
-setting the workbook region before recalculation, and the CLI keeps the full
-import warning list. A generated CSV regression checks that text-only import keeps
-`00123` and `13/01/2026` as text, that normal CSV import still converts the identifier
-to a number, and that regional `DATEVALUE` yields January in either mode.
+The branch integrates main at `488f9982`. File opening retains `csvAsText` while
+applying the selected formula region before recalculation. Text-only import keeps
+`00123` and `13/01/2026` as text. Automatic CSV import preserves main's per-column
+date-order inference from #3043: the identifier becomes 123 and the unambiguous
+DMY date becomes its serial, independently of the formula region. Subsequent
+DATEVALUE text still follows that region. Neither mode changes the workbook's
+save point on opening.
 
 Opening documents preserves main's shared-workbook window lifecycle and control-token
 authentication. An embedder using `DocState::from_saved` keeps cached values when the
