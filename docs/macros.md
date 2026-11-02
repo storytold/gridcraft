@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros; `macro.run` takes `output`; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -264,6 +264,16 @@ default) or always on one range (`input: "B2:D9"`), with an optional output cell
 `macro.run` with its checks; a command goes through the same policy as a macro step and runs, as
 a step does, inside the scripts' file sandbox unless it is an approved file command, so a button
 in a workbook opened from a file asks before it runs anything.
+
+In xlsx a button carries its macro as Excel writes it (`macro="[0]!Name"`, a macro run on the
+selection). A command, a fixed input range or an output cell has no place there and is kept in a
+hidden defined name (`_gc_control_actions_<k>`), keyed by the sheet, the button's place, name and
+anchor cell. When the file is opened the hidden name is removed and each kept action goes back
+onto its button only when the file still agrees with it: a kept macro action needs the file to
+assign that macro still, so an assignment removed in another application stays removed and a
+button given another macro keeps that one; a kept command needs the file to assign no macro. A
+button whose name, anchor cell or place changed, or which another application removed, gets no
+kept action.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's

@@ -420,6 +420,109 @@ fn a_kept_button_action_comes_back_only_on_the_same_button() {
             "{i}"
         );
     }
+    // Another application cleared the macro of "Fixed": the stored action (with its fixed input)
+    // does not bring the assignment back. The command on a button given no macro still does.
+    let mut cleared = kept(&stored);
+    cleared.sheet_mut(0).unwrap().controls[2].action = None;
+    load_action_names(&mut cleared);
+    assert_eq!(cleared.sheets[0].controls[2].action, None, "the removed assignment stays removed");
+    assert_eq!(cleared.sheets[0].controls[0].action, actions(&wb)[0], "the command comes back");
+}
+
+/// The saved xlsx bytes of `s`'s workbook.
+fn saved_xlsx(s: &mut Session) -> Vec<u8> {
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap()
+}
+
+/// `bytes` with `edit` applied to the text of every part, as another application that rewrote
+/// those parts would leave the file.
+fn edit_parts(bytes: &[u8], mut edit: impl FnMut(&str, String) -> String) -> Vec<u8> {
+    use std::io::{Cursor, Read, Write};
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut part = zip.by_index(i).unwrap();
+        let name = part.name().to_string();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        let data = match String::from_utf8(data) {
+            Ok(text) => edit(&name, text).into_bytes(),
+            Err(e) => e.into_bytes(),
+        };
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+/// Opens `bytes` as `name`, checks the hidden name of the button actions is taken back out, and
+/// lists the controls.
+fn open_and_list(s: &mut Session, name: &str, bytes: &[u8]) -> Json {
+    s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(bytes)})).unwrap();
+    assert!(s.doc().unwrap().wb.names.iter().all(|n| !n.name.contains("control_actions")), "{name}: the hidden name is taken back out");
+    s.execute("control.list", json!({})).unwrap()
+}
+
+/// The macro reference xlsx writes for a button that runs `Mark`.
+const MARK: &str = "[0]!Mark";
+
+/// Another application removed a button's macro assignment and kept the button with its name and
+/// place: the hidden name's copy of the action (with the fixed input and the output cell) does not
+/// bring the assignment back. The same file, unedited, reopens with the whole action.
+#[test]
+fn a_macro_assignment_removed_in_another_application_stays_removed() {
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "m"}}], "inputs": [{"name": "Input", "kind": "range"}], "output": {"onConflict": "overwrite"}})).unwrap();
+    s.execute("insert.button", json!({"at": "D2", "text": "Run", "macro": "Mark", "input": "F1:G2", "output": "H1"})).unwrap();
+    let before = s.execute("control.list", json!({})).unwrap()[0].clone();
+    let full = ControlAction::Macro { name: "Mark".into(), input: MacroInput::Fixed("F1:G2".into()), output: Some("H1".into()) };
+    assert_eq!(before["action"], serde_json::to_value(&full).unwrap());
+    let bytes = saved_xlsx(&mut s);
+    // xlsx assigns the macro in the sheet's `<controlPr macro>` and in the VML shape's
+    // `<x:FmlaMacro>` (the parts the reader takes it from); clearing the assignment drops both.
+    let (attr, fmla) = (format!(" macro=\"{MARK}\""), format!("<x:FmlaMacro>{MARK}</x:FmlaMacro>"));
+    let mut edited = Vec::new();
+    let cleared = edit_parts(&bytes, |name, text| {
+        if text.contains(&attr) || text.contains(&fmla) {
+            edited.push(name.to_string());
+        }
+        text.replace(&attr, "").replace(&fmla, "")
+    });
+    edited.sort();
+    assert_eq!(edited, ["xl/drawings/vmlDrawing1.vml", "xl/worksheets/sheet1.xml"]);
+    let list = open_and_list(&mut s, "cleared.xlsx", &cleared);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    for key in ["kind", "name", "at", "text"] {
+        assert_eq!(list[0][key], before[key], "{key}: the same button");
+    }
+    assert_eq!(list[0].get("action"), None, "the removed assignment stays removed");
+    // Unedited, the file still assigns the macro, and the action comes back whole.
+    let list = open_and_list(&mut s, "kept.xlsx", &bytes);
+    assert_eq!(list[0]["action"], before["action"]);
+}
+
+/// Another application assigned a macro to a button that ran a command (kept in the hidden name):
+/// the file's macro wins, as it does when a macro button is given another macro.
+#[test]
+fn a_macro_assigned_in_another_application_replaces_a_stored_command() {
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "m"}}]})).unwrap();
+    s.execute("insert.button", json!({"at": "D2", "text": "Run", "command": "cell.set", "params": {"cell": "A9", "input": "cmd"}})).unwrap();
+    let bytes = saved_xlsx(&mut s);
+    let (pr, data) = ("<controlPr", "<x:ClientData ObjectType=\"Button\">");
+    let mut edited = Vec::new();
+    let assigned = edit_parts(&bytes, |name, text| {
+        if text.contains(pr) || text.contains(data) {
+            edited.push(name.to_string());
+        }
+        text.replace(pr, &format!("<controlPr macro=\"{MARK}\"")).replace(data, &format!("{data}<x:FmlaMacro>{MARK}</x:FmlaMacro>"))
+    });
+    edited.sort();
+    assert_eq!(edited, ["xl/drawings/vmlDrawing1.vml", "xl/worksheets/sheet1.xml"]);
+    let list = open_and_list(&mut s, "assigned.xlsx", &assigned);
+    let plain = ControlAction::Macro { name: "Mark".into(), input: MacroInput::Selection, output: None };
+    assert_eq!(list[0]["action"], serde_json::to_value(&plain).unwrap(), "the file's macro, not the stored command");
 }
 
 #[test]

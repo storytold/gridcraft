@@ -627,7 +627,7 @@ pub(crate) fn load_action_names(wb: &mut Workbook) {
                 && text("name").is_none_or(|n| n == c.display_name())
                 && text("at").is_none_or(|a| a == c.anchor.cell.a1())
                 && match (&c.action, &action) {
-                    (None, _) => true,
+                    (None, ControlAction::Command { .. }) => true,
                     (Some(ControlAction::Macro { name: now, .. }), ControlAction::Macro { name: kept, .. }) => now.eq_ignore_ascii_case(kept),
                     _ => false,
                 }
