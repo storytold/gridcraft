@@ -1719,6 +1719,14 @@ Macro",
     ("Random Number Generation", "توليد الأرقام العشوائية"),
     ("Sampling", "أخذ العينات"),
     ("z-Test: Two Sample for Means", "اختبار z: عينتان للمتوسطات"),
+    // From main (0.15 follow-up)
+    ("Sensitivity", "الحساسية"),
+    ("Show Details", "إظهار التفاصيل"),
+    ("Needs an optimal or converged solution: Solver stopped before reaching one.", "يتطلب حلًا أمثل أو متقاربًا: توقف المحلل قبل الوصول إلى حل."),
+    (
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints.",
+        "يتطلب Simplex LP أو GRG غير الخطي، وهدفًا أقصى أو أدنى، وبلا قيود أعداد صحيحة.",
+    ),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.
