@@ -877,6 +877,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Line" => "Γραμμή",
         "Line with Markers" => "Γραμμή με δείκτες",
         "Stacked Line" => "Σωρευμένες γραμμές",
+        "100% Stacked Line" => "Σωρευμένες γραμμές 100%",
+        "100% Stacked Line with Markers" => "Σωρευμένες γραμμές 100% με δείκτες",
         "Pie" => "Πίτα",
         "Doughnut" => "Δακτύλιος",
         "Area" => "Περιοχή",

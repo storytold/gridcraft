@@ -755,6 +755,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Line" => "Liniowy",
         "Line with Markers" => "Liniowy ze znacznikami",
         "Stacked Line" => "Liniowy skumulowany",
+        "100% Stacked Line" => "Liniowy 100% skumulowany",
+        "100% Stacked Line with Markers" => "Liniowy 100% skumulowany ze znacznikami",
         "Pie" => "Kołowy",
         "Doughnut" => "Pierścieniowy",
         "Area" => "Warstwowy",

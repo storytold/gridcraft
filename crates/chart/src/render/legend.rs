@@ -60,8 +60,10 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
                 .clone()
                 .map(|s| {
                     let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
+                        ChartKind::Line | ChartKind::LineStacked | ChartKind::LineStacked100 | ChartKind::Radar | ChartKind::ScatterLines => {
+                            Swatch::Line
+                        }
+                        ChartKind::LineMarkers | ChartKind::LineStacked100Markers => Swatch::LineMarker,
                         ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
                         _ => Swatch::Box,
                     };

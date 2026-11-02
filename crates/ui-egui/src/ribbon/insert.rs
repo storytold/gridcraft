@@ -94,6 +94,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                         ("Line", "line", ""),
                         ("Line with Markers", "line", "markers"),
                         ("Stacked Line", "line", "stacked"),
+                        ("100% Stacked Line", "line", "stacked100"),
+                        ("100% Stacked Line with Markers", "line", "stacked100Markers"),
                         ("Area", "area", ""),
                         ("Stacked Area", "area", "stacked"),
                         ("100% Stacked Area", "area", "stacked100"),
