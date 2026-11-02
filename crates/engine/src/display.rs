@@ -90,14 +90,14 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if reads_back(&iso) { iso } else { raw }
 }
 
-/// Whether `c` has a formula that must not be shown: its cell is formatted Hidden on a
-/// protected sheet. A spilled cell follows its anchor.
+/// Whether `c` has a formula or Python code that must not be shown: its cell is formatted
+/// Hidden on a protected sheet. A spilled cell follows its anchor.
 pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
     if !sheet.is_protected() {
         return false;
     }
     let at = match sheet.cell(c) {
-        Some(x) if x.formula.is_some() => c,
+        Some(x) if x.formula.is_some() || x.py.is_some() => c,
         _ => match sheet.spill_ranges.iter().find(|(_, r)| r.contains(c)) {
             Some((anchor, _)) => *anchor,
             None => return false,
