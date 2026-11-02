@@ -2,6 +2,7 @@
 //! and OK/Cancel buttons already were (Page Setup showed "Left margin (in):" in every language).
 
 use egui_kittest::kittest::Queryable as _;
+use gridcraft_engine::model::{ObjKind, ObjRef};
 use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::i18n::Language;
 use serde_json::json;
@@ -50,7 +51,7 @@ fn chart_format_pane_is_translated() {
     session.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
     let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3"})).unwrap();
     h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
-    h.state_mut().selected_chart = Some(chart["chart"].as_u64().unwrap() as u32);
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Chart, chart["chart"].as_u64().unwrap() as u32));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     // One section at a time: open together they overflow the pane and the clipped widgets leave the tree.
