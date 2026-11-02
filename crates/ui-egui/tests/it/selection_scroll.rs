@@ -16,6 +16,10 @@ const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..CTRL };
 
 /// Column A filled down to A200 and row 1 filled across to CV1, far past one screen each way.
 fn harness() -> Harness {
+    harness_sized(egui::vec2(1200.0, 800.0))
+}
+
+fn harness_sized(size: egui::Vec2) -> Harness {
     let mut s = Session::new();
     s.new_workbook();
     let down: Vec<Vec<i64>> = (1..=200).map(|r| vec![r]).collect();
@@ -23,7 +27,7 @@ fn harness() -> Harness {
     let across: Vec<i64> = (1..=100).collect();
     s.execute("range.setValues", json!({"range": "A1", "values": [across]})).unwrap();
     s.execute("selection.set", json!({"cell": "A1"})).unwrap();
-    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(size).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -375,4 +379,22 @@ fn ctrl_right_to_the_last_column_shows_it_at_once() {
     key(&mut h, Key::ArrowRight, CTRL);
     assert_eq!(active(&h), CellRef::parse("XFD1").unwrap());
     assert!(visible(&h, "XFD1"), "XFD1 is on screen after the one key press");
+}
+
+#[test]
+fn ctrl_down_to_the_last_row_shows_it_in_a_small_window() {
+    // The scroll limit left 40 rows at the end of the sheet, so a window showing fewer rows (one
+    // that isn't maximized) never reached the last one.
+    for size in [egui::vec2(1200.0, 300.0), egui::vec2(500.0, 800.0)] {
+        let mut h = harness_sized(size);
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A200").unwrap());
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A1048576").unwrap());
+        assert!(visible(&h, "A1048576"), "the last row is on screen in a {size:?} window");
+        key(&mut h, Key::ArrowRight, CTRL);
+        key(&mut h, Key::ArrowRight, CTRL);
+        assert_eq!(active(&h), CellRef::parse("XFD1048576").unwrap());
+        assert!(visible(&h, "XFD1048576"), "the last cell is on screen in a {size:?} window");
+    }
 }
