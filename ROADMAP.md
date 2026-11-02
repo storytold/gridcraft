@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (form controls: buttons, sliders and spin buttons; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (form controls: buttons, sliders and spin buttons; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -22,7 +22,7 @@ This page is the summary. The detail is in:
 | Number | Value | Kind |
 |---|---|---|
 | 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 280 / 296 (94.6%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 281 / 296 (94.9%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
+| 2026-11-02 | Equations: Insert › Equation (a split button with a gallery of examples) and an editor with quick-insert buttons, the error underlined at its position and a live preview; `insert.equation` and `equation.edit`; LaTeX laid out by RaTeX inside the new `gridcraft-math` crate, capped and panic-guarded, and cached on the shape so that painting never runs the layout engine; xlsx writes Office Math with a plain-text fallback and the source in `descr`, and reads Office Math back into LaTeX; PDF prints equations with the standard Symbol font and `[?]` for anything else |
 | 2026-11-02 | Solver writes a Sensitivity report: Simplex LP shadow prices, reduced costs and allowable ranges from the final tableau; GRG Nonlinear reduced gradients and Lagrange multipliers from difference gradients, at a Karush-Kuhn-Tucker point only; Solver Results offers it where it applies (no score change) |
 | 2026-11-02 | Floating objects: charts, pictures, shapes and slicers share one selection with a frame of eight resize handles (each moves only its own edges, also on right-to-left sheets); Delete or Backspace deletes the selected object and Escape drops the selection; slicers follow row and column edits and sorts like the other objects; chart series follow cut-moves and sheet renames and deletes; a copied sheet gives its objects fresh ids; `ui.inspect` reports `selectedObject` and `ui.object.select` selects any object (#190, #213) |
 | 2026-11-01 | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
@@ -254,7 +255,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | minor | Form controls; catalog 276 / 292 → 280 / 296 (Developer › Controls); progress log row |
+| 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
+| 2026-11-02 | minor | Progress log: equations (Insert › Equation, the editor, gridcraft-math) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear (no score change) |
 | 2026-11-02 | minor | Progress log: one selection and eight resize handles for every floating object |
 | 2026-11-01 | minor | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |

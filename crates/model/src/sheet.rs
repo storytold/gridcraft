@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::cell::{Cell, CellPicture};
 use crate::features::{
     Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
-    SheetProtection, Slicer, Sparkline, Table, Validation,
+    ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
 };
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -213,8 +213,8 @@ impl Sheet {
             ObjKind::Chart
         } else if self.images.iter().any(|o| o.id == id) {
             ObjKind::Image
-        } else if self.shapes.iter().any(|o| o.id == id) {
-            ObjKind::Shape
+        } else if let Some(s) = self.shapes.iter().find(|o| o.id == id) {
+            if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
         } else if self.controls.iter().any(|o| o.id == id) {
@@ -225,7 +225,8 @@ impl Sheet {
         Some(ObjRef::new(kind, id))
     }
 
-    /// Whether the floating object `o` exists on this sheet.
+    /// Whether the floating object `o` exists on this sheet. `Shape` accepts any shape (an
+    /// equation included); `Equation` only an equation.
     pub fn has_object(&self, o: ObjRef) -> bool {
         self.object_anchor(o).is_some()
     }
@@ -237,6 +238,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
             ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
@@ -247,6 +249,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
             ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
@@ -263,6 +266,7 @@ impl Sheet {
             ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+            ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
             ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
@@ -714,12 +718,13 @@ mod tests {
         assert_eq!(s.col_left(2), 128.0);
     }
 
-    use crate::features::{ChartKind, LegendPos, ShapeFormat, ShapeKind};
+    use crate::features::{ChartKind, EquationCache, LegendPos, ShapeFormat, ShapeKind};
 
     /// Adds a floating object of `kind` with id `id` at `anchor`. The match is exhaustive on
     /// purpose: a new kind of floating object does not compile here until this test covers it,
     /// and the counts in `object_anchor_accessors_visit_the_same_objects_in_the_same_order`
-    /// then catch an accessor that was not taught about it.
+    /// then catch an accessor that was not taught about it. An equation is a shape of
+    /// `ShapeKind::Equation`, so it lives in `shapes` and is visited among them.
     fn push_object(s: &mut Sheet, kind: ObjKind, id: u32, anchor: Anchor) {
         match kind {
             ObjKind::Chart => s.charts.push(Chart {
@@ -740,14 +745,15 @@ mod tests {
                 pivot: None,
             }),
             ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
-            ObjKind::Shape => s.shapes.push(Shape {
+            ObjKind::Shape | ObjKind::Equation => s.shapes.push(Shape {
                 id,
-                kind: ShapeKind::default(),
+                kind: if kind == ObjKind::Equation { ShapeKind::Equation } else { ShapeKind::default() },
                 anchor,
                 fill: Color::default(),
                 line: Color::default(),
                 text: String::new(),
                 format: ShapeFormat::default(),
+                math: EquationCache::default(),
             }),
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
@@ -773,9 +779,11 @@ mod tests {
             (ObjKind::Chart, 9),
             (ObjKind::Slicer, 1),
             (ObjKind::Image, 4),
-            (ObjKind::Control, 6),
+            (ObjKind::Equation, 6),
+            (ObjKind::Control, 13),
             (ObjKind::Shape, 12),
-            (ObjKind::Control, 10),
+            (ObjKind::Equation, 8),
+            (ObjKind::Control, 15),
         ];
         for &(kind, id) in &inserted {
             push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
@@ -791,10 +799,13 @@ mod tests {
         }
         let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
         assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
-        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in insertion
-        // order) and every object appears in it once.
-        let documented: Vec<u32> =
-            ObjKind::ALL.iter().flat_map(|&k| inserted.iter().filter(move |(kind, _)| *kind == k).map(|&(_, id)| id)).collect();
+        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in
+        // insertion order; equations are shapes) and every object appears in it once.
+        let collection = |k: ObjKind| if k == ObjKind::Equation { ObjKind::Shape } else { k };
+        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Control]
+            .iter()
+            .flat_map(|&k| inserted.iter().filter(move |(kind, _)| collection(*kind) == k).map(|&(_, id)| id))
+            .collect();
         let visited: Vec<u32> = s.object_anchors().map(|a| a.cell.row).collect();
         assert_eq!(visited, documented);
         // The mark written through the bulk accessor landed on the object `object_anchor` finds

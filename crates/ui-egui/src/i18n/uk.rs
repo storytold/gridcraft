@@ -106,6 +106,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Текст\nу стовпці",
         "Link" => "Посилання",
         "Symbol" => "Символ",
+        "Equation" => "Рівняння",
+        "Insert New Equation..." => "Вставити нове рівняння",
         "Sparklines" => "Спарклайни",
         "Checkbox" => "Прапорець",
         "Insert checkboxes in the selected cells" => "Вставити прапорці у виділені комірки",

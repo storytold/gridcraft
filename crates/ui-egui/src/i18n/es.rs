@@ -108,6 +108,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Texto en\ncolumnas",
         "Link" => "Vínculo",
         "Symbol" => "Símbolo",
+        "Equation" => "Ecuación",
+        "Insert New Equation..." => "Insertar nueva ecuación",
         "Sparklines" => "Minigráficos",
         "Header & Footer" => "Encabezado y pie de página",
         "Draw with ink" => "Dibujar con lápiz",

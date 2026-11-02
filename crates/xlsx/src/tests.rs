@@ -10,6 +10,7 @@ mod chart_ref_offsets;
 mod controls_tests;
 mod csv_tests;
 mod encrypted_tests;
+mod equation_tests;
 mod fixtures;
 mod google_sheets_dummy;
 mod ink_roundtrip;
