@@ -7,7 +7,7 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 #[test]
-fn active_cell_is_announced_with_address_value_and_formula() {
+fn active_cell_label_reads_value_before_address_and_says_has_formula() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
@@ -21,14 +21,14 @@ fn active_cell_is_announced_with_address_value_and_formula() {
         crate::common::app(s),
     );
     h.run_steps(4);
-    let cell = h.get_by_role_and_label(Role::Cell, "B2");
+    let cell = h.get_by_role_and_label(Role::Cell, "6 B2");
     let node = cell.accesskit_node();
     assert_eq!(node.value().as_deref(), Some("6"));
-    assert_eq!(node.data().description(), Some("=A1*3"));
+    assert_eq!(node.data().description(), Some("has formula"));
 }
 
 #[test]
-fn array_formula_is_described_in_braces() {
+fn array_formula_is_described_without_reading_the_formula() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
@@ -44,6 +44,6 @@ fn array_formula_is_described_in_braces() {
         crate::common::app(s),
     );
     h.run_steps(4);
-    let node = h.get_by_role_and_label(Role::Cell, "B1");
-    assert_eq!(node.accesskit_node().data().description(), Some("{=A1:A2*2}"));
+    let node = h.get_by_role_and_label(Role::Cell, "4 B1");
+    assert_eq!(node.accesskit_node().data().description(), Some("has formula"));
 }

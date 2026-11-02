@@ -822,8 +822,8 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
 }
 
-/// The grid is painted, so a screen reader sees one blank node. Give it the active cell: address as
-/// the label, shown text as the value, and the formula (when it isn't hidden) as the description.
+/// The grid is painted, so a screen reader sees one blank node. Give it the active cell's shown
+/// text and address in reading order, and describe formulas without speaking their contents.
 fn expose_active_cell(app: &SheetApp, ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, paint: (&Workbook, &Sheet, &Sheet, &mut CfCache)) {
     let (wb, sh, painted_sheet, painted_cf) = paint;
     let si = wb.active_sheet();
@@ -863,19 +863,13 @@ fn expose_active_cell(app: &SheetApp, ui: &mut egui::Ui, id: egui::Id, rect: egu
             && !input.is_empty()
             && !gridcraft_engine::display::formula_hidden(wb, sh, at)
             && sh.cell(sh.spill_anchor(at).unwrap_or(at)).is_some_and(|cell| cell.formula.is_some());
-        let description = if formula_cell {
-            let formula = sh.cell(sh.spill_anchor(at).unwrap_or(at)).and_then(|cell| cell.formula.as_ref());
-            let text = formula.map(|formula| format!("={}", formula.text)).unwrap_or_else(|| input.clone());
-            if formula.is_some_and(|formula| formula.array.is_some()) { format!("{{{text}}}") } else { text }
-        } else {
-            String::new()
-        };
+        let description = if formula_cell { "has formula" } else { "" };
         text_child = shown.clone();
         node.set_role(egui::accesskit::Role::Cell);
-        node.set_label(address);
+        node.set_label(if shown.is_empty() { address } else { format!("{shown} {address}") });
         node.set_value(shown.clone());
         if !description.is_empty() {
-            node.set_description(description);
+            node.set_description(description.to_owned());
         }
     });
     if !text_child.is_empty() {
