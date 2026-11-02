@@ -18,6 +18,9 @@ pub const XML_DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=
 /// GridCraft's private extension namespace and the ext uri its From Web connection data
 /// travels under (Excel ignores an ext whose uri it does not know, and keeps the part).
 pub const GC_NS: &str = "https://gridcraft.app/ns/webquery";
+/// The Markup Compatibility namespace (`mc:Ignorable` and friends) whose attributes on a
+/// kept root must survive a merge, however their prefix is spelled.
+pub const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 pub const GC_URI: &str = "{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}";
 
 pub const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";

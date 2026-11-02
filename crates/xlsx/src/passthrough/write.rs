@@ -463,13 +463,26 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e).ok_or_else(|| IoError::Format("the connections part's root tag is unterminated".into()))?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
-    let kept: Vec<String> = raw_attributes(&raw[tag_start..=tag_end])
+    let attrs: Vec<String> = raw_attributes(&raw[tag_start..=tag_end]).collect();
+    // Nothing is filtered by name shape: a foreign `xmlns:gc` binding (another add-in's
+    // own gc prefix) is KEPT - the preserved `gc:` elements it binds must keep their
+    // identity. GridCraft never reuses the root's gc prefix; it declares its own
+    // nonconflicting one locally on the elements it writes.
+    let kept: Vec<String> = attrs
+        .iter()
         .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
-        // Nothing is filtered by name shape: a foreign `xmlns:gc` binding (another add-in's
-        // own gc prefix) is KEPT - the preserved `gc:` elements it binds must keep their
-        // identity. GridCraft never reuses the root's gc prefix; it declares its own
-        // nonconflicting one locally on the elements it writes.
         .filter(|a| a.trim_end_matches(['"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
+        .cloned()
+        // Markup-compatibility attributes (`mc:Ignorable`, whatever prefix binds the
+        // Markup Compatibility namespace) are kept too: the foreign blocks below may rely
+        // on them to tell an importer which namespaces it may safely ignore. The prefix is
+        // resolved through the root's own declarations, so any spelling survives.
+        .chain(attrs.iter().filter(|a| {
+            let Some((name, _)) = a.split_once('=') else { return false };
+            let Some((prefix, _)) = name.split_once(':') else { return false };
+            let binding = format!("xmlns:{prefix}=");
+            attrs.iter().any(|d| d.starts_with(&binding) && d.contains(crate::write::MC_NS))
+        }).cloned())
         .collect();
     let kept_decls: String = kept.iter().map(|a| format!(" {a}")).collect();
     // The rebuilt root keeps the SpreadsheetML namespace one way or another: an unprefixed
@@ -485,12 +498,24 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // SpreadsheetML default (checking the raw tag would see the dropped one and skip it).
     let has_default_ns = kept.iter().any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
     let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
+    // A kept DEFAULT namespace makes an unprefixed root foreign, so a prefixed root keeps
+    // its prefix: `<x:connections xmlns="urn:foreign">` stays prefixed, and the generated
+    // (unprefixed) connections must then bind the SpreadsheetML namespace inline or they
+    // would inherit the foreign default.
+    let root_prefix = if has_default_ns {
+        // `tag_start` points at the local name, so the prefix is the text between the `<`
+        // and it (`x:` for `<x:connections`); the trailing colon is stripped for the check.
+        raw[..tag_start].rsplit('<').next().map(|s: &str| s.trim_end_matches(':')).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')).map(|s| format!("{s}:")).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let sml_default = if root_prefix.is_empty() { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
     // GridCraft's namespace rides on its OWN generated elements (the prefix declared
     // inline), never on the root: a foreign root-level `xmlns:gc` binding belongs to the
     // foreign elements and stays theirs.
     let gc = format!(" xmlns:gc=\"{}\"", crate::write::GC_NS);
     let mut w = String::from(crate::write::XML_DECL);
-    let _ = write!(w, "<connections{kept_decls}{default_ns}>");
+    let _ = write!(w, "<{root_prefix}connections{kept_decls}{default_ns}>");
     w.push_str(&foreign);
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
@@ -508,7 +533,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         let tid = q.table_id.unwrap_or(0);
         let synced = q.last_synced.unwrap_or(0);
         let _ = write!(w,
-            "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"{gc}><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+            "<connection{sml_default} id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"{gc}><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
             id,
             crate::xml::esc_attr(&q.name),
             crate::xml::esc_attr(&q.url),
@@ -519,7 +544,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
             tid,
             synced);
     }
-    w.push_str("</connections>");
+    let _ = write!(w, "</{root_prefix}connections>");
     Ok(Some(w))
 }
 

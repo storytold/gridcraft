@@ -516,3 +516,99 @@ fn a_foreign_gc_prefix_binding_is_preserved() {
     let (back, _) = crate::read_xlsx(&bytes).expect("reopens");
     assert!(back.web_queries.iter().any(|q| q.name == "prices"), "our connection reads back through the inline declaration");
 }
+
+#[test]
+/// A prefixed root with a foreign default namespace keeps its prefix, and each generated
+/// connection binds the SpreadsheetML namespace inline: the root and the generated
+/// elements resolve to the namespaces the file meant, never inheriting the foreign default.
+fn a_prefixed_root_with_a_foreign_default_keeps_its_prefix() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<x:connections xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns="urn:foreign"><x:connection id="4" name="Theirs" type="4"/></x:connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("<x:connections "), "the root keeps its prefix: {text}");
+    assert!(text.contains("</x:connections>"), "the root's close keeps its prefix");
+    assert!(text.contains("xmlns=\"urn:foreign\""), "the foreign default is kept");
+    // Each generated connection binds the SpreadsheetML namespace inline.
+    assert!(text.contains("<connection xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "), "the generated connection binds SpreadsheetML inline");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+    // And the reopen reads our connection back.
+    let (back, _) = crate::read_xlsx(&bytes).expect("reopens");
+    assert!(back.web_queries.iter().any(|q| q.name == "prices"), "our connection reads back");
+}
+
+#[test]
+/// Removing the last GridCraft connection from a prefixed-root, foreign-default part keeps
+/// the root's identity too: the rewrite still honors the prefix and the default.
+fn removing_the_last_connection_from_a_prefixed_foreign_default_root_keeps_it() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<x:connections xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns="urn:foreign"><x:connection id="4" name="Theirs" type="4"/><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></x:connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    // Save with a connection, reopen, remove it, save again: the rewrite must keep the
+    // root's shape (this is the second case the finding names).
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (mut reopened, _) = read_xlsx(&bytes).expect("reopens");
+    reopened.web_queries.clear();
+    let bytes2 = write_xlsx(&reopened).expect("saves again");
+    let mut pkg = crate::package::Package::open(&bytes2).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("<x:connections "), "the root keeps its prefix after the removal: {text}");
+    assert!(text.contains("</x:connections>"), "the close keeps its prefix");
+    assert!(text.contains("name=\"Theirs\""), "the foreign connection is kept");
+    assert!(!text.contains("name=\"Old\"") && !text.contains("name=\"prices\""), "both GridCraft connections are gone");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+}
+
+#[test]
+/// A markup-compatibility attribute (`mc:Ignorable`, whatever prefix binds the MC
+/// namespace) survives the root rebuild: the foreign blocks may rely on it to tell an
+/// importer which namespaces it may safely ignore.
+fn a_markup_compatibility_attribute_survives_the_rebuild() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x16="http://schemas.microsoft.com/office/spreadsheetml/2016/ext" mc:Ignorable="x16"><x16:connection id="4" name="Theirs" type="4"/></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("mc:Ignorable=\"x16\""), "the markup-compatibility attribute is kept: {text}");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+}
