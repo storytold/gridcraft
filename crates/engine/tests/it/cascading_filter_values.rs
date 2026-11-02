@@ -2,10 +2,37 @@ use std::sync::Arc;
 
 use gridcraft_engine::{
     Session,
-    cmd::data::filter_values,
-    model::{Color, FilterCriterion},
+    cmd::data::{filter_selection, filter_values},
+    core::{CellRef, Value},
+    model::{Cell, Color, FilterCriterion, PyCode},
 };
 use serde_json::json;
+
+#[test]
+fn python_cells_offer_cached_results_without_exposing_or_changing_code() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Company", "Result"], ["East", 7], ["East", null], ["West", 99]]})).unwrap();
+    let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for (at, value) in [("B2", Value::Number(7.0)), ("B3", Value::Empty), ("B4", Value::Number(99.0))] {
+        // A loaded workbook can keep Python code alongside a cached or empty result.
+        sh.set_cell(CellRef::parse(at).unwrap(), Cell { value, py: Some(Arc::new(PyCode::new("secret_input * 2"))), ..Default::default() });
+    }
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["East"]})).unwrap();
+    let doc = s.doc().unwrap();
+    let (before, revision, undo) = (doc.wb.clone(), doc.revision, doc.undo.len());
+    assert_eq!(filter_values(&doc.wb, 0, 1), vec![("7".into(), true), ("(Blanks)".into(), true)]);
+    assert_eq!(
+        filter_selection(&doc.wb, 0, 1, &[("7".into(), false), ("(Blanks)".into(), false)]),
+        vec![("7".into(), false), ("99".into(), true), ("(Blanks)".into(), false)],
+        "eligible edits overlay the cached results; a hidden result keeps its checkbox"
+    );
+    let doc = s.doc().unwrap();
+    assert!(Arc::ptr_eq(&before, &doc.wb), "neither query mutates or evaluates the workbook");
+    assert_eq!((doc.revision, doc.undo.len()), (revision, undo));
+    assert_eq!(doc.wb.active().unwrap().cell(CellRef::parse("B3").unwrap()).unwrap().py.as_ref().unwrap().code, "secret_input * 2");
+}
 
 #[test]
 fn slicer_criteria_outside_the_sheet_filters_columns_are_still_applied() {
