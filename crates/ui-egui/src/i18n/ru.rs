@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Убрать стрелки",
         "Show Formulas" => "Показать формулы",
         "Error Checking" => "Проверка ошибок",
+        "Trace Error" => "Источник ошибки",
         "Circular References" => "Циклические ссылки",
         "Evaluate Formula" => "Вычислить формулу",
         "Watch Window" => "Окно контрольных значений",

@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "删除箭头",
         "Show Formulas" => "显示公式",
         "Error Checking" => "错误检查",
+        "Trace Error" => "追踪错误",
         "Circular References" => "循环引用",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",

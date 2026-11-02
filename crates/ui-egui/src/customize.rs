@@ -580,6 +580,12 @@ fn run_from_toolbar(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
             Ok(r) => app.grid.trace = crate::grid::Trace::new(app, r),
             Err(e) => app.alert(e),
         },
+        // As Error Checking › Trace Error: a cell with no arrows to draw keeps the ones shown.
+        "formulas.traceError" => match app.run(id, json!({})) {
+            Ok(r) if r["arrows"].as_array().is_some_and(|a| !a.is_empty()) => app.grid.trace = crate::grid::Trace::new(app, r),
+            Ok(_) => {}
+            Err(e) => app.alert(e),
+        },
         "formulas.removeArrows" => app.grid.trace = None,
         _ => app.run_or_alert(id, json!({})),
     }
@@ -1284,7 +1290,7 @@ mod tests {
     }
 
     /// The toolbar's trace buttons draw their arrows and Remove Arrows takes them away, as the
-    /// ribbon's buttons do.
+    /// ribbon's buttons and the Error Checking menu's Trace Error do.
     #[test]
     fn trace_buttons_on_the_toolbar_draw_and_remove_arrows() {
         let mut s = gridcraft_engine::Session::new();
@@ -1300,6 +1306,12 @@ mod tests {
         assert!(app.grid.trace.is_none());
         run_from_toolbar(&mut app, &ctx, "formulas.traceDependents");
         assert!(app.grid.trace.is_some() || app.message.is_some(), "arrows, or a message saying there are none");
+        run_from_toolbar(&mut app, &ctx, "formulas.removeArrows");
+        app.run("cell.set", json!({"cell": "C1", "input": "=B1/0"})).unwrap();
+        app.run("cell.set", json!({"cell": "D1", "input": "=C1+1"})).unwrap();
+        app.run("selection.set", json!({"range": "D1"})).unwrap();
+        run_from_toolbar(&mut app, &ctx, "formulas.traceError");
+        assert!(app.grid.trace.is_some(), "arrows from C1, where D1's error starts");
     }
 
     #[test]

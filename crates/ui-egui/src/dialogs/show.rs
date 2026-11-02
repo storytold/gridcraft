@@ -12,6 +12,7 @@ use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
+use gridcraft_engine::model::PageOrder;
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
@@ -102,6 +103,15 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                     if m.get(key).and_then(Json::as_str) == Some("Workbook") {
                         m.remove(key);
                     }
+                }
+            }
+        }
+        "pageSetup" => {
+            // A margin dragged below zero is zero, as the Margins command makes it (Page Setup
+            // refuses negative margins from other callers).
+            for key in ["left", "right", "top", "bottom", "header", "footer"] {
+                if let Some(inches) = d.values.get(key).and_then(Json::as_f64) {
+                    v[key] = json!(inches.max(0.0));
                 }
             }
         }
@@ -580,10 +590,22 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                                 .response
                                 .labelled_by(field_label.id);
                         } else {
-                            for (val, text) in options {
-                                if ui.radio(cur == val, lang.tr(text)).clicked() {
-                                    d.set_value(key, json!(val));
+                            let radios = |ui: &mut egui::Ui, d: &mut Dialog| {
+                                for (val, text) in &options {
+                                    if ui.radio(cur == *val, lang.tr(text)).clicked() {
+                                        d.set_value(key, json!(val));
+                                    }
                                 }
+                            };
+                            if key == "pageOrder" {
+                                // Page Setup pictures the order beside its choices.
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| radios(ui, d));
+                                    ui.add_space(24.0);
+                                    page_order_preview(ui, PageOrder::parse(&cur).unwrap_or_default());
+                                });
+                            } else {
+                                radios(ui, d);
                             }
                         }
                     });
@@ -604,4 +626,31 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.end_row();
         }
     });
+}
+
+/// Page Setup's picture of a page order: four pages, two tall and two wide, numbered in the
+/// order they print, with a line through them from the first to the last.
+fn page_order_preview(ui: &mut egui::Ui, order: PageOrder) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (page, gap) = (vec2(22.0, 28.0), 8.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(page.x * 2.0 + gap, page.y * 2.0 + gap), egui::Sense::hover());
+    let p = ui.painter();
+    let mut path = [egui::Pos2::ZERO; 4];
+    for (row, col) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let r = egui::Rect::from_min_size(rect.min + vec2(col as f32 * (page.x + gap), row as f32 * (page.y + gap)), page);
+        p.rect_filled(r, 1.0, t.paper);
+        p.rect_stroke(r, 1.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        let n = order.index(row, col, 2, 2);
+        p.text(r.left_top() + vec2(4.0, 2.0), egui::Align2::LEFT_TOP, (n + 1).to_string(), crate::theme::ui_font(9.0), t.text);
+        if let Some(at) = path.get_mut(n) {
+            *at = r.center() + vec2(2.0, 3.0);
+        }
+    }
+    let stroke = egui::Stroke::new(1.5, t.accent);
+    p.add(egui::Shape::line(path.to_vec(), stroke));
+    // An arrowhead on the last page.
+    let (from, to) = (path[2], path[3]);
+    let d = (to - from).normalized();
+    let n = vec2(-d.y, d.x);
+    p.add(egui::Shape::convex_polygon(vec![to, to - d * 6.0 + n * 3.5, to - d * 6.0 - n * 3.5], t.accent, egui::Stroke::NONE));
 }
