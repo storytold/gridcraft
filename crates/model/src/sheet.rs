@@ -730,6 +730,7 @@ mod tests {
                 series: vec![],
                 legend: LegendPos::default(),
                 data_labels: false,
+                data_table: None,
                 gridlines: false,
                 style: 0,
                 x_title: None,
@@ -737,7 +738,6 @@ mod tests {
                 source: None,
                 by_rows: false,
                 pivot: None,
-                data_table: None,
             }),
             ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
             ObjKind::Shape => s.shapes.push(Shape {

@@ -331,3 +331,61 @@ fn a_copied_sheets_form_controls_take_free_ids_too() {
     assert_eq!(ids.len(), 6, "every control and shape id is distinct across both sheets: {ids:?}");
     assert_eq!(ids.iter().filter(|&&i| i == u32::MAX).count(), 1, "only the file's slider keeps the largest id");
 }
+
+/// A file's anchors are not held to the 10,000 points `object.move` gives a new size. A picture
+/// a file made 12,000 wide keeps that width when it is moved, shrinks by what a resize asks
+/// (11,990 stays 11,990, no jump to 10,000) and never grows further; a dimension the file kept
+/// within the limit is still capped there.
+#[test]
+fn an_oversized_imported_object_keeps_its_size_when_moved_and_shrinks_only_by_a_resize() {
+    let mut s = s();
+    let image = super::add_image(&mut s, "B2", AnchorMode::MoveOnly);
+    // The file's picture is 12,000 by 300: set on the model, then written and read back as a file.
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let a = wb.sheet_mut(0).unwrap().object_anchor_mut(ObjRef::new(ObjKind::Image, image)).unwrap();
+        a.width = 12_000.0;
+        a.height = 300.0;
+    }
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "wide.xlsx", "base64": saved["base64"]})).unwrap();
+    let o = ObjRef::new(ObjKind::Image, sheet(&s, 0).images[0].id);
+    let size = |s: &Session| {
+        let a = sheet(s, 0).object_anchor(o).unwrap();
+        (a.width.round(), a.height.round())
+    };
+    assert_eq!(size(&s), (12_000.0, 300.0), "the reader keeps the file's size");
+    s.execute("object.move", json!({"kind": "image", "id": o.id, "at": "D5", "dx": 3, "dy": 4})).unwrap();
+    let a = sheet(&s, 0).object_anchor(o).unwrap();
+    assert_eq!((a.cell, a.dx, a.dy), (at("D5"), 3.0, 4.0));
+    assert_eq!(size(&s), (12_000.0, 300.0), "a move without a size keeps the file's size");
+    s.execute("object.move", json!({"kind": "image", "id": o.id, "width": 12_010})).unwrap();
+    assert_eq!(size(&s), (12_000.0, 300.0), "the object does not grow past what the file gave");
+    s.execute("object.move", json!({"kind": "image", "id": o.id, "width": 11_990})).unwrap();
+    assert_eq!(size(&s), (11_990.0, 300.0), "a resize shrinks by what it asks, with no jump to 10,000");
+    s.execute("object.move", json!({"kind": "image", "id": o.id, "width": 50_000, "height": 50_000})).unwrap();
+    assert_eq!(size(&s), (11_990.0, 10_000.0), "hostile sizes are capped: at the current width, and at 10,000 for a height the file kept within it");
+}
+
+/// `chart.set` follows the same rule: the Format Chart pane's Size fields send the unchanged
+/// dimension back with the edited one, so a chart a file made 12,000 wide keeps that width when
+/// its height is edited, shrinks by what is asked and never grows further.
+#[test]
+fn chart_set_keeps_a_chart_size_a_file_made_larger_than_the_limit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    let chart = id_of(&s.execute("insert.chart", json!({"range": "A1:A3", "type": "column", "at": "C2"})).unwrap(), "chart");
+    // The file's chart is 12,000 wide (set on the model, as a loaded file would).
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts.iter_mut().find(|c| c.id == chart).unwrap().anchor.width = 12_000.0;
+    let size = |s: &Session| {
+        let c = sheet(s, 0).charts.iter().find(|c| c.id == chart).unwrap();
+        (c.anchor.width, c.anchor.height)
+    };
+    s.execute("chart.set", json!({"chart": chart, "width": 12_000, "height": 250})).unwrap();
+    assert_eq!(size(&s), (12_000.0, 250.0), "the unchanged width sent back with a new height stays");
+    s.execute("chart.set", json!({"chart": chart, "width": 11_990})).unwrap();
+    assert_eq!(size(&s), (11_990.0, 250.0), "a resize shrinks by what it asks");
+    s.execute("chart.set", json!({"chart": chart, "width": 50_000, "height": 50_000})).unwrap();
+    assert_eq!(size(&s), (11_990.0, 10_000.0), "hostile sizes are capped at the current width and at 10,000");
+}
