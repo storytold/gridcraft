@@ -120,19 +120,20 @@ fn pages_iter(geo: &Geo, pg: &PageGrid) -> impl Iterator<Item = (usize, usize)> 
 }
 
 /// Paints the desk, the pages and their cells; returns the per-page quadrants for the headings.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_pages(
-    app: &SheetApp,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+pub(crate) struct PagePaintInput<'a> {
+    pub(crate) app: &'a SheetApp,
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) workbook: &'a Workbook,
+    pub(crate) sheet_index: usize,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) outline: Rect,
+    pub(crate) tokens: &'a Tokens,
+}
+
+pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
+    let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
@@ -161,7 +162,7 @@ pub(crate) fn paint_pages(
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        grid::paint_quadrant(grid::QuadrantPaint { painter: &pc, geo, workbook: wb, sheet_index: si, sheet: sh, rows, cols, cf, tokens: t });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
@@ -170,7 +171,17 @@ pub(crate) fn paint_pages(
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
-        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols);
+        grid::paint_selection(grid::SelectionPaintInput {
+            painter: &p.with_clip_rect(sel_clip),
+            geo,
+            sheet: sh,
+            selection: sel,
+            outline,
+            tokens: t,
+            app,
+            rows,
+            cols,
+        });
     }
     quads
 }
@@ -182,7 +193,8 @@ fn tr<'a>(app: &SheetApp, s: &'a str) -> &'a str {
 /// Section rectangles (left, centre, right) of a page's header or footer on screen.
 fn section_rects(geo: &Geo, pg: &PageGrid, (i, j): (usize, usize), footer: bool) -> [Rect; 3] {
     let (px, py, w, h) = pg.page_rect(i, j);
-    let [l, r, t, b, ..] = pg.margins;
+    let [_, _, t, b, ..] = pg.margins;
+    let [l, r] = pg.hf_sides;
     let (y0, y1) = if footer { (py + h - b, py + h) } else { (py, py + t) };
     let inner = (w - l - r).max(3.0);
     let third = inner / 3.0;
@@ -195,8 +207,8 @@ fn section_rects(geo: &Geo, pg: &PageGrid, (i, j): (usize, usize), footer: bool)
     out
 }
 
-fn hf_font(geo: &Geo, size_pt: Option<f32>, bold: bool) -> FontId {
-    let px = size_pt.unwrap_or(10.0).clamp(1.0, 72.0) * 96.0 / 72.0 * geo.z;
+fn hf_font(geo: &Geo, pg: &PageGrid, size_pt: Option<f32>, bold: bool) -> FontId {
+    let px = size_pt.unwrap_or(10.0).clamp(1.0, 72.0) * 96.0 / 72.0 * pg.hf_text_k * geo.z;
     let px = px.clamp(4.0, 120.0);
     if bold { theme::ui_bold(px) } else { theme::ui_font(px) }
 }
@@ -235,7 +247,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             if spec.is_empty() {
                 if hovered {
                     let label = if footer { "Add footer" } else { "Add header" };
-                    p.text(rects[1].center(), Align2::CENTER_CENTER, tr(app, label), hf_font(geo, Some(10.0), false), Color32::from_gray(120));
+                    p.text(rects[1].center(), Align2::CENTER_CENTER, tr(app, label), hf_font(geo, &pg, Some(10.0), false), Color32::from_gray(120));
                 }
                 continue;
             }
@@ -255,7 +267,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 if sec.text.trim().is_empty() {
                     continue;
                 }
-                let font = hf_font(geo, sec.size, sec.bold);
+                let font = hf_font(geo, &pg, sec.size, sec.bold);
                 let r = rects[k];
                 let (anchor, x) = match k {
                     0 => (Align2::LEFT_TOP, r.left()),
@@ -279,14 +291,14 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
 pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Leaving the sheet or the view commits.
     if let Some(e) = &app.grid.hf_edit
-        && (e.sheet != wb.active_sheet || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
+        && (e.sheet != wb.active_sheet() || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
     {
         commit(app);
     }
     let Some(pg) = geo.paper.clone() else { return };
-    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet);
+    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet());
     if std::mem::take(&mut app.grid.hf_start) {
-        begin(app, wb.active_sheet, sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
+        begin(app, wb.active_sheet(), sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
     }
     if resp.clicked_by(egui::PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
@@ -294,7 +306,7 @@ pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let (x, y) =
             (geo.scroll.x as f64 + ((p.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((p.y - geo.cells.top()) / geo.z) as f64);
         match pg.hf_zone_at(x, y) {
-            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet, sh, page, zone),
+            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet(), sh, page, zone),
             _ => {
                 // A click anywhere else ends the edit; the grid then handles the click.
                 if app.grid.hf_edit.is_some() {
@@ -326,8 +338,9 @@ pub fn start_editing(app: &mut SheetApp) {
     app.grid.hf_start = true;
 }
 
-/// Turns Different First Page / Different Odd & Even Pages on or off, keeping the edit on the
-/// same page (which may now show another header).
+/// Turns a Header & Footer option (Different First Page, Different Odd & Even Pages, Scale with
+/// Document, Align with Page Margins) on or off, keeping the edit on the same page (which may
+/// now show another header).
 fn set_option(app: &mut SheetApp, key: &str, on: bool) {
     let Some(e) = app.grid.hf_edit.as_ref() else { return };
     let (sheet, page, zone) = (e.sheet, e.page, HfZone { footer: e.footer, section: e.section });
@@ -436,6 +449,7 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
     begin(app, sheet, &sh, page, HfZone { footer, section });
 }
 
+/// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
@@ -446,7 +460,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let rects = section_rects(geo, pg, e.page, e.footer);
     let p = ui.painter().with_clip_rect(geo.cells);
     let t = Tokens::get(ui.ctx());
-    let font = hf_font(geo, Some(10.0), false);
+    let font = hf_font(geo, pg, Some(10.0), false);
     let mut switch_to = None;
     for (k, r) in rects.iter().enumerate() {
         if !r.intersects(geo.cells) {
@@ -467,7 +481,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         let anchor = [Align2::LEFT_TOP, Align2::CENTER_TOP, Align2::RIGHT_TOP][k];
         let x = [r.left() + 3.0, r.center().x, r.right() - 3.0][k];
         p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
-        if ui.interact(*r, ui.id().with(("hf_section", k)), egui::Sense::click()).clicked() {
+        if ui.interact(*r, ui.scope_id().with(("hf_section", k)), egui::Sense::click()).clicked() {
             switch_to = Some(k);
         }
     }
@@ -476,9 +490,9 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         app.grid.hf_edit = Some(e);
         return;
     };
-    let id = egui::Id::new("gridcraft.header_footer_editor");
+    let id = egui::Id::unique("gridcraft.header_footer_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(3.0, 2.0)).intersect(geo.cells)));
-    let align = [egui::Align::LEFT, egui::Align::Center, egui::Align::RIGHT][e.section.min(2)];
+    let align = [egui::Align2::LEFT_TOP, egui::Align2::CENTER_TOP, egui::Align2::RIGHT_TOP][e.section.min(2)];
     if let Some(text) = e.texts.get_mut(e.section) {
         let mut output = TextEdit::multiline(text)
             .id(id)
@@ -486,7 +500,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
             .font(font)
             .text_color(Color32::BLACK)
             .background_color(Color32::WHITE)
-            .horizontal_align(align)
+            .align(align)
             .desired_width(r.width() - 6.0)
             .desired_rows(1)
             .lock_focus(true)
@@ -774,8 +788,8 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
     }
     let (hr, vr) = ruler_rects(outer, geo);
     // Right-to-left sheets mirror the pages and the horizontal ruler; hit-testing is logical.
-    let hresp = ui.interact(hr, egui::Id::new("ruler_margin_h"), egui::Sense::drag());
-    let vresp = ui.interact(vr, egui::Id::new("ruler_margin_v"), egui::Sense::drag());
+    let hresp = ui.interact(hr, egui::Id::unique("ruler_margin_h"), egui::Sense::drag());
+    let vresp = ui.interact(vr, egui::Id::unique("ruler_margin_v"), egui::Sense::drag());
     let margins_in = |sh: &Sheet| -> [f32; 6] {
         let m = |i: usize| sh.print.margins.get(i).copied().unwrap_or(0.5);
         [m(0), m(1), m(2), m(3), m(4), m(5)]
@@ -785,7 +799,7 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
     let tip = |ui: &egui::Ui, app: &SheetApp, edge: Edge, inches: f32| {
         let value = if metric { format!("{:.2} cm", inches * 2.54) } else { format!("{inches:.2} in") };
         let text = format!("{}: {value}", app.ui.language.tr(edge.label()));
-        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("ruler_margin_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("ruler_margin_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(text);
         });
     };
@@ -893,11 +907,10 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         go_to(app, true);
     }
     sep(ui);
-    let (first, odd_even) = app
-        .session
-        .active()
-        .and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet)).map(|s| (s.print.different_first, s.print.different_odd_even)))
-        .unwrap_or_default();
+    let (first, odd_even, scale_doc, align) =
+        app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
+            (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
+        });
     ui.vertical(|ui| {
         let (mut f, mut o) = (first, odd_even);
         if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
@@ -905,6 +918,15 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
             set_option(app, "differentOddEven", o);
+        }
+    });
+    ui.vertical(|ui| {
+        let (mut sd, mut am) = (scale_doc, align);
+        if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
+            set_option(app, "scaleWithDoc", sd);
+        }
+        if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
+            set_option(app, "alignWithMargins", am);
         }
     });
 }

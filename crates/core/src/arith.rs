@@ -13,7 +13,7 @@ fn binade(x: f64) -> f64 {
 /// when the operands have opposite signs and `|x + y| < 2^(e-49)`, `e` the binary exponent of
 /// the LEFT operand `x`, the result is exactly 0. A subtraction passes `-y`.
 ///
-/// Excel does this only at those places, not at every add or subtract (see
+/// Excel does this only at those places, not at every add or subtract (observed on Windows Excel 16.0.20430; see
 /// `EXCEL-BEHAVIOUR.md` of the Spreadsheet Accuracy Suite, "The snap to zero").
 pub fn snap_add(x: f64, y: f64) -> f64 {
     let s = x + y;
@@ -41,7 +41,7 @@ mod tests {
         assert_eq!(snap_add(1.0, -(1.0 + 7.0 * ULP1)), 0.0);
         // Exactly 2^-49 (8 ulps of 1.0) does not snap.
         assert_eq!(snap_add(1.0, -(1.0 + 8.0 * ULP1)), -8.0 * ULP1);
-        // The left operand's binade decides (Excel observed, request 4, excel-probe-4.00044 to 00046):
+        // The left operand's binade decides (observed on Windows Excel 16.0.20430, excel-probe-4.00044 to 00046):
         // 0.4999999999999998 - 0.5000000000000002 keeps -4.44e-16 (threshold 2^-51 is not beaten),
         // the other way round it is 0 (threshold 2^-50).
         assert_eq!(snap_add(0.4999999999999998, -0.5000000000000002), -4.440892098500626e-16);
