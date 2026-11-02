@@ -1417,3 +1417,31 @@ fn negative_bars_hang_from_the_axis_line() {
         assert!((at - starts[0]).abs() < 0.01, "{kind:?}: axis line at {at}, bars start at {}", starts[0]);
     }
 }
+
+/// The value axis GridCraft draws, read back from its numeric labels: (min, max, step).
+fn drawn_value_axis(p: &[Prim]) -> (f64, f64, f64) {
+    let mut v: Vec<f64> = texts(p).iter().filter_map(|t| t.parse::<f64>().ok()).collect();
+    v.sort_by(f64::total_cmp);
+    v.dedup();
+    let (Some(min), Some(max)) = (v.first().copied(), v.last().copied()) else { return (f64::NAN, f64::NAN, f64::NAN) };
+    let step = v.get(1).map_or(f64::NAN, |s| s - min);
+    (min, max, step)
+}
+
+/// A blank cell in a stacked line or area series still gets a stack position (the running total,
+/// 0 with nothing under it); it isn't a plotted value, so it doesn't pull 0 onto the axis.
+/// Found by CodeRabbit on #2277.
+#[test]
+fn blank_stacked_values_dont_pull_zero_onto_the_axis() {
+    for kind in [ChartKind::LineStacked, ChartKind::AreaStacked] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        c.x_title = None;
+        c.y_title = None;
+        let mut s = general("S", &[95.0, 0.0, 100.0], [10, 20, 30, 255], kind);
+        s.values[1] = None;
+        let d = ChartData { categories: vec!["A".into(), "B".into(), "C".into()], series: vec![s], ..ChartData::default() };
+        let (min, max, _) = drawn_value_axis(&render(&c, &d, 480.0, 288.0, &ApproxMeasure));
+        assert!(min > 0.0 && min <= 95.0 && max >= 100.0, "{kind:?}: axis {min}..{max}");
+    }
+}

@@ -136,8 +136,15 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
         }
         let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         // The plotted values: the top of each point, bar or stack segment. The 0 a bar or stack
-        // starts from doesn't count, so bars far from 0 don't force it onto the axis (#1688).
-        let range = value_range(members.iter().flat_map(|i| spans.get(*i).into_iter().flatten().flatten().map(|(_, t)| *t)));
+        // starts from doesn't count, so bars far from 0 don't force it onto the axis (#1688); nor
+        // does the stack position of a blank cell, which is 0 with nothing stacked under it.
+        let range = value_range(members.iter().flat_map(|i| {
+            let values = data.series.get(*i).map(|s| &s.values);
+            spans.get(*i).into_iter().flatten().enumerate().filter_map(move |(j, sp)| {
+                let present = values.and_then(|v| v.get(j)).copied().flatten().is_some();
+                sp.filter(|_| present).map(|(_, t)| t)
+            })
+        }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
