@@ -463,11 +463,11 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e).ok_or_else(|| IoError::Format("the connections part's root tag is unterminated".into()))?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
-    let kept_decls: String = raw_attributes(&raw[tag_start..=tag_end])
+    let kept: Vec<String> = raw_attributes(&raw[tag_start..=tag_end])
         .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
         .filter(|a| !a.starts_with("xmlns:gc=") && a.trim_end_matches(['\"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
-        .map(|a| format!(" {a}"))
         .collect();
+    let kept_decls: String = kept.iter().map(|a| format!(" {a}")).collect();
     // The rebuilt root keeps the SpreadsheetML namespace one way or another: an unprefixed
     // root carried it as its default (and does again), and a prefixed one
     // (`<x:connections>`) whose declarations are kept verbatim still has its prefix bound -
@@ -476,7 +476,10 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // Parsed attributes, not a quote-style search: a default namespace may be single-quoted
     // (`xmlns='...'`) and a `contains("xmlns=\"")` check would miss it and add a second
     // xmlns to the rebuilt root.
-    let has_default_ns = raw_attributes(&raw[tag_start..=tag_end]).any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
+    // The check reads the declarations that are KEPT: a root whose default is GridCraft's
+    // own namespace has it dropped from `kept`, and the rebuilt root must then gain the
+    // SpreadsheetML default (checking the raw tag would see the dropped one and skip it).
+    let has_default_ns = kept.iter().any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
     let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
     let mut w = String::from(crate::write::XML_DECL);
     let _ = write!(w, "<connections{kept_decls}{default_ns} xmlns:gc=\"{}\">",
