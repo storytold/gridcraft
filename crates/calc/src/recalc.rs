@@ -240,10 +240,11 @@ impl Calc {
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
         // The layout the sheets hold now decides who keeps cells two arrays both want.
+        // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
         let mut held = HashSet::default();
         for i in 0..wb.sheets.len() {
             if let Some(sh) = wb.sheet(i) {
-                held.extend(sh.spill_ranges.keys().filter(|a| sh.cell(**a).is_some_and(|c| c.formula.is_some())).map(|a| (i, *a)));
+                held.extend(sh.spill_ranges.keys().filter(|a| sh.cell(**a).is_some_and(|c| c.formula.is_some() || c.py.is_some())).map(|a| (i, *a)));
             }
         }
         // Spills are laid out again from the formulas where they are now (a structural edit moves
