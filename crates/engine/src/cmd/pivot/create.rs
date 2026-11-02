@@ -90,7 +90,7 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         None
     } else {
         let d = s.doc()?;
-        let (sh, body) = crate::cmd::split_sheet(&dest);
+        let (sh, body) = super::split_sheet(&dest);
         let si = match sh {
             Some(n) => d.wb.sheet_index(&n).ok_or_else(|| bad("insert.pivotTable", format!("no sheet named `{n}`")))?,
             None => active,
@@ -334,7 +334,7 @@ pub(super) fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "rows": pt.rows.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
         "columns": pt.columns.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
         "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "numberFormat": v.number_format})).collect::<Vec<_>>(),
-        "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
+        "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "report": !f.hidden && !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
         "grandTotalsRows": pt.grand_totals_rows,
         "grandTotalsCols": pt.grand_totals_cols,

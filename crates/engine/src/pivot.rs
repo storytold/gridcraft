@@ -13,7 +13,7 @@ pub use gridcraft_core::quote_sheet;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
 use gridcraft_model::{
     BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    PivotSort, PivotTable, PivotValue, Series, SlicerCrossFilter, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -27,12 +27,11 @@ use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
 use compute::compute_from;
 pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
-pub use items::{distinct_labels, func_caption, item_label};
+pub use items::{SlicerTile, distinct_labels, func_caption, item_label, slicer_tiles};
 #[cfg(test)]
 use output::data_cols_exceed_sheet;
 pub use output::{CellKind, OutCell, Output, RowKind};
 use output::{cell_style, look};
-
 /// Largest source block read (cells).
 pub const MAX_SOURCE_CELLS: u64 = 10_000_000;
 /// Largest report written (cells).

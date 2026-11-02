@@ -702,24 +702,99 @@ pub struct AutoFilter {
     pub criteria: Vec<(u32, FilterCriterion)>,
 }
 
-/// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles
-/// sets that column's `FilterCriterion::Values` in the sheet's [`AutoFilter`] and re-applies it,
-/// so a slicer is just a visual front-end over the existing filter machinery.
+/// A slicer: an on-sheet filter widget whose value tiles drive an existing filter, so a slicer is
+/// just a visual front-end over the filter machinery (see [`SlicerSource`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Slicer {
     pub id: u32,
-    /// Name of the table this slicer filters.
-    pub table: String,
-    /// Header name of the filtered column within the table.
-    pub column: String,
-    /// Caption shown in the slicer header (defaults to the column name).
+    /// What the slicer filters, and where its selection lives.
+    #[serde(flatten)]
+    pub source: SlicerSource,
+    /// Caption shown in the slicer header (defaults to the column or field name).
     pub caption: String,
     pub anchor: Anchor,
-    /// Selected display values. `None` means every value (no filter from this slicer); an empty
-    /// list means nothing is selected (all rows hidden), matching Excel's "clear all buttons".
-    pub selected: Option<Vec<String>>,
     /// Number of button columns in the layout (Excel default 1).
     pub columns: u32,
+    /// The slicer's name (unique in a workbook; Excel's Slicer Settings "Name"). Empty: derived
+    /// from the caption when saved.
+    #[serde(default)]
+    pub name: String,
+    /// Slicer style name (`SlicerStyleLight1`…). Empty: the default style.
+    #[serde(default)]
+    pub style: String,
+    /// Button height in pixels; `None` uses the default.
+    #[serde(default)]
+    pub row_height: Option<f32>,
+}
+
+impl Slicer {
+    /// The column or field the slicer filters.
+    pub fn field(&self) -> &str {
+        match &self.source {
+            SlicerSource::Table { column, .. } => column,
+            SlicerSource::Pivot { field, .. } => field,
+        }
+    }
+}
+
+/// What a slicer filters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SlicerSource {
+    /// One column of a table: the selection is written as that column's
+    /// `FilterCriterion::Values` in the sheet's [`AutoFilter`] and re-applied.
+    Table {
+        /// Name of the table.
+        table: String,
+        /// Header name of the filtered column within the table.
+        column: String,
+        /// Selected display values. `None` means every value (no filter from this slicer); an
+        /// empty list means nothing is selected (all rows hidden), matching Excel's "clear all
+        /// buttons".
+        selected: Option<Vec<String>>,
+    },
+    /// One field of one or more PivotTables built from the same source. The selection is not
+    /// stored here: it is each PivotTable's [`PivotFilter`] on the field (its hidden items), so the
+    /// slicer and the PivotTables always agree.
+    Pivot {
+        /// The PivotTables it filters.
+        pivots: Vec<SlicerPivot>,
+        /// Source field (column header) name.
+        field: String,
+        /// Tile order: ascending, descending, or data source order (`PivotSort::None`).
+        #[serde(default)]
+        sort: PivotSort,
+        #[serde(default)]
+        cross_filter: SlicerCrossFilter,
+        /// Whether items no longer in the source are shown (Excel's "Show items deleted from the
+        /// data source"; kept for the file).
+        #[serde(default = "default_true")]
+        show_missing: bool,
+    },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A PivotTable a slicer filters: its sheet and name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlicerPivot {
+    pub sheet: String,
+    pub name: String,
+}
+
+/// How a slicer shows items that have no data under its PivotTables' other filters (Excel's
+/// "Visually indicate items with no data" options).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlicerCrossFilter {
+    /// Items with no data aren't marked.
+    None,
+    /// Items with data first (the default).
+    #[default]
+    ShowItemsWithDataAtTop,
+    /// Items with no data stay in their place.
+    ShowItemsWithNoData,
 }
 
 #[cfg(test)]

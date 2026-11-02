@@ -126,6 +126,7 @@ pub struct Out {
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
+    pub slicers: crate::slicer::SlicerWriter,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
 }
@@ -258,6 +259,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
+        slicers: crate::slicer::SlicerWriter::new(wb),
         kept: Default::default(),
     };
     out.kept.reserve_vml_blocks(wb);
@@ -272,9 +274,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
-
-    let names = write_defined_names(wb, &kept, &out.chart_names);
+    let (sheets_xml, kept, pivots, sheet_ids) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let names = write_defined_names(wb, &kept, &out.chart_names, &out.slicers);
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
@@ -328,9 +329,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     w.push_str("/>");
     w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    let slicer_ext = std::mem::take(&mut out.slicers).finish(wb, &sheet_ids, &pivots, &mut out, &mut wb_rels);
     let exts = crate::passthrough::workbook_elements(wb, "ext");
-    if !exts.is_empty() {
-        let _ = write!(w, "<extLst>{exts}</extLst>");
+    if !slicer_ext.is_empty() || !exts.is_empty() {
+        let _ = write!(w, "<extLst>{slicer_ext}{exts}</extLst>");
     }
     w.push_str("</workbook>");
 
@@ -455,11 +457,12 @@ fn write_sheets(
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter, Vec<usize>) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
+    let mut sheet_ids = Vec::with_capacity(wb.sheets.len());
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
     for (i, sheet) in wb.sheets.iter().enumerate() {
@@ -480,19 +483,26 @@ fn write_sheets(
         };
         let name: String = sheet.name.chars().take(31).collect();
         let sheet_id = ids.take(sheet.file_id);
+        sheet_ids.push(sheet_id as usize);
         let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    (sheets_xml, kept, pivots, sheet_ids)
 }
 
-fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {
+fn write_defined_names(
+    wb: &Workbook,
+    kept: &crate::passthrough::WorkbookKept,
+    chart_names: &[String],
+    slicers: &crate::slicer::SlicerWriter,
+) -> String {
     // Defined names, then print areas and titles.
     let mut names = String::new();
     let mut seen = std::collections::HashSet::new();
     for n in &wb.names {
-        if n.name.is_empty() || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
+        // A slicer cache's name is written with its cache.
+        if n.name.is_empty() || (n.scope.is_none() && slicers.is_cache_name(&n.name)) || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
             continue;
         }
         if let Some(sc) = n.scope
@@ -548,6 +558,7 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
         }
     }
 
+    names.push_str(&slicers.defined_names());
     names
 }
 
