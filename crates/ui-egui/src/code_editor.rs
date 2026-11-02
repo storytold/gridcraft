@@ -226,6 +226,45 @@ pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, s
     job
 }
 
+/// Underlines the byte range `mark` of `job` in `color` (an error's position), splitting the
+/// sections it crosses. An empty range marks the character before it (the end of the text, for
+/// an error about missing input). A range past the end of the text is clamped to it, and its
+/// ends are moved out to char boundaries: the mark may come from an earlier version of the text
+/// (the equation editor computes it before this frame's edit), and egui slices the text at every
+/// section boundary.
+pub fn underline(job: &mut egui::text::LayoutJob, mark: Range<usize>, color: egui::Color32) {
+    let text = job.text.as_str();
+    let floor = |i: usize| (0..=i.min(text.len())).rev().find(|&b| text.is_char_boundary(b)).unwrap_or(0);
+    let ceil = |i: usize| (i.min(text.len())..=text.len()).find(|&b| text.is_char_boundary(b)).unwrap_or(text.len());
+    let start = floor(mark.start);
+    let mut mark = start..ceil(mark.end).max(start);
+    if mark.is_empty() {
+        let start = text.get(..mark.start).and_then(|t| t.char_indices().next_back()).map_or(0, |(i, _)| i);
+        mark = start..mark.start.max(start + text.get(start..).and_then(|t| t.chars().next()).map_or(0, char::len_utf8));
+    }
+    let mut out = Vec::with_capacity(job.sections.len() + 2);
+    for sec in job.sections.drain(..) {
+        let r = sec.byte_range.start.0..sec.byte_range.end.0;
+        let (a, b) = (mark.start.clamp(r.start, r.end), mark.end.clamp(r.start, r.end));
+        for (piece, marked) in [(r.start..a, false), (a..b, true), (b..r.end, false)] {
+            if piece.is_empty() {
+                continue;
+            }
+            let mut s = sec.clone();
+            s.byte_range = egui::text::ByteIndex(piece.start)..egui::text::ByteIndex(piece.end);
+            if marked {
+                s.format.underline = egui::Stroke::new(1.5, color);
+                s.format.color = color;
+            }
+            if s.byte_range.start.0 != r.start {
+                s.leading_space = 0.0;
+            }
+            out.push(s);
+        }
+    }
+    job.sections = out;
+}
+
 fn byte_of(text: &str, char_index: usize) -> usize {
     text.char_indices().nth(char_index).map(|(b, _)| b).unwrap_or(text.len())
 }
@@ -501,6 +540,11 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
 /// The code editor. `max_lines` rows are shown before it scrolls; the scroll area follows the
 /// caret.
 pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize) -> Response {
+    code_editor_marked(ui, id, text, lang, max_lines, None)
+}
+
+/// [`code_editor`] with the byte range `mark` underlined in the error colour (see [`underline`]).
+pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize, mark: Option<Range<usize>>) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = font();
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
@@ -534,8 +578,12 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
     }
     let syntax = t.syntax;
     let plain = t.text;
+    let danger = t.danger;
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-        let job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
+        let mut job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
+        if let Some(m) = mark.clone() {
+            underline(&mut job, m, danger);
+        }
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let frame_h = row_h * max_lines as f32 + 8.0;
