@@ -1,7 +1,7 @@
+use super::PRECISION;
 use super::lp::{Outcome, Row, Sense};
 use super::model::Goal;
 use super::problem::{Evaluator, Point};
-use super::*;
 
 // ---------------------------------------------------------------- nonlinear
 

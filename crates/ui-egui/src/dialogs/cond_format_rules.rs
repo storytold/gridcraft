@@ -1,4 +1,4 @@
-use super::*;
+use super::{Json, SheetApp, json};
 
 pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     let list = app.session.run("home.manageRules", json!({})).unwrap_or(Json::Null);
