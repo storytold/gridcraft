@@ -116,13 +116,14 @@ fn fitted_rect(cell: Rect, size: [usize; 2]) -> Option<Rect> {
     Some(Rect::from_center_size(cell.center(), source * scale))
 }
 
+/// Draws a cached cell picture fitted inside the cell and clipped to it, or paints the picture fallback icon when no texture is available.
 pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
     if cell.width() <= 0.0 || cell.height() <= 0.0 || !cell.intersects(painter.clip_rect()) {
         return;
     }
     // Context-local handles must never leak between offscreen, native or browser
     // egui contexts, even when a workbook shares its Arc payload with another view.
-    let cache = painter.ctx().data_mut(|data| data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::new("gridcraft.cell_pictures")).clone());
+    let cache = painter.ctx().data_mut(|data| data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::unique("gridcraft.cell_pictures")).clone());
     let texture = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(painter.ctx(), picture);
     let painter = painter.with_clip_rect(cell.intersect(painter.clip_rect()));
     if let Some(texture) = texture {
@@ -130,7 +131,12 @@ pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
             painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     } else {
-        crate::icons::paint(&painter, cell.shrink(2.0), crate::icons::Icon::Picture, Color32::from_gray(130));
+        crate::icons::paint_on_sheet(
+            &painter,
+            cell.shrink(2.0),
+            crate::icons::Icon::Picture,
+            crate::theme::Tokens::get(painter.ctx()).sheet_control_border,
+        );
     }
 }
 

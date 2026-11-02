@@ -63,9 +63,13 @@ impl Selection {
     pub fn a1(&self) -> String {
         self.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")
     }
-    /// Expands areas so merged cells are included whole.
+    /// Expands areas so merged cells are included whole. Whole columns and whole rows stay as
+    /// they are: clicking column B's header selects just B even when B1:C1 is merged, as in Excel.
     pub fn expand_merges(&mut self, sheet: &Sheet) {
         for r in self.ranges.iter_mut() {
+            if r.is_full_cols() || r.is_full_rows() {
+                continue;
+            }
             let mut cur = *r;
             loop {
                 let mut grown = cur;
@@ -186,7 +190,7 @@ pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
 
 /// The contiguous data region around `c` (Ctrl+A / Ctrl+Shift+8, AutoSum, sort, tables).
 pub fn current_region(sheet: &Sheet, c: CellRef) -> RangeRef {
-    let filled = |c: CellRef| sheet.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sheet.spill.contains_key(&c);
+    let filled = |c: CellRef| sheet.cell(c).is_some_and(gridcraft_model::Cell::has_content) || sheet.spill.contains_key(&c);
     // Whether a row (or column) has a filled cell between two columns (rows), inclusive.
     let row_has = |row: u32, a: u32, b: u32| (a..=b).any(|col| filled(CellRef::new(row, col)));
     let col_has = |col: u32, a: u32, b: u32| (a..=b).any(|row| filled(CellRef::new(row, col)));

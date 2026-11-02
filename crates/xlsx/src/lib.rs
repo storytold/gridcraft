@@ -21,9 +21,11 @@ mod drawing;
 mod feature_bags;
 mod fmla;
 mod ods;
+mod omml;
 mod package;
 mod passthrough;
 mod pivot;
+mod python_part;
 mod read;
 mod richdata;
 mod sheet_read;
@@ -45,8 +47,9 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use csv::{MAX_CSV_BYTES, read_csv, read_csv_with_report, write_csv, write_csv_limited};
 pub use ods::read_ods;
+pub use package::MAX_PART;
 pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
@@ -82,7 +85,28 @@ impl ReadReport {
 /// Reads an `.xlsx` / `.xlsm` / `.xltx` / `.xltm` package (the workbook part is found through the
 /// package relationships, so every main-part content type is accepted).
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes)
+    read::read_xlsx(bytes, None)
+}
+
+/// [`read_xlsx`], and opens formulas from Google Sheets' XLSX export as the formulas written in
+/// Google Sheets (#2871).
+///
+/// Google writes a formula that uses a function it thinks Excel lacks as
+/// `IFERROR(__xludf.DUMMYFUNCTION("<formula, quotes doubled>"),<cached value>)`; Excel shows the
+/// cached value. A cell formula holding that wrapper, whole or inside a larger formula, is read
+/// as the formula inside when it parses and `known` says GridCraft calculates every function it
+/// calls. Otherwise (a Google-only function such as `GOOGLETRANSLATE`, inner text that doesn't
+/// parse, or nesting past the parser's limit) the wrapper stays, so the cell keeps showing the
+/// cached value as in Excel. `known` is passed in because this crate doesn't depend on the
+/// function library.
+pub fn read_xlsx_with(bytes: &[u8], known: &dyn Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, Some(known))
+}
+
+/// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
+/// what an [`IoError::TooLarge`] from reading the package is about when one part is too large.
+pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
+    package::oversized_part(bytes)
 }
 
 /// Which member of the SpreadsheetML family a package is saved as. Only the content type of the
@@ -103,7 +127,7 @@ pub enum XlsxKind {
 impl XlsxKind {
     /// The kind a file name's extension asks for; anything else is a plain workbook.
     pub fn from_path(path: &str) -> XlsxKind {
-        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_ascii_lowercase();
         match ext.as_str() {
             "xlsm" => XlsxKind::MacroWorkbook,
             "xltx" => XlsxKind::Template,
@@ -136,6 +160,12 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
 /// Writes a workbook as the given member of the `.xlsx` family.
 pub fn write_xlsx_as(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write::write_xlsx(wb, kind)
+}
+
+/// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
+/// file name, used for the workbook in a PivotChart's link to its PivotTable).
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named(wb, kind, Some(book_name))
 }
 
 /// CSV import options.
