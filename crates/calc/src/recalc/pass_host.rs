@@ -64,6 +64,8 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Thread that evaluated each formula finished in this pass (merged into [`Calc::last_formula_thread`]).
+    pub(super) thread_log: Vec<(Key, std::thread::ThreadId)>,
 }
 
 impl<'a> PassHost<'a> {
@@ -96,7 +98,16 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            thread_log: Vec::new(),
         }
+    }
+
+    pub(super) fn wb(&self) -> &Workbook {
+        self.wb
+    }
+
+    pub(super) fn now_value(&self) -> f64 {
+        self.now
     }
 }
 
@@ -360,6 +371,7 @@ impl PassHost<'_> {
             self.spills.insert(k, a);
         }
         self.results.insert(k, v.clone());
+        self.thread_log.push((k, std::thread::current().id()));
         v
     }
 

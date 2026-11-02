@@ -26,7 +26,8 @@ fn sample() -> Workbook {
         max_iterations: 42,
         max_change: 0.5,
         precision_as_displayed: true,
-        max_workers: None,
+        multi_threaded: true,
+        threads: 0,
     };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
@@ -731,6 +732,30 @@ fn iterative_calculation_settings_roundtrip() {
         assert!(calc.iterative, "{attrs}");
         assert_eq!((calc.max_iterations, calc.max_change), (count, change), "{attrs}");
     }
+}
+
+#[test]
+fn concurrent_calculation_settings_roundtrip() {
+    let calc_attrs = |wb: &Workbook| {
+        let bytes = write_xlsx(wb).unwrap();
+        let mut pkg = Package::open(&bytes).unwrap();
+        let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+        let c = book.child("calcPr").unwrap();
+        (c.attr("concurrentCalc").map(str::to_string), c.attr("concurrentManualCount").map(str::to_string), read_xlsx(&bytes).unwrap().0.calc)
+    };
+    let mut wb = Workbook::new();
+    let (cc, cm, back) = calc_attrs(&wb);
+    assert_eq!(cc, None);
+    assert_eq!(cm, None);
+    assert!(back.multi_threaded);
+    assert_eq!(back.threads, 0);
+    wb.calc.multi_threaded = false;
+    wb.calc.threads = 4;
+    let (cc, cm, back) = calc_attrs(&wb);
+    assert_eq!(cc.as_deref(), Some("0"));
+    assert_eq!(cm.as_deref(), Some("4"));
+    assert!(!back.multi_threaded);
+    assert_eq!(back.threads, 4);
 }
 
 #[test]

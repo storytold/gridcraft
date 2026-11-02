@@ -3017,7 +3017,7 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "maxWorkers": null}));
+    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "multiThreaded": true, "threads": 0}));
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -3253,26 +3253,25 @@ fn whole_column_fill_remove_duplicates_and_current_region_stay_sparse() {
 }
 
 #[test]
-fn calculation_options_sets_the_worker_cap() {
+fn calculation_options_sets_thread_settings() {
     let mut s = s();
-    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1})).unwrap();
-    assert_eq!(r["maxWorkers"], 1);
-    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    let r = s.execute("formulas.calculationOptions", json!({"multiThreaded": false})).unwrap();
+    assert_eq!(r["multiThreaded"], false);
+    assert!(!s.doc().unwrap().wb.calc.multi_threaded);
     assert!(s.take_ui_requests().is_empty(), "the command does not open a dialog");
-    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": serde_json::Value::Null})).unwrap();
-    assert!(r["maxWorkers"].is_null());
-    assert_eq!(s.doc().unwrap().wb.calc.max_workers, None);
-    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 100})).unwrap();
-    assert_eq!(r["maxWorkers"], 8);
-    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
-    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1000})).unwrap();
-    assert_eq!(r["maxWorkers"], 8);
-    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
-    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 0})).unwrap();
-    assert_eq!(r["maxWorkers"], 1);
-    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    let r = s.execute("formulas.calculationOptions", json!({"multiThreaded": true, "threads": 3})).unwrap();
+    assert_eq!(r["threads"], 3);
+    assert_eq!(s.doc().unwrap().wb.calc.threads, 3);
+    let r = s.execute("formulas.calculationOptions", json!({"threads": 1000})).unwrap();
+    assert_eq!(r["threads"], 1000);
+    assert_eq!(s.doc().unwrap().wb.calc.threads, 1000);
+    let r = s.execute("formulas.calculationOptions", json!({"threads": 5000})).unwrap();
+    assert_eq!(r["threads"], 1024);
+    assert_eq!(s.doc().unwrap().wb.calc.threads, 1024);
+    let r = s.execute("formulas.calculationOptions", json!({"threads": 0})).unwrap();
+    assert_eq!(r["threads"], 0);
     let r = s.execute("formulas.calculationOptions", json!({})).unwrap();
-    assert_eq!(r["maxWorkers"], 1);
+    assert_eq!(r["multiThreaded"], true);
     assert!(s.take_ui_requests().is_empty());
 }
 

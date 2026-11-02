@@ -299,6 +299,12 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     if wb.calc.precision_as_displayed {
         w.push_str(" fullPrecision=\"0\"");
     }
+    if !calc.multi_threaded {
+        w.push_str(" concurrentCalc=\"0\"");
+    }
+    if calc.threads > 0 {
+        let _ = write!(w, " concurrentManualCount=\"{}\"", calc.threads);
+    }
     if out.needs_calc {
         w.push_str(" fullCalcOnLoad=\"1\"");
     }

@@ -34,12 +34,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   (`hundred_mib_styles_part_opens_with_sampled_cells`); styles stay buffered, and
   `declared_styles_over_the_cap_is_an_error` returns an error. A pivot cache of that size was not
   measured separately.
-  On native builds, independent formula waves (a second wave may depend on the first) run on
-  `std::thread::scope` (threshold 64, at most 8 threads); a worker panic is evaluated again on the
-  caller. Dynamic formulas (`INDIRECT`, `OFFSET`, `RAND`), iterative calculation, cycles and WASM
-  stay on one thread. `formulas.calculationOptions` `maxWorkers` sets the cap: null follows the
-  machine, clamped to 1–8, and is not written into the file. Cap 1 matches serial `RAND`, iterative
-  calculation and cycles. WASM ignores the setting.
+  On native builds, recalc uses every processor by default (thread count 0), clamped at 64, stored
+  as `concurrentCalc` / `concurrentManualCount` in the file and via `formulas.calculationOptions`
+  (`multiThreaded`, `threads`). Formulas in a level whose static precedents do not read each other
+  run together; a level under 512 formulas stays on one thread. `RAND`, `RANDBETWEEN` and
+  `RANDARRAY` stay in order on the main thread. Iterative calculation and the web build stay on
+  one thread.
   `cargo xtask bench` (`crates/calc/examples/bench_100k.rs`), median of 5 runs, Intel Xeon
   E5-2680 v3 @ 2.50GHz, default cap 8: 46.373 ms for 100,000 independent dependents and 61.866 ms
   for 100,000 same-row `SUM`s. A 100,000-step serial chain took 230.038 ms and is not the pass
@@ -215,7 +215,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-21 | minor | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms (100k independent dependents) and 71.120 ms (100k same-row SUM). Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands |
-| 2026-10-21 | minor | Gap #2 done. Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Serial chain 230.038 ms, recorded only. 1,048,576-row sheet, whole-column Fill / Remove Duplicates / current region, intersecting spill and a ≥100 MiB styles part are covered by tests. `formulas.calculationOptions` `maxWorkers` sets the native cap |
+| 2026-10-21 | minor | Gap #2 done. Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, historical 8-thread cap: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Serial chain 230.038 ms, recorded only. 1,048,576-row sheet, whole-column Fill / Remove Duplicates / current region, intersecting spill and a ≥100 MiB styles part are covered by tests. Native parallel recalc used a fixed 8-thread cap at the time |
 | 2026-10-21 | minor | Gap #2, earlier the same day: worksheet and shared-string XML stream from the zip; native independent-wave recalc on up to 8 threads. A second-wave `SUM` keeps the sparse total when a spill on the same sheet misses the range. The 100 ms edit, the 1,048,576-row sheet and the whole-sheet bounds were measured later the same day |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |

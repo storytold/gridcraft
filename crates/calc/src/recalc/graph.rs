@@ -351,4 +351,103 @@ impl Graph {
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
     }
+
+    /// Topological levels for `dirty`: formulas in one level do not statically read each other.
+    pub fn levels(&self, dirty: &[Key]) -> Plan {
+        let mut index: HashMap<Key, usize> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+        let mut keys: Vec<Key> = Vec::with_capacity(dirty.len());
+        for &k in dirty {
+            if let std::collections::hash_map::Entry::Vacant(e) = index.entry(k) {
+                e.insert(keys.len());
+                keys.push(k);
+            }
+        }
+        let budget = keys.len().saturating_mul(8).saturating_add(1 << 20);
+        let mut waiting = vec![0usize; keys.len()];
+        let mut edges: Vec<usize> = Vec::new();
+        let mut starts: Vec<usize> = Vec::with_capacity(keys.len() + 1);
+        let mut stored = true;
+        let mut deps = Vec::new();
+        for &k in &keys {
+            starts.push(edges.len());
+            deps.clear();
+            self.dependents(k.0, k.1, &mut deps);
+            for d in &deps {
+                if let Some(&j) = index.get(d)
+                    && let Some(w) = waiting.get_mut(j)
+                {
+                    *w += 1;
+                    if stored {
+                        edges.push(j);
+                    }
+                }
+            }
+            if stored && edges.len() > budget {
+                stored = false;
+                edges = Vec::new();
+            }
+        }
+        starts.push(edges.len());
+        let mut order: Vec<Key> = Vec::with_capacity(keys.len());
+        let mut bounds: Vec<usize> = Vec::new();
+        let mut wave: Vec<usize> = (0..keys.len()).filter(|&i| waiting.get(i) == Some(&0)).collect();
+        let mut next: Vec<usize> = Vec::new();
+        let mut released: Vec<usize> = Vec::new();
+        while !wave.is_empty() {
+            for &i in &wave {
+                let Some(&k) = keys.get(i) else { continue };
+                order.push(k);
+                released.clear();
+                if stored {
+                    let a = starts.get(i).copied().unwrap_or(0);
+                    let b = starts.get(i + 1).copied().unwrap_or(0);
+                    released.extend(edges.get(a..b).unwrap_or(&[]));
+                } else {
+                    deps.clear();
+                    self.dependents(k.0, k.1, &mut deps);
+                    released.extend(deps.iter().filter_map(|d| index.get(d).copied()));
+                }
+                for &j in &released {
+                    if let Some(w) = waiting.get_mut(j)
+                        && *w > 0
+                    {
+                        *w -= 1;
+                        if *w == 0 {
+                            next.push(j);
+                        }
+                    }
+                }
+            }
+            bounds.push(order.len());
+            std::mem::swap(&mut wave, &mut next);
+            next.clear();
+        }
+        let leveled = order.len();
+        if leveled < keys.len() {
+            order.extend(keys.iter().zip(&waiting).filter(|(_, w)| **w > 0).map(|(k, _)| *k));
+        }
+        Plan { order, bounds, leveled }
+    }
+}
+
+/// An evaluation plan from [`Graph::levels`].
+#[derive(Clone, Debug, Default)]
+pub struct Plan {
+    order: Vec<Key>,
+    /// End of each level in `order`.
+    bounds: Vec<usize>,
+    /// Where the formulas on or behind cycles start in `order`.
+    leveled: usize,
+}
+
+impl Plan {
+    /// The levels, in order: no formula of a level reads another of the same level (statically).
+    pub fn levels(&self) -> impl Iterator<Item = &[Key]> {
+        let starts = std::iter::once(0).chain(self.bounds.iter().copied());
+        starts.zip(self.bounds.iter().copied()).filter_map(|(a, b)| self.order.get(a..b))
+    }
+    /// Formulas on or behind a cycle.
+    pub fn rest(&self) -> &[Key] {
+        self.order.get(self.leveled..).unwrap_or(&[])
+    }
 }

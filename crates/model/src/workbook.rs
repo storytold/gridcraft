@@ -43,11 +43,16 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
-    /// Native worker cap for independent formula waves. `None` follows the machine, clamped to
-    /// 1..=8. WASM ignores this and stays on the caller. Not written to `<calcPr>`: it is not an
-    /// OOXML attribute.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_workers: Option<u8>,
+    /// Multi-threaded calculation (`<calcPr concurrentCalc>`). When false, recalc stays on one thread.
+    #[serde(default = "multi_threaded_default")]
+    pub multi_threaded: bool,
+    /// Manual thread count (`<calcPr concurrentManualCount>`). `0` means every processor (native recalc clamps to 64).
+    #[serde(default)]
+    pub threads: u32,
+}
+
+fn multi_threaded_default() -> bool {
+    true
 }
 
 impl Default for CalcSettings {
@@ -58,7 +63,8 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
-            max_workers: None,
+            multi_threaded: true,
+            threads: 0,
         }
     }
 }
@@ -68,8 +74,6 @@ impl CalcSettings {
     pub const DEFAULT_CHANGE: f64 = 0.001;
     /// The largest Maximum Iterations Excel accepts.
     pub const MAX_ITERATIONS: u32 = 32_767;
-    /// Most native workers an independent formula wave may use.
-    pub const MAX_WORKERS: u8 = 8;
 
     /// Sets Maximum Iterations, kept within 1 to [`CalcSettings::MAX_ITERATIONS`].
     pub fn set_max_iterations(&mut self, n: u32) {
@@ -81,11 +85,6 @@ impl CalcSettings {
         if d.is_finite() {
             self.max_change = d.abs();
         }
-    }
-
-    /// Sets the native worker cap, kept within 1 to [`CalcSettings::MAX_WORKERS`].
-    pub fn set_max_workers(&mut self, n: u8) {
-        self.max_workers = Some(n.clamp(1, Self::MAX_WORKERS));
     }
 }
 
