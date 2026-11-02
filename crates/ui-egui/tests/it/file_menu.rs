@@ -327,6 +327,29 @@ fn closing_the_window_saves_a_csv_and_closes_instead_of_asking_again() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// File › Close on an edited CSV whose file can't be written: Save says why and keeps the workbook
+/// open with its edit, instead of closing it unsaved.
+#[cfg(unix)]
+#[test]
+fn file_close_then_a_failed_save_keeps_the_csv_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, path, mut h) = open_csv("close-csv-readonly");
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+    // Saves go through a temporary file renamed over the CSV, so the folder is what refuses.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    h.state_mut().run_or_alert("file.close", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    click(&mut h, "Save");
+    assert!(is_open(&h, &path), "a failed save keeps the workbook open");
+    assert!(h.state().session.active().unwrap().is_dirty(), "and its edit");
+    assert!(h.state().message.is_some(), "the failure is shown");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a,b\r\n1,2\r\n", "the file is as it was");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File › Close on an edited CSV: Cancel keeps it open and unwritten; Save writes it and closes it.
 #[test]
 fn file_close_then_save_writes_a_csv_and_closes_it() {
