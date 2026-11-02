@@ -4,7 +4,8 @@
 //! - `engine.execute {command, params}` — run any engine or UI command
 //! - `engine.commands {search?}` — every command with enablement and params docs
 //! - `document.inspect`, `sheet.read {range?}`, `cell.get {cell?}` — read state
-//! - `ui.inspect` — UI state (ribbon tab, editor, dialog, grid geometry, perf)
+//! - `ui.inspect` — UI state (ribbon tab, editor, dialog, selected object, grid geometry, perf)
+//! - `ui.object.select {id?, kind?}` — select a floating object; replies with its rect
 //! - `ui.click {x, y, button?, count?, shift?, cmd?, alt?}`, `ui.drag {x, y, toX, toY}`,
 //!   `ui.move {x, y}` — real pointer input in window points
 //! - `ui.cell.click {cell}`, `ui.cell.drag {from, to}` — pointer input on a cell's centre
@@ -145,11 +146,13 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
-        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
+        "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
-        "selectedChart": app.selected_chart,
+        "selectedObject": app.selected_object,
+        // The id when the selection is a chart, as before `selectedObject`.
+        "selectedChart": app.selected_chart(),
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
@@ -157,6 +160,47 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "activeWindow": app.session.active_window(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
+}
+
+/// The open edit, for `ui.inspect`. The draft is left out (`text` is null, `hidden` true) while
+/// its cell's code is hidden on a protected sheet, checked now: a protection command earlier in
+/// the same batch runs before the next frame. That holds for a draft in Python mode, and for a
+/// draft that began on a Python cell's code, since leaving Python mode keeps the code as an
+/// ordinary draft; a draft typed over a Python cell holds only what was typed. The sheet is the
+/// draft's own, found by identity: a sheet inserted, deleted or moved in the same batch puts
+/// another at its index. With its sheet gone, such a draft is left out too.
+fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
+    let code = e.python || e.py_cell;
+    let hidden = code
+        && app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
+            Some(sh) => gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
+            None => true,
+        });
+    let text = if hidden { Json::Null } else { json!(e.text) };
+    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
+}
+
+/// `ui.object.select {id?, kind?}`: selects the object with that id on the active sheet (its kind
+/// is found from the id when left out, and must match when given); no `id` clears the selection.
+/// Replies with the object and its rect in window points, for `ui.click` and `ui.drag`.
+fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
+    use gridcraft_engine::model::{ObjKind, ObjRef};
+    let Some(id) = p.get("id").and_then(Json::as_u64) else {
+        app.selected_object = None;
+        return ok(Json::Null);
+    };
+    let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return err("no document") };
+    let found = u32::try_from(id).ok().and_then(|id| match p.get("kind").and_then(Json::as_str) {
+        Some(k) => ObjKind::parse(k).map(|k| ObjRef::new(k, id)).filter(|o| sh.has_object(*o)),
+        None => sh.object_ref(id),
+    });
+    let Some(o) = found else { return err("no such object on the active sheet") };
+    let rect = app.grid.rect.and_then(|r| {
+        let geo = crate::grid::Geo::new(sh, r, app.view().scroll);
+        crate::chartview::object_rect(&geo, sh, o).map(|r| geo.mirror_rect(r))
+    });
+    app.selected_object = Some(o);
+    ok(json!({"selected": o, "rect": rect.map(|r| [r.left(), r.top(), r.width(), r.height()])}))
 }
 
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
@@ -192,6 +236,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
+                ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
@@ -292,6 +337,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             app.dialog = None;
             ok(Json::Null)
         }
+        "ui.object.select" => select_object(app, p),
         "ui.message.dismiss" => {
             app.message = None;
             ok(Json::Null)
