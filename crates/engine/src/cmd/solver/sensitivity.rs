@@ -14,8 +14,9 @@ use super::{CellRef, DocState, EPS, EngineError, Result, Sheet, Trial, Value};
 const NO_LIMIT: f64 = 1e30;
 
 /// Most arithmetic the Lagrange multipliers of a nonlinear model may take (about a second): a
-/// pass over k binding rows and f free variables costs about 2·k²·f, and each pass drops at
-/// most one row, so a model at the constraint limit could otherwise take minutes.
+/// pass over k binding rows and f free variables costs about 3·k²·f (the normal equations and
+/// each multiplier's noise), and each pass drops at most one row, so a model at the constraint
+/// limit could otherwise take minutes.
 #[cfg(not(test))]
 const MULTIPLIER_WORK: u64 = 1_000_000_000;
 /// A low limit in tests, so the refusal is reachable with a small model.
@@ -36,9 +37,11 @@ pub(super) fn sensitivity_refusal(m: &Model, prob: &Problem) -> Option<&'static 
 }
 
 /// A sensitivity figure: values within `noise` of zero (rounding) print as 0, unlimited ones
-/// as 1E+30. The noise level is relative to the coefficients or gradients the figure is made
-/// of, never to the objective's value: adding a constant to the objective changes no price,
-/// multiplier or gradient, so it must not change what the report shows.
+/// as 1E+30. The noise level is local to the figure: it comes from the terms the figure is a
+/// sum of (the rounding error of a sum scales with the sum of its terms' sizes), never from
+/// the model's largest coefficient or gradient component, so a small price or gradient keeps
+/// its value beside a large unrelated one, and never from the objective's value, so adding a
+/// constant to the objective changes nothing the report shows.
 fn sens_num(v: f64, noise: f64) -> Value {
     if !v.is_finite() || v >= NO_LIMIT {
         Value::number(NO_LIMIT)
@@ -224,17 +227,23 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
-    // A shadow price (objective per unit of right side) and a reduced cost (objective per unit
-    // of a variable) are combinations of the objective coefficients, so a figure below 1E-9 of
-    // the largest coefficient is rounding noise. Allowable changes to a coefficient or a right
-    // side are ratios the tableau's own pivot tolerance (`EPS`) already bounds.
-    let noise = 1e-9 * cf.iter().map(|v| v.abs()).fold(0.0, f64::max).max(f64::MIN_POSITIVE);
-    let shadow: Vec<f64> = (0..rows.len())
+    // A shadow price is the dual yᵢ = Σᵣ c_B(r)·B⁻¹(r, i): the row's unit column of the final
+    // tableau holds B⁻¹'s column i, and c_B(r) is the cost of the column basic in row r (a
+    // slack or artificial costs nothing). The rounding error of a sum scales with the sum of
+    // its terms' sizes, so a price below 1E-9 of Σᵣ |c_B(r)·B⁻¹(r, i)| is noise. The bound is
+    // the row's own: a small price keeps its value beside a large coefficient that plays no
+    // part in it, and a constant in the objective (no coefficient) changes no bound. Allowable
+    // changes to a coefficient or a right side are ratios the tableau's own pivot tolerance
+    // (`EPS`) already bounds.
+    let cost_size = |b: usize| tab.cols.get(b).map_or(0.0, |mp| cf.get(mp.var).copied().unwrap_or(0.0).abs());
+    let price_terms = |col: usize| (0..tab.t.len()).map(|r| tab.basis.get(r).map_or(0.0, |b| cost_size(*b)) * entry(&tab, r, col).abs()).sum::<f64>();
+    let (shadow, terms): (Vec<f64>, Vec<f64>) = (0..rows.len())
         .map(|i| {
             let col = tab.ident.get(i).copied().unwrap_or(usize::MAX);
-            sign * flip(&tab, i) * -tab.obj.get(col).copied().unwrap_or(0.0)
+            (sign * flip(&tab, i) * -tab.obj.get(col).copied().unwrap_or(0.0), price_terms(col))
         })
-        .collect();
+        .unzip();
+    let noise = |terms: f64| 1e-9 * terms.max(f64::MIN_POSITIVE);
     let con_rows = ev
         .rows
         .iter()
@@ -252,7 +261,8 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
                 if pinned { (0.0, 0.0) } else { (min_ratio(dir.iter().map(|(v, d)| (*v, -d))), min_ratio(dir.iter().map(|(v, d)| (*v, *d)))) };
             let b = at.finals.get(i).map_or(f64::NAN, |f| f.1);
             let mut row = at.row_head(i, r);
-            row.extend([sens_num(shadow.get(i).copied().unwrap_or(0.0), noise), num(b), sens_num(increase, EPS), sens_num(decrease, EPS)]);
+            let price = sens_num(shadow.get(i).copied().unwrap_or(0.0), noise(terms.get(i).copied().unwrap_or(0.0)));
+            row.extend([price, num(b), sens_num(increase, EPS), sens_num(decrease, EPS)]);
             row
         })
         .collect();
@@ -264,6 +274,11 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         .map(|(j, c)| {
             let coef = cf.get(j).copied().unwrap_or(0.0);
             let used: f64 = rows.iter().zip(&shadow).map(|((a, _, _), p)| a.get(j).copied().unwrap_or(0.0) * p).sum();
+            // The reduced cost cf_j − Σᵢ a_ij·yᵢ is a sum of cf_j and the prices' terms times
+            // a_ij: the prices' terms rather than the prices, since a price that is a small
+            // difference of large terms carries their rounding error into every reduced cost
+            // it is used in.
+            let used_terms: f64 = rows.iter().zip(&terms).map(|((a, _, _), t)| a.get(j).copied().unwrap_or(0.0).abs() * t).sum();
             // A change Δ in the coefficient changes each nonbasic reduced cost by Δ·e.
             let own = |col: usize| tab.cols.get(col).filter(|mp| mp.var == j).map_or(0.0, |mp| mp.sign);
             let moves: Vec<(f64, f64)> = nonbasic
@@ -276,7 +291,7 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             let increase = min_ratio(moves.iter().map(|(d, e)| (*d, -e)));
             let decrease = min_ratio(moves.iter().map(|(d, e)| (*d, *e)));
             let mut row = at.var_head(j, *c);
-            row.extend([sens_num(coef - used, noise), num(coef), sens_num(increase, EPS), sens_num(decrease, EPS)]);
+            row.extend([sens_num(coef - used, noise(coef.abs() + used_terms)), num(coef), sens_num(increase, EPS), sens_num(decrease, EPS)]);
             row
         })
         .collect();
@@ -360,28 +375,53 @@ fn gradients(ev: &mut Evaluator, inp: &ReportInput) -> Result<(Vec<f64>, Vec<Vec
     Ok((df, dg))
 }
 
-/// The largest absolute entry of a gradient, at least the smallest positive number.
-fn gradient_size(g: &[f64]) -> f64 {
-    g.iter().map(|v| v.abs()).fold(0.0, f64::max).max(f64::MIN_POSITIVE)
+/// The rounding noise in the Lagrange multiplier of row `i`, one of the `active` rows whose
+/// multipliers `lambda` solve the normal equations of ∇f = Σ λₖ ∇gₖ over the `free` variables.
+/// Row i's equation gives λᵢ = (Σⱼ gᵢⱼ·dfⱼ − Σ_{k≠i} λₖ·Σⱼ gᵢⱼ·gₖⱼ) / Σⱼ gᵢⱼ²; the difference
+/// gradients are good to about 1E-6 of each component, and the rounding error of a sum scales
+/// with the sum of its terms' sizes, so the noise is 1E-6 of the terms' sizes over the row's
+/// own squared norm. The bound is local to the row: another row enters only through its
+/// coupling term with this one, so a row whose gradient is orthogonal to the others has a bound
+/// from its own gradient alone, and a large component of ∇f that the row's gradient doesn't
+/// touch hides nothing. Nearly parallel active gradients make the normal equations
+/// ill-conditioned and amplify every multiplier's error beyond any bound local to a row; such
+/// multipliers are ill-determined whatever the bound, and they print as computed.
+fn multiplier_noise(i: usize, active: &[usize], lambda: &[f64], free: &[usize], (df, dg): (&[f64], &[Vec<f64>])) -> f64 {
+    let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+    let own: f64 = free.iter().map(|&j| grad(i, j) * grad(i, j)).sum();
+    let objective: f64 = free.iter().map(|&j| (grad(i, j) * df.get(j).copied().unwrap_or(0.0)).abs()).sum();
+    let coupling: f64 = active
+        .iter()
+        .zip(lambda)
+        .filter(|(k, _)| **k != i)
+        .map(|(&k, l)| free.iter().map(|&j| (grad(i, j) * grad(k, j) * l).abs()).sum::<f64>())
+        .sum();
+    1e-6 * (objective + coupling) / own.max(f64::MIN_POSITIVE)
 }
 
 /// Least squares on the free variables: ∇f = Σ λᵢ ∇gᵢ over the `active` rows. An inequality's
 /// multiplier has the sign that tightening it costs (λ ≥ 0 for `lhs ≤ rhs` when maximising); a
-/// row whose multiplier has the other sign isn't binding, so it leaves and the rest are solved
-/// again. A multiplier is objective per unit of its row, so its sign test compares λᵢ·|∇gᵢ|,
-/// the part of the objective's gradient the row explains, with the gradient's size; the
-/// objective's value plays no part. The work is bounded by `budget` (see
+/// row whose multiplier has the other sign beyond its own noise ([`multiplier_noise`], the
+/// criterion the report rounds it with) isn't binding, so it leaves and the rest are solved
+/// again; the objective's value plays no part. Returns each row's multiplier and its noise (0
+/// and 0 for a row that doesn't bind). The work is bounded by `budget` (see
 /// [`MULTIPLIER_WORK`]); past it the report is refused.
-fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize], (df, dg): (&[f64], &[Vec<f64>]), budget: u64) -> Result<Vec<f64>> {
+fn multipliers(
+    rows: &[Row],
+    goal: Goal,
+    mut active: Vec<usize>,
+    free: &[usize],
+    (df, dg): (&[f64], &[Vec<f64>]),
+    budget: u64,
+) -> Result<(Vec<f64>, Vec<f64>)> {
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
-    let row_size = |i: usize| dg.get(i).map_or(f64::MIN_POSITIVE, |r| gradient_size(r));
-    let noise = 1e-6 * gradient_size(df);
     let goal_sign = if goal == Goal::Max { 1.0 } else { -1.0 };
     let mut lambda = vec![0.0; rows.len()];
+    let mut noise = vec![0.0; rows.len()];
     let mut work = 0u64;
     while !active.is_empty() {
         let (k, f) = (active.len() as u64, (free.len() as u64).max(1));
-        work = work.saturating_add(2u64.saturating_mul(k).saturating_mul(k).saturating_mul(f));
+        work = work.saturating_add(3u64.saturating_mul(k).saturating_mul(k).saturating_mul(f));
         if work > budget {
             return Err(EngineError::Other(
                 "The Sensitivity report of this nonlinear model has too many binding constraints to work out in reasonable time.".into(),
@@ -391,17 +431,19 @@ fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize],
             active.iter().map(|&i| active.iter().map(|&k| free.iter().map(|&j| grad(i, j) * grad(k, j)).sum()).collect()).collect();
         let rhs: Vec<f64> = active.iter().map(|&i| free.iter().map(|&j| grad(i, j) * df.get(j).copied().unwrap_or(0.0)).sum()).collect();
         let solved = solve_dense(normal, rhs);
+        let bounds: Vec<f64> = active.iter().map(|&i| multiplier_noise(i, &active, &solved, free, (df, dg))).collect();
         let wrong = active
             .iter()
             .zip(&solved)
+            .zip(&bounds)
             .enumerate()
-            .filter_map(|(k, (&i, l))| {
+            .filter_map(|(k, ((&i, l), bound))| {
                 let want = match rows.get(i).map_or(Sense::Eq, |r| r.sense) {
                     Sense::Le => goal_sign,
                     Sense::Ge => -goal_sign,
                     Sense::Eq => return None,
                 };
-                (want * l * row_size(i) < -noise).then_some((k, want * l))
+                (want * l < -bound).then_some((k, want * l))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
         match wrong {
@@ -409,16 +451,17 @@ fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize],
                 active.remove(k);
             }
             None => {
-                for (i, l) in active.iter().zip(solved) {
-                    if let Some(e) = lambda.get_mut(*i) {
+                for ((i, l), bound) in active.iter().zip(solved).zip(bounds) {
+                    if let (Some(e), Some(n)) = (lambda.get_mut(*i), noise.get_mut(*i)) {
                         *e = l;
+                        *n = bound;
                     }
                 }
                 break;
             }
         }
     }
-    Ok(lambda)
+    Ok((lambda, noise))
 }
 
 /// Whether the solution is a Karush-Kuhn-Tucker point of the model, from the gradients the
@@ -490,7 +533,7 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             v > inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY) + tol && v < inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY) - tol
         })
         .collect();
-    let lambda = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), MULTIPLIER_WORK)?;
+    let (lambda, lambda_noise) = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), MULTIPLIER_WORK)?;
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
     let reduced: Vec<f64> =
         (0..x.len()).map(|j| df.get(j).copied().unwrap_or(0.0) - lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum::<f64>()).collect();
@@ -498,17 +541,23 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     if !kkt_point(at, &ev.rows, &df, &reduced) {
         return Err(not_optimal());
     }
-    // Difference gradients are good to about 1E-6 of the objective gradient's size: a reduced
-    // gradient (a part of that gradient) below it is rounding, and so is a Lagrange multiplier
-    // (objective per unit of its row) whose λᵢ·|∇gᵢ| is.
-    let noise = 1e-6 * gradient_size(&df);
+    // A reduced gradient dfⱼ − Σᵢ λᵢ·gᵢⱼ is a sum of the gradient's own component and the
+    // multipliers' terms: difference gradients are good to about 1E-6 of each component, so
+    // its noise is 1E-6 of those terms' sizes, plus each multiplier's own noise
+    // ([`multiplier_noise`]) times |gᵢⱼ|. The bound is the variable's own: a small gradient
+    // keeps its value beside a large component of another variable.
+    let reduced_noise = |j: usize| {
+        let terms: f64 = lambda.iter().enumerate().map(|(i, l)| (l * grad(i, j)).abs()).sum();
+        let carried: f64 = lambda_noise.iter().enumerate().map(|(i, n)| if grad(i, j) == 0.0 { 0.0 } else { n * grad(i, j).abs() }).sum();
+        1e-6 * (df.get(j).copied().unwrap_or(0.0).abs() + terms) + carried
+    };
     let var_rows = m
         .vars
         .iter()
         .enumerate()
         .map(|(j, c)| {
             let mut row = at.var_head(j, *c);
-            row.push(sens_num(reduced.get(j).copied().unwrap_or(f64::NAN), noise));
+            row.push(sens_num(reduced.get(j).copied().unwrap_or(f64::NAN), reduced_noise(j)));
             row
         })
         .collect();
@@ -517,9 +566,8 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let row_size = dg.get(i).map_or(f64::MIN_POSITIVE, |g| gradient_size(g));
             let mut row = at.row_head(i, r);
-            row.push(sens_num(lambda.get(i).copied().unwrap_or(0.0), noise / row_size));
+            row.push(sens_num(lambda.get(i).copied().unwrap_or(0.0), lambda_noise.get(i).copied().unwrap_or(0.0)));
             row
         })
         .collect();
@@ -546,7 +594,10 @@ mod tests {
         // A small model within the limit still gets its multipliers: ∇f = (1, 2) on two
         // binding rows with unit gradients.
         let dg2 = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        let got = multipliers(&rows[..2], Goal::Max, vec![0, 1], &free[..2], (&[1.0, 2.0], &dg2), MULTIPLIER_WORK).unwrap();
+        let (got, noise) = multipliers(&rows[..2], Goal::Max, vec![0, 1], &free[..2], (&[1.0, 2.0], &dg2), MULTIPLIER_WORK).unwrap();
         assert_eq!(got, vec![1.0, 2.0]);
+        // Each multiplier's noise is 1E-6 of its own row's term (1 · 1 and 1 · 2 over a unit
+        // norm): the rows are orthogonal, so neither enters the other's bound.
+        assert_eq!(noise, vec![1e-6, 2e-6]);
     }
 }

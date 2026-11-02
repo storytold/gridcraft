@@ -912,6 +912,99 @@ fn nonlinear_sensitivity_report_is_the_same_whatever_constant_the_objective_adds
 }
 
 #[test]
+fn simplex_sensitivity_keeps_a_small_price_beside_a_large_coefficient() {
+    // max 1E9·x + y with x ≤ 1 and y ≤ 1 as rows and x, y ≥ 0: (1, 1). Both rows bind, the
+    // basis is {x, y} with B = I, so the shadow prices are the coefficients, 1E9 and 1, and both
+    // reduced costs are 0. x's coefficient may rise without limit and fall by 1E9 (to 0, where
+    // its row's slack ties), y's without limit and by 1. Each right side may rise without limit
+    // (the other row doesn't involve the variable) and fall by 1 (to 0). The second row's price
+    // is the single term 1 · 1, so the first row's coefficient 1E9 is no rounding error in it; a
+    // noise level taken from the largest coefficient (1E-9 · 1E9 = 1) wrote it as 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=1000000000*A1+A2"), ("C1", "=A1"), ("C2", "=A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 1", "C2 <= 1"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[1.0, 0.0, 1e9, 1e30, 1e9], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[1.0, 1e9, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[1.0, 1.0, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$C$2"));
+}
+
+#[test]
+fn simplex_sensitivity_keeps_a_small_reduced_cost_beside_a_large_coefficient() {
+    // max 1E9·x + y − z with x ≤ 1 and y ≤ 1 as rows and x, y, z ≥ 0 (z's bound is the only
+    // constraint on it): (1, 1, 0). z is nonbasic at zero with reduced cost −1 − 0 = −1 (no
+    // row involves it): its coefficient must rise by 1 before z is made, so the Allowable
+    // Increase is 1 and the Allowable Decrease 1E+30, as for a maximum's variable at zero in
+    // `simplex_sensitivity_gives_the_dakota_furniture_report`. The other rows are those of
+    // `simplex_sensitivity_keeps_a_small_price_beside_a_large_coefficient`. The reduced cost
+    // is the coefficient alone, so x's coefficient 1E9 is no rounding error in it; a noise
+    // level taken from the largest coefficient wrote it as 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "0"), ("B1", "=1000000000*A1+A2-A3"), ("C1", "=A1"), ("C2", "=A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A3", "constraints": ["C1 <= 1", "C2 <= 1"], "method": "simplex", "reports": ["sensitivity"]});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    let cols = ["D", "E", "F", "G", "H"];
+    let row = |c: &str| report_row(&s, &rep, c, &cols);
+    assert!(close(&row("$A$1"), &[1.0, 0.0, 1e9, 1e30, 1e9], 1e-9), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$A$2"));
+    assert!(close(&row("$A$3"), &[0.0, -1.0, -1.0, 1.0, 1e30], 1e-9), "{:?}", row("$A$3"));
+    assert!(close(&row("$C$1"), &[1.0, 1e9, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[1.0, 1.0, 1.0, 1e30, 1.0], 1e-9), "{:?}", row("$C$2"));
+}
+
+#[test]
+fn nonlinear_sensitivity_keeps_a_small_multiplier_beside_a_large_gradient() {
+    // The model of `simplex_sensitivity_keeps_a_small_price_beside_a_large_coefficient` under
+    // GRG Nonlinear: at (1, 1) both rows bind; with ∇f = (1E9, 1) and unit row gradients the
+    // Lagrange multipliers are 1E9 and 1, and both reduced gradients are 0. The second row's
+    // multiplier is the single term 1 · 1, so the gradient's large first component is no
+    // rounding error in it; a noise level taken from the gradient's size (1E-6 · 1E9 = 1000)
+    // wrote it as 0. The difference gradient of y is the difference of two values near 1E9,
+    // where the last place is 2⁻²² ≈ 2.4E-7: the step 1E-6 rounds to 4 places, 9.54E-7, so
+    // df_y ≈ 0.954 and the multiplier is checked to 0.1. The nonlinear method stops on this
+    // model from (0, 0) with "unbounded", so the report is asked for at the optimum (1, 1).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=1000000000*A1+A2"), ("C1", "=A1"), ("C2", "=A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 1", "C2 <= 1"]});
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": 1, "A2": 1}})).unwrap();
+    let rep = r["sheets"][0].as_str().unwrap().to_string();
+    let row = |c: &str| report_row(&s, &rep, c, &["D", "E"]);
+    assert!(close(&row("$A$1"), &[1.0, 0.0], 1e-3), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0], 1e-3), "{:?}", row("$A$2"));
+    assert!(close(&row("$C$1"), &[1.0, 1e9], 1e-3), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[1.0, 1.0], 0.1), "{:?}", row("$C$2"));
+}
+
+#[test]
+fn nonlinear_sensitivity_keeps_a_small_reduced_gradient_beside_a_large_gradient() {
+    // The model of `simplex_sensitivity_keeps_a_small_reduced_cost_beside_a_large_coefficient`
+    // under GRG Nonlinear: z sits at its bound 0, where its reduced gradient is its own
+    // gradient −1 (no row involves it); a noise level taken from the gradient's size (1000)
+    // wrote it as 0. Its difference gradient is one-sided at the bound, over the step 1E-6
+    // from a value near 1E9 that rounds as in
+    // `nonlinear_sensitivity_keeps_a_small_multiplier_beside_a_large_gradient`: about −0.954,
+    // checked to 0.1. As there, the report is asked for at the optimum (1, 1, 0).
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "0"), ("B1", "=1000000000*A1+A2-A3"), ("C1", "=A1"), ("C2", "=A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A3", "constraints": ["C1 <= 1", "C2 <= 1"]});
+    let r = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": model, "values": {"A1": 1, "A2": 1, "A3": 0}})).unwrap();
+    let rep = r["sheets"][0].as_str().unwrap().to_string();
+    let row = |c: &str| report_row(&s, &rep, c, &["D", "E"]);
+    assert!(close(&row("$A$1"), &[1.0, 0.0], 1e-3), "{:?}", row("$A$1"));
+    assert!(close(&row("$A$2"), &[1.0, 0.0], 1e-3), "{:?}", row("$A$2"));
+    assert!(close(&row("$A$3"), &[0.0, -1.0], 0.1), "{:?}", row("$A$3"));
+    assert!(close(&row("$C$1"), &[1.0, 1e9], 1e-3), "{:?}", row("$C$1"));
+    assert!(close(&row("$C$2"), &[1.0, 1.0], 0.1), "{:?}", row("$C$2"));
+}
+
+#[test]
 fn simplex_sensitivity_of_a_variable_at_its_upper_bound() {
     // max 3x + 2y with x + y ≤ 4 (a row), x ≤ 3 and y ≤ 5 (bounds on the variable cells, which
     // have no row in the Constraints table): x = 3, y = 1, objective 11. The row's shadow price
