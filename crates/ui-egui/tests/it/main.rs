@@ -50,6 +50,7 @@ mod formula_popup;
 mod freeze_handles;
 mod function_library;
 mod go_to_dialog;
+mod grid_scale;
 mod header_autofit;
 mod header_column_drag;
 mod host_chrome;

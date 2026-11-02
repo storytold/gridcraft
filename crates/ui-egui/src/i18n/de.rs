@@ -357,6 +357,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Change must be a number of 0 or more." => "Die maximale Änderung muss eine Zahl größer oder gleich 0 sein.",
         "Calculation settings are saved with the workbook." => "Berechnungseinstellungen werden mit der Arbeitsmappe gespeichert.",
         "Interface size" => "Größe der Benutzeroberfläche",
+        "Cell grid size" => "Größe des Zellrasters",
         "Auto" => "Automatisch",
         "100%" => "100%",
         "Zoom to\nSelection" => "Zoom auf die\nAuswahl",

@@ -144,6 +144,26 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             .response
             .labelled_by(label.id);
     });
+    // Cell grid size: the grid's own scale on top of the sheet zoom, like a display DPI setting,
+    // for desktops whose density draws cells smaller than expected (often macOS beside Windows).
+    ui.vertical(|ui| {
+        let label = ui.label(egui::RichText::new(lang.tr("Cell grid size")).font(theme::ui_font(11.5)).color(t.text_dim));
+        let current = app.ui.grid_scale;
+        let hint = lang.tr("Draw cells, headings and text larger or smaller at every zoom, like a display DPI setting; the zoom saved in the workbook doesn't change");
+        craft_ui::ComboBox::from_id_salt("ui_grid_size")
+            .width(120.0)
+            .selected_text(egui::RichText::new(format!("{current}%")).font(theme::ui_font(12.5)))
+            .show_ui(ui, |ui| {
+                for v in [75, 90, 100, 110, 120, 130, 133, 140, 150, 175, 200] {
+                    if ui.selectable_label(v == current, format!("{v}%")).clicked() {
+                        act(app, "view.gridScale", json!({"percent": v}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id)
+            .on_hover_text(hint);
+    });
     // Interface language: settings live in the View tab, like Excel's Options. The label follows
     // the current language so it stays readable; the choices are always shown in their own script.
     ui.vertical(|ui| {

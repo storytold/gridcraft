@@ -58,6 +58,38 @@ pub const COL_HEADER_H: f32 = 21.0;
 /// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
 pub const DISPLAY_SCALE: f32 = 0.8;
 
+thread_local! {
+    /// The Cell grid size preference as a factor (see [`set_grid_scale`]).
+    static GRID_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Sets the Cell grid size preference (1.0 = 100%) for grids laid out on this thread. It multiplies
+/// every sheet's zoom on screen, like a DPI setting, so cells, headings and text read larger at
+/// 100% zoom without changing the zoom saved in the workbook. `SheetApp::logic` sets it every frame
+/// from `UiState::grid_scale`; it is per thread so parallel tests don't see each other's value.
+pub fn set_grid_scale(factor: f32) {
+    let factor = if factor.is_finite() { factor.clamp(0.25, 4.0) } else { 1.0 };
+    GRID_SCALE.with(|g| g.set(factor));
+}
+
+/// The Cell grid size preference as a factor (1.0 = 100%).
+pub fn grid_scale() -> f32 {
+    GRID_SCALE.with(|g| g.get())
+}
+
+/// The scale headings, outline bands and their padding are drawn at for the grid zoom `zoom`
+/// (see [`sheet_zoom`]): the workbook zoom no smaller than 75% (so they stay readable when zoomed
+/// out), times the Cell grid size, which scales them with the cells.
+pub fn heading_zoom(zoom: f32) -> f32 {
+    let grid = grid_scale();
+    (zoom / grid).max(0.75) * grid
+}
+
+/// `sh`'s zoom as a factor, times the Cell grid size preference: the zoom the grid is drawn at.
+pub fn sheet_zoom(sh: &Sheet) -> f32 {
+    (sh.zoom as f32 / 100.0).clamp(0.1, 4.0) * grid_scale()
+}
+
 /// The zoom percentages a Ctrl+wheel notch steps between: four per doubling (about 20% apart),
 /// so 25, 50, 100, 200 and 400 are on it. Excel steps 15 points a notch instead; the status bar's
 /// Zoom In / Zoom Out buttons keep their 10% steps.
