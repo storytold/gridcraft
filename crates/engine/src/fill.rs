@@ -125,13 +125,23 @@ struct FillLane {
 impl FillLane {
     fn new(wb: &Workbook, src_cells: Vec<(CellRef, Option<Cell>)>, mode: FillMode) -> Self {
         let fmt = |c: &(CellRef, Option<Cell>)| wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
+        let detect_patterns = mode.extends_series() || mode == FillMode::Alternate;
+        // The whole lane and each text cell use the same list order. Prepare it once, only when
+        // text can need it; numeric and copying lanes do not clone the workbook's custom lists.
+        let all_lists: Vec<Vec<String>> = if detect_patterns
+            && src_cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_none() && c.py.is_none() && c.value.is_text()))
+        {
+            wb.custom_lists.iter().cloned().chain(lists()).collect()
+        } else {
+            Vec::new()
+        };
+        let pattern = if detect_patterns {
             let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
             let dates = match mode {
                 FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, wb.date_system, first_fmt),
                 _ => None,
             };
-            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &wb.custom_lists, wb.date_system, first_fmt));
+            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &all_lists, wb.date_system, first_fmt));
             match (mode, detected) {
                 (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
                 (_, p) => p,
@@ -142,7 +152,7 @@ impl FillLane {
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
         // own series, one step per repeat of the source.
         let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
-            src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &wb.custom_lists, wb.date_system, fmt(c))).collect()
+            src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &all_lists, wb.date_system, fmt(c))).collect()
         } else {
             Vec::new()
         };
@@ -373,7 +383,7 @@ impl Pattern {
         })
     }
 
-    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
+    fn detect(cells: &[(CellRef, Option<Cell>)], all_lists: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
         // Formulas and Python cells copy.
         if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
@@ -425,8 +435,7 @@ impl Pattern {
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
-            let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
-            for list in &all_lists {
+            for list in all_lists {
                 let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();

@@ -198,6 +198,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Fill preview prepares custom and built-in text lists once per source lane, preserving custom-list precedence and mixed-cell pattern results (#2598) |
 | 2026-11-02 | minor | Fill-handle preview preserves Python code and cached results without evaluating Python or showing its source; formatting-only fill keeps the destination's code (#2598) |
 | 2026-11-02 | minor | Python mode edits a cell's code in the formula bar's code editor (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell), with the PY badge beside fx; its keys apply in input order, also several in one frame, and Ctrl+Enter commits through `python.set` (empty code clears the cell), keeping the code and showing the command's message when the code is refused |
 | 2026-11-02 | minor | Insert › Symbols: Equation split button (access keys N E), a gallery of examples, and an equation editor with quick-insert buttons, the error underlined at its position and a live preview; double-clicking an equation edits it |

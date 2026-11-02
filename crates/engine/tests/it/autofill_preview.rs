@@ -7,6 +7,45 @@ use gridcraft_engine::{
 };
 
 #[test]
+fn preview_preserves_custom_list_precedence_and_mixed_text_patterns() {
+    use gridcraft_engine::model::Cell;
+    use std::sync::Arc;
+
+    let mut s = Session::new();
+    s.new_workbook();
+    let doc = s.doc_mut().unwrap();
+    let mut wb = (*doc.wb).clone();
+    wb.custom_lists = vec![vec!["Monday".into(), "Reviewday".into()], vec!["Monday".into(), "Wrongday".into()]];
+    for row in 0..4096 {
+        let text = match row {
+            0 => "Monday",
+            1 => "JAN",
+            2 => "Q4",
+            3 => "Product 007",
+            _ => "On backorder",
+        };
+        wb.sheet_mut(0).unwrap().set_cell(CellRef::new(row, 0), Cell { value: Value::text(text), ..Default::default() });
+    }
+    doc.wb = Arc::new(wb);
+    let before = doc.wb.clone();
+    let (revision, undo) = (doc.revision, doc.undo.len());
+    let src = RangeRef::parse("A1:A4096").unwrap();
+    let target = RangeRef::parse("A1:A4101").unwrap();
+    let expected = ["Reviewday", "FEB", "Q1", "Product 008", "On backorder"];
+    for (offset, text) in expected.iter().enumerate() {
+        let at = CellRef::new(4096 + offset as u32, 0);
+        assert_eq!(preview_cell(&doc.wb, 0, src, target, at, FillMode::Series).unwrap().value, Value::text(*text));
+    }
+    assert!(Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+    assert_eq!((s.doc().unwrap().revision, s.doc().unwrap().undo.len()), (revision, undo));
+    s.execute("edit.autoFill", serde_json::json!({"source": "A1:A4096", "target": "A1:A4101"})).unwrap();
+    for (offset, text) in expected.iter().enumerate() {
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(4096 + offset as u32, 0)), Value::text(*text));
+    }
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+}
+
+#[test]
 fn preview_and_fill_preserve_python_code_and_its_cached_value() {
     use gridcraft_engine::model::{Cell, PyCode};
     use std::sync::Arc;
