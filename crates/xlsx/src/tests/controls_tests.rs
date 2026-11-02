@@ -181,6 +181,42 @@ fn vml_only_controls_are_read_and_clamped() {
     assert_eq!(c[2].action, Some(ControlAction::Macro { name: "Tidy".into(), input: MacroInput::Selection, output: None }));
 }
 
+/// A producer that quotes `shapeId` with single quotes: the control is read, and the kept
+/// `<controls>` fragment drops it as it drops a double-quoted one, so a save holds the control
+/// once and no kept copy points at a VML shape that was taken out.
+#[test]
+fn a_single_quoted_shape_id_is_dropped_from_the_kept_controls_too() {
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#;
+    let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1025" type="#_x0000_t201"><x:ClientData ObjectType="Scroll"><x:Anchor>2, 0, 3, 0, 5, 0, 4, 0</x:Anchor><x:FmlaLink>$B$1</x:FmlaLink><x:Val>40</x:Val><x:Min>0</x:Min><x:Max>100</x:Max><x:Inc>1</x:Inc><x:Page>10</x:Page></x:ClientData></v:shape></xml>"##;
+    let bytes = minimal(
+        r#"<sheetData/><legacyDrawing r:id="rId9"/><controls><control shapeId='1025' name='Scroll 1'/></controls>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/vmlDrawing1.vml", vml)],
+        "",
+        "",
+    );
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    // The minimal package has no styles part; nothing about the control is reported.
+    assert!(report.warnings.iter().all(|w| w == "no styles part"), "{:?}", report.warnings);
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1);
+    assert_eq!((sh.controls[0].kind, sh.controls[0].value, sh.controls[0].name.as_str()), (ControlKind::Slider, 40, "Scroll 1"));
+    let kept = sh.preserved.as_ref().and_then(|k| k.elements.iter().find(|e| e.slot == "controls")).map(|e| e.xml.clone());
+    assert_eq!(kept, None, "nothing of the modelled control is kept for pass-through");
+    // The saved file holds the control once, with its one VML shape, and reads back once.
+    let out = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&out).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    // One <controls> element with one control (each control is written as a Choice with a
+    // Fallback inside the element's own AlternateContent), and no kept copy.
+    assert_eq!(sheet.matches("<controls").count(), 1, "{sheet}");
+    assert_eq!(sheet.matches("<mc:Fallback>").count(), 1, "{sheet}");
+    assert!(!sheet.contains("shapeId='1025'"), "the kept copy would point at a shape that is gone: {sheet}");
+    assert_eq!(text(&mut pkg, "xl/drawings/vmlDrawing1.vml").matches("<v:shape ").count(), 1);
+    let (back, report) = read_xlsx(&out).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(back.sheet(0).unwrap().controls.len(), 1);
+}
+
 /// Shapes with a named `id` and their number in `o:spid`, as some producers write them.
 const VML_SPID: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
 <v:shape id="Button 1" o:spid="_x0000_s1025" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>

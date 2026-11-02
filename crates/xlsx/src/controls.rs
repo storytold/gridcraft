@@ -357,22 +357,25 @@ fn build(p: Props, kind: ControlKind, anchor: Anchor, name: Option<&str>, id: u3
     c
 }
 
+/// The `<control>` elements one child of a `<controls>` element holds: the child itself, or those
+/// inside its `mc:AlternateContent` (the Choice, else the Fallback).
+pub(crate) fn controls_of_child(k: &El) -> Vec<&El> {
+    match k.name.as_str() {
+        "control" => vec![k],
+        "AlternateContent" => k
+            .child("Choice")
+            .filter(|c| c.child("control").is_some())
+            .or_else(|| k.child("Fallback"))
+            .map(|inner| inner.kids("control").collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// The `<control>` elements under a `<controls>` element, looking through `mc:AlternateContent`
 /// (the Choice, else the Fallback).
 fn controls_in(e: &El) -> Vec<&El> {
-    let mut out = Vec::new();
-    for k in &e.children {
-        match k.name.as_str() {
-            "control" => out.push(k),
-            "AlternateContent" => {
-                if let Some(inner) = k.child("Choice").filter(|c| c.child("control").is_some()).or_else(|| k.child("Fallback")) {
-                    out.extend(inner.kids("control"));
-                }
-            }
-            _ => {}
-        }
-    }
-    out
+    e.children.iter().flat_map(controls_of_child).collect()
 }
 
 /// The `<controls>` element of a worksheet child (`controls`, or one inside AlternateContent).
@@ -385,7 +388,7 @@ pub fn controls_of(e: &El) -> Option<&El> {
 }
 
 /// The shape number of a VML shape id (`_x0000_s1025` → 1025) or a `shapeId` attribute.
-fn shape_number(id: &str) -> Option<u64> {
+pub(crate) fn shape_number(id: &str) -> Option<u64> {
     id.trim().trim_start_matches("_x0000_s").parse().ok()
 }
 

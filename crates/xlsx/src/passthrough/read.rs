@@ -630,8 +630,8 @@ pub(super) fn merge_vml(kept: &str, ours: &str) -> String {
     while let Some(i) = ours.get(from..).and_then(|s| s.find("<v:shapetype")).map(|i| i + from) {
         let Some(j) = ours.get(i..).and_then(|s| s.find("</v:shapetype>")).map(|j| i + j + "</v:shapetype>".len()) else { break };
         let ty = ours.get(i..j).unwrap_or("");
-        let id = ty.split("id=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
-        if !id.is_empty() && !kept.contains(&format!("id=\"{id}\"")) {
+        let id = attr_value(ty, "id").unwrap_or("");
+        if !id.is_empty() && !kept.contains(&format!("id=\"{id}\"")) && !kept.contains(&format!("id='{id}'")) {
             add.push_str(ty);
         }
         from = j;
@@ -660,6 +660,25 @@ pub(super) fn merge_vml(kept: &str, ours: &str) -> String {
     format!("{head}{add}{}", kept.get(close..).unwrap_or(""))
 }
 
+/// The value of the first attribute `name` in XML text `x`, in either quote style (`name="v"` or
+/// `name='v'`), when it has one. The name must start a token (`id` is not the end of `spid`).
+fn attr_value<'a>(x: &'a str, name: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(i) = x.get(from..)?.find(name).map(|i| i + from) {
+        from = i + name.len();
+        let starts_token = x.get(..i).is_some_and(|before| before.ends_with(|c: char| c.is_whitespace() || c == '<'));
+        let Some(rest) = x.get(from..).map(str::trim_start).and_then(|r| r.strip_prefix('=')).map(str::trim_start) else { continue };
+        if !starts_token {
+            continue;
+        }
+        if let Some(q) = rest.chars().next().filter(|q| *q == '"' || *q == '\'') {
+            let body = rest.get(q.len_utf8()..)?;
+            return body.find(q).and_then(|e| body.get(..e));
+        }
+    }
+    None
+}
+
 /// A kept `<controls>` fragment without the controls whose `shapeId` is in `drop` (they are
 /// written from the model). `None` when no control is left. A fragment that doesn't parse is
 /// returned unchanged.
@@ -667,8 +686,14 @@ fn without_controls(frag: &str, drop: &HashSet<u64>) -> Option<String> {
     if drop.is_empty() {
         return Some(frag.to_string());
     }
+    // A kept child names its shapes the way the control reader reads them (`shapeId` in either
+    // quote style, through mc:AlternateContent), so what the reader modelled is what is dropped.
     let numbered = |x: &str| {
-        x.split("shapeId=\"").skip(1).any(|r| r.split('"').next().and_then(|n| n.trim().parse::<u64>().ok()).is_some_and(|n| drop.contains(&n)))
+        crate::xml::parse(x.as_bytes()).is_ok_and(|e| {
+            crate::controls::controls_of_child(&e)
+                .iter()
+                .any(|c| c.attr("shapeId").and_then(crate::controls::shape_number).is_some_and(|n| drop.contains(&n)))
+        })
     };
     let mut reader = Reader::from_str(frag);
     let mut out = String::with_capacity(frag.len());
