@@ -37,7 +37,7 @@ pub const MAX_ITEMS: usize = 50_000;
 /// The error for a source over [`MAX_SOURCE_BYTES`]. It is one shared value so that a cache can
 /// answer for such a source by its length alone, without reading it.
 pub static SOURCE_TOO_LONG: std::sync::LazyLock<MathError> =
-    std::sync::LazyLock::new(|| MathError::new(format!("An equation can be at most {MAX_SOURCE_BYTES} characters long."), None));
+    std::sync::LazyLock::new(|| MathError::new(format!("An equation can be at most {MAX_SOURCE_BYTES} bytes long."), None));
 
 /// Why an equation could not be laid out.
 #[derive(Clone, Debug, PartialEq, Eq)]
