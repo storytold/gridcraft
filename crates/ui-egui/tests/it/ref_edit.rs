@@ -629,6 +629,30 @@ fn protect_sheet_opened_while_picking_on_a_protected_sheet_acts_on_the_dialogs_s
 }
 
 #[test]
+fn the_protect_sheet_label_follows_the_dialogs_sheet_while_picking_on_another() {
+    let mut s = two_sheets();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("review.protectSheet", json!({"password": "rates"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    // Rates is shown and protected, but Protect Sheet acts on Sheet1, the dialog's unprotected
+    // sheet: the Review tab, the Format menu and the tab menu offer Protect Sheet, the action it
+    // takes (all three read this).
+    assert!(!h.state().active_sheet_protected());
+    // Without a dialog the label follows the sheet shown.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().active_sheet_protected());
+}
+
+#[test]
 fn arrow_keys_with_shift_select_a_range_into_the_collapsed_box() {
     let mut h = harness(workbook());
     open_goal_seek(&mut h);

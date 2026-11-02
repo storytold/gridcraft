@@ -312,8 +312,12 @@ impl SheetApp {
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
-    /// Sheet labels and actions).
+    /// Sheet labels and actions). While a dialog's reference boxes have picked, it is the dialog's
+    /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
     pub fn active_sheet_protected(&self) -> bool {
+        if let Some(protected) = self.dialog.as_ref().and_then(|d| d.home_sheet_protected(self)) {
+            return protected;
+        }
         self.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false)
     }
 

@@ -64,6 +64,13 @@ fn home_sheet<'a>(wb: &'a Workbook, home: &Home) -> Option<&'a Sheet> {
     wb.sheets.iter().map(|s| &**s).find(|s| s.uid.get() == home.uid.get())
 }
 
+/// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+/// that sheet exists: the sheet [`end_pick`] shows again. `None` otherwise.
+pub(super) fn home_sheet_protected(app: &SheetApp, d: &Dialog) -> Option<bool> {
+    let home = d.refs.home.as_ref()?;
+    app.session.active().and_then(|doc| home_sheet(&doc.wb, home)).map(Sheet::is_protected)
+}
+
 /// The message OK shows once the dialog's own sheet is gone.
 pub(crate) const SHEET_DELETED: &str =
     "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";

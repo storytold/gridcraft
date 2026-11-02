@@ -154,6 +154,12 @@ impl Dialog {
         ref_edit::end_pick(app, self)
     }
 
+    /// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+    /// that sheet exists (the sheet [`Self::end_pick`] shows again); `None` otherwise.
+    pub(crate) fn home_sheet_protected(&self, app: &SheetApp) -> Option<bool> {
+        ref_edit::home_sheet_protected(app, self)
+    }
+
     /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
     /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
     /// nothing to refer to.
