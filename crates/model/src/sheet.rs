@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
@@ -52,9 +53,44 @@ impl SheetViewMode {
     }
 }
 
+/// A sheet's identity while the app runs, for what must follow one sheet (an open cell draft): a
+/// sheet made new (added, inserted, copied, read from a file or from JSON) gets a fresh one, and it
+/// stays with the sheet through renames, moves and the copies undo keeps. Never saved.
+/// It is not content: any two compare equal, so comparing sheets compares what they hold; compare
+/// identities with [`SheetUid::get`].
+#[derive(Clone, Copy, Debug)]
+pub struct SheetUid(u64);
+
+/// The next [`SheetUid`]; 0 is never given out.
+static NEXT_SHEET_UID: AtomicU64 = AtomicU64::new(1);
+
+impl SheetUid {
+    pub fn fresh() -> SheetUid {
+        SheetUid(NEXT_SHEET_UID.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for SheetUid {
+    fn default() -> SheetUid {
+        SheetUid::fresh()
+    }
+}
+
+impl PartialEq for SheetUid {
+    fn eq(&self, _: &SheetUid) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// The sheet's identity while the app runs ([`SheetUid`]). Not in JSON or the file.
+    #[serde(skip)]
+    pub uid: SheetUid,
     /// The `sheetId` the file gave the sheet, written back on save so that what refers to the
     /// sheet by its id keeps finding it; 0 for a sheet the file did not have. Not in JSON.
     #[serde(skip)]
@@ -149,6 +185,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            uid: SheetUid::fresh(),
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
@@ -200,6 +237,42 @@ impl Sheet {
     /// Anchors, ordinary cells and cells outside successfully generated spills return `None`.
     pub fn spill_anchor(&self, c: CellRef) -> Option<CellRef> {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
+    }
+
+    /// Removes the spilled values inside `r`. The work is bounded by the values stored, not by
+    /// the size of `r`, so a range from a file that claims the whole sheet costs no more than the
+    /// values it holds.
+    pub fn clear_spill(&mut self, r: RangeRef) {
+        if r.count() <= self.spill.len() as u64 {
+            for c in r.iter() {
+                self.spill.remove(&c);
+            }
+        } else {
+            self.spill.retain(|c, _| !r.contains(*c));
+        }
+    }
+
+    /// Turns the spill anchored at `anchor` into plain values, for a Python cell that keeps only
+    /// its value: the range is forgotten, and each spilled value in it becomes its cell's value,
+    /// unless the cell holds content of its own (its format is kept either way). The work is
+    /// bounded by the spilled values stored, not by the size of the range.
+    pub fn settle_spill(&mut self, anchor: CellRef) {
+        let Some(r) = self.spill_ranges.remove(&anchor) else { return };
+        let inside: Vec<CellRef> = self.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c)).collect();
+        for c in inside {
+            let Some(v) = self.spill.remove(&c) else { continue };
+            if v.is_empty() || c == anchor {
+                continue;
+            }
+            match self.cells.get_mut(c) {
+                Some(cell) if cell.has_content() => {}
+                Some(cell) => cell.value = v,
+                None => {
+                    let style = self.style_id(c);
+                    self.cells.set(c, Cell::styled(v, style));
+                }
+            }
+        }
     }
 
     /// Displayed value of a cell: its own value, or a spilled value.
@@ -259,7 +332,7 @@ impl Sheet {
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
-        self.set_cell(c, Cell { value: v, formula: None, style });
+        self.set_cell(c, Cell { value: v, formula: None, style, py: None });
     }
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
@@ -278,7 +351,7 @@ impl Sheet {
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
-        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
+        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
     pub fn input_text(&self, c: CellRef) -> String {
@@ -477,6 +550,26 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    #[test]
+    fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
+        let a = Sheet::new("A");
+        let b = Sheet::new("A");
+        assert_ne!(a.uid.get(), b.uid.get(), "two new sheets");
+        assert_ne!(a.uid.get(), 0);
+        // A clone (an undo snapshot, a rename through Arc::make_mut) is the same sheet.
+        let mut renamed = a.clone();
+        renamed.name = "B".into();
+        assert_eq!(renamed.uid.get(), a.uid.get());
+        // Not content: equal sheets compare equal whatever their identity.
+        assert_eq!(a, b);
+        // Not in JSON: a sheet read back is a new one.
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(!json.contains("uid"), "{json}");
+        let read: Sheet = serde_json::from_str(&json).unwrap();
+        assert_ne!(read.uid.get(), a.uid.get());
+        assert_eq!(read, a);
+    }
 
     #[test]
     fn line_index_matches_linear() {

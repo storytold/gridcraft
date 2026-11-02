@@ -146,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Formülleri Göster",
         "Error Checking" => "Hata Denetimi",
         "Circular References" => "Döngüsel Başvurular",
+        "Python Mode" => "Python Modu",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",

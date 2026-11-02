@@ -626,7 +626,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(sheet)?;
                 let style = sh.style_id(c);
                 // The second column holds the refers-to text as a text value, with no formula.
-                sh.set_cell(c, Cell { value: Value::text(text.as_str()), formula: None, style });
+                sh.set_cell(c, Cell { value: Value::text(text.as_str()), formula: None, style, py: None });
                 cx.touch(sheet, c);
             }
         }

@@ -278,7 +278,10 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
             if oc.value.is_empty() && id == StyleId::default() {
                 continue;
             }
-            cells.push((CellRef::new(origin.row + ri as u32, origin.col + ci as u32), Cell { value: oc.value.clone(), formula: None, style: id }));
+            cells.push((
+                CellRef::new(origin.row + ri as u32, origin.col + ci as u32),
+                Cell { value: oc.value.clone(), formula: None, style: id, py: None },
+            ));
         }
     }
     // Column widths that fit the labels.

@@ -371,6 +371,8 @@ pub struct Applied {
     /// The keyboard events held back for the next pass, in order: the editor's first key after
     /// an event the text field acts on, and every keyboard event after that key.
     pub held: Vec<egui::Event>,
+    /// The caller's key the pass stopped at (see [`apply_in_order_until`]).
+    pub stop: Option<egui::Event>,
 }
 
 /// Applies the pass's input to `text` in the order it came. A pass can carry several events
@@ -387,6 +389,22 @@ pub struct Applied {
 /// follows each one, not the key. `sel` is the selection as char indices (anchor, caret),
 /// updated.
 pub fn apply_in_order(events: &mut Vec<egui::Event>, text: &mut String, sel: &mut (usize, usize), lang: Lang) -> Applied {
+    apply_in_order_until(events, text, sel, lang, &|_| false)
+}
+
+/// [`apply_in_order`], stopping at the first event `stop` picks: a key the caller acts on itself
+/// (commit, cancel, a mode switch). It counts as one of the editor's keys for the order: the
+/// typing before it is applied first, and after an event the text field acts on it is held back
+/// for the next pass with the rest. Once the pass stops (`Applied::stop`), the keyboard events
+/// after the stop key are dropped: the caller acts on the text as it was when the key was
+/// pressed, and what followed it was typed after it.
+pub fn apply_in_order_until(
+    events: &mut Vec<egui::Event>,
+    text: &mut String,
+    sel: &mut (usize, usize),
+    lang: Lang,
+    stop: &dyn Fn(&egui::Event) -> bool,
+) -> Applied {
     let mut out = Applied::default();
     // An event the field acts on has gone by: the editor's keys after it wait for the next pass.
     let mut field_seen = false;
@@ -394,8 +412,23 @@ pub fn apply_in_order(events: &mut Vec<egui::Event>, text: &mut String, sel: &mu
     let mut holding = false;
     let mut keep = Vec::with_capacity(events.len());
     for ev in std::mem::take(events) {
+        if out.stop.is_some() {
+            if !is_keyboard(&ev) {
+                keep.push(ev);
+            }
+            continue;
+        }
         if holding && is_keyboard(&ev) {
             out.held.push(ev);
+            continue;
+        }
+        if is_keyboard(&ev) && stop(&ev) {
+            if field_seen {
+                holding = true;
+                out.held.push(ev);
+            } else {
+                out.stop = Some(ev);
+            }
             continue;
         }
         match classify(&ev) {
@@ -502,18 +535,88 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
 /// caret.
 pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize) -> Response {
     let t = Tokens::get(ui.ctx());
-    let font = font();
-    let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
+    let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font()));
     let max_lines = max_lines.clamp(1, 200);
+    let mut response = None;
+    egui::Frame::new().fill(t.input_bg).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
+        let options = FieldOptions { max_height: row_h * max_lines as f32, ..FieldOptions::new(lang) };
+        response = Some(code_field(ui, id, text, &options).response);
+    });
+    response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
+}
+
+/// How a [`code_field`] is laid out, and the keys its caller takes.
+pub struct FieldOptions<'a> {
+    pub lang: Lang,
+    /// The field's width (`f32::INFINITY`: all there is).
+    pub width: f32,
+    /// The height shown before it scrolls; the scroll area follows the caret.
+    pub max_height: f32,
+    /// Whether it takes input. A dialog or message box over the field has the keyboard.
+    pub interactive: bool,
+    /// Keys the caller acts on itself, in input order (see [`apply_in_order_until`]).
+    pub stop: &'a dyn Fn(&egui::Event) -> bool,
+    /// Esc stays with the field (for a caller that stops at it) instead of releasing the focus.
+    pub keep_escape: bool,
+    /// Puts the caret here (a char index) before the pass's input: the caller changed the text.
+    pub caret: Option<usize>,
+    /// The field's name for screen readers.
+    pub name: &'a str,
+}
+
+impl FieldOptions<'_> {
+    pub fn new(lang: Lang) -> FieldOptions<'static> {
+        FieldOptions {
+            lang,
+            width: f32::INFINITY,
+            max_height: 100.0,
+            interactive: true,
+            stop: &|_| false,
+            keep_escape: false,
+            caret: None,
+            // The editor is a generic code field, so the name is not part of the UI's translated
+            // strings unless the caller gives one.
+            name: "Code Editor",
+        }
+    }
+}
+
+/// What a [`code_field`] laid out and did.
+pub struct FieldOutput {
+    pub response: Response,
+    /// The caller's key the pass stopped at, if any.
+    pub stop: Option<egui::Event>,
+    /// Laid-out rows of the text.
+    pub lines: usize,
+    /// The caret on screen, while the field has the focus.
+    pub caret: Option<egui::Rect>,
+    /// The caret and the other end of the selection (char indices).
+    pub selection: (usize, usize),
+}
+
+/// The code editor's text field without a frame: monospace text with syntax colours, Enter that
+/// keeps the indentation, Tab and Shift+Tab, applied in input order (see [`apply_in_order`]).
+pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldOptions<'_>) -> FieldOutput {
+    let t = Tokens::get(ui.ctx());
+    let font = font();
+    let lang = options.lang;
     // The input the editor handles itself (Enter with indentation, Tab, Shift+Tab), applied in
     // input order with the typing around it, before the text field sees the rest; what had to
     // wait for the field in the previous pass comes first.
-    let focused = ui.memory(|m| m.has_focus(id));
+    let focused = options.interactive && ui.memory(|m| m.has_focus(id));
     let held = take_held(ui, id, focused);
     let mut edited = None;
+    let mut stop = None;
+    let count = text.chars().count();
+    if let Some(caret) = options.caret {
+        let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let caret = caret.min(count);
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+        state.store(ui.ctx(), id);
+        edited = Some(Edit { anchor: caret, caret });
+    }
     if focused {
         let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-        let count = text.chars().count();
         let mut sel = state.cursor.char_range().map(|r| (r.secondary.index.into(), r.primary.index.into())).unwrap_or((count, count));
         let applied = ui.input_mut(|i| {
             if !held.is_empty() {
@@ -521,7 +624,7 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
                 events.append(&mut i.events);
                 i.events = events;
             }
-            apply_in_order(&mut i.events, text, &mut sel, lang)
+            apply_in_order_until(&mut i.events, text, &mut sel, lang, options.stop)
         });
         if applied.edited {
             state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(sel.0), CCursor::new(sel.1))));
@@ -531,6 +634,7 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
         if !applied.held.is_empty() {
             hold(ui, id, applied.held);
         }
+        stop = applied.stop;
     }
     let syntax = t.syntax;
     let plain = t.text;
@@ -538,35 +642,40 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
         let job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
         ui.fonts_mut(|f| f.layout_job(job))
     };
-    let frame_h = row_h * max_lines as f32 + 8.0;
-    let mut response = None;
-    egui::Frame::new().fill(t.input_bg).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(frame_h - 8.0).auto_shrink([false, true]).show(ui, |ui| {
+    let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: options.keep_escape };
+    let scrolled =
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(options.max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
             let out = TextEdit::multiline(text)
                 .id(id)
                 .font(font.clone())
                 .code_editor()
                 .frame(egui::Frame::NONE)
-                .desired_width(f32::INFINITY)
+                .desired_width(options.width)
                 .desired_rows(1)
-                .lock_focus(true)
+                .interactive(options.interactive)
+                .event_filter(filter)
                 .layouter(&mut layouter)
                 .show(ui);
             if let Some(e) = edited {
                 let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
                 ui.scroll_to_rect(caret, None);
             }
-            // The field has no visible label; name it for screen readers and the strict
-            // kittest accessibility check. The editor is a generic code field, so the name is
-            // not part of the UI's translated strings.
-            let mut r = out.response.response.accessible_name("Code Editor");
-            if edited.is_some() {
-                r.mark_changed();
-            }
-            response = Some(r);
+            out
         });
-    });
-    response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
+    let out = scrolled.inner;
+    // The field has no visible label; name it for screen readers and the strict kittest
+    // accessibility check.
+    let mut response = out.response.response.accessible_name(options.name);
+    if edited.is_some() {
+        response.mark_changed();
+    }
+    let selection = out.cursor_range.map(|r| (r.primary.index.into(), r.secondary.index.into())).unwrap_or((count, count));
+    let caret = out
+        .cursor_range
+        .map(|r| out.galley.pos_from_cursor(r.primary).translate(out.galley_pos.to_vec2()))
+        .filter(|_| response.has_focus())
+        .map(|r| r.intersect(scrolled.inner_rect.expand(1.0)));
+    FieldOutput { response, stop, lines: out.galley.rows.len().max(1), caret, selection }
 }
 
 #[cfg(test)]

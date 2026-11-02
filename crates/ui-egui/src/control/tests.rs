@@ -977,3 +977,234 @@ fn synthetic_text_key_and_move_producers_honour_the_queue_budget() {
     assert_eq!(reply["ok"], false, "{reply}");
     assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), MAX_QUEUED_SYNTHETIC_EVENTS);
 }
+
+#[test]
+fn python_ui_commands_are_listed() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search": "python"})) else {
+        panic!("command discovery must return immediately");
+    };
+    let commands = reply["result"].as_array().cloned().unwrap_or_default();
+    let listed = [("ui.pythonMode", "{on?: bool} (toggles without it) → {on}")];
+    for (id, docs) in listed {
+        let command = commands.iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("engine.commands lists {id}"));
+        assert_eq!(command["ui"], true, "{id}");
+        assert_eq!(command["params"], docs, "{id}");
+    }
+}
+
+/// Runs `command` through the control channel, as one line of a batch: no frame runs after it.
+fn execute(app: &mut SheetApp, ctx: &egui::Context, command: &str, params: Json) {
+    let Outcome::Done(reply) = handle(app, ctx, "engine.execute", &json!({"command": command, "params": params})) else {
+        panic!("{command} answers at once");
+    };
+    assert_eq!(reply["ok"], true, "{command}: {reply}");
+}
+
+fn inspected(app: &mut SheetApp, ctx: &egui::Context) -> Json {
+    let Outcome::Done(reply) = handle(app, ctx, "ui.inspect", &json!({})) else { panic!("ui.inspect answers at once") };
+    reply["result"].clone()
+}
+
+#[test]
+fn a_python_draft_on_code_hidden_in_the_same_batch_shows_no_code() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("python.set", json!({"cell": "B2", "code": "secret = 41\nsecret + 1"})).unwrap();
+    session.execute("home.formatCells", json!({"range": "B2", "style": {"protection": {"hidden": true}}})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+    let before = inspected(&mut app, &ctx);
+    assert_eq!(before["editor"]["text"], "secret = 41\nsecret + 1", "unprotected, the draft shows its code");
+    // Protected on the session itself, so no app command drops the draft first: `ui.inspect`
+    // still leaves the code out, checked when it is called.
+    app.session.execute("review.protectSheet", json!({})).unwrap();
+    let after = inspected(&mut app, &ctx);
+    assert!(app.editor.as_ref().is_some_and(|e| e.python), "the draft is still open");
+    assert!(!after.to_string().contains("secret"), "{after}");
+    assert_eq!(after["editor"]["text"], Json::Null);
+    assert_eq!(after["editor"]["hidden"], true);
+    // Out of Python mode the draft still holds the hidden cell's code.
+    if let Some(e) = app.editor.as_mut() {
+        e.leave_python();
+    }
+    assert!(app.editor.as_ref().is_some_and(|e| !e.python && e.text.contains("secret")), "an ordinary draft holds the code");
+    let left = inspected(&mut app, &ctx);
+    assert!(!left.to_string().contains("secret"), "{left}");
+    assert_eq!(left["editor"]["hidden"], true);
+}
+
+/// Answers one control request that must answer at once with `ok`.
+fn call(app: &mut SheetApp, ctx: &egui::Context, method: &str, params: Json) {
+    let Outcome::Done(reply) = handle(app, ctx, method, &params) else { panic!("{method} answers at once") };
+    assert_eq!(reply["ok"], true, "{method}: {reply}");
+}
+
+/// A Python draft of hidden code at B2 on Sheet1, protected after the draft opened, with an
+/// unprotected sheet `Other` after it when `other` is set.
+fn hidden_python_draft(other: bool) -> (SheetApp, egui::Context) {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("python.set", json!({"cell": "B2", "code": "secret = 41\nsecret + 1"})).unwrap();
+    session.execute("home.formatCells", json!({"range": "B2", "style": {"protection": {"hidden": true}}})).unwrap();
+    if other {
+        session.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+        session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    }
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+    // On the session itself, so the draft stays open for `ui.inspect` to be checked against.
+    app.session.execute("review.protectSheet", json!({})).unwrap();
+    assert_eq!(inspected(&mut app, &ctx)["editor"]["hidden"], true, "hidden on its own sheet");
+    (app, ctx)
+}
+
+#[test]
+fn a_python_draft_shows_no_code_when_another_sheet_takes_its_index_in_the_same_batch() {
+    let (mut app, ctx) = hidden_python_draft(false);
+    // An unprotected sheet now sits at the draft's old index, in the same batch.
+    app.session.execute("home.insertSheet", json!({"name": "New", "before": 0})).unwrap();
+    let after = inspected(&mut app, &ctx);
+    assert!(!after.to_string().contains("secret"), "{after}");
+    assert_eq!(after["editor"]["text"], Json::Null);
+    assert_eq!(after["editor"]["hidden"], true);
+}
+
+#[test]
+fn a_python_draft_shows_no_code_once_its_sheet_is_deleted_in_the_same_batch() {
+    let (mut app, ctx) = hidden_python_draft(true);
+    // The draft's own sheet goes, and the unprotected `Other` takes its index.
+    app.session.execute("home.deleteSheet", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(app.session.active().map(|d| d.wb.sheets.len()), Some(1));
+    let after = inspected(&mut app, &ctx);
+    assert!(!after.to_string().contains("secret"), "{after}");
+    assert_eq!(after["editor"]["hidden"], true);
+    // The next app command (an undo that brings the protected sheet back) drops the draft, since
+    // its code is hidden there; deleting a draft's sheet is covered by
+    // `a_draft_whose_sheet_is_deleted_is_dropped_with_a_message`.
+    execute(&mut app, &ctx, "edit.undo", json!({}));
+    assert!(app.editor.is_none(), "the draft is dropped");
+    assert_eq!(app.message.as_ref().map(|m| m.1.as_str()), Some(crate::app::DRAFT_CODE_HIDDEN));
+    assert_eq!(inspected(&mut app, &ctx)["editor"], Json::Null);
+}
+
+/// Sheet `name`'s A1: its input text and whether it is a Python cell.
+fn a1(app: &SheetApp, name: &str) -> Option<(String, bool)> {
+    let d = app.session.active()?;
+    let sh = d.wb.sheet(d.wb.sheet_index(name)?)?;
+    sh.cell(gridcraft_engine::core::CellRef::new(0, 0)).map(|c| (c.input_text(), c.py.is_some()))
+}
+
+#[test]
+fn a_draft_is_committed_on_its_own_sheet_after_a_sheet_is_inserted_before_it() {
+    // An ordinary draft and a Python draft on Sheet1!A1, then a sheet inserted before Sheet1.
+    for python in [false, true] {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        if python {
+            execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+            call(&mut app, &ctx, "ui.edit.text", json!({"text": "1 + 1"}));
+        } else {
+            call(&mut app, &ctx, "ui.edit.begin", json!({"text": "42"}));
+        }
+        execute(&mut app, &ctx, "home.insertSheet", json!({"name": "New", "before": 0}));
+        call(&mut app, &ctx, "ui.edit.commit", json!({"move": "none"}));
+        assert!(app.editor.is_none(), "python {python}");
+        assert_eq!(a1(&app, "New"), None, "python {python}: nothing lands on the inserted sheet");
+        let got = a1(&app, "Sheet1");
+        if python {
+            assert_eq!(got.map(|g| g.1), Some(true), "the code lands on the draft's own sheet");
+        } else {
+            assert_eq!(got, Some(("42".to_string(), false)), "the entry lands on the draft's own sheet");
+        }
+    }
+}
+
+#[test]
+fn a_draft_whose_sheet_is_deleted_is_dropped_with_a_message() {
+    for python in [false, true] {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        execute(&mut app, &ctx, "home.insertSheet", json!({"name": "Other", "before": 1}));
+        execute(&mut app, &ctx, "sheet.activate", json!({"sheet": 0}));
+        if python {
+            execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+            call(&mut app, &ctx, "ui.edit.text", json!({"text": "1 + 1"}));
+        } else {
+            call(&mut app, &ctx, "ui.edit.begin", json!({"text": "42"}));
+        }
+        execute(&mut app, &ctx, "home.deleteSheet", json!({"sheet": "Sheet1"}));
+        // Dropped once the command is done, not left drawn on the sheet in its place.
+        assert!(app.editor.is_none(), "python {python}: the draft is dropped");
+        assert_eq!(inspected(&mut app, &ctx)["editor"], Json::Null, "python {python}");
+        assert_eq!(a1(&app, "Other"), None, "python {python}: nothing lands on the sheet in its place");
+        assert_eq!(app.message.as_ref().map(|m| m.1.as_str()), Some(crate::app::DRAFT_SHEET_GONE), "python {python}");
+    }
+}
+
+#[test]
+fn an_open_draft_follows_its_sheet_when_a_sheet_is_inserted_before_it() {
+    for python in [false, true] {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        if python {
+            execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+        } else {
+            call(&mut app, &ctx, "ui.edit.begin", json!({"text": "=SUM("}));
+        }
+        if let Some(ed) = app.editor.as_mut() {
+            ed.point_anchor = Some((0, gridcraft_engine::core::CellRef::parse("C3").unwrap()));
+        }
+        execute(&mut app, &ctx, "home.insertSheet", json!({"name": "Before", "before": 0}));
+        let ed = app.editor.as_ref().expect("the draft stays open");
+        assert_eq!(ed.sheet, 1, "python {python}: the draft is on Sheet1, now at index 1, so it is drawn there");
+        assert_eq!(ed.point_anchor, None, "python {python}: the anchor's sheet index no longer names its sheet");
+        // A rename changes no index: nothing is let go.
+        if let Some(ed) = app.editor.as_mut() {
+            ed.point_anchor = Some((1, gridcraft_engine::core::CellRef::parse("C3").unwrap()));
+        }
+        execute(&mut app, &ctx, "sheet.rename", json!({"sheet": "Before", "name": "First"}));
+        assert!(app.editor.as_ref().is_some_and(|e| e.sheet == 1 && e.point_anchor.is_some()), "python {python}");
+    }
+}
+
+#[test]
+fn a_draft_of_python_code_that_protection_hides_is_dropped_with_a_message() {
+    // In Python mode, and after leaving it (an ordinary draft of a Python cell's code).
+    for leave in [false, true] {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("python.set", json!({"cell": "B2", "code": "secret = 41"})).unwrap();
+        session.execute("cell.set", json!({"cell": "C2", "input": "=1+1"})).unwrap();
+        session.execute("home.formatCells", json!({"range": "B2:C2", "style": {"protection": {"hidden": true, "locked": false}}})).unwrap();
+        session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let ctx = egui::Context::default();
+        execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+        if leave {
+            execute(&mut app, &ctx, "ui.pythonMode", json!({"on": false}));
+            assert!(app.editor.as_ref().is_some_and(|e| !e.python && e.text.contains("secret")), "an ordinary draft of the code");
+        }
+        execute(&mut app, &ctx, "review.protectSheet", json!({}));
+        assert!(app.editor.is_none(), "leave {leave}: neither editor keeps hidden code on screen");
+        assert_eq!(app.message.as_ref().map(|m| m.1.as_str()), Some(crate::app::DRAFT_CODE_HIDDEN), "leave {leave}");
+        assert!(!inspected(&mut app, &ctx).to_string().contains("secret"));
+    }
+    // An ordinary formula draft on a hidden cell stays open, as on main.
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "C2", "input": "=1+1"})).unwrap();
+    session.execute("home.formatCells", json!({"range": "C2", "style": {"protection": {"hidden": true, "locked": false}}})).unwrap();
+    session.execute("selection.set", json!({"cell": "C2"})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    call(&mut app, &ctx, "ui.edit.begin", json!({"text": "=2+2"}));
+    execute(&mut app, &ctx, "review.protectSheet", json!({}));
+    assert!(app.editor.as_ref().is_some_and(|e| e.text == "=2+2"), "a formula draft is unchanged");
+}

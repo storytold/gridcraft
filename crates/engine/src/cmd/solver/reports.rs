@@ -290,7 +290,7 @@ pub(super) fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>
         let mut sheet = Sheet::new(name);
         for (r, c, v, b) in lines {
             let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
-            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style, py: None });
         }
         for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
             sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });

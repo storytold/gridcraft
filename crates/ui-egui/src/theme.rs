@@ -114,6 +114,13 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// The PY badge in the formula bar (Python mode) and its text.
+    pub badge_py: Color32,
+    pub on_badge: Color32,
+    /// The PY tag on a Python cell and its text. They follow the sheet, so they are the same in
+    /// both themes.
+    pub sheet_py_tag: Color32,
+    pub on_sheet_py_tag: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -165,6 +172,8 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+/// The PY tag on Python cells: a deep green, white text on it.
+const SHEET_PY_TAG: Color32 = rgb(0x1E6E4E);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -244,6 +253,10 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            badge_py: pick(dark, SHEET_PY_TAG, rgb(0x5CBF94)),
+            on_badge: pick(dark, Color32::WHITE, rgb(0x0B1F17)),
+            sheet_py_tag: SHEET_PY_TAG,
+            on_sheet_py_tag: Color32::WHITE,
         }
     }
 
@@ -401,6 +414,11 @@ mod contrast_tests {
         add("text on current step", t.text, t.accent_soft, TEXT);
         add("current step arrow", t.accent, t.accent_soft, GLYPH);
         add("error marker on window", t.danger, t.window, GLYPH);
+        add("PY badge text", t.on_badge, t.badge_py, TEXT);
+        add("PY badge on window", t.badge_py, t.window, GLYPH);
+        add("PY badge on input", t.badge_py, t.input_bg, GLYPH);
+        add("PY tag text", t.on_sheet_py_tag, t.sheet_py_tag, TEXT);
+        add("PY tag on sheet", t.sheet_py_tag, t.grid_bg, GLYPH);
         v
     }
 

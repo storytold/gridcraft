@@ -153,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Показать формулы",
         "Error Checking" => "Проверка ошибок",
         "Circular References" => "Циклические ссылки",
+        "Python Mode" => "Режим Python",
         "Evaluate Formula" => "Вычислить формулу",
         "Watch Window" => "Окно контрольных значений",
         "Calculation\nOptions" => "Параметры\nвычислений",

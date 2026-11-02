@@ -1124,13 +1124,13 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
         let sh = cx.sheet_mut(si)?;
         for c in &occupied {
             let style = sh.style_id(*c);
-            sh.set_cell(*c, Cell { value: Value::Empty, formula: None, style });
+            sh.set_cell(*c, Cell { value: Value::Empty, formula: None, style, py: None });
         }
         let mut touched = occupied.clone();
         for ((r, c), v) in &g.cells {
             let cell = CellRef::new(at.row + r, at.col + c);
             let style = pct_styles.get(&cell).copied().unwrap_or_else(|| sh.style_id(cell));
-            sh.set_cell(cell, Cell { value: v.clone(), formula: None, style });
+            sh.set_cell(cell, Cell { value: v.clone(), formula: None, style, py: None });
             touched.push(cell);
         }
         for c in touched {

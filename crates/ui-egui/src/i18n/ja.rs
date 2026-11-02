@@ -155,6 +155,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Show Formulas", "数式の表示"),
     ("Error Checking", "エラーチェック"),
     ("Circular References", "循環参照"),
+    ("Python Mode", "Python モード"),
     ("Evaluate Formula", "数式の検証"),
     ("Watch Window", "ウォッチ ウィンドウ"),
     ("Calculation\nOptions", "計算方法の設定"),

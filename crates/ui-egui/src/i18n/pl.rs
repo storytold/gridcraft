@@ -147,6 +147,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Pokaż formuły",
         "Error Checking" => "Sprawdzanie błędów",
         "Circular References" => "Odwołania cykliczne",
+        "Python Mode" => "Tryb Python",
         "Evaluate Formula" => "Szacuj formułę",
         "Watch Window" => "Okno czujki",
         "Calculation\nOptions" => "Opcje\nobliczania",

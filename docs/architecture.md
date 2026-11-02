@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -149,6 +149,51 @@ The macro engine (`engine/src/macros/`, commands in `cmd/macros.rs`, described i
 recording buffer, the policy asks before a macro in a `FromFile` workbook runs, and xlsx keeps
 macros as chunked hidden names (`_gc_macro_<n>_<k>`: macro `n`, chunk `k`).
 
+## Python cells
+
+A Python cell is a `Cell` whose `py` holds a `model::PyCode`: the code, the return type (an Excel
+value or a Python object, the `0` or `1` of Excel's `PY(code, return_type)`), the last result and a
+stale flag. Its `value` is the cached result, so formulas, display and saving read it like any
+other cell. `model::python` has the text forms: `PY("…"&"…",n)` with literals of at most 255
+characters (the function's syntax, which some files hold), the `_xlfn._xlws.` prefix, the
+8,192-character limit measured on that formula (`PyCode::fits`), and the `xl("…")` literals in
+code, which structural edits rewrite like formula references.
+
+Only those edits rewrite them: inserting or deleting cells, rows and columns, a cut and paste, and
+renaming or deleting a sheet. An edit that would make a cell's code longer than the limit (a
+longer sheet name, `Z1` becoming `AA1`, a cut to another sheet that qualifies the references) is
+refused and changes nothing, since code over the limit would be dropped to its value on the next
+open. Copying, filling and sorting carry the code unchanged, so an `xl()`
+reference acts as an absolute reference. A sort that moves a Python cell to another row leaves its
+code reading the cells it named before (a formula moved by the same sort has its relative references
+shifted), and references to the sorted cells from other cells, formulas and Python code alike, keep
+naming the same positions.
+
+Calc treats a Python cell as a graph node that reads nothing: a pass takes its kept result instead
+of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
+through the same code as a formula's. The xlsx reader and writer map Python cells to and from
+`_xlfn._xlws.PY(index,n)` formulas with cached values and the workbook's Python part, which holds
+the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
+bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
+size). This build runs no Python: `python.set` stores code, and new or changed code shows
+`#BLOCKED!`.
+
+In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
+the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. A locked cell on
+a protected sheet is refused before a draft exists. Committing a Python edit
+(`commit_python_edit`) runs no command when the code is unchanged (no undo step), and none when
+sheet protection locked the cell while the draft was open (the draft is dropped with the warning).
+With all code deleted it runs `cell.set` with empty input on a Python cell, which clears it, and
+nothing on any other cell. Any other commit runs `python.set`; when that refuses, the message
+shows and the edit stays open. Drafts, Python or not, follow their sheet by its runtime identity
+(`Sheet::uid`, `model::SheetUid`, found again by `EditState::sheet_in`), so a sheet inserted,
+deleted or moved while one is open never takes it. After every command the open draft is pointed
+at its sheet again, so it is drawn, pointed from and committed there, and its point-mode anchor
+(held by sheet index) is let go when the sheet order changed. A draft is dropped then, with a
+message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
+cell) that sheet protection now hides, as the Python editor window closes then.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -174,6 +219,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
+| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |

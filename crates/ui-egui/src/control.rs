@@ -145,7 +145,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
-        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
+        "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
@@ -157,6 +157,22 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "activeWindow": app.session.active_window(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
+}
+
+/// The open edit, for `ui.inspect`. The draft is left out (`text` is null, `hidden` true) while
+/// its cell's code is hidden on a protected sheet, checked now: a protection command earlier in
+/// the same batch runs before the next frame. That holds for a draft in Python mode, and for any
+/// draft of a Python cell, since leaving Python mode keeps the code as an ordinary draft. The
+/// sheet is the draft's own, found by identity: a sheet inserted, deleted or moved in the same
+/// batch puts another at its index. With its sheet gone, such a draft is left out too.
+fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
+    let code = |sh: &gridcraft_engine::model::Sheet| e.python || sh.cell(e.cell).is_some_and(|c| c.py.is_some());
+    let hidden = app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
+        Some(sh) => code(sh) && gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
+        None => e.python || e.py_cell,
+    });
+    let text = if hidden { Json::Null } else { json!(e.text) };
+    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
 }
 
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
@@ -192,6 +208,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
+                ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),

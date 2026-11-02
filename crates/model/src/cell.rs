@@ -6,6 +6,7 @@ use gridcraft_core::{RangeRef, Value};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
+use crate::python::PyCode;
 use crate::style::StyleId;
 
 /// A parsed formula. `text` is the canonical formula text without the leading `=`.
@@ -60,25 +61,45 @@ pub struct CellPicture {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
-    /// Constant value, or the cached result of the formula.
+    /// Constant value, or the cached result of the formula or Python code.
     pub value: Value,
     pub formula: Option<Arc<Formula>>,
     pub style: StyleId,
+    /// Python code, for a Python cell (which has no formula).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py: Option<Arc<PyCode>>,
 }
 
 impl Cell {
     pub fn value(v: Value) -> Cell {
-        Cell { value: v, formula: None, style: StyleId::DEFAULT }
+        Cell { value: v, formula: None, style: StyleId::DEFAULT, py: None }
     }
     pub fn formula(f: Formula) -> Cell {
-        Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT }
+        Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT, py: None }
     }
-    /// No value, no formula and the default style: storing it is pointless.
+    /// A value cell with this style.
+    pub fn styled(v: Value, style: StyleId) -> Cell {
+        Cell { value: v, formula: None, style, py: None }
+    }
+    /// No value, no formula, no Python code and the default style: storing it is pointless.
     pub fn is_blank(&self) -> bool {
-        self.value.is_empty() && self.formula.is_none() && self.style == StyleId::DEFAULT
+        self.value.is_empty() && self.formula.is_none() && self.style == StyleId::DEFAULT && self.py.is_none()
     }
-    /// What the formula bar shows.
+    /// Whether the cell holds content (a value, a formula or Python code), formats aside.
+    pub fn has_content(&self) -> bool {
+        !self.value.is_empty() || self.formula.is_some() || self.py.is_some()
+    }
+    /// Removes the content (value, formula and Python code), keeping the style.
+    pub fn clear_content(&mut self) {
+        self.value = Value::Empty;
+        self.formula = None;
+        self.py = None;
+    }
+    /// What the formula bar shows: a formula, a Python cell's code, or the value.
     pub fn input_text(&self) -> String {
+        if let Some(py) = &self.py {
+            return py.code.clone();
+        }
         if let Some(f) = &self.formula {
             return format!("={}", f.text);
         }

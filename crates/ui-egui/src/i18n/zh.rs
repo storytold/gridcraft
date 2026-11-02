@@ -153,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "显示公式",
         "Error Checking" => "错误检查",
         "Circular References" => "循环引用",
+        "Python Mode" => "Python 模式",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",
         "Calculation\nOptions" => "计算\n选项",

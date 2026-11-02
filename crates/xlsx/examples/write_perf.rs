@@ -21,7 +21,7 @@ fn build(rows: u32) -> Workbook {
     let products = ["Widget", "Gadget", "Gizmo", "Doohickey", "Sprocket", "Thingamajig", "Whatsit"];
     let mut s = Sheet::new("Sales");
     let set = |s: &mut Sheet, row: u32, col: u32, value: Value, style: StyleId| {
-        s.cells.set(CellRef::new(row, col), Cell { value, formula: None, style });
+        s.cells.set(CellRef::new(row, col), Cell { value, formula: None, style, py: None });
     };
     for (col, title) in ["Order", "Date", "Region", "Product", "Units", "Price", "Revenue", "Share", "Paid", "Note"].iter().enumerate() {
         set(&mut s, 0, col as u32, Value::text(*title), bold);
@@ -53,10 +53,10 @@ fn build(rows: u32) -> Workbook {
     let mut total = Cell::formula(Formula::new(&format!("=SUM(Sales!G2:G{})", rows + 1)));
     total.value = Value::Number(1.0e7);
     summary.cells.set(CellRef::new(0, 1), total);
-    summary.cells.set(CellRef::new(0, 0), Cell { value: Value::text("Total"), formula: None, style: bold });
+    summary.cells.set(CellRef::new(0, 0), Cell { value: Value::text("Total"), formula: None, style: bold, py: None });
     for (k, region) in regions.iter().enumerate() {
         let row = k as u32 + 2;
-        summary.cells.set(CellRef::new(row, 0), Cell { value: Value::text(*region), formula: None, style: StyleId::DEFAULT });
+        summary.cells.set(CellRef::new(row, 0), Cell { value: Value::text(*region), formula: None, style: StyleId::DEFAULT, py: None });
         let mut f = Cell::formula(Formula::new(&format!("=SUMIFS(Sales!G:G,Sales!C:C,A{})", row + 1)));
         f.value = Value::Number(2.0e6);
         f.style = money;
