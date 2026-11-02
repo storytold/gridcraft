@@ -71,8 +71,24 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         "none" | "manual" | "source" => PivotSort::None,
         o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
     };
+    // Sort by a value field (its caption or source field) instead of by the item labels.
+    let by = str_param(p, "by").map(str::to_string);
     update(s, p, |pt, _, _| {
-        axis_field(C, pt, &field)?.sort = order;
+        let by = match by {
+            Some(b) => Some(
+                pt.values
+                    .iter()
+                    .find(|v| v.name.eq_ignore_ascii_case(&b))
+                    .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(&b)))
+                    .map(|v| v.name.clone())
+                    .ok_or_else(|| bad(C, format!("`{b}` isn't in the values area")))?,
+            ),
+            None => None,
+        };
+        let f = axis_field(C, pt, &field)?;
+        f.sort = order;
+        f.sort_by = by;
+        f.sort_scope.clear();
         Ok(json!({}))
     })
 }
@@ -164,7 +180,11 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         if let Some((on, top)) = subtotals {
+            // Design › Subtotals applies to every field, replacing per-field settings.
             pt.subtotals = on;
+            for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+                f.subtotal = None;
+            }
             if let Some(t) = top {
                 pt.subtotals_top = t;
             }
