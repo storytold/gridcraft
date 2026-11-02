@@ -307,56 +307,72 @@ fn reads_values_formulas_formats_and_layout() {
         assert!(report.warnings[0].contains("Excel 97-2003"), "{:?}", report.warnings);
         assert!(report.warnings.iter().any(|w| w.contains("Chart sheets")));
         assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1", "Data"]);
-        assert_eq!(v(&wb, 0, "A1"), Value::from("Hello"));
-        assert_eq!(v(&wb, 0, "B1"), Value::Number(1.5));
-        assert_eq!(v(&wb, 0, "C1"), Value::Number(42.0));
-        assert_eq!(v(&wb, 0, "D1"), Value::from("Wörld"));
-        assert_eq!(v(&wb, 0, "A2"), Value::Bool(true));
-        assert_eq!(v(&wb, 0, "B2"), Value::Error(CellError::Div0));
-        assert_eq!(v(&wb, 0, "C2"), Value::Number(7.0));
-        assert_eq!(v(&wb, 0, "D2"), Value::Number(1.5));
-        // Formulas: text plus the cached result.
-        assert_eq!(ftext(&wb, "A3").as_deref(), Some("B1*2"));
-        assert_eq!(v(&wb, 0, "A3"), Value::Number(3.0));
-        assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:C1)"));
-        assert_eq!(ftext(&wb, "C3").as_deref(), Some("A1&\"!\""));
-        assert_eq!(v(&wb, 0, "C3"), Value::from("Hello!"));
-        assert_eq!(ftext(&wb, "D3").as_deref(), Some("B1>1"));
-        assert_eq!(v(&wb, 0, "D3"), Value::Bool(true));
-        assert_eq!(ftext(&wb, "E3").as_deref(), Some("Rate*2"));
-        assert_eq!(ftext(&wb, "F3").as_deref(), Some("ROUND(B1,0)"));
-        assert_eq!(ftext(&wb, "G3").as_deref(), Some("Data!A1"));
-        assert_eq!(v(&wb, 0, "H3"), Value::Error(CellError::NA));
-        // Shared formula: relative offsets resolve per cell.
-        assert_eq!(ftext(&wb, "B5").as_deref(), Some("A5*10"));
-        assert_eq!(ftext(&wb, "B6").as_deref(), Some("A6*10"));
-        // Array formula: the anchor holds it; the other cell's cached result is dropped so that
-        // the formula fills the range on recalculation (as when an .xlsx is read, #156).
-        let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
-        assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
-        assert_eq!(ftext(&wb, "C6"), None);
-        assert_eq!(v(&wb, 0, "C6"), Value::Empty);
-        // Number formats, merges, sizes, names, print area; embedded chart records ignored.
-        let sh = &wb.sheets[0];
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
-        assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
-        assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
-        assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
-        assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
-        assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
-        assert_eq!(v(&wb, 0, "J10"), Value::Empty);
-        assert_eq!(wb.names.len(), 1);
-        assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
-        assert_eq!(v(&wb, 1, "A1"), Value::Number(7.0));
-        assert_eq!(wb.date_system, DateSystem::D1900);
-        // The import saves as .xlsx and reads back.
-        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
-        assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
-        assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
+        assert_values_roundtrip(&wb);
+        assert_formula_roundtrip(&wb);
+        assert_layout_roundtrip(&wb);
+        assert_xlsx_conversion(&wb);
     }
     let (wb, _) = read_xls(&compound("Workbook", &sample(true))).unwrap();
     assert_eq!(wb.date_system, DateSystem::D1904);
+}
+
+fn assert_values_roundtrip(wb: &gridcraft_model::Workbook) {
+    assert_eq!(v(wb, 0, "A1"), Value::from("Hello"));
+    assert_eq!(v(wb, 0, "B1"), Value::Number(1.5));
+    assert_eq!(v(wb, 0, "C1"), Value::Number(42.0));
+    assert_eq!(v(wb, 0, "D1"), Value::from("Wörld"));
+    assert_eq!(v(wb, 0, "A2"), Value::Bool(true));
+    assert_eq!(v(wb, 0, "B2"), Value::Error(CellError::Div0));
+    assert_eq!(v(wb, 0, "C2"), Value::Number(7.0));
+    assert_eq!(v(wb, 0, "D2"), Value::Number(1.5));
+}
+
+fn assert_formula_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Formulas: text plus the cached result.
+    assert_eq!(ftext(wb, "A3").as_deref(), Some("B1*2"));
+    assert_eq!(v(wb, 0, "A3"), Value::Number(3.0));
+    assert_eq!(ftext(wb, "B3").as_deref(), Some("SUM(B1:C1)"));
+    assert_eq!(ftext(wb, "C3").as_deref(), Some("A1&\"!\""));
+    assert_eq!(v(wb, 0, "C3"), Value::from("Hello!"));
+    assert_eq!(ftext(wb, "D3").as_deref(), Some("B1>1"));
+    assert_eq!(v(wb, 0, "D3"), Value::Bool(true));
+    assert_eq!(ftext(wb, "E3").as_deref(), Some("Rate*2"));
+    assert_eq!(ftext(wb, "F3").as_deref(), Some("ROUND(B1,0)"));
+    assert_eq!(ftext(wb, "G3").as_deref(), Some("Data!A1"));
+    assert_eq!(v(wb, 0, "H3"), Value::Error(CellError::NA));
+    // Shared formula: relative offsets resolve per cell.
+    assert_eq!(ftext(wb, "B5").as_deref(), Some("A5*10"));
+    assert_eq!(ftext(wb, "B6").as_deref(), Some("A6*10"));
+    // Array formula: the anchor holds it; the other cell's cached result is dropped so that
+    // the formula fills the range on recalculation (as when an .xlsx is read, #156).
+    let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
+    assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
+    assert_eq!(ftext(wb, "C6"), None);
+    assert_eq!(v(wb, 0, "C6"), Value::Empty);
+}
+
+fn assert_layout_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Number formats, merges, sizes, names, print area; embedded chart records ignored.
+    let sh = &wb.sheets[0];
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
+    assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
+    assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
+    assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
+    assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
+    assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
+    assert_eq!(v(wb, 0, "J10"), Value::Empty);
+    assert_eq!(wb.names.len(), 1);
+    assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
+    assert_eq!(v(wb, 1, "A1"), Value::Number(7.0));
+    assert_eq!(wb.date_system, DateSystem::D1900);
+}
+
+fn assert_xlsx_conversion(wb: &gridcraft_model::Workbook) {
+    // The import saves as .xlsx and reads back.
+    let (back, _) = read_xlsx(&write_xlsx(wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
+    assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
 }
 
 #[test]

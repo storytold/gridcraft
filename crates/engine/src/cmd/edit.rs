@@ -4,7 +4,10 @@ use gridcraft_core::{CellRef, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{Cell, Formula, StyleId};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_clipboard, has_doc,
+    locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 use crate::selection::{current_region, jump};
 use crate::{Clipboard, Session};
 
@@ -17,7 +20,7 @@ mod paste_special;
 mod selection;
 
 use cell::{cell_set, range_fill, range_set_values};
-pub(crate) use cell::{check_arg_counts, input_to_cell, json_to_input, parse_typed_formula};
+pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste};
@@ -32,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::rewrite_all_formulas;
+pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -43,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives, a leading ' is kept and an empty string clears the cell)} → {cells, convertedCount, converted: [{cell, input, stored}] (up to 20 of the strings typed input read as a number, date, time, boolean or error, so a script can notice)}",
             has_doc,
             range_set_values
         ),
@@ -78,15 +81,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             paste
         ),
-        cmd!(
-            "edit.pasteSpecial",
-            "Paste Special…",
-            ["Home", "Clipboard"],
-            Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-            has_clipboard,
-            paste_special
-        ),
+        CommandSpec {
+            shortcut_mac: Some("Ctrl+Cmd+V"),
+            ..cmd!(
+                "edit.pasteSpecial",
+                "Paste Special…",
+                ["Home", "Clipboard"],
+                Some("Ctrl+Alt+V"),
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+                has_clipboard,
+                paste_special
+            )
+        },
         cmd!(noundo "edit.clearClipboard", "Cancel Copy", [], Some("Escape"), "{}", has_doc, clear_clipboard),
         cmd!("edit.clearAll", "Clear All", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "all")),
         cmd!("edit.clearFormats", "Clear Formats", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "formats")),
@@ -182,6 +188,8 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        // Step by step: a rename and a new sheet undone together match up only one step apart.
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -205,6 +213,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -216,6 +225,13 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- clear
 
+/// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
+fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
+}
+
+/// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
+/// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -226,7 +242,10 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         d.wb.sheet(sheet).is_some_and(|sh| {
             ranges.iter().any(|r| {
                 r.intersection(&sh.used_range().unwrap_or(RangeRef::cell(r.start))).is_some_and(|r| {
-                    sh.cells.iter_range(r).any(|(c, x)| x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
+                    let skip = filtered_rows(sh, r);
+                    sh.cells
+                        .iter_range(r)
+                        .any(|(c, x)| !skip.contains(&c.row) && x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
                 })
             })
         })
@@ -240,8 +259,12 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 },
                 None => continue,
             };
-            let cells: Vec<(CellRef, Cell)> =
-                cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(r).map(|(c, x)| (c, x.clone())).collect()).unwrap_or_default();
+            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, r)).unwrap_or_default();
+            let cells: Vec<(CellRef, Cell)> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect())
+                .unwrap_or_default();
             // Report every stored cell we touch, even beyond a million coordinates in a sparse
             // selection. Removed formula anchors must also reach calc so their spills disappear.
             cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
@@ -276,16 +299,17 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     _ => {}
                 }
             }
+            let cleared = |c: CellRef| r.contains(c) && !skip.contains(&c.row);
             if matches!(what, "all" | "comments") {
-                sh.comments.retain(|c, _| !r.contains(*c));
+                sh.comments.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "hyperlinks") {
-                sh.hyperlinks.retain(|c, _| !r.contains(*c));
+                sh.hyperlinks.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "formats") {
                 let mut unmerged = false;
                 sh.merges.retain(|m| {
-                    let keep = !r.contains_range(m);
+                    let keep = !r.contains_range(m) || skip.range(m.start.row..=m.end.row).next().is_some();
                     unmerged |= !keep;
                     keep
                 });

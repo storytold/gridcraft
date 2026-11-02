@@ -806,6 +806,23 @@ mod tests {
         assert_eq!(pin("fr-FR", "1 234 5").value, Value::text("1 234 5"));
     }
 
+    /// The updated Region dependency reaches the parser, including both Swiss apostrophes.
+    #[test]
+    fn updated_swiss_regions_parse_grouping_and_dates() {
+        for tag in ["en-CH", "de-CH", "fr-CH", "it-CH"] {
+            for input in ["1'234.50", "1’234.50"] {
+                assert_eq!(pin(tag, input).value, Value::Number(1234.5), "{tag}: {input}");
+            }
+            assert_eq!(pin(tag, "31.12.2026").value, pin("en-US", "2026-12-31").value, "{tag}");
+        }
+        for (tag, expected) in [("fr-LI", "fr-CH"), ("it-LI", "it-CH")] {
+            assert_eq!(crate::region::lookup(tag).tag, expected);
+            let parsed = parse_input_in("1’234.50", DateSystem::D1900, crate::region::lookup(tag));
+            assert_eq!(parsed.value, Value::Number(1234.5), "{tag}");
+        }
+        assert_eq!(pin("nl-NL", "1.234,50").value, Value::Number(1234.5));
+    }
+
     #[test]
     /// Read Indian digit grouping without changing the represented number.
     fn indian_grouping() {
