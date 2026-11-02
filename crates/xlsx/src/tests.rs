@@ -10,6 +10,7 @@ mod chart_line_percent_stacked;
 mod chart_ref_offsets;
 mod csv_tests;
 mod encrypted_tests;
+mod equation_tests;
 mod fixtures;
 mod google_sheets_dummy;
 mod ink_roundtrip;

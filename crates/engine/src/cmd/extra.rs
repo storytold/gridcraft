@@ -3,8 +3,8 @@
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{
-    Anchor, Chart, Color, DefinedName, HAlign, LegendPos, NumFmt, Shape, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline, TrendlineKind,
-    Workbook,
+    Anchor, Chart, Color, DefinedName, HAlign, LegendPos, NumFmt, Shape, ShapeKind, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline,
+    TrendlineKind, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -97,7 +97,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Bring Forward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toFront?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toFront?: bool}",
             has_doc,
             |s, p| arrange(s, p, true)
         ),
@@ -106,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Send Backward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toBack?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toBack?: bool}",
             has_doc,
             |s, p| arrange(s, p, false)
         ),
@@ -116,7 +116,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Align",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, ids: [..], align: left|center|right|top|middle|bottom}",
+            "{kind: chart|image|shape|slicer|equation, ids: [..], align: left|center|right|top|middle|bottom}",
             has_doc,
             align
         ),

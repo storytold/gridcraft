@@ -1,43 +1,52 @@
+use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, ref_edit};
 use super::show::{build_params, form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
-pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
+/// Data › What-If Analysis › Goal Seek. OK runs `data.goalSeek` here; Cancel clears `open`, as
+/// the shared buttons do, so cancelling is never taken for a confirmation.
+pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     egui::Grid::new("gs").show(ui, |ui| {
-        ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        let l = ui.label("Set cell:");
+        ref_edit(app, ui, d, "set", RefLabel::By(l.id), 200.0);
         ui.end_row();
-        ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let l = ui.label("To value:");
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).labelled_by(l.id).changed() {
+            d.values.insert("to".into(), json!(to));
+        }
         ui.end_row();
-        ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        let l = ui.label("By changing cell:");
+        ref_edit(app, ui, d, "changing", RefLabel::By(l.id), 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
-    let mut open = true;
-    ok_cancel(ui, confirm, &mut open);
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
+    ok_cancel(ui, confirm, open);
+    if *confirm && home_sheet_deleted(app, d) {
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        *confirm = false;
+    }
+    if *confirm && let Err(e) = end_pick(app, d) {
+        // The dialog's sheet can't be shown again (a draft on the picked sheet could not be
+        // saved): the cells would be read against the wrong sheet, so Goal Seek doesn't run.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        *confirm = false;
+    }
     if *confirm {
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
         }
     }
-    if !open {
-        *confirm = true;
-    }
 }
 
 /// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
-fn toolpak_fields(tool: &str) -> Vec<Field> {
+fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Ref { key: "range", label: "Input Range:" };
+    let two = || vec![Ref { key: "range1", label: "Variable 1 Range:" }, Ref { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -50,16 +59,27 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Ref { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
         ],
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
+        // With Labels ticked this tool reads row names from the first column as well as column
+        // names from the first row, so the caption says both.
+        "anovaTwoFactorWithout" => {
+            vec![range(), Check { key: "labels", label: "Labels in first row and first column" }, Text { key: "alpha", label: "Alpha:" }]
+        }
+        "anovaTwoFactorWith" => vec![
+            Note("The input range holds column labels in its first row and sample labels in its first column.".into()),
+            range(),
+            Text { key: "rowsPerSample", label: "Rows per sample:" },
+            Text { key: "alpha", label: "Alpha:" },
+        ],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Ref { key: "inputY", label: "Input Y Range:" },
+            Ref { key: "inputX", label: "Input X Range:" },
             labels(),
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
@@ -70,12 +90,82 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "movingAverage" => {
             vec![range(), labels(), Text { key: "interval", label: "Interval:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
+        "randomNumberGeneration" => {
+            let dist = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform");
+            let mut v = vec![Text { key: "variables", label: "Number of Variables:" }];
+            // A patterned sequence sets its own length, so it has no count to type.
+            if dist != "patterned" {
+                v.push(Text { key: "count", label: "Number of Random Numbers:" });
+            }
+            v.push(Choice {
+                key: "distribution",
+                label: "Distribution:",
+                options: vec![
+                    ("uniform", "Uniform"),
+                    ("normal", "Normal"),
+                    ("bernoulli", "Bernoulli"),
+                    ("binomial", "Binomial"),
+                    ("poisson", "Poisson"),
+                    ("patterned", "Patterned"),
+                    ("discrete", "Discrete"),
+                ],
+            });
+            v.extend(match dist {
+                "normal" => vec![Text { key: "mean", label: "Mean:" }, Text { key: "standardDeviation", label: "Standard deviation:" }],
+                "bernoulli" => vec![Text { key: "p", label: "p Value:" }],
+                "binomial" => vec![Text { key: "p", label: "p Value:" }, Text { key: "trials", label: "Number of trials:" }],
+                "poisson" => vec![Text { key: "lambda", label: "Lambda:" }],
+                "patterned" => vec![
+                    Note("Each number is repeated, then the whole sequence; together they set how many values are written.".into()),
+                    Text { key: "from", label: "From:" },
+                    Text { key: "to", label: "To:" },
+                    Text { key: "step", label: "In steps of:" },
+                    Text { key: "repeatEach", label: "Repeating each number (times):" },
+                    Text { key: "repeatSequence", label: "Repeating each sequence (times):" },
+                ],
+                "discrete" => vec![Text { key: "valueRange", label: "Value and Probability Input Range:" }],
+                _ => vec![Text { key: "from", label: "Between:" }, Text { key: "to", label: "And:" }],
+            });
+            // A patterned sequence draws nothing, so it has no seed.
+            if dist != "patterned" {
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            }
+            v
+        }
+        "sampling" => {
+            let mut v = vec![
+                range(),
+                labels(),
+                Choice { key: "method", label: "Sampling Method:", options: vec![("periodic", "Periodic"), ("random", "Random")] },
+            ];
+            // Periodic sampling takes every period-th value and draws nothing, so only random
+            // sampling has a seed.
+            if values.get("method").and_then(Json::as_str) == Some("random") {
+                v.push(Text { key: "samples", label: "Number of Samples:" });
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            } else {
+                v.push(Text { key: "period", label: "Period:" });
+            }
+            v
+        }
+        "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {
             vec![range(), labels(), Text { key: "damping", label: "Damping factor:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
         "fTest" => {
             let mut v = two();
             v.extend([labels(), Text { key: "alpha", label: "Alpha:" }]);
+            v
+        }
+        "zTest" => {
+            let mut v = two();
+            v.extend([
+                Text { key: "hypothesizedDifference", label: "Hypothesized Mean Difference:" },
+                Text { key: "variance1", label: "Variable 1 Variance (known):" },
+                Text { key: "variance2", label: "Variable 2 Variance (known):" },
+                labels(),
+                Text { key: "alpha", label: "Alpha:" },
+            ]);
             v
         }
         _ => {
@@ -96,14 +186,42 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
+        "rowsPerSample": "", "variance1": "", "variance2": "", "inverse": false,
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
+    // Random Number Generation and Sampling.
+    for (k, x) in [
+        ("variables", "1"),
+        ("count", ""),
+        ("distribution", "uniform"),
+        ("from", "0"),
+        ("to", "1"),
+        ("mean", "0"),
+        ("standardDeviation", "1"),
+        ("p", "0.5"),
+        ("trials", "10"),
+        ("lambda", "1"),
+        ("step", "1"),
+        ("repeatEach", "1"),
+        ("repeatSequence", "1"),
+        ("valueRange", ""),
+        ("seed", ""),
+        ("method", "periodic"),
+        ("period", ""),
+        ("samples", ""),
+    ] {
+        v[k] = json!(x);
+    }
     if tool == "regression" {
         v["confidence"] = json!("95");
         v["inputY"] = json!(sel);
     }
     v.as_object().cloned().unwrap_or_default()
 }
+
+/// Height a ToolPak form needs besides the tool's own options: title bar, output options, OK
+/// and the window's margins.
+const TOOLPAK_CHROME: f32 = 240.0;
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
@@ -149,20 +267,40 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         return;
     };
     d.title = label.to_string();
-    d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    d.fields = toolpak_fields(&tool, &d.values);
+    // The tool's options scroll in a short window (the patterned Random Number Generation form
+    // is taller than 600 points); the output options and OK below always stay in view.
+    let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
+    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(app, ui, d));
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let r = ui.radio(to == choice, text_label);
+            if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
+                // Another output option ends picking into Output Range, so a later selection on
+                // the grid doesn't choose it again.
+                if key != "output" && d.refs.target.as_deref() == Some("output") {
+                    d.refs.target = None;
+                }
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if key == "output" {
+                let before = d.values.get(key).cloned();
+                let was_target = d.refs.target.as_deref() == Some(key);
+                ref_edit(app, ui, d, key, RefLabel::By(r.id), 190.0);
+                // Clicking into the box, typing or picking an output range chooses it; only a
+                // change does, so an option chosen later stays chosen.
+                if d.refs.target.as_deref() == Some(key) && (!was_target || d.values.get(key) != before.as_ref()) {
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }
@@ -265,6 +403,23 @@ fn clear_solver_options(d: &mut Dialog) {
     d.values.remove("requireBounds");
 }
 
+/// Before one of Solver's commands other than Solve runs from the form (Reset All, Load, Save,
+/// Replace): the dialog's sheet must be there and shown again, as `dialogs::show` requires for
+/// Solve, since the commands act on the active sheet and read references without a sheet name
+/// against it. Shows the reason and answers `false` when the command must not run: the sheet
+/// was deleted, or it cannot be shown again (a draft on the picked sheet could not be saved).
+fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
+    if home_sheet_deleted(app, d) {
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        return false;
+    }
+    if let Err(e) = end_pick(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        return false;
+    }
+    true
+}
+
 /// Save Model from the Solver Parameters form: writes the form's model down from `range`. A
 /// range that holds data is replaced only with `overwrite`; without it the form asks first.
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
@@ -298,8 +453,8 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         return;
     }
     ui.horizontal(|ui| {
-        ui.label("Set Objective:");
-        edit(ui, d, "objective", 200.0, "Set Objective:");
+        let l = ui.label("Set Objective:");
+        ref_edit(app, ui, d, "objective", RefLabel::By(l.id), 230.0);
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
@@ -311,8 +466,8 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         }
         edit(ui, d, "value", 80.0, "Value Of:");
     });
-    ui.label("By Changing Variable Cells:");
-    edit(ui, d, "variables", 420.0, "By Changing Variable Cells:");
+    let l = ui.label("By Changing Variable Cells:");
+    ref_edit(app, ui, d, "variables", RefLabel::By(l.id), 420.0);
     ui.label("Subject to the Constraints:");
     let list: Vec<String> = d
         .values
@@ -331,7 +486,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         });
     });
     ui.horizontal(|ui| {
-        edit(ui, d, "newLhs", 110.0, "Constraint Cell Reference");
+        ref_edit(app, ui, d, "newLhs", RefLabel::Named("Constraint Cell Reference"), 130.0);
         let op = text(d, "newOp");
         craft_ui::ComboBox::from_id_salt("solverOp")
             .selected_text(op.clone())
@@ -346,7 +501,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             .response
             .accessible_name(lang.tr("Constraint Operator"));
         if !matches!(op.as_str(), "int" | "bin") {
-            edit(ui, d, "newRhs", 110.0, "Constraint Value");
+            ref_edit(app, ui, d, "newRhs", RefLabel::Named("Constraint Value"), 130.0);
         }
         if ui.button("Add").clicked() {
             let lhs = text(d, "newLhs");
@@ -401,7 +556,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("Reset All").clicked() {
+        if ui.button("Reset All").clicked() && at_home(app, d) {
             match app.run("data.solverReset", json!({})) {
                 Ok(_) => {
                     for (k, v) in [
@@ -427,6 +582,8 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             }
         }
         let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
+        // Hiding the area ends picking into Model Range, as a box that is not drawn is no longer
+        // picked into (`ref_edit::window_shown`).
         if ui.selectable_label(shown, "Load/Save").clicked() {
             d.values.insert("modelArea".into(), json!(!shown));
         }
@@ -436,11 +593,11 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     });
     if d.values.get("modelArea").and_then(Json::as_bool) == Some(true) {
         ui.horizontal(|ui| {
-            ui.label("Model Range:");
-            edit(ui, d, "modelRange", 140.0, "Model Range:");
+            let l = ui.label("Model Range:");
+            ref_edit(app, ui, d, "modelRange", RefLabel::By(l.id), 170.0);
             let range = text(d, "modelRange");
             let ready = !range.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() && at_home(app, d) {
                 d.values.remove("askModelOverwrite");
                 match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
                     Ok(r) => {
@@ -458,7 +615,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     }
                 }
             }
-            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() && at_home(app, d) {
                 save_solver_model(app, d, &range, false);
             }
         });
@@ -471,7 +628,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         } else if let Some(asked) = asked {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("{asked} already holds data. Replace it with the model?"));
-                if ui.button("Replace").clicked() {
+                if ui.button("Replace").clicked() && at_home(app, d) {
                     save_solver_model(app, d, &asked, true);
                 }
                 if ui.button("Don't Replace").clicked() {
@@ -520,12 +677,25 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
     // Reports describe the solution whether it is kept or not.
     let solved = d.values.get("values").and_then(Json::as_object).is_some_and(|v| !v.is_empty());
+    // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report, and
+    // it describes an optimum, so a run that stopped before one (at the evaluation limit) has
+    // none either.
+    let model_allows = d.values.get("model").is_none_or(gridcraft_engine::cmd::solver::sensitivity_applies);
+    let optimum = d.values.get("status").and_then(Json::as_str).is_some_and(gridcraft_engine::cmd::solver::sensitivity_status);
+    let sensitivity = model_allows && optimum;
+    let why_not = if model_allows {
+        "Needs an optimal or converged solution: Solver stopped before reaching one."
+    } else {
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints."
+    };
+    let offered = |key: &str| key != "sensitivityReport" || sensitivity;
     if solved {
         ui.add_space(4.0);
         ui.label("Reports:");
-        for (key, label) in [("answerReport", "Answer"), ("limitsReport", "Limits")] {
-            let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            if ui.checkbox(&mut on, label).changed() {
+        for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
+            let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
+            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, label)).on_disabled_hover_text(why_not);
+            if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }
         }
@@ -537,15 +707,32 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         if changed && restore {
             app.run_or_alert("edit.undo", json!({}));
         }
-        let reports: Vec<&str> = [("answerReport", "answer"), ("limitsReport", "limits")]
+        let reports: Vec<&str> = [("answerReport", "answer"), ("sensitivityReport", "sensitivity"), ("limitsReport", "limits")]
             .into_iter()
-            .filter(|(key, _)| d.values.get(*key).and_then(Json::as_bool) == Some(true))
+            .filter(|(key, _)| offered(key) && d.values.get(*key).and_then(Json::as_bool) == Some(true))
             .map(|(_, kind)| kind)
             .collect();
         if solved && !reports.is_empty() {
             let field = |k: &str| d.values.get(k).cloned().unwrap_or(Json::Null);
-            let params = json!({"reports": reports, "model": field("model"), "values": field("values"), "original": field("original"), "message": field("message")});
-            app.run_or_alert("data.solverReport", params);
+            // A Sensitivity report the values turn out not to support is left out, and the other
+            // reports are still written.
+            let params = json!({"reports": reports, "model": field("model"), "values": field("values"), "original": field("original"),
+                "message": field("message"), "skipNotOptimal": true});
+            match app.run("data.solverReport", params) {
+                Ok(r) => {
+                    let reasons: Vec<&str> = r
+                        .get("skippedReports")
+                        .and_then(Json::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.get("reason").and_then(Json::as_str))
+                        .collect();
+                    if !reasons.is_empty() {
+                        app.message = Some(("Solver Results".into(), reasons.join("\n")));
+                    }
+                }
+                Err(e) => app.message = Some(("Solver Results".into(), crate::clean_error(&e))),
+            }
         }
         *open = false;
     }
