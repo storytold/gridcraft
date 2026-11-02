@@ -4,8 +4,10 @@
 //! It shows on the right when the active cell is inside a model PivotTable (or the user reopened
 //! it from its tab), groups the model's tables with their columns and measures, and keeps the four
 //! areas — Filters, Columns, Rows, Σ Values — as *pending* placements until Apply writes the
-//! report. Pending placements are pane state (nothing is written before Apply), and every
-//! placement is a `Table[Column]` reference or a measure name, exactly what the command takes.
+//! report. Pending placements are pane state (nothing is written before Apply): an axis and a
+//! filter take a `Table[Column]` reference, and Σ Values takes a measure name or a column plus the
+//! aggregation that summarizes it — `Sum of Amount`, Excel's implicit measure, which the command
+//! evaluates without adding a measure to the model.
 //!
 //! `dataModel.pivotFields` reads the package's pivot parts back, so its answer is cached per
 //! (document uid, revision, model shape) and per (document uid, revision, model shape, pivot name),
@@ -15,6 +17,7 @@ use egui::{Color32, Sense, Ui, vec2};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
+use crate::dnd;
 use crate::i18n;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
@@ -23,8 +26,14 @@ use crate::theme::{self, Tokens};
 const PANE: &str = "model_pivot_pane";
 /// The strip that reopens a pane the user closed.
 const TAB: &str = "model_pivot_fields_tab";
+/// The pane's bottom strip: Apply and Refresh stay visible while the field list scrolls.
+const ACTIONS: &str = "model_pivot_actions";
 /// Values one filter may keep: `dataModel.createPivot` accepts 64 per filter.
 const MAX_FILTER_VALUES: usize = 64;
+/// Characters the field search box keeps: a pasted novel must not be scanned on every frame.
+const MAX_SEARCH_CHARS: usize = 80;
+/// The aggregations `dataModel.createPivot` accepts for a column in Σ Values, in Excel's order.
+const AGGREGATES: [&str; 5] = ["Sum", "Average", "Count", "Min", "Max"];
 
 /// (document uid, revision, model shape): a command answer goes stale when any of them changes.
 type CacheKey = (u64, u64, (usize, usize));
@@ -72,14 +81,89 @@ struct Field {
     /// What the checklist shows: the column or measure name.
     caption: String,
     numeric: bool,
+    /// The column's type holds dates: a date field has no timeline here (see [`slicer_card`]).
+    date: bool,
     measure: bool,
 }
 
 /// One table and the fields it owns, as the checklist groups them.
+#[derive(Clone)]
 struct TableFields {
     name: String,
     columns: Vec<Field>,
     measures: Vec<Field>,
+}
+
+/// One entry of Σ Values: a model measure by name, or a column the command summarizes as Excel's
+/// implicit measure (`Sum of Amount`).
+#[derive(Clone, PartialEq)]
+struct ValueField {
+    /// `Table[Column]` for a summarized column; the measure's name for a measure.
+    reference: String,
+    /// The aggregation a column is summarized by; `None` for a measure.
+    aggregate: Option<&'static str>,
+}
+
+impl ValueField {
+    /// A measure's entry.
+    fn measure(reference: impl Into<String>) -> Self {
+        Self { reference: reference.into(), aggregate: None }
+    }
+
+    /// A field's entry in Σ Values: a measure by name, a numeric column summed and a text or date
+    /// column counted — Excel's default summarization.
+    fn for_field(field: &Field) -> Self {
+        let aggregate = if field.measure {
+            None
+        } else if field.numeric {
+            Some("Sum")
+        } else {
+            Some("Count")
+        };
+        Self { reference: field.reference.clone(), aggregate }
+    }
+
+    /// A `values` entry as `dataModel.createPivot` takes it.
+    fn json(&self) -> Json {
+        match self.aggregate {
+            Some(aggregate) => json!({"column": self.reference, "aggregate": aggregate}),
+            None => Json::String(self.reference.clone()),
+        }
+    }
+
+    /// The chip's caption: `Sum of Amount` for a summarized column, the measure's name otherwise.
+    fn caption(&self) -> String {
+        match self.aggregate {
+            Some(aggregate) => format!("{aggregate} of {}", caption_of(&self.reference)),
+            None => self.reference.clone(),
+        }
+    }
+
+    /// The measure name this entry contributes, for the pivot's `measure` parameter: none for a
+    /// column, whose implicit measure the command names itself.
+    fn measure_name(&self) -> Option<&str> {
+        self.aggregate.is_none().then_some(self.reference.as_str())
+    }
+}
+
+/// A `values` entry read back from `dataModel.pivotFields`' `selected` (or kept in a draft): a
+/// measure name, or `{column, aggregate}` when the engine ever reports a summarized column.
+fn value_from_json(item: &Json) -> Option<ValueField> {
+    if let Some(name) = item.as_str() {
+        return Some(ValueField::measure(name));
+    }
+    let reference = item["column"].as_str()?;
+    let aggregate = item["aggregate"].as_str().and_then(|name| AGGREGATES.iter().copied().find(|known| known.eq_ignore_ascii_case(name)));
+    Some(ValueField { reference: reference.to_string(), aggregate })
+}
+
+/// A field being dragged: out of the tree (`from` is `None`) or out of one area's list, where it
+/// also remembers its place so a drop inside the same area reorders instead of appending.
+#[derive(Clone)]
+struct FieldDrag {
+    reference: String,
+    caption: String,
+    from: Option<(Area, usize)>,
 }
 
 /// The report the pane is building, before Apply writes it.
@@ -89,7 +173,8 @@ struct Draft {
     columns: Vec<String>,
     /// `[{field, allowed}]`, as `dataModel.createPivot` takes them.
     filters: Vec<Json>,
-    values: Vec<String>,
+    /// A measure name or a summarized column, as `dataModel.createPivot` takes them.
+    values: Vec<ValueField>,
     layout: String,
     grand_totals: bool,
 }
@@ -110,18 +195,19 @@ impl Draft {
             .as_array()
             .map(|items| items.iter().filter(|item| item["field"].as_str().is_some()).cloned().collect())
             .unwrap_or_default();
+        let values = selected["values"].as_array().map(|items| items.iter().filter_map(value_from_json).collect()).unwrap_or_default();
         Self {
             rows: list("row_fields"),
             columns: list("column_fields"),
             filters,
-            values: list("values"),
+            values,
             layout: selected["layout"].as_str().filter(|layout| !layout.is_empty()).unwrap_or("compact").to_string(),
             grand_totals: selected["grand_totals"].as_bool().unwrap_or(false),
         }
     }
 
     fn contains(&self, reference: &str) -> bool {
-        self.rows.iter().chain(&self.columns).chain(&self.values).any(|placed| placed == reference)
+        self.rows.iter().chain(&self.columns).chain(self.values.iter().map(|value| &value.reference)).any(|placed| placed == reference)
             || self.filters.iter().any(|filter| filter["field"].as_str() == Some(reference))
     }
 
@@ -130,9 +216,19 @@ impl Draft {
         match area {
             Area::Rows => self.rows.clone(),
             Area::Columns => self.columns.clone(),
-            Area::Values => self.values.clone(),
+            Area::Values => self.values.iter().map(|value| value.reference.clone()).collect(),
             Area::Filters => self.filters.iter().filter_map(|filter| filter["field"].as_str()).map(str::to_string).collect(),
         }
+    }
+
+    /// The Σ Values entry for `reference`, when it is one.
+    fn value(&self, reference: &str) -> Option<&ValueField> {
+        self.values.iter().find(|value| value.reference == reference)
+    }
+
+    /// The Σ Values entry for `reference`, for the chip menu's aggregation change.
+    fn value_mut(&mut self, reference: &str) -> Option<&mut ValueField> {
+        self.values.iter_mut().find(|value| value.reference == reference)
     }
 
     /// Ticking a field: text and date columns go to Rows, numeric columns and measures to Values,
@@ -142,27 +238,35 @@ impl Draft {
             return;
         }
         if field.measure || field.numeric {
-            self.values.push(field.reference.clone());
+            self.values.push(ValueField::for_field(field));
         } else {
             self.rows.push(field.reference.clone());
         }
     }
 
     fn remove(&mut self, reference: &str) {
-        for area in [&mut self.rows, &mut self.columns, &mut self.values] {
-            area.retain(|placed| placed != reference);
-        }
+        self.rows.retain(|placed| placed != reference);
+        self.columns.retain(|placed| placed != reference);
+        self.values.retain(|placed| placed.reference != reference);
         self.filters.retain(|filter| filter["field"].as_str() != Some(reference));
     }
 
     /// Moves a placed field to another area (Filters is handled by the caller, which also needs
-    /// the field's members for the filter's `allowed` list).
-    fn move_to(&mut self, reference: &str, area: Area) {
+    /// the field's members for the filter's `allowed` list). A field entering Σ Values keeps its
+    /// kind: a measure stays a measure, a model column is summarized (`Sum`, or `Count` for text).
+    fn move_to(&mut self, reference: &str, area: Area, fields: &[TableFields]) {
         self.remove(reference);
         match area {
             Area::Rows => self.rows.push(reference.to_string()),
             Area::Columns => self.columns.push(reference.to_string()),
-            Area::Values => self.values.push(reference.to_string()),
+            Area::Values => {
+                let entry = fields
+                    .iter()
+                    .flat_map(|table| table.columns.iter().chain(&table.measures))
+                    .find(|field| field.reference == reference)
+                    .map_or_else(|| ValueField::measure(reference), ValueField::for_field);
+                self.values.push(entry);
+            }
             Area::Filters => {}
         }
     }
@@ -186,6 +290,23 @@ struct State {
     closed: bool,
     /// A filter field's members, for the filter's `allowed` list.
     members: Option<(NamedKey, Vec<Json>)>,
+    /// The slicers the person added from a filter field: the sheet's slicer object binds to a
+    /// worksheet table's column, so a data-model field's slicer is drawn here and drives the
+    /// PivotTable's page filter through Apply.
+    slicers: Vec<SlicerCard>,
+    /// The field search box's query; empty shows the whole tree.
+    search: String,
+}
+
+/// One slicer the pane draws: a page filter's members as value tiles.
+#[derive(Clone)]
+struct SlicerCard {
+    /// The filter field, `Table[Column]`.
+    field: String,
+    /// What the card's header shows: the column name.
+    caption: String,
+    /// Every member of the field, from `VALUES(Table[Column])`: the tiles.
+    values: Vec<Json>,
 }
 
 impl State {
@@ -250,6 +371,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             state.draft = None;
             state.error = None;
             state.members = None;
+            state.slicers.clear();
             state.closed = false;
             state.opened = false;
         }
@@ -372,10 +494,12 @@ fn catalog(model: &Json) -> Vec<TableFields> {
             .flatten()
             .filter_map(|column| {
                 let caption = column["name"].as_str()?;
+                let kind = column["type"].as_str().or_else(|| column["data_type"].as_str()).unwrap_or("");
                 Some(Field {
                     reference: format!("{name}[{caption}]"),
                     caption: caption.to_string(),
-                    numeric: numeric_type(column["type"].as_str().or_else(|| column["data_type"].as_str()).unwrap_or("")),
+                    numeric: numeric_type(kind),
+                    date: date_type(kind),
                     measure: false,
                 })
             })
@@ -385,7 +509,7 @@ fn catalog(model: &Json) -> Vec<TableFields> {
     for measure in model["measures"].as_array().into_iter().flatten() {
         let Some(caption) = measure["name"].as_str() else { continue };
         let table = measure["table"].as_str().unwrap_or("");
-        let field = Field { reference: caption.to_string(), caption: caption.to_string(), numeric: true, measure: true };
+        let field = Field { reference: caption.to_string(), caption: caption.to_string(), numeric: true, date: false, measure: true };
         match tables.iter_mut().find(|owner| owner.name == table) {
             Some(owner) => owner.measures.push(field),
             None => tables.push(TableFields { name: table.to_string(), columns: Vec::new(), measures: vec![field] }),
@@ -400,14 +524,25 @@ fn numeric_type(kind: &str) -> bool {
     ["int", "double", "decimal", "currency", "single", "float", "number", "numeric", "money", "real"].iter().any(|name| kind.contains(name))
 }
 
+/// Whether a model column type holds dates: the model's `DateTime` type, and the date/time type
+/// names a Power Pivot model may declare. A date field has no timeline in this pane: a timeline
+/// needs the field's date grouping, which a model PivotTable does not carry (`PivotFilter` holds
+/// plain member values, not a date axis), so [`slicer_card`] reports that instead of a slicer.
+fn date_type(kind: &str) -> bool {
+    let kind = kind.to_ascii_lowercase();
+    kind.contains("date") || kind.contains("time")
+}
+
 /// The short caption of a placement: the column of `Table[Column]`, or a measure's name.
 fn caption_of(reference: &str) -> &str {
     reference.split_once('[').map(|(_, column)| column.strip_suffix(']').unwrap_or(column)).unwrap_or(reference)
 }
 
-/// Whether the field list knows `reference` as a measure (a measure may only sit in Σ Values).
+/// Whether `reference` is a measure (a measure may only sit in Σ Values): a bare name, never a
+/// `Table[Column]` column. A value the workbook carries but the session model does not — the
+/// implicit measure of an earlier Apply, `Sum of Amount` — is a measure too.
 fn is_measure(reference: &str, fields: &[TableFields]) -> bool {
-    fields.iter().flat_map(|table| &table.measures).any(|field| field.reference == reference)
+    !is_column(reference, fields)
 }
 
 /// Whether `reference` is a column (only columns can be report filters).
@@ -421,6 +556,76 @@ fn load(ctx: &egui::Context) -> State {
 
 fn store(ctx: &egui::Context, state: &State) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::unique(PANE), state.clone()));
+}
+
+/// The field search box's stable id, so a control request or a test can focus it.
+pub fn search_id() -> egui::Id {
+    egui::Id::unique(PANE).with("search")
+}
+
+/// Sets the field tree's search query from outside the frame — a control request or a test — so
+/// the next frame filters the tree without anyone typing into the box.
+pub fn set_search(ctx: &egui::Context, query: &str) {
+    let mut state = load(ctx);
+    state.search = query.chars().take(MAX_SEARCH_CHARS).collect();
+    store(ctx, &state);
+}
+
+/// The query the field tree is filtered by; empty when the box is clear.
+pub fn search(ctx: &egui::Context) -> String {
+    load(ctx).search
+}
+
+/// One area's drop zone, for the control channel and tests (matching is case-insensitive).
+pub fn area_rect(ctx: &egui::Context, title: &str) -> Option<egui::Rect> {
+    let area = Area::ALL.into_iter().find(|area| area.title().eq_ignore_ascii_case(title))?;
+    last_rect(ctx, area_id(area))
+}
+
+/// A tree field's row id: its drag handle covers exactly this id's rect.
+fn field_id(reference: &str) -> egui::Id {
+    egui::Id::unique(PANE).with(("field", reference))
+}
+
+/// One area's drop-zone id, and the key of its rect in the context's data.
+fn area_id(area: Area) -> egui::Id {
+    egui::Id::unique(PANE).with(("area", area.title()))
+}
+
+/// One placed chip's id: its drag handle sits under the chip's button.
+fn chip_id(area: Area, reference: &str) -> egui::Id {
+    egui::Id::unique(PANE).with(("chip", area.title(), reference))
+}
+
+/// Remembers where a widget was drawn this pass, so next pass's drag handle can cover it.
+fn remember_rect(ctx: &egui::Context, id: egui::Id, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| data.insert_temp(id, (pass, rect)));
+}
+
+/// The rect `id` was drawn at in this or the previous pass. A row or chip the search hides (or a
+/// field the menu removed) stops being drawn, so its old rect stops answering: no invisible
+/// handle can be grabbed where it used to be.
+fn last_rect(ctx: &egui::Context, id: egui::Id) -> Option<egui::Rect> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|data| data.get_temp::<(u64, egui::Rect)>(id)).filter(|(drawn, _)| drawn.saturating_add(1) >= pass).map(|(_, rect)| rect)
+}
+
+/// The tables the search keeps, case-insensitively: a table whose name matches keeps all its
+/// children, otherwise only the children whose own name matches. An empty query keeps everything.
+fn filtered(fields: &[TableFields], query: &str) -> Vec<TableFields> {
+    let query = query.trim().to_lowercase();
+    let matches = |caption: &str| caption.to_lowercase().contains(&query);
+    let mut kept = Vec::new();
+    for table in fields {
+        let table_matches = matches(&table.name);
+        let columns: Vec<Field> = table.columns.iter().filter(|field| table_matches || matches(&field.caption)).cloned().collect();
+        let measures: Vec<Field> = table.measures.iter().filter(|field| table_matches || matches(&field.caption)).cloned().collect();
+        if table_matches || !columns.is_empty() || !measures.is_empty() {
+            kept.push(TableFields { name: table.name.clone(), columns, measures });
+        }
+    }
+    kept
 }
 
 /// The strip that brings a closed pane back, as Excel's collapsed field list does.
@@ -457,8 +662,27 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
     let mut refresh = false;
     let mut close = false;
     let mut place_filter: Option<String> = None;
+    let mut add_slicer: Option<String> = None;
 
     egui::Panel::right(PANE).default_size(300.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
+        // The actions live in their own bottom strip, so a long field list scrolls above them
+        // instead of pushing the report's one write out of the pane.
+        egui::Panel::bottom(ACTIONS).frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
+            ui.separator();
+            ui.horizontal(|ui| {
+                let can_apply = !draft.rows.is_empty() || !draft.columns.is_empty() || !draft.values.is_empty();
+                if ui.add_enabled(can_apply, egui::Button::new(lang.tr("Apply"))).clicked() {
+                    apply = true;
+                }
+                if ui.button(lang.tr("Refresh")).clicked() {
+                    refresh = true;
+                }
+            });
+            if let Some(message) = &error {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(message).small().color(t.danger));
+            }
+        });
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(lang.tr("PivotTable Fields")).font(theme::ui_bold(15.0)));
@@ -477,28 +701,33 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(lang.tr("This data model has no tables to report.")).small().color(t.text_dim));
             } else {
-                changed |= checklist(ui, &lang, view.fields, &mut draft);
+                search_box(ui, &t, &lang, &mut state.search);
+                // The empty query keeps the model's own list: no copy on the common frame.
+                let narrowed;
+                let fields: &[TableFields] = if state.search.trim().is_empty() {
+                    view.fields
+                } else {
+                    narrowed = filtered(view.fields, &state.search);
+                    &narrowed
+                };
+                if fields.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(lang.tr("No fields match")).small().color(t.text_dim));
+                } else {
+                    changed |= checklist(ui, &lang, fields, &mut draft);
+                }
                 ui.separator();
-                ui.label(egui::RichText::new(lang.tr("Use a field's menu to move it between areas:")).small().color(t.text_dim));
+                ui.label(egui::RichText::new(lang.tr("Drag a field into an area, or use its menu, to place it:")).small().color(t.text_dim));
                 let outcome = areas(ui, &t, &lang, &mut draft, view.fields);
                 changed |= outcome.changed;
                 place_filter = outcome.place_filter;
+                add_slicer = outcome.add_slicer;
                 ui.separator();
                 changed |= options(ui, &lang, &mut draft);
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                let can_apply = !draft.rows.is_empty() || !draft.columns.is_empty() || !draft.values.is_empty();
-                if ui.add_enabled(can_apply, egui::Button::new(lang.tr("Apply"))).clicked() {
-                    apply = true;
+                if !state.slicers.is_empty() {
+                    ui.separator();
+                    changed |= slicer_cards(ui, &t, &lang, &mut draft, &mut state.slicers);
                 }
-                if ui.button(lang.tr("Refresh")).clicked() {
-                    refresh = true;
-                }
-            });
-            if let Some(message) = &error {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(message).small().color(t.danger));
             }
         });
     });
@@ -519,6 +748,16 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
                 draft.remove(&reference);
                 draft.filters.push(json!({"field": reference, "allowed": allowed}));
                 changed = true;
+            }
+            Err(message) => error = Some(message),
+        }
+    }
+    if let Some(reference) = add_slicer {
+        match slicer_card(app, state, key, &reference, view) {
+            Ok(card) => {
+                // Re-adding a field's slicer refreshes its tiles instead of stacking a second card.
+                state.slicers.retain(|existing| existing.field != card.field);
+                state.slicers.push(card);
             }
             Err(message) => error = Some(message),
         }
@@ -552,6 +791,22 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
     state.error = error;
 }
 
+/// The field search box above the checklist: typing narrows the tree to the matching tables and
+/// fields, case-insensitively. It is a normal single-line text edit, so Tab reaches it.
+fn search_box(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, query: &mut String) {
+    ui.horizontal(|ui| {
+        glyph(ui, Icon::Search, t.text_dim);
+        let width = (ui.available_width() - 4.0).max(80.0);
+        let response = ui.add(
+            egui::TextEdit::singleline(query).id(search_id()).hint_text(lang.tr("Search fields")).char_limit(MAX_SEARCH_CHARS).desired_width(width),
+        );
+        if response.changed() {
+            // The tree below is filtered next frame; keyboard focus stays in the box.
+            ui.ctx().request_repaint();
+        }
+    });
+}
+
 /// The field checklist, grouped by table: its columns, then the measures it owns.
 fn checklist(ui: &mut Ui, lang: &i18n::Language, fields: &[TableFields], draft: &mut Draft) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -576,12 +831,20 @@ fn checklist(ui: &mut Ui, lang: &i18n::Language, fields: &[TableFields], draft: 
     changed
 }
 
-/// One field's check box: ticking places the field the way Excel does.
+/// One field's check box: ticking places the field the way Excel does, and dragging the row
+/// carries the field to an area.
 fn tick(ui: &mut Ui, field: &Field, icon: Icon, draft: &mut Draft) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut on = draft.contains(&field.reference);
     let mut changed = false;
-    ui.horizontal(|ui| {
+    let handle = field_id(&field.reference);
+    let row = ui.horizontal(|ui| {
+        // The drag handle covers the row drawn last pass, under the check box. It senses clicks
+        // too, so egui waits for real movement before it starts a drag and a click still ticks.
+        if let Some(rect) = last_rect(ui.ctx(), handle) {
+            let drag = ui.interact(rect, handle, Sense::click_and_drag());
+            dnd::drag_source(ui, &drag, FieldDrag { reference: field.reference.clone(), caption: field.caption.clone(), from: None });
+        }
         ui.add_space(12.0);
         glyph(ui, icon, t.text_dim);
         let response = ui.checkbox(&mut on, egui::RichText::new(&field.caption).font(theme::ui_font(13.0)));
@@ -594,6 +857,7 @@ fn tick(ui: &mut Ui, field: &Field, icon: Icon, draft: &mut Draft) -> bool {
             changed = true;
         }
     });
+    remember_rect(ui.ctx(), handle, row.response.rect);
     changed
 }
 
@@ -602,56 +866,130 @@ struct Outcome {
     changed: bool,
     /// A field moved to Filters: its members fill the filter's `allowed` list.
     place_filter: Option<String>,
+    /// A filter field asked for a slicer: the pane adds a card that drives its page filter.
+    add_slicer: Option<String>,
 }
 
-/// The four area lists: each placed field has the existing pane's move/remove menu.
+/// What a completed drop asked the caller to do.
+enum DropAction {
+    /// The area refuses the field, or it was already there.
+    Nothing,
+    /// The draft changed.
+    Moved,
+    /// The field moved to Filters: its members fill the `allowed` list outside the frame.
+    Filter(String),
+}
+
+/// The four area lists: each placed field has the existing pane's move/remove menu, and fields
+/// can also be dragged from the tree into an area or between areas.
 fn areas(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draft, fields: &[TableFields]) -> Outcome {
-    let mut outcome = Outcome { changed: false, place_filter: None };
+    let drag = egui::DragAndDrop::payload::<FieldDrag>(ui.ctx());
+    let pointer = ui.ctx().pointer_latest_pos();
+    let released = ui.input(|input| input.pointer.any_released());
+    let mut outcome = Outcome { changed: false, place_filter: None, add_slicer: None };
+    // The area under the pointer, and the gap the field would land in. Remembered even when the
+    // area refuses it: releasing over an area must never also count as "dropped outside".
+    let mut hovered: Option<(Area, usize)> = None;
     ui.columns(2, |columns| {
         for (index, area) in Area::ALL.into_iter().enumerate() {
             let ui = &mut columns[index % 2];
             let entries = draft.entries(area);
             let title = if matches!(area, Area::Values) && entries.len() > 1 { "Σ Values" } else { area.title() };
             ui.label(egui::RichText::new(lang.tr(title)).strong());
-            egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
+            let mut chips: Vec<egui::Rect> = Vec::new();
+            let frame = egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
                 ui.set_min_size(vec2(ui.available_width(), 54.0));
-                for reference in entries {
-                    let caption = caption_of(&reference);
+                for (at, reference) in entries.iter().enumerate() {
+                    // A summarized column shows the aggregation the command applies
+                    // (`Sum of Amount`); a measure shows its own name.
+                    let caption = draft.value(reference).map_or_else(|| caption_of(reference).to_string(), ValueField::caption);
+                    let id = chip_id(area, reference);
+                    if let Some(rect) = last_rect(ui.ctx(), id) {
+                        // The handle covers the chip drawn last pass, under its button. It senses
+                        // clicks too, so a click still opens the menu and only movement drags it.
+                        let handle = ui.interact(rect, id, Sense::click_and_drag());
+                        dnd::drag_source(ui, &handle, FieldDrag { reference: reference.clone(), caption: caption.clone(), from: Some((area, at)) });
+                    }
                     let button = egui::Button::new(egui::RichText::new(format!("{caption} ▾")).font(theme::ui_font(12.0)))
                         .fill(t.ribbon)
                         .min_size(vec2(ui.available_width(), 20.0));
                     let placed = ui.add(button);
-                    let placed = if matches!(area, Area::Values) && !is_measure(&reference, fields) {
-                        // A column needs a measure to summarize it; the command says so, and the
-                        // chip should not have to be applied to find out.
-                        placed.on_hover_text(lang.tr("This column needs a measure to summarize it."))
-                    } else {
-                        placed
-                    };
+                    chips.push(placed.rect);
+                    remember_rect(ui.ctx(), id, placed.rect);
+                    // A summarized column offers Excel's Summarize Values By on its own menu.
+                    let aggregate = draft.value(reference).and_then(|value| value.aggregate);
                     egui::Popup::menu(&placed).show(|ui| {
+                        if let Some(current) = aggregate {
+                            for candidate in AGGREGATES {
+                                let title = format!("{} {candidate}", lang.tr("Summarize by"));
+                                if ui.selectable_label(current == candidate, title).clicked() && current != candidate {
+                                    if let Some(value) = draft.value_mut(reference) {
+                                        value.aggregate = Some(candidate);
+                                    }
+                                    outcome.changed = true;
+                                }
+                            }
+                            ui.separator();
+                        }
                         for target in Area::ALL {
-                            if target == area || !can_move(&reference, area, target, fields) {
+                            if target == area || !can_move(reference, area, target, fields) {
                                 continue;
                             }
                             if ui.button(lang.tr(target.moving())).clicked() {
                                 if matches!(target, Area::Filters) {
                                     outcome.place_filter = Some(reference.clone());
                                 } else {
-                                    draft.move_to(&reference, target);
+                                    draft.move_to(reference, target, fields);
                                     outcome.changed = true;
                                 }
                             }
                         }
+                        if matches!(area, Area::Filters) && ui.button(lang.tr("Add as Slicer")).clicked() {
+                            outcome.add_slicer = Some(reference.clone());
+                        }
                         ui.separator();
                         if ui.button(lang.tr("Remove Field")).clicked() {
-                            draft.remove(&reference);
+                            draft.remove(reference);
                             outcome.changed = true;
                         }
                     });
                 }
             });
+            let zone = frame.response.rect;
+            remember_rect(ui.ctx(), area_id(area), zone);
+            if let (Some(carry), Some(at)) = (&drag, pointer)
+                && zone.contains(at)
+            {
+                if accepts(carry, area, fields) {
+                    dnd::drop_marker(ui, zone, &chips, at.y);
+                }
+                hovered = Some((area, dnd::insert_index(&chips, at.y)));
+            }
         }
     });
+    if let (Some(carry), Some(at)) = (&drag, pointer) {
+        dnd::ghost(ui, &carry.caption, at);
+        if released {
+            match hovered {
+                Some((area, index)) if accepts(carry, area, fields) => match place(draft, carry, area, index, fields) {
+                    DropAction::Nothing => {}
+                    DropAction::Moved => outcome.changed = true,
+                    DropAction::Filter(reference) => outcome.place_filter = Some(reference),
+                },
+                Some(_) => {}
+                // Released away from every area: a placed field leaves the report, as dragging a
+                // field back onto Excel's field list does. A tree field just returns.
+                None if carry.from.is_some() => {
+                    draft.remove(&carry.reference);
+                    outcome.changed = true;
+                }
+                None => {}
+            }
+            if hovered.is_some() || carry.from.is_some() {
+                let _ = egui::DragAndDrop::take_payload::<FieldDrag>(ui.ctx());
+            }
+        }
+    }
     outcome
 }
 
@@ -663,6 +1001,63 @@ fn can_move(reference: &str, from: Area, target: Area, fields: &[TableFields]) -
     if matches!(from, Area::Values) && is_measure(reference, fields) && !matches!(target, Area::Values) {
         return false;
     }
+    true
+}
+
+/// Whether a dragged field may land in `area`: a measure only summarizes, a filter only takes a
+/// column, and a placed measure moves only between Σ Values slots.
+fn accepts(drag: &FieldDrag, area: Area, fields: &[TableFields]) -> bool {
+    if is_measure(&drag.reference, fields) {
+        return matches!(area, Area::Values);
+    }
+    if matches!(area, Area::Filters) {
+        return is_column(&drag.reference, fields);
+    }
+    true
+}
+
+/// Applies a drop: a chip inside its own area takes the new place, and a field from another area
+/// or from the tree moves over (appending when the gap is the end).
+fn place(draft: &mut Draft, drag: &FieldDrag, area: Area, index: usize, fields: &[TableFields]) -> DropAction {
+    match area {
+        Area::Filters => {
+            if draft.entries(Area::Filters).iter().any(|placed| placed == &drag.reference) {
+                return DropAction::Nothing;
+            }
+            DropAction::Filter(drag.reference.clone())
+        }
+        Area::Rows | Area::Columns | Area::Values => {
+            if matches!(drag.from, Some((from, _)) if from == area) {
+                return if reorder(draft, area, &drag.reference, index) { DropAction::Moved } else { DropAction::Nothing };
+            }
+            draft.move_to(&drag.reference, area, fields);
+            // `index` counts the target's chips as they were, without the newcomer.
+            let _ = reorder(draft, area, &drag.reference, index);
+            DropAction::Moved
+        }
+    }
+}
+
+/// Moves a placed field inside its own area to the gap before `index`, counted with the field
+/// still in the list (so dropping it back where it was changes nothing).
+fn reorder(draft: &mut Draft, area: Area, reference: &str, index: usize) -> bool {
+    match area {
+        Area::Rows => reorder_entry(&mut draft.rows, |placed| placed.as_str(), reference, index),
+        Area::Columns => reorder_entry(&mut draft.columns, |placed| placed.as_str(), reference, index),
+        Area::Values => reorder_entry(&mut draft.values, |value| value.reference.as_str(), reference, index),
+        Area::Filters => false,
+    }
+}
+
+/// [`reorder`] over one area's list: `key` names each entry's reference.
+fn reorder_entry<T>(list: &mut Vec<T>, key: impl Fn(&T) -> &str, reference: &str, index: usize) -> bool {
+    let Some(from) = list.iter().position(|entry| key(entry) == reference) else { return false };
+    if index == from || index == from + 1 {
+        return false;
+    }
+    let entry = list.remove(from);
+    let to = if index > from { index - 1 } else { index }.min(list.len());
+    list.insert(to, entry);
     true
 }
 
@@ -697,12 +1092,111 @@ fn glyph(ui: &mut Ui, icon: Icon, color: Color32) {
     icons::paint(ui.painter(), rect.shrink(1.0), icon, color);
 }
 
+/// The card for a filter field, or why a data-model field cannot have one.
+///
+/// A date field has no slicer: a timeline needs the field's date grouping — a date axis over the
+/// members with a from/to range — and a model PivotTable's page filter carries plain member values
+/// only (`PivotFilter { field, allowed }`), so the pane reports the limitation instead of offering
+/// tiles that could not filter. Everything else (text, numbers) lists its `VALUES()` members.
+fn slicer_card(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str, view: &View<'_>) -> Result<SlicerCard, String> {
+    let date = view.fields.iter().flat_map(|table| &table.columns).any(|field| field.reference == reference && field.date);
+    if date {
+        return Err(format!(
+            "`{reference}` is a date field: a timeline needs the field's date grouping, which a model PivotTable does not carry, so it has no slicer here."
+        ));
+    }
+    let values = members(app, state, key, reference)?;
+    Ok(SlicerCard { field: reference.to_string(), caption: caption_of(reference).to_string(), values })
+}
+
+/// The slicer cards: each filter field's members as tiles, the selected ones marked.
+///
+/// A tile click edits the filter's `allowed` list in the pending draft, so Apply writes the
+/// PivotTable's page filter with exactly the tiles that are on — the grid shrinks to those
+/// members, and "Clear Slicer Filter" turns every tile back on and restores every row.
+fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draft, cards: &mut Vec<SlicerCard>) -> bool {
+    // A card whose filter left the draft has nothing to drive: drop it.
+    cards.retain(|card| draft.filters.iter().any(|filter| filter["field"].as_str() == Some(card.field.as_str())));
+    if cards.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    ui.label(egui::RichText::new(lang.tr("Slicers")).strong());
+    ui.label(
+        egui::RichText::new(lang.tr("A data-model field's slicer is drawn here: a sheet slicer object filters a table column."))
+            .small()
+            .color(t.text_dim),
+    );
+    let mut removed: Vec<String> = Vec::new();
+    for card in cards.iter() {
+        let field = card.field.clone();
+        let caption = card.caption.clone();
+        let values = card.values.clone();
+        ui.add_space(4.0);
+        egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(6.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&caption).strong().font(theme::ui_font(12.0)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::widgets::icon_button(ui, Icon::Close, t.text_dim, lang.tr("Remove Slicer"), vec2(18.0, 18.0)).clicked() {
+                        removed.push(field.clone());
+                    }
+                });
+            });
+            let Some(filter) = draft.filters.iter_mut().find(|filter| filter["field"].as_str() == Some(field.as_str())) else { return };
+            let mut allowed: Vec<Json> = filter["allowed"].as_array().cloned().unwrap_or_default();
+            // Excel's slicer click: a plain click selects exactly that tile (the rest turn off) and
+            // clicking the only selected tile clears the filter, while Ctrl/Cmd-click toggles one
+            // tile at a time.
+            let multi = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+            ui.horizontal_wrapped(|ui| {
+                for value in &values {
+                    let on = allowed.iter().any(|kept| kept == value);
+                    if ui.selectable_label(on, egui::RichText::new(tile_text(value)).font(theme::ui_font(12.0))).clicked() {
+                        let only = allowed.len() == 1 && allowed.first() == Some(value);
+                        if multi {
+                            if on {
+                                allowed.retain(|kept| kept != value);
+                            } else {
+                                allowed.push(value.clone());
+                            }
+                        } else if only {
+                            allowed = values.clone();
+                        } else {
+                            allowed = vec![value.clone()];
+                        }
+                        changed = true;
+                    }
+                }
+            });
+            filter["allowed"] = Json::Array(allowed);
+            if ui.button(lang.tr("Clear Slicer Filter")).clicked() {
+                filter["allowed"] = Json::Array(values.clone());
+                changed = true;
+            }
+        });
+    }
+    cards.retain(|card| !removed.contains(&card.field));
+    changed
+}
+
+/// A member as its tile shows it: text as it is, a blank as `(Blank)`, a number as JSON spells it.
+fn tile_text(value: &Json) -> String {
+    match value {
+        Json::String(text) => text.clone(),
+        Json::Null => "(Blank)".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The Apply call: the pane's placements in `dataModel.createPivot`'s vocabulary.
 fn apply_params(view: &View<'_>, draft: &Draft) -> Json {
+    // The source measure only supplies the grouping table: a values area of summarized columns
+    // lets the command take the first column's table (an empty `measure` is that request).
     let measure = draft
         .values
-        .first()
-        .cloned()
+        .iter()
+        .find_map(ValueField::measure_name)
+        .map(str::to_string)
         .or_else(|| view.selected.and_then(|selected| selected["measure"].as_str().or(selected["source"].as_str())).map(str::to_string))
         .or_else(|| {
             view.model["measures"].as_array().and_then(|measures| measures.first()).and_then(|measure| measure["name"].as_str()).map(str::to_string)
@@ -710,7 +1204,7 @@ fn apply_params(view: &View<'_>, draft: &Draft) -> Json {
         .unwrap_or_default();
     let mut params = json!({
         "measure": measure,
-        "values": draft.values,
+        "values": draft.values.iter().map(ValueField::json).collect::<Vec<Json>>(),
         "row_fields": draft.rows,
         "column_fields": draft.columns,
         "filters": draft.filters,

@@ -25,6 +25,16 @@
 //! item) above the report body, which is what `pivotTableDefinition`'s `rowPageCount` describes.
 //! The report grid itself starts below them.
 //!
+//! # Columns in the values area
+//!
+//! A `values` entry is a measure name, or `{column, aggregate}` — a model column summarized the
+//! way Excel's implicit measures are. The command builds that implicit measure (`Sum of Amount`
+//! over `SUM(Sales[Amount])`), appends it to the model for the duration of the call only, renders
+//! and writes the pivot, then takes it out again: the Power Pivot window keeps exactly the
+//! measures the user made. The measure is not lost from the workbook, because the pivot cache
+//! needs it declared: it goes into the cache's measure list and into `xl/model/item.data`'s MDX
+//! script, as any other measure does.
+//!
 //! # The field list
 //!
 //! `dataModel.pivotFields` is the read side of the same data: the model's tables, columns, measures
@@ -39,7 +49,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, RangeRef, Value as CoreValue};
 use gridcraft_dax::model::ModelColumn;
 use gridcraft_dax::pivot_table::{PivotFilter, PivotLayout, PivotTable};
-use gridcraft_dax::{DataModel, Scalar, pivot_fields};
+use gridcraft_dax::{DataModel, Measure, Scalar, parse_expression, pivot_fields};
 use gridcraft_model::{Cell, NumFmt, StyleId, Workbook};
 use gridcraft_xlsx::{
     ModelPivotColumn, ModelPivotDataType, ModelPivotFieldRef, ModelPivotFilter, ModelPivotLayout, ModelPivotMeasure, ModelPivotPartInfo,
@@ -84,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create PivotTable",
             ["Data", "Data Model"],
             None,
-            "{measure, values?: [measure, ..], row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed: [value, ..], include_blank?}], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: `measure` groups the rows, `values` (default `[measure]`) fills the values area with one measure column each, and the reply's report cells plus the pivot cache and PivotTable definitions carry it; `replace` overwrites the report area — clearing the cells the previous report of `name` occupied — and re-applies that kept PivotTable → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
+            "{measure?, values?: [measure | {column: \"Sales[Amount]\", aggregate?: Sum|Average|Count|Min|Max}, ..], row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed: [value, ..], include_blank?}], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: `measure` groups the rows (optional when `values` names a field; the first value then supplies its table), `values` (default `[measure]`) fills the values area with one measure column each — a measure name, or a column with the aggregation that summarizes it, which the command evaluates as Excel's implicit measure (`Sum of Amount`) without adding a measure to the model — and the reply's report cells plus the pivot cache and PivotTable definitions carry it; `replace` overwrites the report area — clearing the cells the previous report of `name` occupied — and re-applies that kept PivotTable → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
             has_model,
             create_pivot
         ),
@@ -127,9 +137,33 @@ pub fn write_pivot(s: &mut Session, p: &Json) -> Result<(Json, Option<Vec<u8>>)>
     create(s, p, true)
 }
 
+/// [`write_pivot`]'s and `create_pivot`'s body, as [the command's own
+/// doc](self) describes it.
+///
+/// The values area may summarize columns the model never turned into measures. Those implicit
+/// measures are appended to the model for the duration of the call — the renderer, the cache spec
+/// and `xl/model/item.data` all read them there — and taken out before the reply, so a pivot over
+/// a column leaves the Power Pivot window exactly as the user left it.
 fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<u8>>)> {
+    let area = {
+        let model = s.dax_model.as_ref().ok_or_else(|| bad(CMD, "no data model loaded"))?;
+        values_area(model, p)?
+    };
+    let base = s.dax_model.as_ref().map_or(0, |model| model.measures.len());
+    if let Some(model) = s.dax_model.as_mut() {
+        model.measures.extend(area.implicit);
+    }
+    let out = create_with(s, p, &area.names, package);
+    if let Some(model) = s.dax_model.as_mut() {
+        model.measures.truncate(base);
+    }
+    out
+}
+
+/// [`create`] with the implicit value measures already in the model.
+fn create_with(s: &mut Session, p: &Json, value_fields: &[String], package: bool) -> Result<(Json, Option<Vec<u8>>)> {
     let model = s.dax_model.as_ref().ok_or_else(|| bad(CMD, "no data model loaded"))?;
-    let pivot = pivot_param(model, p)?;
+    let pivot = pivot_param(model, p, value_fields)?;
     let table = pivot.render(model).map_err(|error| other(error.to_string()))?;
     let report = report_grid(&table)?;
     let values = spec_values(model, &pivot)?;
@@ -416,18 +450,6 @@ fn wrong_type(key: &str, what: &str) -> EngineError {
     bad(CMD, format!("`{key}` must be {what}"))
 }
 
-/// A required, non-blank string parameter, trimmed.
-fn required_str<'a>(p: &'a Json, key: &str) -> Result<&'a str> {
-    match p.get(key) {
-        None | Some(Json::Null) => Err(bad(CMD, format!("`{key}` is required"))),
-        Some(Json::String(s)) => match s.trim() {
-            "" => Err(bad(CMD, format!("`{key}` is required"))),
-            s => Ok(s),
-        },
-        Some(_) => Err(wrong_type(key, "a string")),
-    }
-}
-
 /// An optional string parameter: absent and JSON `null` both mean "none"; anything else is an
 /// error, so a mistyped parameter never silently takes the default.
 fn optional_str<'a>(p: &'a Json, key: &str) -> Result<Option<&'a str>> {
@@ -462,20 +484,192 @@ fn field_list(p: &Json, key: &str) -> Result<Vec<String>> {
     }
 }
 
-/// The optional `values` area: the measures, in column order (a single string is accepted too).
-/// Absent, `null` or empty keeps the single measure the pivot is built around.
-fn values_param(p: &Json) -> Result<Vec<String>> {
+/// One aggregation Excel offers for a column in the values area, and the DAX an implicit measure
+/// over that column evaluates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Aggregate {
+    Sum,
+    Average,
+    Count,
+    Min,
+    Max,
+}
+
+impl Aggregate {
+    /// The five aggregates, in the order Excel's Summarize Values By menu lists them.
+    const ALL: [Aggregate; 5] = [Aggregate::Sum, Aggregate::Average, Aggregate::Count, Aggregate::Min, Aggregate::Max];
+
+    /// The aggregate's canonical name (`Sum`): the prefix of an implicit measure's name and the
+    /// spelling a `values` entry accepts, case-insensitively.
+    fn label(self) -> &'static str {
+        match self {
+            Aggregate::Sum => "Sum",
+            Aggregate::Average => "Average",
+            Aggregate::Count => "Count",
+            Aggregate::Min => "Min",
+            Aggregate::Max => "Max",
+        }
+    }
+
+    /// The aggregate `name` spells; `None` for anything else.
+    fn parse(name: &str) -> Option<Aggregate> {
+        Aggregate::ALL.into_iter().find(|aggregate| name.trim().eq_ignore_ascii_case(aggregate.label()))
+    }
+
+    /// Whether the aggregate needs a numeric column. `Count` counts a column's non-blank values,
+    /// so it takes any type.
+    fn needs_number(self) -> bool {
+        !matches!(self, Aggregate::Count)
+    }
+
+    /// The formula Excel's implicit measure for `table[column]` evaluates. `Count` is `COUNT` and
+    /// not `COUNTROWS`: Excel counts the column's non-blank values.
+    fn formula(self, table: &str, column: &str) -> String {
+        let field = format!("{}{}", dax_table_ref(table), dax_column_ref(column));
+        match self {
+            Aggregate::Sum => format!("SUM({field})"),
+            Aggregate::Average => format!("AVERAGE({field})"),
+            Aggregate::Count => format!("COUNT({field})"),
+            Aggregate::Min => format!("MIN({field})"),
+            Aggregate::Max => format!("MAX({field})"),
+        }
+    }
+}
+
+/// A DAX table reference for a model name, quoted when the name is not a plain identifier.
+///
+/// The same text `cmd/dax.rs` builds for its implicit measures; kept here so this command's
+/// synthetic measures are spelled identically.
+fn dax_table_ref(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if plain { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
+}
+
+/// A DAX column reference for a model name.
+fn dax_column_ref(name: &str) -> String {
+    format!("[{}]", name.replace(']', "]]"))
+}
+
+/// The aggregate a column gets when its `values` entry names none: numbers sum, everything else
+/// counts — Excel's default summarization.
+fn default_aggregate(column: &ModelColumn) -> Aggregate {
+    if matches!(data_type(column.data_type.as_deref()), ModelPivotDataType::Number) { Aggregate::Sum } else { Aggregate::Count }
+}
+
+/// One entry of the values area as the caller wrote it: a measure name, or a model column and the
+/// aggregation that summarizes it.
+enum ValueEntry {
+    Measure(String),
+    Column { field: String, aggregate: Option<String> },
+}
+
+/// The values area resolved against the model: the value fields in column order, and the implicit
+/// measures the `{column, aggregate}` entries declare.
+struct ValuesArea {
+    /// The measure names [`PivotTable::values`] holds.
+    names: Vec<String>,
+    /// Measures over model columns, made for this call only (see [`create`]).
+    implicit: Vec<Measure>,
+}
+
+/// The optional `values` area, in column order: measure names and `{column, aggregate}` objects (a
+/// single string is accepted too). Absent, `null` or empty keeps the single measure the pivot is
+/// built around.
+fn values_param(p: &Json) -> Result<Vec<ValueEntry>> {
     match p.get("values") {
         None | Some(Json::Null) => Ok(Vec::new()),
-        Some(Json::String(measure)) => Ok(vec![measure.clone()]),
+        Some(Json::String(measure)) => Ok(vec![ValueEntry::Measure(measure.clone())]),
         Some(Json::Array(items)) => {
             if items.len() > MAX_VALUE_FIELDS {
-                return Err(bad(CMD, format!("`values` accepts at most {MAX_VALUE_FIELDS} measures")));
+                return Err(bad(CMD, format!("`values` accepts at most {MAX_VALUE_FIELDS} fields")));
             }
-            items.iter().map(|item| item.as_str().map(str::to_string).ok_or_else(|| wrong_type("values", "a list of measure names"))).collect()
+            items.iter().map(value_entry).collect()
         }
-        Some(_) => Err(wrong_type("values", "a list of measure names")),
+        Some(_) => Err(wrong_type("values", "a list of measure names or {column, aggregate} objects")),
     }
+}
+
+/// One `values` entry: a measure name, or `{column, aggregate?}`.
+fn value_entry(item: &Json) -> Result<ValueEntry> {
+    if let Some(measure) = item.as_str() {
+        return Ok(ValueEntry::Measure(measure.to_string()));
+    }
+    let object = item.as_object().ok_or_else(|| wrong_type("values", "a list of measure names or {column, aggregate} objects"))?;
+    let field = object
+        .get("column")
+        .and_then(Json::as_str)
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| bad(CMD, "a `values` entry needs `column` (`Table[Column]`) or a measure name"))?;
+    let aggregate = match object.get("aggregate") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(name)) => Some(name.clone()),
+        Some(_) => return Err(wrong_type("aggregate", "a summarization name (Sum, Average, Count, Min or Max)")),
+    };
+    Ok(ValueEntry::Column { field: field.to_string(), aggregate })
+}
+
+/// The values area resolved against `model`: every measure name in the model's spelling, and one
+/// implicit measure per `{column, aggregate}` entry, named the way Excel names it (`Sum of
+/// Amount`) and made unique in the model.
+///
+/// The column is checked before anything renders: it must exist, and `Sum`, `Average`, `Min` and
+/// `Max` need a numeric column (`Count` takes any type).
+fn values_area(model: &DataModel, p: &Json) -> Result<ValuesArea> {
+    let entries = values_param(p)?;
+    let mut names: Vec<String> = Vec::with_capacity(entries.len());
+    let mut implicit: Vec<Measure> = Vec::new();
+    for entry in entries {
+        match entry {
+            ValueEntry::Measure(name) => names.push(resolve_measure(model, &name)?),
+            ValueEntry::Column { field, aggregate } => {
+                let measure = implicit_measure(model, &field, aggregate.as_deref(), &implicit)?;
+                names.push(measure.name.clone());
+                implicit.push(measure);
+            }
+        }
+    }
+    Ok(ValuesArea { names, implicit })
+}
+
+/// The implicit measure a `{column, aggregate}` value is.
+///
+/// The name is Excel's `Sum of Amount`, with a number appended when the model (or an earlier value
+/// of the same call) already carries it; the formula is the one Excel's implicit measure evaluates,
+/// parsed here because [`gridcraft_dax::Evaluator`] takes only prepared measures.
+fn implicit_measure(model: &DataModel, field: &str, aggregate: Option<&str>, taken: &[Measure]) -> Result<Measure> {
+    let reference = field_ref(model, field)?;
+    let column = model
+        .tables
+        .iter()
+        .find(|table| table.name.eq_ignore_ascii_case(&reference.table))
+        .and_then(|table| table.columns.iter().find(|column| column.name.eq_ignore_ascii_case(&reference.column)))
+        .ok_or_else(|| bad(CMD, format!("`{field}` is not a model column")))?;
+    let aggregate = match aggregate {
+        Some(name) => Aggregate::parse(name)
+            .ok_or_else(|| bad(CMD, format!("unknown summarization `{name}` for `{field}` (Sum, Average, Count, Min or Max)")))?,
+        None => default_aggregate(column),
+    };
+    if aggregate.needs_number() && !matches!(data_type(column.data_type.as_deref()), ModelPivotDataType::Number) {
+        return Err(bad(CMD, format!("`{field}` is not a numeric column, so {} can't summarize it; use Count instead", aggregate.label())));
+    }
+    let base = format!("{} of {}", aggregate.label(), reference.column);
+    let mut name = base.clone();
+    let mut suffix = 1u32;
+    while model.measure_index(&name).is_some() || taken.iter().any(|measure| measure.name.eq_ignore_ascii_case(&name)) {
+        // A bound, not a search: the model and the values area both hold a bounded number of
+        // measures, so a name collides only that many times.
+        suffix = suffix.saturating_add(1);
+        if suffix > MAX_VALUE_FIELDS as u32 + 1 {
+            return Err(other(format!("too many values over `{field}`")));
+        }
+        name = format!("{base}{suffix}");
+    }
+    let formula = aggregate.formula(&reference.table, &reference.column);
+    let expr = parse_expression(&formula).map_err(|error| other(format!("the implicit measure for `{field}` could not be built: {error}")))?;
+    Ok(Measure { name, formula, table: Some(reference.table), format: None, expr: Some(expr) })
 }
 
 /// A filter value as a DAX scalar; JSON `null` is BLANK.
@@ -555,13 +749,17 @@ fn resolve_measure(model: &DataModel, name: &str) -> Result<String> {
         .ok_or_else(|| bad(CMD, format!("no measure named `{name}` in the data model")))
 }
 
-/// The pivot the parameters describe, with every name resolved against the model so an unknown
-/// measure, table or field is an error before anything is rendered.
-fn pivot_param(model: &DataModel, p: &Json) -> Result<PivotTable> {
-    let measure = resolve_measure(model, required_str(p, "measure")?)?;
-    // The values area: every measure checked against the model, so an unknown one is a parameter
-    // error; empty means `[measure]`, the single-measure pivot.
-    let values = values_param(p)?.iter().map(|name| resolve_measure(model, name)).collect::<Result<Vec<_>>>()?;
+/// The pivot the parameters describe, with every value field resolved by [`values_area`] and every
+/// other name resolved against the model, so an unknown measure, table or field is an error before
+/// anything is rendered.
+fn pivot_param(model: &DataModel, p: &Json, values: &[String]) -> Result<PivotTable> {
+    // The source measure supplies the grouping table. `measure` is optional when the values area
+    // names one: a pivot built from a column alone groups by that column's table, exactly as the
+    // implicit measure it declared says.
+    let measure = match optional_str(p, "measure")?.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => resolve_measure(model, name)?,
+        None => values.first().cloned().ok_or_else(|| bad(CMD, "a PivotTable needs `measure` or a column in `values`"))?,
+    };
     let row_fields = field_list(p, "row_fields")?;
     let column_fields = field_list(p, "column_fields")?;
     // Resolving now reports an unknown field as a parameter error, and proves every field belongs
@@ -571,7 +769,7 @@ fn pivot_param(model: &DataModel, p: &Json) -> Result<PivotTable> {
     }
     let filters = filters_param(p)?;
     let mut pivot = PivotTable::new(optional_str(p, "name")?.unwrap_or_default(), measure);
-    pivot.values = values;
+    pivot.values = values.to_vec();
     pivot.row_fields = row_fields;
     pivot.column_fields = column_fields;
     pivot.filters = filters;

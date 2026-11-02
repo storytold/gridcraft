@@ -16,9 +16,14 @@ const MODEL: &str = r##"{
 }"##;
 
 fn load() -> Session {
+    load_json(MODEL)
+}
+
+/// A session holding `model` (the same JSON `dataModel.load` takes).
+fn load_json(model: &str) -> Session {
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("dataModel.load", json!({"json": MODEL})).expect("load model");
+    s.execute("dataModel.load", json!({"json": model})).expect("load model");
     s
 }
 
@@ -592,4 +597,183 @@ fn replace_clears_a_previous_report_that_was_bigger_in_both_directions() {
     assert_eq!(listing["selected"]["row_fields"], json!([]), "the applied report has no row fields");
     assert_eq!(listing["selected"]["column_fields"], json!([]), "the applied report has no column fields");
     assert_eq!(listing["selected"]["filters"], json!([{"field": "Sales[Channel]", "allowed": ["Web"]}]));
+}
+
+// ---------------------------------------------------------------- columns in the values area
+
+/// A model with no measures at all: what a workbook analysed straight from its tables looks like.
+const NO_MEASURES: &str = r##"{
+    "tables": [{"name":"Sales",
+                "columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                "rows":[["East",10],["West",30],["East",20]]}],
+    "relationships": [],
+    "measures": []
+}"##;
+
+/// A model whose text column has a blank: `COUNT` and `COUNTROWS` disagree on it.
+const SPARSE_TEXT: &str = r##"{
+    "tables": [{"name":"Sales",
+                "columns":[{"name":"Region","data_type":"String"},{"name":"Note","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                "rows":[["East","x",1],["East",null,2],["West","y",3],["West","y",4]]}],
+    "relationships": [],
+    "measures": []
+}"##;
+
+#[test]
+fn a_numeric_column_in_values_sums_averages_and_takes_extremes() {
+    for (aggregate, east, west) in [("Sum", "30", "70"), ("Average", "15", "35"), ("Min", "10", "30"), ("Max", "20", "40")] {
+        let mut s = load();
+        let reply = create(
+            &mut s,
+            json!({
+                "measure": "Total Sales",
+                "values": [{"column": "Sales[Amount]", "aggregate": aggregate}],
+                "row_fields": ["Sales[Region]"],
+            }),
+        );
+        let caption = format!("{aggregate} of Amount");
+        assert_eq!(reply["values"], json!([caption.clone()]), "{aggregate}");
+        let expected = vec![
+            vec!["Row Labels".to_string(), caption.clone()],
+            vec!["East".to_string(), east.to_string()],
+            vec!["West".to_string(), west.to_string()],
+        ];
+        assert_eq!(grid(&s, 2, 0, 3, 2), expected, "{aggregate} summarizes the column the way Excel does");
+        // The implicit measure is not added to the model the pane shows.
+        let listing = fields(&mut s, json!({"name": reply["name"].as_str().unwrap_or_default()}));
+        assert_eq!(listing["model"]["measures"].as_array().map(Vec::len), Some(1), "{aggregate} left the model alone");
+        assert_eq!(listing["selected"]["values"], json!([caption]), "{aggregate} is the pivot's value");
+    }
+}
+
+#[test]
+fn count_summarizes_a_text_column_by_its_non_blank_values() {
+    let mut s = load_json(SPARSE_TEXT);
+    let reply = create(
+        &mut s,
+        json!({
+            "values": [{"column": "Sales[Note]", "aggregate": "Count"}],
+            "row_fields": ["Sales[Region]"],
+            "grand_totals": true,
+        }),
+    );
+    assert_eq!(reply["values"], json!(["Count of Note"]));
+    // East has one blank note and one text: `COUNT` is 1, while the two rows would be 2.
+    let expected = vec![
+        vec!["Row Labels".to_string(), "Count of Note".to_string()],
+        vec!["East".to_string(), "1".to_string()],
+        vec!["West".to_string(), "2".to_string()],
+        vec!["Grand Total".to_string(), "3".to_string()],
+    ];
+    assert_eq!(grid(&s, 2, 0, 4, 2), expected);
+}
+
+#[test]
+fn a_column_in_values_needs_no_measure_at_all() {
+    let mut s = load_json(NO_MEASURES);
+    let reply = create(
+        &mut s,
+        json!({
+            "values": [{"column": "Sales[Amount]", "aggregate": "Sum"}],
+            "row_fields": ["Sales[Region]"],
+            "grand_totals": true,
+        }),
+    );
+    assert_eq!(reply["values"], json!(["Sum of Amount"]));
+    // Without `measure`, the implicit value supplies the grouping table.
+    let expected = vec![
+        vec!["Row Labels".to_string(), "Sum of Amount".to_string()],
+        vec!["East".to_string(), "30".to_string()],
+        vec!["West".to_string(), "30".to_string()],
+        vec!["Grand Total".to_string(), "60".to_string()],
+    ];
+    assert_eq!(grid(&s, 2, 0, 4, 2), expected);
+    // Neither a measure nor a values field is nothing to group by.
+    let error = s.execute("dataModel.createPivot", json!({"at": "H1"})).expect_err("no field at all");
+    assert!(error.to_string().contains("needs `measure` or a column in `values`"), "{error}");
+    assert_eq!(s.doc().expect("doc").undo.len(), 1, "the refused call wrote nothing");
+}
+
+#[test]
+fn a_values_entry_is_validated_before_anything_is_written() {
+    let mut s = load();
+    let cases = [
+        (json!({"column": "Sales[Nope]", "aggregate": "Sum"}), "unknown column `Nope` in table `Sales`"),
+        (json!({"column": "Nope[Amount]", "aggregate": "Sum"}), "unknown table `Nope`"),
+        (json!({"column": "Sales[Region]", "aggregate": "Sum"}), "`Sales[Region]` is not a numeric column"),
+        (json!({"column": "Sales[Amount]", "aggregate": "Median"}), "unknown summarization `Median`"),
+        (json!({"column": "Sales[Amount]", "aggregate": 3}), "`aggregate` must be a summarization name"),
+        (json!({"column": 42}), "needs `column`"),
+        (json!({}), "needs `column`"),
+        (json!(7), "must be a list of measure names"),
+        (json!([1]), "must be a list of measure names"),
+    ];
+    for (entry, expected) in cases {
+        let error = s
+            .execute("dataModel.createPivot", json!({"measure": "Total Sales", "values": [entry.clone()]}))
+            .expect_err(&format!("values entry {entry} must be refused"));
+        assert!(error.to_string().contains(expected), "{entry}: {error}");
+    }
+    // The values area keeps its bound.
+    let many: Vec<Json> = (0..1_000).map(|_| json!({"column": "Sales[Amount]", "aggregate": "Sum"})).collect();
+    let error = s.execute("dataModel.createPivot", json!({"values": many})).expect_err("too many values");
+    assert!(error.to_string().contains("at most 64"), "{error}");
+    assert!(s.doc().expect("doc").undo.is_empty(), "no refused call records an edit");
+    assert_eq!(cell(&s, 0, 0), "", "no refused call wrote a cell");
+
+    // An absent `aggregate` takes the column's default summarization: numbers sum, text counts.
+    let reply = create(
+        &mut s,
+        json!({
+            "values": [{"column": "Sales[Amount]"}, {"column": "Sales[Region]"}],
+            "row_fields": ["Sales[Region]"],
+        }),
+    );
+    assert_eq!(reply["values"], json!(["Sum of Amount", "Count of Region"]));
+}
+
+#[test]
+fn an_implicit_value_is_declared_in_the_pivot_cache_and_not_in_the_model() {
+    let mut s = load();
+    let (reply, package) = gridcraft_engine::cmd::dax_pivot::write_pivot(
+        &mut s,
+        &json!({
+            "measure": "Total Sales",
+            "values": [{"column": "Sales[Amount]", "aggregate": "Average"}],
+            "row_fields": ["Sales[Region]"],
+            "name": "By Region",
+        }),
+    )
+    .expect("write pivot");
+    assert_eq!(reply["values"], json!(["Average of Amount"]));
+    // The cache declares the measure it evaluates: Excel reads the value field from there.
+    let package = package.expect("the pivot parts are written");
+    let (parts, _) = read_model_pivots(&package).expect("read the parts back");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].spec.values.len(), 1);
+    assert_eq!(parts[0].spec.values[0].measure, "Average of Amount");
+    assert!(
+        parts[0].spec.measures.iter().any(|measure| measure.name == "Average of Amount"),
+        "the cache lists the implicit measure: {:?}",
+        parts[0].spec.measures
+    );
+    // The session model still holds only the measure the user made.
+    let listing = fields(&mut s, json!({"name": "By Region"}));
+    assert_eq!(listing["model"]["measures"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn an_implicit_value_does_not_collide_with_an_existing_measure() {
+    let mut s = load();
+    // A user measure with the name Excel would pick: the implicit one takes a suffix, so the value
+    // cells carry the column's sum and not the other measure's 1.
+    s.execute("dataModel.addMeasure", json!({"name": "Sum of Amount", "formula": "1", "table": "Sales"})).expect("add measure");
+    let reply = create(&mut s, json!({"values": [{"column": "Sales[Amount]", "aggregate": "Sum"}], "row_fields": ["Sales[Region]"]}));
+    assert_eq!(reply["values"], json!(["Sum of Amount2"]));
+    let expected = vec![
+        vec!["Row Labels".to_string(), "Sum of Amount2".to_string()],
+        vec!["East".to_string(), "30".to_string()],
+        vec!["West".to_string(), "70".to_string()],
+    ];
+    assert_eq!(grid(&s, 2, 0, 3, 2), expected);
 }
