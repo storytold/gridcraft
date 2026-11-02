@@ -459,3 +459,24 @@ fn a_repeat_pass_of_the_frame_counts_as_the_next_pass() {
     h.run_steps(1);
     assert_eq!(h.state().0, "    a\n    b");
 }
+
+/// Whether a frame drew text with an underline.
+fn draws_underline(mark: Option<std::ops::Range<usize>>) -> bool {
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut text = String::from("x^{2");
+        code_editor_marked(ui, egui::Id::unique("marked"), &mut text, Lang::Latex, 3, mark.clone());
+    });
+    out.textures_delta.clear();
+    out.shapes.iter().any(|s| match &s.shape {
+        egui::Shape::Text(t) => t.galley.job.sections.iter().any(|sec| sec.format.underline.width > 0.0),
+        _ => false,
+    })
+}
+
+#[test]
+fn the_marked_editor_underlines_its_mark() {
+    // The equation editor marks an error's position; the code field draws it.
+    assert!(draws_underline(Some(3..4)));
+    assert!(!draws_underline(None));
+}

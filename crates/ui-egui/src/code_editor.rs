@@ -583,7 +583,7 @@ pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: La
     let max_lines = max_lines.clamp(1, 200);
     let mut response = None;
     egui::Frame::new().fill(t.input_bg).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
-        let options = FieldOptions { max_height: row_h * max_lines as f32, ..FieldOptions::new(lang) };
+        let options = FieldOptions { max_height: row_h * max_lines as f32, mark: mark.clone(), ..FieldOptions::new(lang) };
         response = Some(code_field(ui, id, text, &options).response);
     });
     response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
@@ -606,6 +606,8 @@ pub struct FieldOptions<'a> {
     pub caret: Option<usize>,
     /// The field's name for screen readers.
     pub name: &'a str,
+    /// A byte range underlined in the error colour (see [`underline`]).
+    pub mark: Option<Range<usize>>,
 }
 
 impl FieldOptions<'_> {
@@ -621,6 +623,7 @@ impl FieldOptions<'_> {
             // The editor is a generic code field, so the name is not part of the UI's translated
             // strings unless the caller gives one.
             name: "Code Editor",
+            mark: None,
         }
     }
 }
@@ -685,7 +688,7 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
     let danger = t.danger;
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let mut job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
-        if let Some(m) = mark.clone() {
+        if let Some(m) = options.mark.clone() {
             underline(&mut job, m, danger);
         }
         ui.fonts_mut(|f| f.layout_job(job))
