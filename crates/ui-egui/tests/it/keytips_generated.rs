@@ -1143,7 +1143,7 @@ fn keytip_nd_() {
 fn keytip_ne_() {
     let mut h = harness(blank());
     sequence(&mut h, "NE", false);
-    assert!(h.state().dialog.is_some(), "NE must open the equation dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("equation"), "NE must open the equation dialog");
 }
 
 #[test]
