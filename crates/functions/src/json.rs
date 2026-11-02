@@ -53,22 +53,26 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
+    /// peek.
     fn peek(&self) -> Option<u8> {
         self.b.get(self.i).copied()
     }
 
+    /// bump.
     fn bump(&mut self) -> Option<u8> {
         let c = self.peek()?;
         self.i += 1;
         Some(c)
     }
 
+    /// ws.
     fn ws(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.i += 1;
         }
     }
 
+    /// node.
     fn node(&mut self) -> Option<()> {
         self.nodes = self.nodes.checked_add(1)?;
         if self.nodes > MAX_NODES {
@@ -77,6 +81,7 @@ impl Parser<'_> {
         Some(())
     }
 
+    /// value.
     fn value(&mut self, depth: usize) -> Option<Json> {
         if depth > MAX_DEPTH {
             return None;
@@ -94,6 +99,7 @@ impl Parser<'_> {
         }
     }
 
+    /// literal.
     fn literal(&mut self, word: &str, value: Json) -> Option<Json> {
         let end = self.i.checked_add(word.len())?;
         if self.b.get(self.i..end)? == word.as_bytes() {
@@ -104,6 +110,7 @@ impl Parser<'_> {
         }
     }
 
+    /// object.
     fn object(&mut self, depth: usize) -> Option<Json> {
         self.bump(); // '{'
         let mut items = Vec::new();
@@ -133,6 +140,7 @@ impl Parser<'_> {
         }
     }
 
+    /// array.
     fn array(&mut self, depth: usize) -> Option<Json> {
         self.bump(); // '['
         let mut items = Vec::new();
@@ -153,6 +161,7 @@ impl Parser<'_> {
         }
     }
 
+    /// string.
     fn string(&mut self) -> Option<String> {
         self.bump(); // '"'
         let mut out: Vec<u8> = Vec::new();
@@ -166,6 +175,7 @@ impl Parser<'_> {
         }
     }
 
+    /// escape.
     fn escape(&mut self, out: &mut Vec<u8>) -> Option<()> {
         match self.bump()? {
             b'"' => out.push(b'"'),
@@ -206,6 +216,7 @@ impl Parser<'_> {
         char::from_u32(code)
     }
 
+    /// hex4.
     fn hex4(&mut self) -> Option<u32> {
         let mut n: u32 = 0;
         for _ in 0..4 {
@@ -256,6 +267,7 @@ impl Parser<'_> {
         Some(Json::Number(n))
     }
 
+    /// digits.
     fn digits(&mut self) {
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.i += 1;
@@ -267,11 +279,13 @@ impl Parser<'_> {
 mod tests {
     use super::*;
 
+    /// text.
     fn text(s: &str) -> Json {
         Json::Text(s.to_string())
     }
 
     #[test]
+    /// reads_values.
     fn reads_values() {
         assert_eq!(parse("null"), Some(Json::Null));
         assert_eq!(parse(" true "), Some(Json::Bool(true)));
@@ -283,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    /// reads_nesting.
     fn reads_nesting() {
         let expected = Json::Object(vec![
             ("a".to_string(), Json::Array(vec![Json::Number(1.0), Json::Object(vec![("b".to_string(), Json::Null)])])),
@@ -292,6 +307,7 @@ mod tests {
     }
 
     #[test]
+    /// reads_escapes.
     fn reads_escapes() {
         assert_eq!(parse(r#""a\"b\\c\/d\t""#), Some(text("a\"b\\c/d\t")));
         assert_eq!(parse(r#""\u00e9""#), Some(text("é")));
@@ -300,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    /// rejects_malformed.
     fn rejects_malformed() {
         for bad in [
             "",
@@ -333,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    /// rejects_overflow_and_depth.
     fn rejects_overflow_and_depth() {
         assert_eq!(parse("1e400"), None);
         let deep = "[".repeat(MAX_DEPTH + 2) + &"]".repeat(MAX_DEPTH + 2);
@@ -342,12 +360,14 @@ mod tests {
     }
 
     #[test]
+    /// rejects_node_flood.
     fn rejects_node_flood() {
         let many = format!("[{}]", vec!["0"; MAX_NODES].join(","));
         assert_eq!(parse(&many), None);
     }
 
     #[test]
+    /// member_takes_the_first_match.
     fn member_takes_the_first_match() {
         let doc = parse(r#"{"a":1,"a":2}"#);
         assert_eq!(doc.as_ref().and_then(|d| d.member("a")), Some(&Json::Number(1.0)));
@@ -356,13 +376,16 @@ mod tests {
 
     // Robustness: thousands of generated inputs must never panic the reader.
     #[test]
+    /// fuzz_parse_never_panics.
     fn fuzz_parse_never_panics() {
+        /// rng.
         fn rng(s: &mut u64) -> u64 {
             *s ^= *s << 13;
             *s ^= *s >> 7;
             *s ^= *s << 17;
             *s
         }
+        /// gen_json.
         fn gen_json(s: &mut u64, depth: usize) -> String {
             if depth == 0 || rng(s).is_multiple_of(5) {
                 match rng(s) % 7 {
