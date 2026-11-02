@@ -288,10 +288,13 @@ fn raw_attributes(tag: &str) -> impl Iterator<Item = String> + '_ {
         let Some(eq) = tag[i..].find('=').map(|e| i + e) else { break };
         // The value: a quote-delimited string (the closing quote is the boundary, so spaces
         // inside survive). The attribute is the raw slice, name, `=` and value as written.
-        let q = bytes.get(eq + 1).copied().unwrap_or(b'"');
+        // Only a real quote starts a value (an unquoted or a missing quote ends the scan, so
+        // malformed input cannot slice inside a multibyte character and panic the save), and
+        // the name is bounded by XML whitespace only (a Unicode space would land mid-byte).
+        let Some(&q) = bytes.get(eq + 1).filter(|b| matches!(**b, b'"' | b'\'')) else { break };
         let vstart = eq + 2;
         let Some(vend) = tag[vstart..].find(q as char).map(|v| vstart + v) else { break };
-        let name_start = tag[..eq].rfind(char::is_whitespace).map(|w| w + 1).unwrap_or(0);
+        let name_start = tag[..eq].rfind([' ', '\t', '\r', '\n']).map(|w| w + 1).unwrap_or(0);
         let attribute = &tag[name_start..=vend];
         if !attribute.starts_with(char::is_whitespace) {
             out.push(attribute.to_string());
@@ -420,8 +423,8 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // from. The parser drops xmlns:* from its attribute list, so the raw start tag is scanned
     // instead; GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew),
     // and every other declaration is copied verbatim between the element name and its `>`.
-    let Some(tag_start) = raw.find("<connections") else { return None };
-    let Some(tag_end) = raw[tag_start..].find('>').map(|e| tag_start + e) else { return None };
+    let tag_start = raw.find("<connections")?;
+    let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e)?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
     let kept_decls: String = raw_attributes(&raw[tag_start..=tag_end])

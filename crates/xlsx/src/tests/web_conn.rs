@@ -277,7 +277,12 @@ fn a_root_declared_prefix_survives_removing_the_last_web_query() {
     let text = String::from_utf8_lossy(&part);
     assert!(text.contains("<xel:connection"), "the prefixed foreign connection is kept");
     assert!(text.contains("xmlns:xel="), "the root's prefix declaration survives the merge");
-    assert!(!text.contains("gone.example") && !text.contains("https://example.com"), "the removed web query is gone");
+    // The stale GridCraft connection from the fixture: gone by name, and no extension
+    // marker left (the GC_URI check also proves the fixture's marker matches the real
+    // constant - a mismatched fixture marker would make `Old` look foreign and kept).
+    assert!(!text.contains("name=\"Old\""), "the stale GridCraft connection is dropped");
+    assert!(!text.contains(crate::write::GC_URI), "no GridCraft extension marker remains");
+    assert!(!text.contains("https://example.com"), "the removed web query's URL is gone");
     // The part parses: the prefix is bound.
     assert!(crate::xml::parse(&part).is_ok(), "the merged part is well-formed XML");
 }

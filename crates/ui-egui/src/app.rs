@@ -248,9 +248,11 @@ impl SheetApp {
         {
             self.reap_fetches();
             // A reaped worker still running needs a pass when it ends: without one, its
-            // result can sit retained until some later UI activity happens to run.
+            // result can sit retained until some later UI activity happens to run. A delayed
+            // repaint rather than a continuous one (a canceled Refresh All fetches its URLs
+            // one after another, and idle windows must not repaint every frame for minutes).
             if self.reaped.iter().any(|h| h.as_ref().is_none_or(|h| !h.is_finished())) {
-                ctx.request_repaint();
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
             // This block runs in every window's pass; a fetch belongs to the window that
             // started it, so only that window polls or discards it \u{2014} another window drawing
