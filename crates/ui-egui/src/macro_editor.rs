@@ -57,6 +57,9 @@ pub struct Editor {
     pub draft: Macro,
     /// The name the macro is saved under (`None` until it is first saved).
     pub saved_as: Option<String>,
+    /// The name the editor opened with: a new macro that still has it and nothing else counts
+    /// as untouched.
+    pub opened_as: String,
     pub dirty: bool,
     /// The selected row: a step path (`3`, `2.1`, `4.then.1`) or an If branch (`4.then`).
     pub selected: Option<String>,
@@ -79,6 +82,9 @@ pub struct Editor {
     pub close_requested: bool,
     /// The window is quitting: once the editor has closed, the window close goes on.
     pub quit: bool,
+    /// The workbook (or the editor's window) is closing: once the editor has closed, this close
+    /// runs again, in the window it was asked in.
+    pub then_close: Option<PendingClose>,
     /// Asking whether to save before closing.
     pub ask_close: bool,
     /// Start debugging on the first frame (Macros › Step Into).
@@ -92,6 +98,20 @@ pub struct Editor {
     pub new_param: (String, String),
     /// The reference boxes' picking state.
     pub refs: RefPick,
+}
+
+/// A workbook or window close (`file.close` or `window.close`, with its params) waiting on the
+/// editor's question about its draft. Once the editor has closed, it runs again in the window it
+/// was asked in, whichever window became active meanwhile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingClose {
+    /// The editor's window, where the close was asked.
+    pub window: u64,
+    /// Whether the workbook closes (its last window, or `file.close {document: true}`), rather
+    /// than the editor's window alone while the workbook stays open in another.
+    pub whole: bool,
+    pub id: String,
+    pub params: Json,
 }
 
 /// Which reference box grid selections write into, and the selection to put back on closing.
@@ -523,6 +543,7 @@ pub fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
     let doc = doc.uid;
     app.macros.editor = Some(Editor {
         doc,
+        opened_as: draft.name.clone(),
         draft,
         dirty: saved_as.is_none(),
         saved_as,
@@ -538,6 +559,7 @@ pub fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
         closing: false,
         close_requested: false,
         quit: false,
+        then_close: None,
         ask_close: false,
         start_debug,
         start_check: params["check"].as_bool() == Some(true),
@@ -610,6 +632,77 @@ pub fn save(app: &mut SheetApp, ed: &mut Editor) -> bool {
 
 fn ensure_saved(app: &mut SheetApp, ed: &mut Editor) -> bool {
     if ed.dirty || ed.saved_as.is_none() { save(app, ed) } else { true }
+}
+
+impl Editor {
+    /// The draft holds changes not yet saved into the workbook. A new macro counts once it
+    /// differs from the empty one the editor started with, its name included.
+    pub fn has_unsaved_changes(&self) -> bool {
+        let untouched = Macro { name: self.opened_as.clone(), inputs: vec![NamedInput::default()], ..Default::default() };
+        self.dirty && (self.saved_as.is_some() || self.draft != untouched)
+    }
+}
+
+/// Closing the editor's workbook (File › Close, Cmd+W, the Backstage Close, a window's close
+/// button) while the draft has unsaved changes: the editor asks about them first, as its own
+/// close button does, and the close (`id` with `params`) goes on once the editor has closed, in
+/// the window it was asked in; Cancel keeps both. Closing the window that shows the editor asks
+/// too, even when the workbook stays open in another window. A close of another of the
+/// workbook's windows, or a forced one, is none of the editor's business (`None`) and goes ahead
+/// as before.
+///
+/// While the editor is asking, one question stands for one close: a further request for the
+/// same close (Cmd+W pressed again, the close button after Cmd+W) waits for the answer without a
+/// second question, and the pending close then runs once. A request for a different close (the
+/// workbook while only the editor's window was closing, or the reverse) is refused with the
+/// reason until the question is answered, so that the answer never closes more or less than
+/// what was asked.
+pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> Option<Result<Json, String>> {
+    let flag = |k: &str| params.get(k).and_then(Json::as_bool) == Some(true);
+    if flag("force") {
+        return None;
+    }
+    let doc = app.macros.editor.as_ref().filter(|ed| ed.has_unsaved_changes()).map(|ed| ed.doc)?;
+    let window = match id {
+        "file.close" => app.session.active_window(),
+        "window.close" => gridcraft_engine::Target::from_json(params).ok().and_then(|t| app.session.target_window(t).ok()),
+        _ => None,
+    };
+    let owner = window.and_then(|w| app.session.window(w)).map(|w| w.doc_uid)?;
+    // The editor asks in the window it is shown in.
+    let home = app.window_with_dialog("macroEditor")?;
+    let only = app.session.windows().iter().filter(|w| w.doc_uid == owner).count() <= 1;
+    // The workbook closes, or the window that shows the editor does (taking the editor with it).
+    let whole = only || (id == "file.close" && flag("document"));
+    if owner != doc || !(whole || window == Some(home)) {
+        return None;
+    }
+    if app.ui_window() != Some(home) {
+        app.enter_window(home);
+    }
+    let ed = app.macros.editor.as_mut()?;
+    let waiting = json!({"closed": false, "dirty": true, "macroDraft": true});
+    // Quitting: the quit asks about every unsaved workbook itself once the editor has closed,
+    // and Cancel keeps them all.
+    if ed.quit {
+        return Some(Ok(waiting));
+    }
+    match &ed.then_close {
+        Some(pending) if pending.whole == whole => {}
+        Some(pending) => {
+            let what = |whole: bool| if whole { "the workbook" } else { "its window" };
+            return Some(Err(format!(
+                "The macro step editor is asking whether to save its draft before {} closes. Answer that first, then close {}.",
+                what(pending.whole),
+                what(whole)
+            )));
+        }
+        None => {
+            ed.then_close = Some(PendingClose { window: home, whole, id: id.to_string(), params: params.clone() });
+            ed.close_requested = true;
+        }
+    }
+    Some(Ok(waiting))
 }
 
 /// The inputs a run from the editor uses: the first input's example.
@@ -863,7 +956,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
         if app.session.macro_debug.is_some() {
             ed.ask_stop = true;
             ed.closing = true;
-        } else if ed.dirty {
+        } else if ed.has_unsaved_changes() {
             ed.ask_close = true;
         } else {
             *open = false;
@@ -882,14 +975,32 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             restore_home(app, &ed.refs);
         }
         if ed.quit {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            // A quit takes over a workbook close waiting on the editor: it asks about every
+            // unsaved workbook itself, and the close replayed after it would act on whichever
+            // workbook the quit is asking about.
+            if app.native_windows {
+                // Each workbook window is a native window whose close button closes only it:
+                // the quit goes on directly.
+                app.continue_quit(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else if let Some(close) = ed.then_close.take() {
+            // The close runs in the window it was asked in, not in whichever window the person
+            // activated meanwhile: `file.close` acts on the active window and workbook.
+            if app.session.window(close.window).is_some() {
+                app.enter_window(close.window);
+                app.run_or_alert(&close.id, close.params);
+            } else {
+                app.message = Some(("Close".into(), "The window that was closing has closed already; nothing else was closed.".into()));
+            }
         }
     }
 }
 
 /// Asks the open step editor to close, as its close button does: it asks about a debug run or
-/// unsaved steps first. With `quit` (the window is closing), the window close goes on once the
-/// editor has closed; a Cancel in its questions keeps both open.
+/// unsaved steps first. With `quit` (the window is closing, or the app is quitting), the close or
+/// quit goes on once the editor has closed; a Cancel in its questions keeps both open.
 pub fn request_close(app: &mut SheetApp, quit: bool) {
     if let Some(ed) = app.macros.editor.as_mut() {
         ed.close_requested = true;
@@ -904,7 +1015,7 @@ pub fn close_now(app: &mut SheetApp) -> Result<(), String> {
     if app.session.macro_debug.is_some() {
         return Err("A macro is being debugged: stop it first (macro.debug {\"action\": \"stop\"}).".into());
     }
-    if app.macros.editor.as_ref().is_some_and(|ed| ed.dirty) {
+    if app.macros.editor.as_ref().is_some_and(Editor::has_unsaved_changes) {
         return Err("The macro step editor has unsaved steps: save them or close the editor in its window.".into());
     }
     if let Some(ed) = app.macros.editor.take()
@@ -1018,7 +1129,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
                 ed.ask_stop = false;
                 stop(app, ed, keep);
                 if ed.closing {
-                    if ed.dirty { ed.ask_close = true } else { *open = false }
+                    if ed.has_unsaved_changes() { ed.ask_close = true } else { *open = false }
                 }
                 ed.closing = false;
             }
@@ -1026,6 +1137,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
                 ed.ask_stop = false;
                 ed.closing = false;
                 ed.quit = false;
+                ed.then_close = None;
             }
             None => {}
         }
@@ -1054,6 +1166,11 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
                 ed.ask_close = false;
                 if save(app, ed) {
                     *open = false;
+                } else {
+                    // The draft stays open with the reason shown; the workbook is not closed and
+                    // the app does not quit, then or when the editor closes later.
+                    ed.then_close = None;
+                    ed.quit = false;
                 }
             }
             Some(Some(false)) => {
@@ -1063,6 +1180,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
             Some(None) => {
                 ed.ask_close = false;
                 ed.quit = false;
+                ed.then_close = None;
             }
             None => {}
         }
