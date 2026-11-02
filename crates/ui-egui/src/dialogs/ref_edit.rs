@@ -25,6 +25,11 @@ pub(super) struct RefBoxes {
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
     refocus: bool,
+    /// A press on the grid selected this frame ([`note_selecting_press`]): the target takes the
+    /// selection even when it is the one it last saw, since clicking the cell already selected
+    /// is a pick too. Cleared when a box starts picking and once the frame's boxes are drawn, so
+    /// only a press made while the box picks counts.
+    pressed: bool,
     /// The target box was drawn this frame. A box the dialog stops showing (another view of the
     /// dialog, a hidden area, a constraint operator that takes no value) is no longer picked
     /// into, so a selection made meanwhile does not land in it once it is shown again (see
@@ -259,6 +264,8 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
         d.refs.rect = rect;
     }
     d.refs.was_collapsed = collapsed;
+    // A press the boxes did not take this frame (none was picking) is not kept for a later one.
+    d.refs.pressed = false;
     d.refs.other_field = d.refs.collapsed.as_deref().is_some_and(|key| other_field_focused(ctx, key));
     // The box compares the grid selection with the one it last saw only while it is drawn: a
     // hidden box would take a selection made meanwhile when it comes back.
@@ -268,6 +275,11 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
         d.refs.target = None;
     }
+}
+
+/// Records a press on the grid that selects (see [`RefBoxes::pressed`]).
+pub(super) fn note_selecting_press(d: &mut Dialog) {
+    d.refs.pressed = true;
 }
 
 /// Makes the reference box `key` the one grid selections fill. The first pick (and the first
@@ -285,6 +297,8 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
+    // Focusing the box keeps its text: only a press after this one picks.
+    d.refs.pressed = false;
     d.refs.seen = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
     d.refs.seen_sheet = active_sheet_name(app);
 }
@@ -343,14 +357,17 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         } else if d.refs.target.as_deref() == Some(key) {
             let sel = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
             let sheet = active_sheet_name(app);
-            if sheet != d.refs.seen_sheet {
+            let pressed = std::mem::take(&mut d.refs.pressed);
+            if sheet != d.refs.seen_sheet && !pressed {
                 // Another sheet was shown: its selection is where that sheet was left, not a pick.
                 d.refs.seen = sel;
                 d.refs.seen_sheet = sheet;
-            } else if sel != d.refs.seen {
-                // The person selected on the grid: the selection becomes the reference.
+            } else if pressed || sel != d.refs.seen {
+                // The person selected on the grid, even the cell already selected: the selection
+                // becomes the reference.
                 s = sel.clone();
                 d.refs.seen = sel;
+                d.refs.seen_sheet = sheet;
                 d.refs.refocus = true;
             }
             if d.refs.refocus && !ui.input(|i| i.pointer.any_down()) {

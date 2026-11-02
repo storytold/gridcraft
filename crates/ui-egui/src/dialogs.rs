@@ -167,6 +167,12 @@ impl Dialog {
         ref_edit::home_sheet_deleted(app, self)
     }
 
+    /// A press on the grid that selects cells: the reference box being picked into takes the
+    /// selection on this frame even when it is unchanged (a click on the cell already selected).
+    pub(crate) fn note_selecting_press(&mut self) {
+        ref_edit::note_selecting_press(self);
+    }
+
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
     pub fn picks_references(&self) -> bool {
         self.pick.is_some()

@@ -1765,3 +1765,53 @@ fn a_dialog_opened_by_the_control_channel_keeps_the_sheet_it_was_opened_on() {
     assert_eq!(r["ok"], json!(true), "{r}");
     assert_eq!(selection(&h), (0, "B5".into()), "a scripted cancel goes back to the sheet the dialog was opened on");
 }
+
+/// A single click on `cell`, however soon after the last one: the harness clicks faster than a
+/// double-click, which would start editing the cell instead.
+fn single_click(h: &mut H, cell: &str) {
+    h.state_mut().grid.last_click = None;
+    let pos = cell_pos(h, cell);
+    click_at(h, pos);
+}
+
+#[test]
+fn a_click_on_the_cell_already_selected_picks_it() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    // Not picking: a click on the selected cell changes no box.
+    single_click(&mut h, "B5");
+    assert_eq!((field(&h, "set"), field(&h, "changing")), ("B5".into(), String::new()));
+    // Clicking into a box keeps its text: the earlier click is not taken for a pick.
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    assert_eq!(field(&h, "changing"), "", "focusing the box alone writes nothing");
+    // Picking: B5 is still the selection, and a click on it writes it.
+    assert_eq!(selection(&h), (0, "B5".into()));
+    single_click(&mut h, "B5");
+    assert_eq!(field(&h, "changing"), "$B$5", "a click on the cell already selected is a pick");
+    // A drag still picks a range, and after typing over it, a click on the cell already selected
+    // writes that cell again.
+    drag(&mut h, "C3", "D4");
+    assert_eq!(field(&h, "changing"), "$C$3:$D$4");
+    single_click(&mut h, "C3");
+    assert_eq!(field(&h, "changing"), "$C$3");
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "X1");
+    assert_eq!(field(&h, "changing"), "X1");
+    single_click(&mut h, "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the click replaces the typed text although the selection is unchanged");
+    assert_eq!(field(&h, "set"), "B5", "only the box being picked into changes");
+    assert!(h.state().editor.is_none(), "no cell is being edited");
+}
+
+#[test]
+fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    next_sheet(&mut h);
+    assert_eq!(selection(&h), (1, "A1".into()));
+    assert_eq!(field(&h, "changing"), "", "showing another sheet is not a pick");
+    single_click(&mut h, "A1");
+    assert_eq!(field(&h, "changing"), "Rates!$A$1", "a click on that sheet's selected cell is");
+}

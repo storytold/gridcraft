@@ -321,6 +321,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
         app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
     }
@@ -340,6 +341,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
     }
@@ -371,6 +373,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     if in_corner {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::all().a1()}));
         return;
     }
@@ -460,6 +463,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     app.grid.last_click = Some((c, now));
+    note_selecting_press(app);
     if mods.shift {
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
@@ -499,6 +503,15 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     {
         // The first recognised drag already includes movement away from the press.
         select_to_pointer(app, geo, sh, wb, p);
+    }
+}
+
+/// Tells the open dialog that a press on the grid selects: the reference box being picked into
+/// takes the selection even when the press leaves it as it was (a click on the cell already
+/// selected), as a deliberate pick.
+fn note_selecting_press(app: &mut SheetApp) {
+    if let Some(d) = app.dialog.as_mut() {
+        d.note_selecting_press();
     }
 }
 
