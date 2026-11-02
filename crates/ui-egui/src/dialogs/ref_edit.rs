@@ -149,16 +149,17 @@ fn followed_through_history(doc: &DocState, home: &Home) -> HomeSheet {
 
 /// Where the home sheet, `sheet` in `before`, is after the step that made `after` of it.
 ///
-/// A sheet with its name in `after` is the same sheet unless the step replaced it. An unchanged
-/// sheet keeps its `Arc`, an edited one is a new `Arc` of the same sheet, and no step changes a
-/// sheet's `file_id` (the file's `sheetId`, 0 for a sheet inserted here), so a different
-/// `file_id` means another sheet. The one case nothing in the model tells apart is a sheet never
-/// saved to a file, deleted and replaced by one of the same name inside a single recorded step
-/// (one undo group): the replacement is a new `Arc` with `file_id` 0, as the sheet itself would
-/// be after an edit (a copy of the sheet made in that step keeps its id and its cells too).
-/// Without its name in `after`, the step was a rename if [`renamed_in_step`] says so, else it
-/// deleted the sheet, which is remembered as it was: only a step that brings that very `Arc`
-/// back (an undo) revives it.
+/// A sheet that came from a file keeps the file's `sheetId` (`file_id`: no step changes it, and
+/// a sheet inserted in the session has 0), which finds it in `after` wherever the step put it
+/// and whatever it renamed it to. When the step also copied it (a copy keeps the id and the
+/// cells), the one keeping the name is taken; with no sheet of its id, the step deleted it. A
+/// sheet never saved to a file is followed by name: a sheet with its name in `after` is the same
+/// sheet unless it came from a file, and without one the step was a rename if
+/// [`renamed_in_step`] says so. The one case nothing in the model tells apart is such a sheet
+/// deleted and replaced by one of the same name inside a single recorded step (one undo group):
+/// the replacement is a new `Arc` with `file_id` 0, as the sheet itself would be after an edit.
+/// A deleted sheet is remembered as it was: only a step that brings that very `Arc` back (an
+/// undo) revives it.
 fn followed_in_step(before: &Workbook, after: &Workbook, sheet: HomeSheet) -> HomeSheet {
     let (name, seen) = match &sheet {
         HomeSheet::There(name, seen) => (name, seen),
@@ -167,9 +168,19 @@ fn followed_in_step(before: &Workbook, after: &Workbook, sheet: HomeSheet) -> Ho
     let Some(was) = before.sheets.iter().find(|s| s.name.eq_ignore_ascii_case(name)) else {
         return HomeSheet::Deleted(seen.clone());
     };
+    let there = |now: &Arc<Sheet>| HomeSheet::There(now.name.clone(), Arc::downgrade(now));
     let deleted = HomeSheet::Deleted(Arc::downgrade(was));
-    match after.sheets.iter().find(|s| s.name.eq_ignore_ascii_case(name)) {
-        Some(now) if was.file_id == now.file_id => HomeSheet::There(now.name.clone(), Arc::downgrade(now)),
+    let named = after.sheets.iter().find(|s| s.name.eq_ignore_ascii_case(name));
+    if was.file_id != 0 {
+        let mut same = after.sheets.iter().filter(|s| s.file_id == was.file_id);
+        return match (same.next(), same.next()) {
+            (Some(one), None) => there(one),
+            (Some(_), Some(_)) => named.filter(|s| s.file_id == was.file_id).map(there).unwrap_or(deleted),
+            (None, _) => deleted,
+        };
+    }
+    match named {
+        Some(now) if now.file_id == 0 => there(now),
         Some(_) => deleted,
         None => match renamed_in_step(before, after, name) {
             Some(renamed) => HomeSheet::in_workbook(after, &renamed, deleted),

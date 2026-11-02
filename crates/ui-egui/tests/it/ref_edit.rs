@@ -1081,6 +1081,18 @@ fn undoing_and_redoing_the_dialogs_sheets_rename_still_follow_it() {
     assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
 }
 
+/// Types 25 into To value and presses OK, which runs Goal Seek on the dialog's sheet: B5 = B2 * 3
+/// + 4 = 25 wants B2 = 7 there.
+fn ok_to_25(h: &mut H) {
+    let to = dialog_boxes(h)[1];
+    click_at(h, to.center());
+    key(h, Key::A, Modifiers::COMMAND);
+    type_text(h, "25");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+}
+
 /// The sheet shown, at `index`, carries the dialog's sheet's name but is another sheet: picks on
 /// it carry its name, OK is refused with the "was deleted" message and runs nothing, and Cancel
 /// leaves the selection on it where it is.
@@ -1185,13 +1197,7 @@ fn undoing_the_deletion_of_the_dialogs_sheet_brings_it_back_and_redoing_takes_it
     drag(&mut h, "B2", "B2");
     assert_eq!(field(&h, "changing"), "$B$2");
     key(&mut h, Key::Escape, Modifiers::NONE);
-    let to = dialog_boxes(&h)[1];
-    click_at(&mut h, to.center());
-    key(&mut h, Key::A, Modifiers::COMMAND);
-    type_text(&mut h, "25");
-    h.get_by_label("   OK   ").click();
-    h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    ok_to_25(&mut h);
     // B5 = B2 * 3 + 4 = 25 wants B2 = 7.
     let b2 = h.state().session.active().unwrap().wb.sheets[0].value(CellRef::parse("B2").unwrap());
     assert!((b2.as_f64().unwrap() - 7.0).abs() < 1e-6, "Goal Seek ran on the restored sheet: {b2:?}");
@@ -1217,13 +1223,7 @@ fn a_new_sheet_given_the_dialogs_sheets_old_name_is_not_taken_for_it() {
     drag(&mut h, "B2", "B2");
     assert_eq!(field(&h, "changing"), "$B$2");
     key(&mut h, Key::Escape, Modifiers::NONE);
-    let to = dialog_boxes(&h)[1];
-    click_at(&mut h, to.center());
-    key(&mut h, Key::A, Modifiers::COMMAND);
-    type_text(&mut h, "25");
-    h.get_by_label("   OK   ").click();
-    h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    ok_to_25(&mut h);
     let wb = &h.state().session.active().unwrap().wb;
     // B5 = B2 * 3 + 4 = 25 wants B2 = 7, on Model.
     let b2 = wb.sheets[0].value(CellRef::parse("B2").unwrap());
@@ -1290,4 +1290,37 @@ fn one_undo_step_that_replaces_an_empty_saved_sheet_is_not_taken_for_a_rename() 
     assert!(h.state().dialog.is_some(), "OK is refused");
     let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
     assert!(message.contains("was deleted"), "{message}");
+}
+
+#[test]
+fn one_undo_step_that_renames_a_saved_sheet_and_reuses_its_old_name_follows_the_rename() {
+    let mut h = harness(two_sheets_from_file());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // One recorded step: the dialog's sheet becomes Model and a new sheet takes its old name.
+    // The file id finds the renamed sheet; the rename rule for sheets never saved could not,
+    // since the sheet count changed.
+    h.state_mut()
+        .session
+        .grouped("Rename and insert", |s| {
+            s.execute("sheet.rename", json!({"sheet": 0, "name": "Model"}))?;
+            s.execute("home.insertSheet", json!({"name": "Sheet1", "before": 2}))
+        })
+        .unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Model", "Rates", "Sheet1"]);
+    assert_eq!(selection(&h).0, 2, "the new sheet is shown");
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "Sheet1!$C$3", "the new Sheet1 is not the dialog's sheet");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2", "Model is the dialog's sheet");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    ok_to_25(&mut h);
+    let wb = &h.state().session.active().unwrap().wb;
+    let b2 = wb.sheets[0].value(CellRef::parse("B2").unwrap());
+    assert!((b2.as_f64().unwrap() - 7.0).abs() < 1e-6, "Goal Seek ran on Model: {b2:?}");
+    assert!(wb.sheets[2].value(CellRef::parse("B2").unwrap()).is_empty(), "the new Sheet1 is untouched");
+    assert_eq!(selection(&h), (0, "B5".into()));
 }
