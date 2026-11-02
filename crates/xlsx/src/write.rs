@@ -352,7 +352,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // kept part already holds the name, and a zip entry cannot repeat, so the model's
     // connections wait for a save that has the part to itself. (The round trip reads them
     // back from the part the next open, whichever wrote it.)
-    if !wb.web_queries.is_empty() && !out.kept.used_contains("xl/connections.xml") {
+    if !wb.web_queries.is_empty() && !out.kept.has_connections() {
         let mut c = format!("{XML_DECL}<connections xmlns=\"{NS_MAIN}\" xmlns:gc=\"{GC_NS}\">");
         for (i, q) in wb.web_queries.iter().enumerate() {
             let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };

@@ -563,7 +563,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 // is the default (an explicit General in a Text-formatted column, say)
                 // would lose that override and fall back to the column's format before the
                 // rewrite lands. Mutating what is already stored keeps every override.
-                let cell = sh.cells.get_mut(c).expect("the cell was collected from the sheet");
+                let cell = sh.cells.get_mut(c).ok_or_else(|| EngineError::Other("a cell collected for the refresh is missing.".into()))?;
                 cell.formula = None;
                 cell.value = gridcraft_core::Value::Empty;
             }

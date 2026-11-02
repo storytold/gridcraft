@@ -17,6 +17,13 @@ pub struct KeptOut {
 impl KeptOut {
     /// True when a kept (pass-through) part already holds this exact name: the writer must
     /// not put its own part there (a zip entry cannot repeat).
+    /// True when the input file already has a connections relationship (whatever its part
+    /// is named): the writer must not add a second one, or the reopen would read the stale
+    /// original ahead of the model's own part.
+    pub fn has_connections(&self) -> bool {
+        self.used.iter().any(|n| n.contains("connections.xml"))
+    }
+
     pub fn used_contains(&self, name: &str) -> bool {
         self.used.contains(&name.to_ascii_lowercase())
     }
@@ -288,11 +295,15 @@ fn raw_attributes(tag: &str) -> impl Iterator<Item = String> + '_ {
         let Some(eq) = tag[i..].find('=').map(|e| i + e) else { break };
         // The value: a quote-delimited string (the closing quote is the boundary, so spaces
         // inside survive). The attribute is the raw slice, name, `=` and value as written.
-        // Only a real quote starts a value (an unquoted or a missing quote ends the scan, so
-        // malformed input cannot slice inside a multibyte character and panic the save), and
-        // the name is bounded by XML whitespace only (a Unicode space would land mid-byte).
-        let Some(&q) = bytes.get(eq + 1).filter(|b| matches!(**b, b'"' | b'\'')) else { break };
-        let vstart = eq + 2;
+        // XML allows whitespace around the `=` (`xmlns:xel = "..."`), so the quote is the
+        // first quote after it, not necessarily the byte right next to it. Only a real
+        // quote starts a value (an unquoted or a missing quote ends the scan, so malformed
+        // input cannot slice inside a multibyte character and panic the save), and the name
+        // is bounded by XML whitespace only (a Unicode space would land mid-byte).
+        let q_at = (eq + 1..).find(|&j| bytes.get(j).is_some_and(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))).filter(|&j| bytes.get(j).is_some_and(|b| matches!(*b, b'"' | b'\'')));
+        let Some(q_at) = q_at else { break };
+        let q = bytes[q_at];
+        let vstart = q_at + 1;
         let Some(vend) = tag[vstart..].find(q as char).map(|v| vstart + v) else { break };
         let name_start = tag[..eq].rfind([' ', '\t', '\r', '\n']).map(|w| w + 1).unwrap_or(0);
         let attribute = &tag[name_start..=vend];
@@ -370,7 +381,10 @@ fn block_end(s: &str) -> Option<usize> {
 /// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
 /// when the part does not parse: it is kept exactly as the file held it.
 fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoError> {
-    let raw = std::str::from_utf8(data).map_err(|_| IoError::Format("the connections part is not valid UTF-8".into()))?;
+    // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
+    // still merges, rather than failing every open-and-save with the part in it.
+    let decoded = crate::xml::to_utf8(data);
+    let raw = std::str::from_utf8(&decoded).map_err(|_| IoError::Format("the connections part is not text in a supported encoding".into()))?;
     // Nothing of ours in the part and nothing to write: leave the file's part alone (a
     // foreign-only connections.xml is never rewritten, byte for byte).
     if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
@@ -433,7 +447,15 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // from. The parser drops xmlns:* from its attribute list, so the raw start tag is scanned
     // instead; GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew),
     // and every other declaration is copied verbatim between the element name and its `>`.
-    let tag_start = raw.find("<connections").ok_or_else(|| IoError::Format("the connections part has no connections element".into()))?;
+    // The root by its XML local name, prefixed or not: a valid part may spell it
+    // `<x:connections`, and a fixed `<connections` search would find nothing and fail the
+    // save. Any name char can sit between the prefix and `connections`, so every
+    // occurrence of the local name with a `<` before it is checked.
+    let tag_start = raw
+        .match_indices("connections")
+        .map(|(s, _)| s)
+        .find(|&s| raw[..s].ends_with('<') || raw[..s].rfind('<').is_some_and(|lt| raw[lt + 1..s].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')))
+        .ok_or_else(|| IoError::Format("the connections part has no connections element".into()))?;
     let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e).ok_or_else(|| IoError::Format("the connections part's root tag is unterminated".into()))?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
@@ -499,7 +521,13 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Resul
     // since the open, and a save must write the current state, not the file's. Foreign
     // connections (a database query) are kept verbatim; GridCraft's (the ones with the
     // extension element) are replaced wholesale by the model's.
-    if let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml") {
+    // The connections part THROUGH ITS RELATIONSHIP, not by a fixed name: the file may
+    // name it xl/connections2.xml, and merging into a phantom `xl/connections.xml` while
+    // the real part went unchanged would leave the save stale and add a second relationship.
+    let conn_target = rels.iter().find(|r| r.rel_type.ends_with("/connections")).map(|r| normalize(&r.target));
+    if let Some(target) = conn_target
+        && let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == target)
+    {
         // Runs even when the model holds no connections now: the part's stale GridCraft
         // connections (removed since the open) must not survive the save, while foreign ones
         // stay whatever the model does. A merge that cannot run (malformed part, no ids

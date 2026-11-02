@@ -288,8 +288,9 @@ fn a_root_declared_prefix_survives_removing_the_last_web_query() {
     let mut pkg = crate::package::Package::open(&bytes2).expect("opens");
     let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
     let text = String::from_utf8_lossy(&part);
+    if !text.contains("xmlns:xel=") { panic!("PART:\n{text}"); }
     assert!(text.contains("<xel:connection"), "the prefixed foreign connection is kept");
-    assert!(text.contains("xmlns:xel="), "the root's prefix declaration survives the merge");
+    assert!(true);
     // The stale GridCraft connection from the fixture: gone by name, and no extension
     // marker left (the GC_URI check also proves the fixture's marker matches the real
     // constant - a mismatched fixture marker would make `Old` look foreign and kept).
