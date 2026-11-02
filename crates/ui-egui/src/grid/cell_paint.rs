@@ -1,7 +1,7 @@
 use super::geo::Geo;
 use super::{
     BorderLine, BorderStyle, CellRef, CfCache, CfLook, Color, Color32, FontId, HAlign, MAX_COLS, Painter, PatternType, Pos2, RangeRef, Rect, Sheet,
-    Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
+    Stroke, Style, Tokens, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
 };
 
 /// Resolved look of a cell for painting.
@@ -20,7 +20,7 @@ pub(super) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 
 }
 
 /// Last column of a Center Across Selection run starting at `start`: it extends over following columns (up to `limit`) while `continues` holds.
-pub(super) fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) -> bool) -> u32 {
+pub(super) fn center_across_end(start: u32, limit: u32, mut continues: impl FnMut(u32) -> bool) -> u32 {
     let mut end = start;
     while end < limit && end + 1 < MAX_COLS && continues(end + 1) {
         end += 1;
@@ -28,7 +28,13 @@ pub(super) fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) 
     end
 }
 
-pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
+/// Only unmerged, empty cells without a resolved fill can receive text overflow.
+pub(super) fn empty_for_overflow(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, merges: &[RangeRef], cf: &mut CfCache, t: &Tokens) -> bool {
+    sh.value_ref(c).is_none_or(Value::is_empty) && !merges.iter().any(|m| m.contains(c)) && look(wb, si, sh, c, cf, t).0.fill.is_none()
+}
+
+/// Resolve table and conditional styles before choosing theme defaults and automatic cell ink.
+pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache, t: &Tokens) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
         style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
@@ -89,7 +95,8 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     {
         fill = Some(theme::color32(rgb));
     }
-    let text_color = col32(style.font.color, wb, Color32::BLACK);
+    let automatic = fill.map_or(t.cell_text, ink_on);
+    let text_color = col32(style.font.color, wb, automatic);
     (Look { style, fill, text_color }, cfl)
 }
 
@@ -195,8 +202,8 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
             continue;
         }
         let (x0, x1) = (geo.x(sh, col), geo.x(sh, col.saturating_add(1)));
-        let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf).0.style.borders.top;
-        let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf).0.style.borders.bottom;
+        let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf, &Tokens::light()).0.style.borders.top;
+        let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf, &Tokens::light()).0.style.borders.bottom;
         out.push((top, [pos2(x0, rect.top()), pos2(x1, rect.top())]));
         out.push((bottom, [pos2(x0, rect.bottom()), pos2(x1, rect.bottom())]));
     }
@@ -206,8 +213,8 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
             continue;
         }
         let (y0, y1) = (geo.y(sh, row), geo.y(sh, row.saturating_add(1)));
-        let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf).0.style.borders.left;
-        let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf).0.style.borders.right;
+        let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf, &Tokens::light()).0.style.borders.left;
+        let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf, &Tokens::light()).0.style.borders.right;
         out.push((left, [pos2(rect.left(), y0), pos2(rect.left(), y1)]));
         out.push((right, [pos2(rect.right(), y0), pos2(rect.right(), y1)]));
     }
@@ -293,10 +300,9 @@ pub(super) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     }
 }
 
-/// Black or white, whichever reads on `fill` (the threshold chart labels use).
+/// Black or white, whichever has the higher WCAG contrast against the resolved fill.
 pub(super) fn ink_on(fill: Color32) -> Color32 {
-    let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
-    if l < 150.0 { Color32::WHITE } else { Color32::BLACK }
+    if theme::contrast(Color32::BLACK, fill) >= theme::contrast(Color32::WHITE, fill) { Color32::BLACK } else { Color32::WHITE }
 }
 
 /// The horizontal alignment to paint with. Cells are painted left to right and a right-to-left
