@@ -308,6 +308,11 @@ impl DocState {
     fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         // Equations arrive without a layout (files never store one); painting reads only the cache.
         wb.refresh_equations();
+        // A workbook whose active sheet is hidden (another program wrote it, or a script activated
+        // the sheet before saving) opens on the nearest visible sheet.
+        if let Some(i) = wb.visible_sheet_from(wb.active_sheet()) {
+            wb.set_active_sheet(i);
+        }
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());

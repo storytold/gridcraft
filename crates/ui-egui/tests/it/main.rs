@@ -55,6 +55,7 @@ mod function_library;
 mod go_to_dialog;
 mod header_autofit;
 mod header_column_drag;
+mod hidden_sheet_navigation;
 mod host_chrome;
 mod hyperlink_ctrl_click;
 mod hyperlink_dialog;
