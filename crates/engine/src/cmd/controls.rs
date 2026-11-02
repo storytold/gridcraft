@@ -369,6 +369,38 @@ fn format(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Commands a button never runs, beyond the macro policy's lists: a button has no way to show
+/// what its command would open, so a web page is refused when the action is assigned or comes in
+/// from a file. A command that turns out to open a page or a dialog when it runs is refused
+/// then, by [`press`].
+const BUTTON_DENIED: &[(&str, &str)] = &[("link.open", "buttons don't open web pages")];
+
+/// The macro policy for a button's command, with the button's own refusals first.
+fn button_policy(id: &str, params: &Json, trust: crate::Trust) -> Policy {
+    match BUTTON_DENIED.iter().find(|(d, _)| *d == id) {
+        Some((_, why)) => Policy::Deny((*why).into()),
+        None => macro_policy(id, params, trust),
+    }
+}
+
+/// Drops the UI requests a button's command queued from `queued` on, keeping messages for the
+/// person, and says why the press is refused when one would open a dialog or a web page, which
+/// buttons don't do (`name` is the button's). A cell edit the command asked for is dropped too.
+pub(crate) fn take_requests(s: &mut Session, queued: usize, name: &str) -> Option<String> {
+    use crate::UiRequest;
+    let mut blocked = None;
+    let asked: Vec<UiRequest> = s.ui_requests.drain(queued.min(s.ui_requests.len())..).collect();
+    for q in asked {
+        match q {
+            UiRequest::Dialog(d, _) => blocked = Some(format!("'{name}' would open the {d} dialog; give its command the parameters it needs.")),
+            UiRequest::OpenUrl(_) => blocked = Some(format!("'{name}' would open a web page, which buttons don't do.")),
+            UiRequest::EditCell(_) | UiRequest::InsertName(_) => {}
+            m @ UiRequest::Message(_) => s.ui_requests.push(m),
+        }
+    }
+    blocked
+}
+
 /// A button action from `macro` (with `input` and `output`) or `command` (with `params`).
 fn action_param(s: &Session, cmd: &str, p: &Json) -> Result<Option<ControlAction>> {
     if let Some(name) = str_param(p, "macro").map(str::trim).filter(|n| !n.is_empty()) {
@@ -403,7 +435,7 @@ fn action_param(s: &Session, cmd: &str, p: &Json) -> Result<Option<ControlAction
             return Err(bad(cmd, "`params` must be an object"));
         }
         let trust = s.doc()?.trust;
-        if let Policy::Deny(why) = macro_policy(id, &params, trust) {
+        if let Policy::Deny(why) = button_policy(id, &params, trust) {
             return Err(EngineError::Other(format!("A button can't run {id}: {why}.")));
         }
         return Ok(Some(ControlAction::Command { id: id.to_string(), params }));
@@ -489,7 +521,7 @@ fn press(s: &mut Session, p: &Json) -> Result<Json> {
         Some(ControlAction::Command { id, params }) => {
             let d = s.doc()?;
             let (doc, trust) = (d.uid, d.trust);
-            let policy = macro_policy(&id, &params, trust);
+            let policy = button_policy(&id, &params, trust);
             let file_command = matches!(policy, Policy::NeedsPermission(_));
             let why = match policy {
                 Policy::Allow => None,
@@ -508,7 +540,18 @@ fn press(s: &mut Session, p: &Json) -> Result<Json> {
             // As a macro step: only an approved file command reaches the file system, so a
             // command that reads or writes a file under another parameter name can't.
             let _sandbox = (!file_command).then(crate::io::ScriptSandbox::enter);
-            s.grouped(&name, |s| s.execute(&id, params.clone()))
+            s.grouped(&name, |s| {
+                let queued = s.ui_requests.len();
+                let r = s.execute(&id, params.clone());
+                // As a macro step: a command that would open a dialog or a web page is refused
+                // and its group rolled back; messages for the person stay queued.
+                let blocked = take_requests(s, queued, &name);
+                let r = r?;
+                match blocked {
+                    Some(why) => Err(EngineError::Other(why)),
+                    None => Ok(r),
+                }
+            })
         }
     }
 }

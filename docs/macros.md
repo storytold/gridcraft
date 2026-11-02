@@ -263,7 +263,10 @@ default) or always on one range (`input: "B2:D9"`), with an optional output cell
 {id, command, params}` makes it run a command with fixed parameters. A macro runs through
 `macro.run` with its checks; a command goes through the same policy as a macro step and runs, as
 a step does, inside the scripts' file sandbox unless it is an approved file command, so a button
-in a workbook opened from a file asks before it runs anything.
+in a workbook opened from a file asks before it runs anything. Like a step, a button's command
+never opens a web page or a dialog: `link.open` is refused when it is assigned or comes in from
+a file, and a command that would open a dialog or a page once it runs (a command given no
+parameters opens its dialog) is refused then, with the request dropped and nothing done.
 
 In xlsx a button carries its macro as Excel writes it (`macro="[0]!Name"`, a macro run on the
 selection). A command, a fixed input range or an output cell has no place there and is kept in a

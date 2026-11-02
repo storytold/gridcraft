@@ -625,6 +625,7 @@ fn a_denied_command_is_refused_when_assigned_and_when_a_file_brings_it_in() {
     let dir = std::env::temp_dir().join(format!("gridcraft-control-deny-{}", std::process::id()));
     let leak = dir.join("leak.xlsx").to_string_lossy().to_string();
     let denied = [
+        ("link.open", json!({"url": "https://example.com/?d=secret"})),
         ("file.saveAs", json!({"path": leak})),
         ("file.save", json!({})),
         ("file.open", json!({"path": leak})),
@@ -665,6 +666,35 @@ fn a_denied_command_is_refused_when_assigned_and_when_a_file_brings_it_in() {
     }
     assert!(!std::path::Path::new(&leak).exists());
     assert_eq!(v(&s, "A1"), Value::Empty, "the macro never ran");
+    assert!(!s.ui_requests.iter().any(|r| matches!(r, crate::UiRequest::OpenUrl(_))), "no page was opened: {:?}", s.ui_requests);
+}
+
+/// A command the policy allows may still turn out to open a dialog or a web page when it runs
+/// (a command given no parameters opens its dialog): the press is refused with the reason, as a
+/// macro step is, and the request is dropped, so nothing opens. Messages for the person pass.
+#[test]
+fn a_button_command_that_would_open_a_dialog_or_a_page_is_refused_after_it_runs() {
+    use crate::UiRequest;
+    use crate::cmd::controls::take_requests;
+    let mut s = s();
+    let b = id(&s.execute("insert.button", json!({"at": "B2", "text": "Link", "command": "insert.link", "params": {}})).unwrap());
+    let before = undo_len(&s);
+    let name = control(&s, b).display_name();
+    assert_eq!(
+        err(s.execute("control.press", json!({"id": b}))),
+        format!("'{name}' would open the insertLink dialog; give its command the parameters it needs.")
+    );
+    assert!(!s.ui_requests.iter().any(|r| matches!(r, UiRequest::Dialog(..))), "{:?}", s.ui_requests);
+    assert_eq!(undo_len(&s), before, "nothing stays done");
+    // The filter itself, with every kind of request a command can queue: the page is refused,
+    // the cell edit is dropped, the message stays, and requests queued before are left alone.
+    s.ui_requests.push(UiRequest::Message("earlier".into()));
+    let queued = s.ui_requests.len();
+    s.ui_requests.extend([UiRequest::EditCell(None), UiRequest::Message("saved".into()), UiRequest::OpenUrl("https://example.com/".into())]);
+    assert_eq!(take_requests(&mut s, queued, "Go").as_deref(), Some("'Go' would open a web page, which buttons don't do."));
+    assert_eq!(s.ui_requests, vec![UiRequest::Message("earlier".into()), UiRequest::Message("saved".into())]);
+    assert_eq!(take_requests(&mut s, 5, "Go"), None, "a mark past the queue's end drops nothing");
+    assert_eq!(s.ui_requests.len(), 2);
 }
 
 /// Using a slider or spin button writes its linked cell through `cell.set`, so the cell's
