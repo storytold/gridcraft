@@ -194,16 +194,18 @@ follows; expanded, the arrows edit the box. F4 in a focused box cycles the ancho
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
 elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
 keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it.
-The dialog follows the sheet it was opened on through the engine's recorded undo steps: a step
-keeps it while a sheet with its name is there and that sheet's file id is unchanged (a sheet
-inserted in the session has none), renames it when the step keeps the sheet count and changes
-one name, at that sheet's index, on a sheet that keeps its cells and file id, and deletes it
-otherwise. A sheet deleted and another inserted in its place or given its own name, even in one
-script batch, is not taken for it: OK is refused and Cancel leaves the selection where it is;
-only an undo that brings the very sheet back makes it the dialog's again. When the steps since
-the dialog last looked cannot be accounted for (the undo history was trimmed meanwhile, or
-steps were undone and new ones run), a sheet with its name is taken for it. The collapse
-button is reachable from the keyboard and named for screen readers. Goal Seek, Solver
+The dialog follows the sheet it was opened on through the engine's recorded undo steps. A sheet
+that came from a file is found by the file's sheet id wherever a step puts it and whatever it
+renames it to; a sheet inserted in the session (no id) is followed by name: a step keeps it
+while a sheet with its name is there that did not come from a file, renames it when the step
+keeps the sheet count and changes one name, at that sheet's index, on a sheet that keeps its
+cells, and deletes it otherwise. A sheet deleted and another inserted in its place or given
+its own name, even in one script batch, is not taken for it: OK is refused and Cancel leaves
+the selection where it is; only an undo that brings the very sheet back makes it the dialog's
+again. When the steps since the dialog last looked cannot be accounted for (the undo history
+was trimmed meanwhile, or steps were undone and new ones run), a sheet with its name is taken
+for it. The collapse button is reachable from the keyboard and named for screen readers. Goal
+Seek, Solver
 (objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
 Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
