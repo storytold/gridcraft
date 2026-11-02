@@ -75,6 +75,24 @@ this logic, with one undo step.
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
 | Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
 
+## AutoFilter population and pending integrations
+
+[Microsoft's filtering guide](https://support.microsoft.com/en-us/excel/get-started/filter-data-in-a-range-or-table-in-excel)
+describes additive column filters and restricting other dropdowns to the filtered range. The
+current column is excluded from enumeration so its unchecked alternatives remain available.
+The existing one-million-data-row enumeration limit and value sorting remain unchanged.
+
+This changes the population behind the pending row-count work (#1737, and its stacked Only
+button #1741): a future count beside a choice should count eligible rows satisfying the other
+columns, including rows rejected by the current column. It must not count the whole original
+range or just currently visible rows. Search narrows the displayed choices, not that population;
+Apply with a search excludes nonmatching values even when another filter hides them.
+These PRs are not incorporated here. Date grouping (#1509) should group this same eligible
+population. Table filter activation / roundtrip ownership changes remain in #2506. Enumeration
+reads the active sheet AutoFilter without changing criteria, row visibility or the XLSX
+representation. A separate table dropdown outside that AutoFilter's columns remains empty;
+it does not receive choices from its own eligible-row population.
+
 ## Keyboard
 
 | Area | Excel | GridCraft |
@@ -92,23 +110,6 @@ this logic, with one undo step.
 | Mac-specific (Cmd variants, Control variants, Fn keys) | yes | done where a feature exists (`keymap.rs` picks the Mac variant) |
 | Sequential Alt access keys (Alt, H, N, …) on every ribbon tab | yes | 364-sequence keytip table for all tabs: per-control badges, prefix waiting, dropdowns open for editing (type/arrows/Enter), pending bindings for not-yet-built commands; letters also work with left Alt held (Alt+H, O, A), as in Excel; each Borders letter (H, B, …) draws its own preset, H, B, M opens Format Cells on the Border tab, and Erase Border, Line Color and Line Style are reserved; QAT/Backstage excluded |
 | Requests | — | #110 (more shortcuts and hot keys), #33 (sequential Alt; initial support landed in #43) |
-
-### AutoFilter population and pending integrations
-
-[Microsoft's filtering guide](https://support.microsoft.com/en-us/excel/get-started/filter-data-in-a-range-or-table-in-excel)
-describes additive column filters and restricting other dropdowns to the filtered range. The
-current column is excluded from enumeration so its unchecked alternatives remain available.
-The existing one-million-data-row enumeration limit and value sorting remain unchanged.
-
-This changes the population behind the pending row-count work (#1737, and its stacked Only
-button #1741): a future count beside a choice should count eligible rows satisfying the other
-columns, including rows rejected by the current column. It must not count the whole original
-range or just currently visible rows. Search narrows the displayed choices, not that population;
-Apply with a search excludes nonmatching values even when another filter hides them.
-These PRs are not incorporated here. Date grouping (#1509) should group this same eligible
-population. Table filter activation / roundtrip ownership changes remain in #2506; enumeration
-reads the active sheet AutoFilter used by the current table dropdown without changing criteria,
-row visibility or the XLSX representation.
 
 ### Shortcut audit (#110)
 
@@ -214,7 +215,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | Filter popup checkbox edits, search and button state belong to their document window; switching columns in another window no longer discards an open popup's pending choices (#2641) |
+| 2026-11-01 | minor | Filter popup checkbox edits, search and button state belong to their document window; switching columns in another window no longer discards an open popup's pending choices (#2641); the separate AutoFilter section documents the empty dropdown outside the active sheet filter columns (#2506) |
 | 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
 | 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |
 | 2026-11-01 | minor | Formulas › Error Checking › Trace Error (`formulas.traceError`): red arrows from the cell an error starts in to the selected cell, through the first reference showing the same error at each step, and blue arrows from that cell's own references, as measured in Excel; the command returns the source and the arrows |
