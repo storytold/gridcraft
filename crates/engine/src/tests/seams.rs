@@ -1183,3 +1183,40 @@ fn panicking_region_command_preserves_clean_state_and_releases_frames() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(!s.doc().unwrap().is_dirty());
 }
+
+/// After content edits, panic recovery keeps the effective Region and original content/history.
+#[test]
+fn panicking_edit_then_region_keeps_current_region_and_history() {
+    crate::cmd::register_undoable_test_command("test.editRegionThenPanic", |s, _| {
+        s.execute("cell.set", json!({"cell":"B1","input":5}))?;
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        panic!("synthetic panic after an edit and a regional option change");
+    });
+    for dirty in [false, true] {
+        let mut s = s();
+        set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+        d.undo.clear();
+        if dirty {
+            set(&mut s, "D1", "preserved edit");
+        }
+        set(&mut s, "E1", "redo content");
+        s.execute("edit.undo", json!({})).unwrap();
+        let history = (s.doc().unwrap().undo.len(), s.doc().unwrap().redo.len());
+        assert!(s.execute("test.editRegionThenPanic", json!({})).is_err());
+        assert_eq!(s.region().tag, "it-IT");
+        assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+        assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+        assert_eq!(v(&s, "B1"), crate::core::Value::Empty);
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert_eq!((s.doc().unwrap().undo.len(), s.doc().unwrap().redo.len()), history);
+        assert!(s.region_frames.is_empty());
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(v(&s, "E1").display(), "redo content");
+        assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert_eq!(v(&s, "D1").display(), if dirty { "preserved edit" } else { "" });
+    }
+}

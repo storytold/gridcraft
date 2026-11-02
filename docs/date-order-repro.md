@@ -135,3 +135,10 @@ save made while the group was open. Region-only groups do not manufacture an und
 | 2026-10-28 | Reject padded implicit date text without changing numeric serial coercion; document and test the remaining VALUE/arithmetic regional boundary and the limits of reported Excel observations |
 | 2026-10-27 | Add transient native overrides and synthetic grouped rollback, nested history and save-point regressions; preserve the regional CLI oracle after main's module split and inherit these fixes in the implicit-date follow-up |
 | 2026-10-26 | Verify shared workbook windows and preserve parser bounds, regional implicit date text and canonical numeric coercion |
+
+
+Panic recovery also reapplies the effective application Region after restoring content
+and history. A command that edits a cell, changes `app.region`, and then panics cannot
+restore formulas interpreted in the previous Region. A synthetic regression covers
+clean and modified documents, an existing redo branch, recalculated dates, and undo/redo
+returning to the original save point. The original region-only panic control is retained.

@@ -878,6 +878,7 @@ impl Session {
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
                 let group_open = before.as_ref().is_some_and(|(uid, ..)| self.groups.iter().any(|g| g.doc == *uid));
+                let region = self.region();
                 if let Some((uid, wb, sel)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
                 {
@@ -897,6 +898,8 @@ impl Session {
                         push_entry(&mut d.undo, label, wb, &d.wb, selection);
                         d.redo.clear();
                     }
+                    // The application option survives rollback even when content changed first.
+                    d.apply_region(region);
                     d.calc.rebuild(&d.wb);
                 }
                 if self.journal_paused != paused_before {
