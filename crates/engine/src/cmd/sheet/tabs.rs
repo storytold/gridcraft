@@ -1,4 +1,7 @@
-use super::{Arc, CellRef, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, ok, str_param, target_sheet};
+use super::{
+    Arc, CellRef, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, mark_changed_name_spans, ok,
+    spans_changed, str_param, target_sheet,
+};
 
 pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
@@ -50,15 +53,22 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     edit_doc(d, |cx| {
         cx.wb.sheets.remove(i);
+        let new_order: Vec<String> = cx.wb.sheets.iter().map(|s| s.name.clone()).collect();
         for si in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for (c, f) in keys {
-                if let Some(e) = f.expr() {
-                    let ne = gridcraft_formula::adjust::delete_sheet(e, &name, &order);
+                if let Some(e) = f.expr_arc() {
+                    let ne = gridcraft_formula::adjust::delete_sheet((*e).clone(), &name, &order);
                     if let Some(cell) = sh.cells.get_mut(c) {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        // A reference into the deleted sheet, or a 3-D span losing an interior
+                        // sheet, reads something else now even when its text is unchanged.
+                        if ne != *e || spans_changed(&e, &order, &new_order) {
+                            super::edit::forget_value(cell);
+                            cx.changed.push((si, c));
+                        }
+                        cell.formula = Some(Arc::new(f.rewritten(ne)));
                     }
                 }
             }
@@ -78,6 +88,7 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        mark_changed_name_spans(cx, &order, &new_order);
         if cx.wb.active_sheet() >= cx.wb.sheets.len() || cx.wb.active_sheet() > i {
             cx.wb.set_active_sheet(cx.wb.active_sheet().saturating_sub(1).min(cx.wb.sheets.len().saturating_sub(1)));
         }
@@ -112,7 +123,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     if text != f.text
                         && let Some(cell) = sh.cells.get_mut(c)
                     {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        cell.formula = Some(Arc::new(f.rewritten(ne)));
                     }
                 }
             }
@@ -137,6 +148,8 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
         for n in cx.wb.names.iter_mut() {
             if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
+                // The same cells, under the sheet's new name.
+                cx.moved_names.push(n.name.to_lowercase());
                 n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
             }
         }
@@ -152,6 +165,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
     let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
+    let old_order: Vec<String> = s.doc()?.wb.sheets.iter().map(|sh| sh.name.clone()).collect();
     edit(s, |cx| {
         let n = cx.wb.sheets.len();
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };
@@ -211,6 +225,22 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        let new_order: Vec<String> = cx.wb.sheets.iter().map(|sh| sh.name.clone()).collect();
+        for si in 0..cx.wb.sheets.len() {
+            let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
+                cx.wb.sheets.get(si).map(|sh| sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
+            let Some(sh) = cx.wb.sheet_mut(si) else { continue };
+            for (c, f) in keys {
+                if let Some(e) = f.expr_arc()
+                    && spans_changed(&e, &old_order, &new_order)
+                    && let Some(cell) = sh.cells.get_mut(c)
+                {
+                    super::edit::forget_value(cell);
+                    cx.changed.push((si, c));
+                }
+            }
+        }
+        mark_changed_name_spans(cx, &old_order, &new_order);
         cx.structural = true;
         Ok(Json::Null)
     })

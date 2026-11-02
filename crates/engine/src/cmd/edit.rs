@@ -20,7 +20,10 @@ mod paste_special;
 mod selection;
 
 use cell::{cell_set, range_fill, range_set_values};
-pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
+pub(crate) use cell::{
+    check_arg_counts, check_linked_books, drop_linked_books, input_to_cell, is_formula_input, json_to_input, parse_typed_formula,
+    refuse_linked_books, shared_links,
+};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste};
@@ -35,7 +38,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::rewrite_all_formulas;
+pub(crate) use paste_special::{forget_value, rewrite_all_formulas};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {

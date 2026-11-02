@@ -1,6 +1,6 @@
 use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
-use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
+use super::special::{ev_shape, linked_parts, resized_sum_range, resizes_sum_range, takes_reference};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
 use std::sync::Arc;
 
@@ -271,7 +271,12 @@ impl<'h> Evaluator<'h> {
             return Ev::V(Value::number(count as f64));
         }
         match self.eval(&args[0]) {
-            Ev::R(areas) if is_sheet => areas.first().map_or(err(CellError::Ref), |area| Ev::V(Value::number(area.sheet as f64 + 1.0))),
+            Ev::R(areas) if is_sheet => match areas.first() {
+                // A sheet of a linked workbook has no number in this one.
+                Some(area) if linked_parts(area.sheet).is_some() => err(CellError::NA),
+                Some(area) => Ev::V(Value::number(area.sheet as f64 + 1.0)),
+                None => err(CellError::Ref),
+            },
             Ev::R(areas) => {
                 let mut sheets: Vec<usize> = areas.iter().map(|area| area.sheet).collect();
                 sheets.dedup();
@@ -325,6 +330,17 @@ impl<'h> Evaluator<'h> {
                 && let [area] = areas.as_slice()
             {
                 criteria = Some(*area);
+            }
+            // Range parameters of the *IF(S) family take only references, and not references into
+            // a linked workbook: Excel answers `#VALUE!` (or the cell's error) while the source
+            // workbook is closed. A written error (`#REF!` left by a deleted range, here or in a
+            // linked workbook: `[1]Data!#REF!`) is that error.
+            let linked = matches!(&ev, Ev::R(areas) if areas.iter().any(|x| linked_parts(x.sheet).is_some()));
+            if takes_reference(spec.name, i) && (linked || matches!(a, Expr::Error(_) | Expr::LinkedRefError(_))) {
+                return err(match self.deref(ev) {
+                    Value::Error(e) => e,
+                    _ => CellError::Value,
+                });
             }
             if resizes_sum_range(name, args.len()) {
                 if i == 0 {
@@ -382,7 +398,7 @@ impl<'h> Evaluator<'h> {
 
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
-        if !a.range.is_single() {
+        if !a.range.is_single() && linked_parts(a.sheet).is_none() {
             let mut error = None;
             let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,

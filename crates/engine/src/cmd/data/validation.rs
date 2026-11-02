@@ -73,6 +73,9 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         // An unknown type used to give an "any value" rule, saved as `type="none"`: no validation.
         other => return Err(bad("data.validation", format!("unknown type `{other}` (any, whole, decimal, list, date, time, textLength, custom)"))),
     };
+    for f in [str_param(p, "formula1"), str_param(p, "formula2")].into_iter().flatten() {
+        super::edit::refuse_linked_books(f)?;
+    }
     if kind == ValidationKind::List && str_param(p, "formula1").is_none_or(|f| f.trim().trim_start_matches('=').is_empty()) {
         return Err(bad("data.validation", "a list validation needs `formula1`"));
     }

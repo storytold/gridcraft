@@ -1,5 +1,5 @@
 use super::graph::{HashMap, HashSet, Key};
-use super::{Evaluator, Host, Workbook, stack_position};
+use super::{Evaluator, Host, Workbook, reads_linked, stack_position};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 
@@ -19,6 +19,8 @@ pub(super) struct PassHost<'a> {
     pub(super) results: HashMap<Key, Value>,
     pending: HashSet<Key>,
     in_progress: HashSet<Key>,
+    /// Values formulas showed before this pass cleared spill layout.
+    saved: Option<&'a HashMap<Key, Value>>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
@@ -60,6 +62,14 @@ pub(super) struct PassHost<'a> {
     pub(super) tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// Whether the formula being evaluated used something in a linked workbook that can't be
+    /// calculated from the link's saved values ([`Host::note_unknown_link`]).
+    unknown_link: bool,
+    /// After an edit, the formulas that read a changed cell, directly or through other formulas
+    /// (see [`Calc::readers`]). A formula over something uncalculable in a linked workbook keeps
+    /// the value it showed unless it is one of them; then it is calculated, the uncalculable part
+    /// being `#REF!`. `None` (loading, F9): every such formula keeps its value.
+    pub(super) reached: Option<&'a HashSet<Key>>,
     /// `stack_position()` where the outermost formula being calculated started.
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
@@ -67,13 +77,20 @@ pub(super) struct PassHost<'a> {
 }
 
 impl<'a> PassHost<'a> {
-    pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+    pub(super) fn new(
+        wb: &'a Workbook,
+        exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+        rng: &'a mut u64,
+        now: f64,
+        saved: Option<&'a HashMap<Key, Value>>,
+    ) -> Self {
         PassHost {
             wb,
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
+            saved,
             spills: HashMap::default(),
             used: HashMap::default(),
             rng,
@@ -94,6 +111,8 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            unknown_link: false,
+            reached: None,
             stack_top: 0,
             out_of_stack: false,
         }
@@ -224,12 +243,14 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        let outer_unknown = std::mem::replace(&mut self.unknown_link, false);
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
+        let unknown = std::mem::replace(&mut self.unknown_link, outer_unknown);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
             // It ran out of the stack left below the formulas that read it: it is calculated
             // from the top instead, as a formula needed at `MAX_NESTED` levels deep is.
@@ -253,6 +274,9 @@ impl PassHost<'_> {
             self.taint = outer_taint;
             return Value::Error(CellError::Calc);
         }
+        // Excel keeps showing what it saved for a formula over a linked value it can't calculate,
+        // until the formula has to be calculated again.
+        let v = if unknown && !self.reached.is_some_and(|r| r.contains(&k)) { self.saved_value(k).unwrap_or(v) } else { v };
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {
@@ -303,6 +327,26 @@ impl PassHost<'_> {
         };
         self.results.insert(k, v.clone());
         v
+    }
+
+    /// The value a formula showed before this pass, if any: what it was saved with, or last
+    /// calculated to. A spilled array, or a legacy array formula's range, comes back whole. A
+    /// blank formula cell has none (a typed formula, or one a structural edit made read other
+    /// cells): formulas show 0 for blank.
+    fn saved_value(&self, k @ (sheet, at): Key) -> Option<Value> {
+        if let Some(v) = self.saved.and_then(|saved| saved.get(&k)) {
+            return Some(v.clone());
+        }
+        let sh = self.wb.sheet(sheet)?;
+        if sh.value(at).is_empty() {
+            return None;
+        }
+        let block = sh.spill_ranges.get(&at).copied().or_else(|| sh.cell(at)?.formula.as_ref()?.array);
+        if let Some(range) = block.filter(|r| !r.is_single()) {
+            let data = range.iter().map(|c| sh.value(c)).collect();
+            return Array::new(range.height() as usize, range.width() as usize, data).map(|a| Value::Array(std::sync::Arc::new(a)));
+        }
+        Some(sh.value(at))
     }
 
     /// A formula's previous value for iterative calculation: from the last iteration, else the
@@ -395,6 +439,9 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
+    }
+    fn note_unknown_link(&mut self) {
+        self.unknown_link = true;
     }
     fn stack_top(&self) -> Option<usize> {
         (self.depth > 1).then_some(self.stack_top)
@@ -539,7 +586,7 @@ impl Host for PassHost<'_> {
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
-        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+        *self.used.entry(sheet).or_insert_with(|| crate::eval::used_range_of(wb, sheet))
     }
     fn now_serial(&self) -> f64 {
         self.now
@@ -553,4 +600,35 @@ impl Host for PassHost<'_> {
         *self.rng = x;
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
     }
+}
+
+/// The arrays formulas into linked workbooks showed before a full recalculation clears spill
+/// layout, by anchor: what `PassHost::saved_value` hands back for them. Empty without links.
+pub(super) fn saved_arrays(wb: &Workbook) -> HashMap<Key, Value> {
+    if wb.external_books.is_empty() {
+        return HashMap::default();
+    }
+    let linked_arrays: HashSet<Key> = wb
+        .sheets
+        .iter()
+        .enumerate()
+        .flat_map(|(sheet, sh)| {
+            sh.cells.iter().filter_map(move |(at, cell)| {
+                let formula = cell.formula.as_ref()?;
+                let block = sh.spill_ranges.get(&at).copied().or(formula.array);
+                (block.is_some_and(|range| !range.is_single()) && reads_linked(wb, sheet, formula)).then_some((sheet, at))
+            })
+        })
+        .collect();
+    let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());
+    for &(sheet, at) in &linked_arrays {
+        let Some(sh) = wb.sheet(sheet) else { continue };
+        let block = sh.spill_ranges.get(&at).copied().or_else(|| sh.cell(at).and_then(|c| c.formula.as_ref()?.array));
+        let Some(range) = block.filter(|r| !r.is_single()) else { continue };
+        let data = range.iter().map(|c| sh.value(c)).collect();
+        if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
+            saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
+        }
+    }
+    saved
 }

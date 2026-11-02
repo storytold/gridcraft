@@ -31,6 +31,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if is_formula_input(input) {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
+        check_linked_books(&expr, wb.external_books.len())?;
         check_arg_counts(&expr)?;
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
@@ -82,10 +83,134 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     Ok(Some(Cell { value: parsed.value, formula: None, style }))
 }
 
+/// The workbook a sheet name (or the sheet part of a qualified name) is in: `Ok(None)` = this one,
+/// `Ok(Some(n))` = `[n]Prices`, linked workbook `n` (`[0]` = this one). `Err` = a bracketed prefix
+/// that names no workbook (`[-1]`, `[Book2.xlsx]`, `[ 1]`): a sheet name can't contain `[` or `]`,
+/// and a formula names a linked workbook only by its index.
+fn sheet_book(s: &str) -> std::result::Result<Option<usize>, String> {
+    if !s.contains(['[', ']']) {
+        return Ok(None);
+    }
+    let bad = || s.find(']').and_then(|i| s.get(..=i)).unwrap_or(s).to_string();
+    let Some((book, rest)) = s.strip_prefix('[').and_then(|x| x.split_once(']')) else { return Err(bad()) };
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) || rest.contains(['[', ']']) {
+        return Err(bad());
+    }
+    book.parse().map(Some).map_err(|_| bad())
+}
+
+/// The sheets an expression names, as written: both ends of a sheet range (`'[1]Jan:Dec'`) and the
+/// sheet part of qualified names (`[1]!Rates`, `[1]Prices!Rates`). `true` = the second sheet of a
+/// range, which can't carry a workbook index (MS-XLSX `sheet-range`).
+fn sheets_named(e: &gridcraft_formula::Expr) -> Vec<(&str, bool)> {
+    use gridcraft_formula::{Expr, SheetSel};
+    match e {
+        Expr::Ref(gridcraft_formula::Reference { sheet, .. }) | Expr::LinkedRefError(sheet) => match sheet {
+            SheetSel::Named(a) => vec![(a.as_str(), false)],
+            SheetSel::Span(a, b) => vec![(a.as_str(), false), (b.as_str(), true)],
+            SheetSel::Current => vec![],
+        },
+        Expr::Name(n) => n.rsplit_once('!').map(|(s, _)| vec![(s, false)]).unwrap_or_default(),
+        _ => vec![],
+    }
+}
+
+/// The first workbook prefix in `expr` that isn't `[0]` or one of `links` linked workbooks
+/// (`[1]` is the first), as written (`[5]`, `[Book2.xlsx]`).
+fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize) -> Option<String> {
+    let mut bad = None;
+    expr.walk(&mut |e| {
+        for (s, range_end) in sheets_named(e) {
+            if bad.is_some() {
+                return;
+            }
+            bad = match sheet_book(s) {
+                Ok(None) => None,
+                Ok(Some(n)) if n <= links && !range_end => None,
+                Ok(Some(_)) => s.find(']').and_then(|i| s.get(..=i)).map(str::to_string),
+                Err(prefix) => Some(prefix),
+            };
+        }
+    });
+    bad
+}
+
+/// A cell reference after a bare workbook index (`[1]!A1`, `SUM([1]!A1:B2)`, `[0]!A1`), as written.
+/// Only a defined name can follow `[n]!`: the reference would be to a sheet called `[1]`, which no
+/// sheet can be.
+fn first_book_only_ref(expr: &gridcraft_formula::Expr) -> Option<String> {
+    use gridcraft_formula::{Expr, SheetSel};
+    let book_only = |s: &str| matches!(sheet_book(s), Ok(Some(_))) && s.ends_with(']');
+    let mut bad = None;
+    expr.walk(&mut |e| {
+        let sheet = match e {
+            Expr::Ref(gridcraft_formula::Reference { sheet: SheetSel::Named(a), .. }) | Expr::LinkedRefError(SheetSel::Named(a)) => Some(a.as_str()),
+            _ => None,
+        };
+        if bad.is_none()
+            && let Some(s) = sheet.filter(|s| book_only(s))
+        {
+            bad = Some(s.to_string());
+        }
+    });
+    bad
+}
+
+/// Typed references into other workbooks. `[n]` must name one of the workbook's `links` external
+/// links (`[1]` is the first): Excel refuses any other index on entry, and a file saved with one
+/// can't be opened. `[0]` is this workbook, as in Excel (the parser enters `[0]Sheet1!A1` as
+/// `Sheet1!A1`). Only a defined name can follow a bare `[n]!`.
+pub(crate) fn check_linked_books(expr: &gridcraft_formula::Expr, links: usize) -> Result<()> {
+    if let Some(book) = first_bad_book(expr, links) {
+        return Err(EngineError::Other(format!("There's a problem with this formula: {book} isn't a linked workbook.")));
+    }
+    if let Some(book) = first_book_only_ref(expr) {
+        return Err(EngineError::Other(format!("There's a problem with this formula: only a defined name can follow {book}!.")));
+    }
+    Ok(())
+}
+
+/// Conditional formats and data validation can't refer to other workbooks: Excel refuses it in
+/// those dialogs. Text that isn't a formula is left to the caller.
+pub(crate) fn refuse_linked_books(text: &str) -> Result<()> {
+    match gridcraft_formula::parse(text.trim_start_matches('=')) {
+        Ok(e) if first_bad_book(&e, 0).is_some() || first_book_only_ref(&e).is_some() => {
+            Err(EngineError::Other("There's a problem with this formula: references to other workbooks can't be used here.".into()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Which of the source workbook's links (`[1]` first) the target holds at the same index: the same
+/// linked workbook with the same saved sheets and names. A New Window of the workbook shares them.
+pub(crate) fn shared_links(src: &gridcraft_model::Workbook, dst: &gridcraft_model::Workbook) -> Vec<bool> {
+    if std::sync::Arc::ptr_eq(&src.external_books, &dst.external_books) {
+        return vec![true; src.external_books.len()];
+    }
+    src.external_books.iter().enumerate().map(|(i, b)| dst.external_books.get(i) == Some(b)).collect()
+}
+
+/// A formula pasted from another workbook: its references into links the target doesn't share
+/// (`shared`, from [`shared_links`]) are `#REF!`. `[1]` there would be a link it doesn't have, or a
+/// different workbook.
+pub(crate) fn drop_linked_books(expr: gridcraft_formula::Expr, shared: &[bool]) -> gridcraft_formula::Expr {
+    use gridcraft_formula::Expr;
+    if shared.iter().all(|&s| s) && first_bad_book(&expr, shared.len()).is_none() {
+        return expr;
+    }
+    expr.map(&mut |e| {
+        let unshared = sheets_named(&e).iter().any(|(s, _)| match sheet_book(s) {
+            Ok(None | Some(0)) => false,
+            Ok(Some(n)) => !shared.get(n - 1).copied().unwrap_or(false),
+            Err(_) => true,
+        });
+        if unshared { Expr::Error(gridcraft_core::CellError::Ref) } else { e }
+    })
+}
+
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
 /// and refuses a formula that still doesn't parse.
 pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr> {
-    // Excel closes missing parentheses for you.
     let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse);
     parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))
 }
@@ -332,7 +457,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewritten(shifted)));
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 sh.set_cell(at, cell);
