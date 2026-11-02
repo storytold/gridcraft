@@ -109,6 +109,7 @@ const NEEDS_INPUT: &[&str] = &[
     "home.newCellStyle",
     "home.numberFormat",
     "home.rowHeight",
+    "insert.equation",
     "insert.sparkline",
     "pivot.changeSource",
     "pivot.collapse",
