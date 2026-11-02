@@ -1247,6 +1247,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Preview" => "Aperçu",
         "Reply…" => "Répondre…",
         "Reports:" => "Rapports :",
+        "Solver Report|Answer" => "Réponses",
+        "Solver Report|Sensitivity" => "Sensibilité",
+        "Solver Report|Limits" => "Limites",
+        "Needs an optimal or converged solution: Solver stopped before reaching one." => {
+            "Nécessite une solution optimale ou convergente : le Solveur s'est arrêté avant d'en atteindre une."
+        }
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints." => {
+            "Nécessite Simplex PL ou GRG non linéaire, un objectif Max ou Min et aucune contrainte de nombre entier."
+        }
         "Resolved" => "Résolu",
         "Reverse the order" => "Inverser l'ordre",
         "Send" => "Envoyer",
