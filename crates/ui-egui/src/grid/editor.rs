@@ -125,7 +125,8 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         app.grid.list_picker = None;
         return;
     };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
+    // Show formatted labels; commit value-preserving input (so `mmm-yy` "Jan-26" does not become the 1st).
+    let items = gridcraft_engine::cmd::data::list_choices(&wb, si, &dv);
     let r = geo.cell_rect(sh, c);
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
@@ -143,12 +144,12 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
             egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
-                for it in &items {
+                for (display, input) in &items {
                     if ui
-                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
+                        .add(egui::Button::new(display.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
                         .clicked()
                     {
-                        app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
+                        app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": input}));
                         close = true;
                     }
                 }

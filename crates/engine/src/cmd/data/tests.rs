@@ -483,12 +483,16 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 #[test]
 fn list_validation_from_date_cells_shows_formatted_labels() {
     // Source cells formatted as dates must appear in the dropdown as `Jan-26`, not the serial
-    // `46023`. Selecting the label (or typing the serial) must both validate, and committing the
-    // label must store the date rather than text.
+    // `46023`. The picker commits value-preserving input (not the lossy label), so a mid-month
+    // `mmm-yy` source keeps its day.
     let mut s = Session::new();
     s.new_workbook();
-    for (cell, serial, code) in [("K1", "46023", "mmm-yy"), ("K2", "46054", "mmm-yy"), ("K3", "46023", "d-mmm-yy")] {
-        s.execute("cell.set", json!({"cell": cell, "input": serial})).unwrap();
+    for (cell, input, code) in [
+        ("K1", "2026-01-15", "mmm-yy"),
+        ("K2", "46054", "mmm-yy"),
+        ("K3", "46023", "d-mmm-yy"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
         s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
     }
     s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "$K$1:$K$3"})).unwrap();
@@ -501,6 +505,10 @@ fn list_validation_from_date_cells_shows_formatted_labels() {
     let b1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "B1")).unwrap();
     assert_eq!(list_items(&wb, 0, a1), ["Jan-26", "Feb-26", "1-Jan-26"]);
     assert_eq!(list_items(&wb, 0, b1), ["Jan-26", "Feb-26"]);
+    let choices = list_choices(&wb, 0, a1);
+    assert_eq!(choices[0].0, "Jan-26");
+    assert_eq!(choices[0].1, "2026-01-15", "mmm-yy label must not be the commit text");
+    let mid_month = sh.value(CellRef::parse("K1").unwrap());
 
     let at = CellRef::parse("A1").unwrap();
     assert!(check_validation(&wb, 0, at, "Jan-26").is_none());
@@ -508,10 +516,10 @@ fn list_validation_from_date_cells_shows_formatted_labels() {
     assert!(check_validation(&wb, 0, at, "46023").is_none(), "raw serial of a source date still matches");
     assert!(check_validation(&wb, 0, at, "Pending").is_some());
 
-    s.execute("cell.set", json!({"cell": "A1", "input": "Jan-26"})).unwrap();
+    // Picker path: commit `input`, not `display`.
+    s.execute("cell.set", json!({"cell": "A1", "input": choices[0].1})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
-    assert_eq!(sh.value(at), Value::Number(46023.0));
-    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, sh, at), "Jan-26");
+    assert_eq!(sh.value(at), mid_month, "selecting Jan-26 keeps 15 Jan, not the 1st");
     assert!(check_validation(&s.doc().unwrap().wb, 0, at, &sh.input_text(at)).is_none());
 }
 
