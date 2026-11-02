@@ -30,6 +30,51 @@ pub enum ShowObjects {
     None,
 }
 
+/// The workbook window's display settings from `<workbookView>` (Excel: File › Options ›
+/// Advanced, "Display options for this workbook"): whether the window shows the sheet tabs
+/// and the two scroll bars, and how much of the horizontal bar the tabs take (`tabRatio`,
+/// thousandths of the bar; the format's default is 600). XLSX I/O normalizes this
+/// share to 0–1000, including values supplied directly through the model.
+///
+/// The values are modelled so an open + save keeps them — a workbook Excel saved with the
+/// tabs hidden must not come back with them shown and the settings gone. The app does not
+/// act on them yet and there is no Options control for them; that is the other half of
+/// storytold/gridcraft#3057.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkbookView {
+    #[serde(default = "yes")]
+    pub show_sheet_tabs: bool,
+    #[serde(default = "yes")]
+    pub show_horizontal_scroll: bool,
+    #[serde(default = "yes")]
+    pub show_vertical_scroll: bool,
+    #[serde(default = "default_tab_ratio")]
+    pub tab_ratio: u32,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_tab_ratio() -> u32 {
+    600
+}
+
+impl Default for WorkbookView {
+    fn default() -> Self {
+        WorkbookView { show_sheet_tabs: true, show_horizontal_scroll: true, show_vertical_scroll: true, tab_ratio: default_tab_ratio() }
+    }
+}
+
+impl WorkbookView {
+    /// The entire bar, in thousandths: the upper bound used by XLSX I/O.
+    pub const MAX_TAB_RATIO: u32 = 1000;
+
+    fn is_default(&self) -> bool {
+        *self == WorkbookView::default()
+    }
+}
+
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
@@ -230,6 +275,9 @@ pub struct Workbook {
     pub show_objects: ShowObjects,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
+    /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
+    #[serde(default, skip_serializing_if = "WorkbookView::is_default")]
+    pub view: WorkbookView,
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
@@ -367,6 +415,7 @@ impl Workbook {
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
             active_sheet: ActiveSheet::default(),
+            view: WorkbookView::default(),
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,

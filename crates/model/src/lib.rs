@@ -29,7 +29,7 @@ pub use style::{
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, ExternalBook, ExternalName, ExternalSheet, PhoneticProps, PhoneticRun, PhoneticString,
-    ShowObjects, Workbook,
+    ShowObjects, Workbook, WorkbookView,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

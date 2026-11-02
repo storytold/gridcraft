@@ -5,6 +5,16 @@ use super::{
 
 // ---------------------------------------------------------------- entry
 
+/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
+/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+pub(crate) fn is_formula_input(input: &str) -> bool {
+    input.starts_with('=')
+        || (input.len() > 1
+            && (input.starts_with('+') || input.starts_with('-'))
+            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+}
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
@@ -18,12 +28,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
-    if is_formula {
+    if is_formula_input(input) {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_linked_books(&expr, wb.external_books.len())?;
@@ -308,6 +313,22 @@ pub(crate) fn json_to_input(v: &Json) -> String {
     }
 }
 
+/// How many converted strings `range.setValues` reports back, and how much of each input and
+/// stored text: the report is a diagnostic, so a big write must not put a second copy of its data
+/// in the result.
+const MAX_REPORTED_CONVERSIONS: usize = 20;
+const MAX_REPORTED_CHARS: usize = 32;
+
+/// `text` cut to [`MAX_REPORTED_CHARS`] characters for the conversion report, with `…` when it was
+/// cut. Counting characters keeps a multi-byte input whole.
+fn clipped(text: &str) -> String {
+    let mut out: String = text.chars().take(MAX_REPORTED_CHARS).collect();
+    if out.len() < text.len() {
+        out.push('…');
+    }
+    out
+}
+
 pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
@@ -325,6 +346,10 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("range.setValues", "too many rows"));
     }
     let mut count = 0;
+    // The strings typed input read as something other than the text given, for the result: a
+    // caller can notice a "05.04.2026" that became a date without reading the file back (#2255).
+    let mut converted: Vec<(CellRef, String)> = Vec::new();
+    let mut converted_count = 0;
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             let cols: Vec<&Json> = match row.as_array() {
@@ -347,15 +372,35 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     // text rather than the marker that makes it text. A formula is still a
                     // formula, which is what the ticket asks for and what `=` means in a cell.
                     Json::String(text) if !parse && !text.starts_with('=') => {
-                        let mut style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
-                        // Line breaks still turn on Wrap Text, as typed input does.
-                        if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
-                            style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
+                        if text.is_empty() {
+                            // An empty string clears the cell, as `null` and the default path do:
+                            // an empty text cell is not blank, and a script clearing cells with
+                            // `""` would leave cells `COUNTA` counts. The cell keeps its formatting.
+                            input_to_cell("", sheet, at, &mut cx.wb)?
+                        } else {
+                            let mut style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+                            // Line breaks still turn on Wrap Text, as typed input does.
+                            if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
+                                style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
+                            }
+                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
                         }
-                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
+                // A string that became a formula was written as one (`=`), which is deliberate;
+                // only a number (dates and times included), boolean or error is a reading of the
+                // string and worth reporting.
+                if let Some(c) = &cell
+                    && matches!(v, Json::String(_))
+                    && c.formula.is_none()
+                    && matches!(c.value, Value::Number(_) | Value::Bool(_) | Value::Error(_))
+                {
+                    converted_count += 1;
+                    if converted.len() < MAX_REPORTED_CONVERSIONS {
+                        converted.push((at, input.clone()));
+                    }
+                }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
                     Some(c) => sh.set_cell(at, c),
@@ -370,7 +415,17 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(())
     })?;
-    Ok(json!({"cells": count}))
+    let d = s.doc()?;
+    let reported: Vec<Json> =
+        d.wb.sheet(sheet)
+            .map(|sh| {
+                converted
+                .iter()
+                .map(|(at, input)| json!({"cell": at.a1(), "input": clipped(input), "stored": clipped(&crate::display::cell_text(&d.wb, sh, *at))}))
+                .collect()
+            })
+            .unwrap_or_default();
+    Ok(json!({"cells": count, "convertedCount": converted_count, "converted": reported}))
 }
 
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
