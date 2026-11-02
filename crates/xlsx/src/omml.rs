@@ -84,15 +84,18 @@ fn count_math(e: &El, depth: usize) -> usize {
 }
 
 /// A marker for the equation a text body holds: 16 hex digits of an FNV-1a 64-bit hash over what
-/// carries the equation's meaning, the OMML element names in document order and the text of the
-/// runs. The writer puts it in the shape's description beside the LaTeX source; the reader takes
-/// the source only while the marker still matches the body, so an equation whose Office Math
-/// another application edited (Excel leaves the description alone) is converted from that Office
-/// Math instead of coming back as the old source. What a re-serialisation may change without
-/// changing the equation is left out: property elements (`*Pr`) and extension lists, the
-/// DrawingML containers (`txBody`, `p`, `r`, `fld`, `lstStyle`), attributes, namespace prefixes
-/// and whitespace between elements; adjacent runs are joined, so splitting or merging runs
-/// changes nothing. A text change, an added run or a structural change does.
+/// carries the equation's meaning, the OMML element names in document order, the text of the
+/// runs, and the properties the converter reads ([`PROPERTIES`]: a run's `sty`, a delimiter's
+/// characters, an operator's limits and so on). The writer puts it in the shape's description
+/// beside the LaTeX source; the reader takes the source only while the marker still matches the
+/// body, so an equation whose Office Math another application edited (Excel leaves the
+/// description alone) is converted from that Office Math instead of coming back as the old
+/// source. What a re-serialisation may change without changing the equation is left out: every
+/// other property (`ctrlPr`, DrawingML run properties such as size and colour), extension lists,
+/// the DrawingML containers (`txBody`, `p`, `r`, `fld`, `lstStyle`), attributes, namespace
+/// prefixes and whitespace between elements; adjacent runs without properties are joined, so
+/// splitting or merging them changes nothing. A text change, an added run, a structural change
+/// or a change to a property the converter reads does.
 pub fn body_marker(tb: &El) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut text = String::new();
@@ -106,7 +109,26 @@ fn mark(e: &El, h: &mut u64, text: &mut String, depth: usize) {
         return;
     }
     for c in &e.children {
-        if c.name.ends_with("Pr") || c.name == "extLst" {
+        if c.name.ends_with("Pr") {
+            // Only the properties the converter reads, each as `name=val`, in a fixed order; they
+            // close the run text gathered so far, so a property moving between runs is a change.
+            let read: Vec<(&str, &str)> =
+                read_properties(&c.name).iter().filter_map(|n| c.child(n).map(|p| (*n, p.attr("val").unwrap_or("")))).collect();
+            if !read.is_empty() {
+                mark_text(h, text);
+                mark_bytes(h, b"[");
+                mark_bytes(h, c.name.as_bytes());
+                for (n, v) in read {
+                    mark_bytes(h, b" ");
+                    mark_bytes(h, n.as_bytes());
+                    mark_bytes(h, b"=");
+                    mark_bytes(h, v.as_bytes());
+                }
+                mark_bytes(h, b"]");
+            }
+            continue;
+        }
+        if c.name == "extLst" {
             continue;
         }
         match c.name.as_str() {
@@ -166,12 +188,37 @@ fn group(e: Option<&El>, out: &mut String, depth: usize) -> Option<()> {
     Some(())
 }
 
-fn val<'a>(props: Option<&'a El>, name: &str) -> Option<&'a str> {
-    props.and_then(|p| p.child(name)).and_then(|c| c.attr("val"))
+/// The property elements and the properties in them that this converter reads, so the ones
+/// that decide what an equation says beyond its structure and text. [`body_marker`] hashes
+/// exactly these, and [`val`] and [`on`] read only these, so the two cannot drift: a property
+/// read here without a row in this table reads as absent, which the conversion tests show.
+const PROPERTIES: &[(&str, &[&str])] = &[
+    ("rPr", &["nor", "sty", "scr"]),
+    ("fPr", &["type"]),
+    ("radPr", &["degHide"]),
+    ("naryPr", &["chr", "limLoc", "subHide", "supHide"]),
+    ("dPr", &["begChr", "sepChr", "endChr"]),
+    ("accPr", &["chr"]),
+    ("barPr", &["pos"]),
+    ("groupChrPr", &["chr", "pos"]),
+];
+
+/// The properties of the property element `pr` that the converter reads.
+fn read_properties(pr: &str) -> &'static [&'static str] {
+    PROPERTIES.iter().find(|(name, _)| *name == pr).map_or(&[], |(_, names)| names)
 }
 
+/// The `val` of property `name` in the property element `props`, when the converter reads it.
+fn val<'a>(props: Option<&'a El>, name: &str) -> Option<&'a str> {
+    props.filter(|p| read_properties(&p.name).contains(&name)).and_then(|p| p.child(name)).and_then(|c| c.attr("val"))
+}
+
+/// Whether the switch `name` in the property element `props` is on, when the converter reads it.
 fn on(props: Option<&El>, name: &str) -> bool {
-    props.and_then(|p| p.child(name)).is_some_and(|c| c.attr("val").is_none_or(|v| v == "1" || v == "on" || v == "true"))
+    props
+        .filter(|p| read_properties(&p.name).contains(&name))
+        .and_then(|p| p.child(name))
+        .is_some_and(|c| c.attr("val").is_none_or(|v| v == "1" || v == "on" || v == "true"))
 }
 
 /// LaTeX for one character of a math run.
@@ -699,11 +746,45 @@ mod tests {
         let base = body_marker(&tb("<m:r><m:t>x+1</m:t></m:r>"));
         assert_eq!(base.len(), 16);
         assert!(base.bytes().all(|b| b.is_ascii_hexdigit()));
-        // Properties, run boundaries, whitespace between elements and attributes are not the
-        // equation: what Excel re-serialises differently leaves the marker alone.
-        assert_eq!(body_marker(&tb("<m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>x</m:t></m:r><m:r><m:t>+1</m:t></m:r>")), base);
+        // Run boundaries, whitespace between elements, attributes, and properties the converter
+        // does not read (`ctrlPr`, an extension list, DrawingML size, colour and font) are not
+        // the equation: what Excel re-serialises differently leaves the marker alone.
+        assert_eq!(body_marker(&tb("<m:r><m:t>x</m:t></m:r><m:r><m:t>+1</m:t></m:r>")), base);
         assert_eq!(body_marker(&tb("\n  <m:r>\n <a:rPr lang=\"en-US\" sz=\"1100\"/><m:t xml:space=\"preserve\">x+1</m:t></m:r>\n")), base);
-        assert_eq!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><m:ctrlPr/>")), base);
+        assert_eq!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><m:ctrlPr><a:rPr lang=\"en-US\" i=\"1\"/></m:ctrlPr>")), base);
+        assert_eq!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><a:extLst><a:ext uri=\"{x}\"><a:z/></a:ext></a:extLst>")), base);
+        assert_eq!(
+            body_marker(&tb(
+                "<m:r><a:rPr sz=\"2400\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill><a:latin typeface=\"Cambria Math\"/></a:rPr><m:t>x+1</m:t></m:r>"
+            )),
+            base
+        );
+        assert_eq!(
+            body_marker(&tb("<m:r><m:rPr><m:rFonts m:ascii=\"Cambria\"/></m:rPr><m:t>x+1</m:t></m:r>")),
+            base,
+            "a property the converter never reads"
+        );
+        // Properties the converter reads are: a run's style, an accent's character, a delimiter's
+        // brackets, an operator's limits; the same property on another run is a change too.
+        let styled = |sty: &str| body_marker(&tb(&format!("<m:r><m:rPr><m:sty m:val=\"{sty}\"/></m:rPr><m:t>x</m:t></m:r><m:r><m:t>+1</m:t></m:r>")));
+        assert_ne!(styled("p"), base);
+        assert_ne!(styled("p"), styled("b"));
+        assert_ne!(styled("p"), body_marker(&tb("<m:r><m:t>x</m:t></m:r><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>+1</m:t></m:r>")));
+        let accented =
+            |chr: &str| body_marker(&tb(&format!("<m:acc><m:accPr><m:chr m:val=\"{chr}\"/></m:accPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:acc>")));
+        assert_ne!(accented("\u{0302}"), accented("\u{0303}"));
+        let bracketed = |b: &str, e: &str| {
+            body_marker(&tb(&format!(
+                "<m:d><m:dPr><m:begChr m:val=\"{b}\"/><m:endChr m:val=\"{e}\"/></m:dPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:d>"
+            )))
+        };
+        assert_ne!(bracketed("(", ")"), bracketed("[", "]"));
+        assert_ne!(
+            body_marker(&tb("<m:nary><m:naryPr><m:chr m:val=\"∑\"/></m:naryPr><m:sub/><m:sup/><m:e><m:r><m:t>i</m:t></m:r></m:e></m:nary>")),
+            body_marker(&tb(
+                "<m:nary><m:naryPr><m:chr m:val=\"∑\"/><m:subHide m:val=\"1\"/></m:naryPr><m:sub/><m:sup/><m:e><m:r><m:t>i</m:t></m:r></m:e></m:nary>"
+            ))
+        );
         // Text and structure are the equation.
         assert_ne!(body_marker(&tb("<m:r><m:t>x+2</m:t></m:r>")), base);
         assert_ne!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><m:r><m:t> </m:t></m:r>")), base, "a space added is a change");
