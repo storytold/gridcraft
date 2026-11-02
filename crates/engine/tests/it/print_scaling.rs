@@ -103,3 +103,64 @@ fn print_scaling_saved_fit_and_manual_breaks_remain_independent() {
     assert_eq!(fit["pages"], 1);
     assert_eq!(serde_json::to_value(&s.doc().unwrap().wb).unwrap(), before);
 }
+
+/// Job overrides honour rotated paper and ignore manual breaks only while fitting; XLSX keeps saved settings.
+#[test]
+fn print_scaling_orientations_breaks_and_xlsx_round_trip() {
+    for orientation in ["portrait", "landscape"] {
+        let mut s = workbook();
+        for name in ["Tall", "Wide"] {
+            s.execute("sheet.activate", json!({"sheet":name})).unwrap();
+            s.execute(
+                "pageLayout.pageSetup",
+                json!({"orientation":orientation,"fitWidth":2,"fitHeight":3,"rowBreaks":[3],"colBreaks":["C"],"pageOrder":"overThenDown"}),
+            )
+            .unwrap();
+        }
+        let before = s.doc().unwrap().wb.clone();
+        let revision = s.doc().unwrap().revision;
+        let dirty = s.doc().unwrap().is_dirty();
+        let saved = s.execute("file.printPreview", json!({"sheets":"all"})).unwrap();
+        for mode in ["pageSetup", "none", "columns", "rows", "sheet"] {
+            let preview = s.execute("file.printPreview", json!({"sheets":"all","scaling":mode})).unwrap();
+            if mode == "pageSetup" {
+                assert_eq!(preview, saved);
+            }
+            for page in preview["pageList"].as_array().unwrap() {
+                assert_eq!(page["orientation"], orientation);
+                assert_eq!(page["pageOrder"], "overThenDown");
+                let wide = page["width"].as_f64().unwrap() > page["height"].as_f64().unwrap();
+                assert_eq!(wide, orientation == "landscape");
+                if mode == "none" {
+                    assert_eq!(page["scale"], 100.0);
+                }
+            }
+            for name in ["Tall", "Wide"] {
+                let rows = bands(&preview, name, "rows");
+                let columns = bands(&preview, name, "columns");
+                if mode == "none" {
+                    assert!(rows.contains("1:2"));
+                    assert!(columns.contains("A:B"));
+                } else {
+                    assert!(!rows.contains("1:2"), "{orientation}/{mode}/{name}: ignore the manual row break");
+                    assert!(!columns.contains("A:B"), "{orientation}/{mode}/{name}: ignore the manual column break");
+                }
+                if mode == "columns" || mode == "sheet" {
+                    assert_eq!(columns.len(), 1);
+                }
+                if mode == "rows" || mode == "sheet" {
+                    assert_eq!(rows.len(), 1);
+                }
+            }
+            assert_eq!(serde_json::to_value(&s.doc().unwrap().wb).unwrap(), serde_json::to_value(&before).unwrap());
+            assert_eq!(s.doc().unwrap().revision, revision);
+            assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+            let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+            let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+            assert_eq!(reopened.sheets.len(), before.sheets.len());
+            for (actual, expected) in reopened.sheets.iter().zip(&before.sheets) {
+                assert_eq!(actual.print, expected.print, "{orientation}/{mode}: preserve saved XLSX settings");
+            }
+        }
+    }
+}
