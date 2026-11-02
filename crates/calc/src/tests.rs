@@ -707,6 +707,67 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
+fn a_full_recalc_keeps_a_spill_with_the_formula_already_spilling_there() {
+    // F13's array would spill over F14:G14, which C14's array already fills: F13 is #SPILL!, and
+    // a full recalculation (Ctrl+Alt+F9) doesn't hand the area to F13 for coming first in
+    // reading order.
+    let mut t = T::new();
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(5,2)");
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("G14"), t.num("I14")], [1.0, 5.0, 7.0]);
+}
+
+#[test]
+fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
+    // Both arrays spill; in manual calculation F13 then grows over F14:G14, which C14's array
+    // fills. A full recalculation gives what an automatic one would: C14 keeps its cells and F13
+    // is #SPILL!, although F13 comes first in reading order.
+    let mut t = T::new();
+    t.set("J1", "1");
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(J1,2)");
+    assert_eq!([t.num("F13"), t.num("G13")], [1.0, 2.0]);
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("J1", "5");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("F14"), t.num("G14"), t.num("I14")], [1.0, 4.0, 5.0, 7.0]);
+}
+
+#[test]
+fn a_full_recalc_lays_out_arrays_as_an_automatic_one_when_one_shrinks_for_another() {
+    // C1 grows into C3, which A3's array fills, and A3 grows into E3, which E1's array leaves.
+    // Automatic recalculation lays them out in reading order with each former area still filled:
+    // C1 is #SPILL! and A3 takes A3:E3. A full recalculation after the same edit in manual
+    // calculation gives the same sheet.
+    let build = |manual: bool| {
+        let mut t = T::new();
+        t.set("J1", "2");
+        t.set("C1", "=SEQUENCE(J1)");
+        t.set("A3", "=SEQUENCE(1,J1+1)");
+        t.set("E1", "=SEQUENCE(5-J1)");
+        assert_eq!([t.num("C2"), t.num("C3"), t.num("E3")], [2.0, 3.0, 3.0]);
+        if manual {
+            t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+        }
+        t.set("J1", "4");
+        if manual {
+            t.calc.recalc_all(&mut t.wb);
+        }
+        t
+    };
+    let (automatic, full) = (build(false), build(true));
+    assert_eq!(automatic.get("C1"), Value::Error(CellError::Spill));
+    assert_eq!([automatic.num("A3"), automatic.num("C3"), automatic.num("E3")], [1.0, 3.0, 5.0]);
+    for cell in ["A1", "C1", "C2", "C3", "C4", "E1", "E2", "A3", "B3", "C3", "D3", "E3"] {
+        assert_eq!(full.get(cell), automatic.get(cell), "{cell}");
+    }
+}
+
+#[test]
 fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     // Two arrays of one recalculation want the same empty cell: the one laid out second is
     // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over

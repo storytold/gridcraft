@@ -109,6 +109,21 @@ fn components(edges: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>) {
     (comp, size)
 }
 
+/// What a full recalculation knows about the spill layout it clears, so a contested area goes to
+/// the same formula as in an incremental recalculation.
+#[derive(Default)]
+struct Prior {
+    /// Formulas that spilled, with the area they filled (from the last calculation or the file's
+    /// `ref`).
+    spilled: HashMap<Key, RangeRef>,
+    /// Whether those areas are where the formulas' arrays still are. Then, until a formula is laid
+    /// out again, its area stays taken. A structural edit moves the formulas, not the areas.
+    areas_in_place: bool,
+    /// Formulas that showed #SPILL!. A cell's value moves with it on a structural edit, its spill
+    /// area doesn't.
+    blocked: HashSet<Key>,
+}
+
 impl Calc {
     pub fn new() -> Self {
         Self::default()
@@ -186,19 +201,32 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.recalc_everything(wb, true);
+    }
+
+    /// Recalculates every formula after rows, columns or sheets were inserted, deleted or moved:
+    /// the formulas moved, the spill areas they filled are where they were.
+    pub fn recalc_after_structural_edit(&mut self, wb: &mut Workbook) {
+        self.recalc_everything(wb, false);
+    }
+
+    fn recalc_everything(&mut self, wb: &mut Workbook, areas_in_place: bool) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
+        let mut prior = Prior { areas_in_place, ..Prior::default() };
         for i in 0..wb.sheets.len() {
             if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
                 && let Some(sh) = wb.sheet_mut(i)
             {
+                prior.spilled.extend(sh.spill_ranges.iter().filter(|(_, r)| !r.is_single()).map(|(c, r)| ((i, *c), *r)));
                 sh.spill.clear();
                 sh.spill_ranges.clear();
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true);
+        prior.blocked = all.iter().copied().filter(|k| wb.sheet(k.0).is_some_and(|s| s.value(k.1) == Value::Error(CellError::Spill))).collect();
+        self.run(wb, all, &prior);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -235,7 +263,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, &Prior::default());
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -262,6 +290,13 @@ impl Calc {
                 }
             }
         }
+        // A cleared anchor empties its whole former spill area too.
+        for (si, r) in &cleared {
+            match emptied.iter_mut().find(|x| x.0 == *si) {
+                Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
+                None => emptied.push((*si, r.end)),
+            }
+        }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
             for &(s, c) in self.graph.nodes.keys() {
@@ -283,7 +318,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, &Prior::default());
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -322,10 +357,17 @@ impl Calc {
         seen.into_iter().collect()
     }
 
-    /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    /// Evaluates the dirty set and writes results (and spills) back. `prior` is the layout a full
+    /// recalculation cleared (empty otherwise).
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, prior: &Prior) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
+        // Former areas of formulas still in the workbook (a deleted formula's area is free), when
+        // they are still in place.
+        let mut former = Former::default();
+        if prior.areas_in_place {
+            former.areas = prior.spilled.iter().filter(|(k, _)| self.graph.nodes.contains_key(*k)).map(|(k, r)| (*k, *r)).collect();
+        }
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -367,15 +409,20 @@ impl Calc {
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            // When two arrays want the same cells, the one already spilling there keeps them and
+            // the newcomer is #SPILL! (as when it is entered), and one that was #SPILL! stays so:
+            // arrays are laid out in that order, then in reading order. Without this, a full
+            // recalculation or reopening the file handed the area to whichever came first.
+            dirty.sort_by_key(|k| {
+                let owns = prior.spilled.contains_key(k) || wb.sheet(k.0).is_some_and(|s| s.spill_ranges.contains_key(&k.1));
+                (prior.blocked.contains(k), !owns)
+            });
+            let mut spill_changes = self.write_back(wb, &dirty, results, &spills, &mut former);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
-            }
-            if full {
-                // Everything was already evaluated once; spill dependents need another pass.
             }
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);
@@ -396,12 +443,15 @@ impl Calc {
         }
     }
 
+    /// Writes results and lays out spills. `former` holds the areas a full recalculation cleared
+    /// whose formulas are not laid out yet.
     fn write_back(
         &mut self,
         wb: &mut Workbook,
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
+        former: &mut Former,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
@@ -414,6 +464,7 @@ impl Calc {
             }
         }
         for key in dirty {
+            let own_former = former.take(key);
             let new = spills.get(key);
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             let old = sheet.spill_ranges.get(&key.1).copied();
@@ -436,7 +487,8 @@ impl Calc {
             if let Some(array) = new {
                 let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
                 let range = RangeRef::new(key.1, end);
-                let blocked = spill_is_blocked(sheet, key.1, range, end);
+                let blocked = spill_is_blocked(sheet, key.1, range, end)
+                    || (own_former.is_none_or(|f| !f.contains_range(&range)) && former.reaches(key.0, range));
                 if blocked {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
@@ -476,6 +528,39 @@ impl Calc {
             }
         }
         spill_changes
+    }
+}
+
+/// Spill areas a full recalculation cleared, of formulas not laid out yet: as in an incremental
+/// recalculation, where those cells are still filled, another array can't take them.
+#[derive(Default)]
+struct Former {
+    areas: HashMap<Key, RangeRef>,
+    /// The cells of `areas`, built when an array first needs more cells than its own former area
+    /// (so each check costs what checking the cells themselves does, however many areas there are).
+    cells: Option<HashSet<Key>>,
+}
+
+impl Former {
+    /// Frees `key`'s former area, as it is laid out now.
+    fn take(&mut self, key: &Key) -> Option<RangeRef> {
+        let area = self.areas.remove(key)?;
+        if let Some(cells) = &mut self.cells {
+            for cell in area.iter() {
+                cells.remove(&(key.0, cell));
+            }
+        }
+        Some(area)
+    }
+
+    /// Whether `range` on `sheet` reaches a former area that is still taken.
+    fn reaches(&mut self, sheet: usize, range: RangeRef) -> bool {
+        if self.areas.is_empty() {
+            return false;
+        }
+        let areas = &self.areas;
+        let cells = self.cells.get_or_insert_with(|| areas.iter().flat_map(|(k, area)| area.iter().map(move |cell| (k.0, cell))).collect());
+        range.iter().any(|cell| cells.contains(&(sheet, cell)))
     }
 }
 
