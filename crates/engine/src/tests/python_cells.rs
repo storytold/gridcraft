@@ -530,3 +530,15 @@ fn python_code_with_an_empty_value_counts_as_content() {
     s.execute("edit.copy", json!({"range": "T1"})).unwrap();
     assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
 }
+
+#[test]
+fn a_python_cell_is_not_a_trend_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    plant(&mut s, 0, "A1", "1");
+    let offered = |s: &Session, growth: bool| {
+        let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+        crate::fill::trend_applies(&s.doc().unwrap().wb, 0, r("A1:A2"), r("A1:A5"), growth)
+    };
+    assert!(!offered(&s, false) && !offered(&s, true));
+}

@@ -59,7 +59,7 @@ fn fills_vertically(src: RangeRef, target: RangeRef) -> bool {
 }
 
 /// The numbers in each lane of `src` that a fill to `target` continues, or `None` when a source
-/// cell is empty or holds text, a logical value, an error or a formula.
+/// cell is empty or holds text, a logical value, an error, a formula or Python code.
 fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> Option<Vec<Vec<f64>>> {
     let sh = wb.sheet(sheet)?;
     let vertical = fills_vertically(src, target);
@@ -72,7 +72,7 @@ fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -
                 .map(|i| {
                     let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
                     let cell = sh.cell(c)?;
-                    if cell.formula.is_some() || !cell.value.is_number() {
+                    if cell.formula.is_some() || cell.py.is_some() || !cell.value.is_number() {
                         return None;
                     }
                     cell.value.as_f64()
