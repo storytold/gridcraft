@@ -1401,6 +1401,17 @@ fn protection_refuses_edits_of_locked_cells() {
 }
 
 #[test]
+fn locked_cell_message_matches_what_an_edit_would_be_refused_with() {
+    let s = protected(json!({}));
+    let locked = CellRef::parse("A1").unwrap();
+    let unlocked = CellRef::parse("D1").unwrap();
+
+    assert!(s.locked_cell_message(0, locked).is_some_and(|m| m.contains("protected sheet")));
+    assert_eq!(s.locked_cell_message(0, unlocked), None, "an unlocked cell stays editable");
+    assert_eq!(s.locked_cell_message(9, locked), None, "no such sheet");
+}
+
+#[test]
 fn protection_allows_permitted_row_and_column_edits() {
     let mut s = protected(json!({"insertRows": true, "deleteRows": true, "insertColumns": true}));
     // Inserting shifts locked cells, which the protection allows.
@@ -2008,6 +2019,15 @@ fn a_whole_column_table_without_headers_stays_on_the_sheet() {
 }
 
 #[test]
+fn inserting_a_column_next_to_far_right_data_names_gridcraft_in_the_refusal() {
+    let mut sess = s();
+    sess.execute("cell.set", json!({"cell": "XFD1", "input": "2"})).unwrap();
+    let e = sess.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap_err();
+    assert!(e.to_string().contains("GridCraft cannot shift nonblank cells"), "{e}");
+    assert!(!e.to_string().contains("Excel"), "{e}");
+}
+
+#[test]
 fn inserting_cells_refuses_to_push_values_off_the_sheet() {
     for (shift, edge, last_fit, last_ok) in [("right", "XFD1", "XFC1", "XFD1"), ("down", "A1048576", "A1048575", "A1048576")] {
         let mut sess = s();
@@ -2015,6 +2035,7 @@ fn inserting_cells_refuses_to_push_values_off_the_sheet() {
         sess.execute("cell.set", json!({"cell": edge, "input": "2"})).unwrap();
         let e = sess.execute("home.insertCells", json!({"range": "A1", "shift": shift})).unwrap_err();
         assert!(e.to_string().contains("loss of data"), "{e}");
+        assert!(e.to_string().contains("GridCraft") && !e.to_string().contains("Excel"), "{e}");
         assert_eq!(v(&sess, "A1"), Value::Number(1.0));
         assert_eq!(v(&sess, edge), Value::Number(2.0));
         // A value that still fits moves to the last valid cell.
@@ -2394,6 +2415,36 @@ fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
 }
 
 #[test]
+fn workbook_view_roundtrips_after_sheet_deletion_and_reordering() {
+    let view = gridcraft_model::WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: true, show_vertical_scroll: false, tab_ratio: 350 };
+    for (initial_active, command, params, expected_order, expected_active) in [
+        ("Third", "home.deleteSheet", json!({"sheet": "First"}), vec!["Second", "Third"], 1),
+        ("Third", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 1),
+        ("First", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "Third", "to": 0}), vec!["Third", "First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "First", "to": 2}), vec!["Second", "Third", "First"], 2),
+    ] {
+        let mut session = s();
+        session.execute("sheet.rename", json!({"name": "First"})).unwrap();
+        for name in ["Second", "Third"] {
+            session.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).view = view;
+        session.execute("sheet.activate", json!({"sheet": initial_active})).unwrap();
+        session.execute(command, params).unwrap();
+
+        let wb = &session.doc().unwrap().wb;
+        assert_eq!(wb.active_sheet(), expected_active, "{command}");
+        assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command}");
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+        assert_eq!(back.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command} after reopening");
+        assert_eq!(back.active_sheet(), expected_active, "activeTab follows {command}");
+        assert_eq!(back.active().unwrap().name, expected_order[expected_active], "the active sheet is not a stale index");
+        assert_eq!(back.view, view, "workbook display settings survive {command}");
+    }
+}
+
+#[test]
 fn xlsx_roundtrip_through_engine() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["a", 1], ["b", 2]]})).unwrap();
@@ -2497,6 +2548,53 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
     assert!(bytes.starts_with(b"1;511;184;"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `file.exportCsv` writes displayed text by default (Excel's Save As CSV); `values: true` writes the
+/// raw values for automation: full precision, ISO dates and times.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_csv_values_writes_raw_values_and_the_default_stays_displayed_text() {
+    let mut s = s();
+    for (cell, input, code) in [
+        ("A1", "1234.5", "$#,##0.00"),
+        ("B1", "0.123456789", "0.00"),
+        ("C1", "46023", "d-mmm-yy"),
+        ("D1", "46023.5", "yyyy-mm-dd hh:mm"),
+        ("E1", "0.75", "h:mm"),
+        ("F1", "TRUE", "General"),
+        ("G1", "a,b", "General"),
+        ("H1", "=1/0", "General"),
+        ("I1", "1", "h:mm"),
+        ("J1", "1.5", "h:mm"),
+        ("K1", "46023", "yyyy-mm-dd hh:mm"),
+        ("L1", "1.5", "[h]:mm"),
+        ("M1", "2.5", "[>=3]yyyy-mm-dd;[<3]hh:mm"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
+    }
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-values-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let displayed = dir.join("displayed.csv");
+    s.execute("file.exportCsv", json!({"path": displayed})).unwrap();
+    s.execute("file.exportCsv", json!({"path": dir.join("off.csv"), "values": false})).unwrap();
+    let raw = dir.join("raw.csv");
+    s.execute("file.exportCsv", json!({"path": raw, "values": true})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
+    let default = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    // The default export is byte for byte what Save As CSV writes, and `values: false` is the default.
+    assert_eq!(std::fs::read(&displayed).unwrap(), default);
+    assert_eq!(std::fs::read(dir.join("off.csv")).unwrap(), default);
+    let default = String::from_utf8(default).unwrap();
+    assert!(default.starts_with("\"$1,234.50\",0.12,1-Jan-26,"), "{default}");
+    assert_eq!(
+        std::fs::read_to_string(&raw).unwrap(),
+        "1234.5,0.123456789,2026-01-01,2026-01-01T12:00:00,18:00:00,TRUE,\"a,b\",#DIV/0!,00:00:00,12:00:00,2026-01-01T00:00:00,1.5,12:00:00\r\n"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -5176,4 +5274,73 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
 fn unique_nonce() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
+/// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
+/// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).
+#[test]
+fn undo_and_redo_keep_each_sheets_view() {
+    use gridcraft_model::SheetViewMode;
+    let view = |s: &Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().view;
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview, "undo leaves the view alone");
+    s.execute("view.pageLayout", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(view(&s, 0), SheetViewMode::PageLayout, "redo leaves the view alone");
+
+    // Undoing a rename: the sheet is found at its position under the restored name.
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(s.doc().unwrap().wb.sheet(0).unwrap().name, "Renamed");
+    assert_eq!(view(&s, 0), SheetViewMode::Normal);
+
+    // Undoing a new sheet: the other sheets keep theirs.
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_multi_step_undo_keeps_views_through_each_step() {
+    // A rename and a new sheet undone in one call: neither the name nor the sheet count matches
+    // between the first and last workbook, so the view is carried step by step.
+    let mut s = s();
+    let first = s.doc().unwrap().wb.sheet(0).unwrap().name.clone();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 1);
+    assert_eq!(d.wb.sheet(0).unwrap().name, first);
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.sheets.len(), d.wb.sheet(0).unwrap().name.as_str()), (2, "Renamed"));
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
 }

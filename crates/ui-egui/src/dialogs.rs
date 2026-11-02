@@ -72,6 +72,8 @@ pub struct Dialog {
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
+    /// The linked cell's initial display text; unchanged text must not replace a number or formula.
+    original_link_text: Option<String>,
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -165,6 +167,7 @@ impl Dialog {
         self.values.insert(pick.key.into(), json!(ed.text));
     }
 
+    /// Creates a command-backed form with its initial field values.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -183,9 +186,11 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
         }
     }
 
+    /// Creates a dialog whose body handles its own controls instead of a standard form.
     pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -204,9 +209,11 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
         }
     }
 
+    /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -494,17 +501,30 @@ impl Dialog {
                     json!({"url": url}),
                 )
             }
-            "insertLink" => Dialog::form(
-                "insertLink",
-                "Insert Hyperlink",
-                "insert.link",
-                vec![
-                    Text { key: "text", label: "Display:" },
-                    Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
-                    Text { key: "tooltip", label: "ScreenTip:" },
-                ],
-                json!({"target": "https://"}),
-            ),
+            "insertLink" => {
+                let mut d = Dialog::form(
+                    "insertLink",
+                    "Insert Hyperlink",
+                    "insert.link",
+                    vec![
+                        Text { key: "text", label: "Display:" },
+                        Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
+                        Text { key: "tooltip", label: "ScreenTip:" },
+                    ],
+                    json!({"target": "https://"}),
+                );
+                if let Some(doc) = app.session.active()
+                    && let Some(sheet) = doc.wb.active()
+                    && let Some(link) = sheet.hyperlinks.get(&doc.selection.active)
+                {
+                    let text = gridcraft_engine::display::cell_text(&doc.wb, sheet, doc.selection.active);
+                    d.values.insert("target".into(), json!(link.target));
+                    d.values.insert("text".into(), json!(text));
+                    d.values.insert("tooltip".into(), json!(link.tooltip));
+                    d.original_link_text = Some(text);
+                }
+                d
+            }
             "sparkline" => Dialog::form(
                 "sparkline",
                 "Create Sparklines",
@@ -643,19 +663,31 @@ impl Dialog {
                 d
             }
             "solver" => {
-                // Starts from the sheet's saved model, else the active cell as objective.
+                // Starts from the sheet's saved model, else the active cell as objective; fields
+                // given when opening it go over either.
                 let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet()));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
-                if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
-                    for (k, x) in m {
-                        v.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                for m in [saved.as_ref(), Some(&params)].into_iter().flatten().filter_map(Json::as_object) {
+                    if let Some(v) = values.as_object_mut() {
+                        for (k, x) in m {
+                            v.insert(
+                                k.clone(),
+                                if k == "value" { json!(x.as_str().map_or_else(|| x.to_string(), str::to_string)) } else { x.clone() },
+                            );
+                        }
                     }
                 }
                 if let Some(v) = values.as_object_mut() {
                     v.insert("newOp".into(), json!("<="));
                 }
+                let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
                 let mut d = Dialog::custom("solver", "Solver Parameters", values);
                 d.command = Some("data.solver");
+                // Straight into the Solver Options: the same setup as the Options button, so the
+                // fields show their defaults and Cancel restores what was there.
+                if options {
+                    analysis::open_solver_options(&mut d);
+                }
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
@@ -833,7 +865,13 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                let mut d = Dialog::custom("insertFunction", "Insert Function", json!({"category": category}));
+                d.focus_first_field = true;
+                d
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
