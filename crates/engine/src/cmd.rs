@@ -64,7 +64,15 @@ pub struct CommandInfo {
 impl CommandInfo {
     /// Format the portable shortcut notation for the runtime operating system.
     pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
-        let keys = if mac { self.shortcut_mac.or(self.shortcut) } else { self.shortcut }?;
+        let keys = if mac {
+            self.shortcut_mac.or(self.shortcut)
+        } else if self.shortcut_mac.is_some() && self.shortcut_mac == self.shortcut {
+            // An identical Mac override marks a Mac-only display shortcut.
+            // The portable field remains unchanged for legacy CLI consumers.
+            None
+        } else {
+            self.shortcut
+        }?;
         if mac {
             return Some(keys.to_owned());
         }

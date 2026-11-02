@@ -177,7 +177,9 @@ fn command_palette_shortcuts_come_from_engine_metadata() {
         assert_eq!(command.shortcut_for_platform(false), other.map(str::to_string), "{id}: Windows/Linux");
     }
 
-    for (id, legacy) in [("data.group", "Alt+Shift+Right"), ("data.ungroup", "Alt+Shift+Left")] {
+    for (id, legacy) in
+        [("data.group", "Alt+Shift+Right"), ("data.ungroup", "Alt+Shift+Left"), ("home.alignLeft", "Cmd+L"), ("home.alignCenter", "Cmd+E")]
+    {
         let command = commands.iter().find(|c| c.id == id).unwrap();
         assert_eq!(command.shortcut, Some(legacy), "{id}: legacy CLI shortcut");
     }

@@ -89,11 +89,11 @@ pub fn specs() -> Vec<CommandSpec> {
         // Alignment
         CommandSpec {
             shortcut_mac: Some("Cmd+L"),
-            ..cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left))
+            ..cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left))
         },
         CommandSpec {
             shortcut_mac: Some("Cmd+E"),
-            ..cmd!("home.alignCenter", "Center", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center))
+            ..cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center))
         },
         cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
         cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
