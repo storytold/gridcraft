@@ -148,6 +148,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Прибрати стрілки",
         "Show Formulas" => "Показати формули",
         "Error Checking" => "Перевірка помилок",
+        "Trace Error" => "Джерело помилки",
         "Circular References" => "Циклічні посилання",
         "Evaluate Formula" => "Обчислити формулу",
         "Watch Window" => "Окно контрольних значень",
