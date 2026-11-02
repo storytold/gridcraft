@@ -47,7 +47,11 @@ impl SheetApp {
             return r;
         }
         let before = self.session.active_window();
+        let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        if let Some(from) = zoom_from {
+            crate::grid::Trace::keep_through_zoom(self, from);
+        }
         if id.starts_with("file.") && self.session.active_window() != before {
             // File › New or Open from the Backstage view: the window it was in goes back to its sheet.
             self.backstage = None;
