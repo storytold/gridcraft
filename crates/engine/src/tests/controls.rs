@@ -148,7 +148,8 @@ fn format_and_assign() {
     s.execute("control.format", json!({"id": c, "value": 25})).unwrap();
     assert_eq!(v(&s, "B1"), Value::Number(50.0), "without a link nothing is written");
     // Buttons: text and action.
-    s.execute("macro.save", json!({"name": "Fill", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "x"}}]})).unwrap();
+    // A fixed input needs a macro that takes one.
+    s.execute("macro.save", json!({"name": "Fill", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "x"}}], "inputs": [{"name": "Input", "kind": "range"}]})).unwrap();
     let b = id(&s.execute("insert.button", json!({"text": "Go", "macro": "Fill", "input": "C2:D4", "output": "F2"})).unwrap());
     let action = control(&s, b).action;
     assert_eq!(action, Some(ControlAction::Macro { name: "Fill".into(), input: MacroInput::Fixed("C2:D4".into()), output: Some("F2".into()) }));
@@ -380,7 +381,7 @@ fn reopen(s: &mut Session) {
 fn a_kept_button_action_comes_back_only_on_the_same_button() {
     use crate::cmd::controls::{load_action_names, with_action_names};
     let mut s = s();
-    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "m"}}]})).unwrap();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "m"}}], "inputs": [{"name": "Input", "kind": "range"}]})).unwrap();
     s.execute("insert.button", json!({"at": "D2", "text": "Run", "command": "cell.set", "params": {"cell": "A9", "input": "cmd"}})).unwrap();
     s.execute("insert.button", json!({"at": "D6", "text": "Other"})).unwrap();
     s.execute("insert.button", json!({"at": "D9", "text": "Fixed", "macro": "Mark", "input": "F1:G2"})).unwrap();
@@ -465,6 +466,39 @@ fn a_kept_action_without_the_buttons_name_or_anchor_is_dropped() {
     assert_eq!(kept(&edited("name", Some(json!(1)))), None, "`name` is not text");
     assert_eq!(kept(&edited("at", Some(Json::Null))), None, "`at` is null");
     assert!(matches!(kept(&items), Some(ControlAction::Command { .. })), "the writer's own entry still comes back");
+}
+
+/// A fixed input range for a macro that declares no inputs would fail every press (`macro.run`
+/// refuses inputs the macro doesn't take), so the assignment is refused when it is made, naming
+/// the macro; a macro the workbook doesn't have yet is not checked, and a macro with an input
+/// takes the range. A file that brings such a stored input in gets the macro on the selection.
+#[test]
+fn a_fixed_input_for_a_macro_without_inputs_is_refused_when_assigned() {
+    use crate::cmd::controls::{load_action_names, with_action_names};
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Fill", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "x"}}]})).unwrap();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "m"}}], "inputs": [{"name": "Input", "kind": "range"}]})).unwrap();
+    let want = "macro 'Fill' takes no inputs";
+    assert!(err(s.execute("insert.button", json!({"at": "B2", "macro": "Fill", "input": "C2:D4"}))).contains(want));
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().controls.len(), 0, "no button was placed");
+    let b = id(&s.execute("insert.button", json!({"at": "B2", "macro": "Fill", "output": "F2"})).unwrap());
+    let e = err(s.execute("control.assign", json!({"id": b, "macro": "fill", "input": "C2:D4"})));
+    assert!(e.contains(want), "any letter case: {e}");
+    assert_eq!(control(&s, b).action, Some(ControlAction::Macro { name: "Fill".into(), input: MacroInput::Selection, output: Some("F2".into()) }));
+    s.execute("control.assign", json!({"id": b, "macro": "Mark", "input": "C2:D4"})).unwrap();
+    s.execute("control.assign", json!({"id": b, "macro": "Later", "input": "C2:D4"})).unwrap();
+    assert_eq!(control(&s, b).action, Some(ControlAction::Macro { name: "Later".into(), input: MacroInput::Fixed("C2:D4".into()), output: None }));
+    // A file's stored fixed input for Fill (another version assigned it) comes back as the selection.
+    s.execute("control.assign", json!({"id": b, "macro": "Fill", "output": "F2"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    wb.sheet_mut(0).unwrap().controls[0].action =
+        Some(ControlAction::Macro { name: "Fill".into(), input: MacroInput::Fixed("C2:D4".into()), output: Some("F2".into()) });
+    let mut stored = with_action_names(&wb).unwrap().unwrap();
+    load_action_names(&mut stored);
+    assert_eq!(
+        stored.sheets[0].controls[0].action,
+        Some(ControlAction::Macro { name: "Fill".into(), input: MacroInput::Selection, output: Some("F2".into()) })
+    );
 }
 
 /// The saved xlsx bytes of `s`'s workbook.

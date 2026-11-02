@@ -404,6 +404,14 @@ pub(crate) fn take_requests(s: &mut Session, queued: usize, name: &str) -> Optio
     blocked
 }
 
+/// The stored name of the workbook's macro `name` when it exists and declares no inputs: a fixed
+/// input range would make every press fail (`macro.run` refuses inputs it doesn't take), so such
+/// an assignment is refused when it is made and dropped to the selection when a file brings one
+/// in. A macro the workbook doesn't have (yet) is not checked: the assignment is kept as given.
+fn takes_no_inputs(wb: &Workbook, name: &str) -> Option<String> {
+    crate::macros::find(wb, name).and_then(|i| wb.macros.get(i)).filter(|m| m.inputs.is_empty()).map(|m| m.name.clone())
+}
+
 /// A button action from `macro` (with `input` and `output`) or `command` (with `params`).
 fn action_param(s: &Session, cmd: &str, p: &Json) -> Result<Option<ControlAction>> {
     if let Some(name) = str_param(p, "macro").map(str::trim).filter(|n| !n.is_empty()) {
@@ -417,6 +425,9 @@ fn action_param(s: &Session, cmd: &str, p: &Json) -> Result<Option<ControlAction
                 let (_, body) = split_sheet(t);
                 if gridcraft_core::RangeRef::parse(body).is_none() {
                     return Err(bad(cmd, format!("`input` must be \"selection\" or a range such as B2:D9, not `{t}`")));
+                }
+                if let Some(stored) = takes_no_inputs(&s.doc()?.wb, name) {
+                    return Err(bad(cmd, format!("macro '{stored}' takes no inputs, so `input` must be \"selection\"")));
                 }
                 MacroInput::Fixed(t.to_string())
             }
@@ -654,7 +665,8 @@ pub(crate) fn with_action_names(wb: &Workbook) -> Result<Option<Workbook>> {
 /// button's name and anchor cell, the button at the stored place must have that name and anchor
 /// cell (another application may have added, removed or reordered controls), and it must not
 /// have been given another macro since (a stored macro action comes back only on a button that
-/// still runs that macro, a stored command only on one the file gives no macro).
+/// still runs that macro, a stored command only on one the file gives no macro). A stored fixed
+/// input for a macro that takes no inputs becomes the selection (see [`takes_no_inputs`]).
 pub(crate) fn load_action_names(wb: &mut Workbook) {
     let Some(items) = stash::get_json(wb, ACTIONS_KEY) else { return };
     stash::remove(wb, ACTIONS_KEY);
@@ -681,6 +693,14 @@ pub(crate) fn load_action_names(wb: &mut Workbook) {
         if !valid || !wb.sheet(si).is_some_and(|sh| sh.controls.get(index).is_some_and(same)) {
             continue;
         }
+        let action = match action {
+            // The macro takes no inputs now: the stored range would fail every press, so the
+            // button runs the macro on the selection, as the file itself assigns it.
+            ControlAction::Macro { name, input: MacroInput::Fixed(_), output } if takes_no_inputs(wb, &name).is_some() => {
+                ControlAction::Macro { name, input: MacroInput::Selection, output }
+            }
+            other => other,
+        };
         if let Some(c) = wb.sheet_mut(si).and_then(|sh| sh.controls.get_mut(index)) {
             c.action = Some(action);
         }
