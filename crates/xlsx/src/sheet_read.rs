@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
-    ValidationKind, XmlColumnPr,
+    NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn,
+    Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -48,16 +48,17 @@ struct RowState {
     rows: u64,
 }
 
-/// Whether `pos` lies in a known dynamic range that isn't its anchor: the cell's cached value
-/// gives way to the formula that will fill it. Charges every scanned range against one work
-/// budget, then gives up consulting the ranges at all: the worst kind of file may then import
-/// a few cached spill values, but it never stalls the whole import.
-fn in_dynamic(st: &mut RowState, pos: CellRef) -> bool {
+/// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
+/// value gives way to the formula that will fill it (or, for a Python cell, becomes its
+/// result). Charges every scanned range against one work budget, then gives up consulting the
+/// ranges at all: the worst kind of file may then import a few cached spill values, but it
+/// never stalls the whole import.
+fn dynamic_range(st: &mut RowState, pos: CellRef) -> Option<RangeRef> {
     if st.dynamic_checks > MAX_DYNAMIC_CHECKS || st.dynamic.is_empty() {
-        return false;
+        return None;
     }
     let ranges = st.dynamic.len();
-    let hit = st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos);
+    let hit = st.dynamic.iter().find(|r| r.contains(pos) && r.start != pos).copied();
     st.dynamic_checks = st.dynamic_checks.saturating_add(ranges as u64);
     hit
 }
@@ -76,6 +77,47 @@ fn push_dynamic(st: &mut RowState, range: RangeRef) {
     }
     st.dynamic_cells = st.dynamic_cells.saturating_add(cells);
     st.dynamic.push(range);
+}
+
+/// Forgets the range anchored at `pos` (a Python cell whose code the file doesn't hold, which
+/// keeps only its cached value): the cached values over the rest of its spill are kept as plain
+/// values too, as the file shows them, rather than left for a result that won't come. Charged
+/// like [`dynamic_range`]'s scans.
+fn forget_dynamic(st: &mut RowState, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    if let Some(i) = st.dynamic.iter().rposition(|r| r.start == pos) {
+        st.dynamic.remove(i);
+    }
+}
+
+/// Records the spill range of the Python cell read at `pos`, its anchor, when the file declares
+/// one that a result can fill: the spill then exists even when the file holds no records for its
+/// blank cells. Charged like [`dynamic_range`]'s scans.
+fn record_python_spill(st: &mut RowState, sheet: &mut Sheet, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    let Some(r) = st.dynamic.iter().rev().find(|r| r.start == pos).copied() else { return };
+    if r.count() > 1 && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 {
+        sheet.spill_ranges.insert(pos, r);
+    }
+}
+
+/// Past the scan budget, the cells of a Python spill read afterwards were kept as plain cells, not
+/// as its spilled values, and a result rebuilt over them would block itself. Every Python spill of
+/// such a sheet keeps its values as plain values instead, with no live spill.
+fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
+    if st.dynamic_checks <= MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    let anchors: Vec<CellRef> = sheet.spill_ranges.keys().copied().filter(|a| sheet.cells.get(*a).is_some_and(|c| c.py.is_some())).collect();
+    for anchor in anchors {
+        sheet.settle_spill(anchor);
+    }
 }
 
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
@@ -134,6 +176,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
     let mut fit_to_page = false;
@@ -191,6 +234,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 if e.attr("orientation") == Some("landscape") {
                     sheet.print.orientation = Orientation::Landscape;
                 }
+                // `downThenOver` when absent (ECMA-376's default); an unknown value reads as that too.
+                sheet.print.page_order = e.attr("pageOrder").and_then(PageOrder::parse).unwrap_or_default();
                 if let Some(p) = e.attr_u32("paperSize").and_then(paper_name) {
                     sheet.print.paper = p.to_string();
                 }
@@ -524,8 +569,45 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
+    // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
+    // line breaks in the code. A formula naming a script the part lacks keeps only its cached
+    // values, its own and its spill's, as plain values.
+    let py = match (&formula, c.child("f")) {
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
+        _ => crate::python_part::PyFormula::Not,
+    };
+    let (formula, py) = match py {
+        crate::python_part::PyFormula::Not => (formula, None),
+        crate::python_part::PyFormula::Code(py) => (None, Some(Arc::new(py))),
+        crate::python_part::PyFormula::Missing => {
+            forget_dynamic(st, pos);
+            (None, None)
+        }
+    };
+    if py.is_some() {
+        record_python_spill(st, sheet, pos);
+    }
+    let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
+    let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
+    let value = match spilled_from {
+        // A Python cell's spilled values are kept: they are its result until it runs again.
+        Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
+            if !value.is_empty() {
+                sheet.spill.insert(pos, value);
+            }
+            sheet.spill_ranges.insert(r.start, r);
+            Value::Empty
+        }
+        // A Python cell's range larger than a result may be is a crafted file's: it is no spill,
+        // and its cells keep the values the file shows as plain values, as when the cell keeps
+        // only its own value.
+        Some(_) if python_anchor => value,
+        // A formula's spilled values are dropped: recalculation fills them again.
+        Some(_) => Value::Empty,
+        None => value,
+    };
+    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

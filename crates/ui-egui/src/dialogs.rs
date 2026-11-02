@@ -69,7 +69,7 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
-    focus_initialized: bool,
+    pub(crate) focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
     /// The linked cell's initial display text; unchanged text must not replace a number or formula.
@@ -551,14 +551,20 @@ impl Dialog {
                 },
             ),
             "pageSetup" => {
-                // Opens on the active sheet's saved margins, so OK without edits rewrites them unchanged.
-                let m = app.session.active().and_then(|d| d.wb.active()).map(|s| s.print.margins).unwrap_or([0.7, 0.7, 0.75, 0.75, 0.3, 0.3]);
+                // Opens on the active sheet's saved margins and page order, so OK without edits
+                // rewrites them unchanged. One `pageLayout.pageSetup` sets them all: one undo step.
+                let (margins, order) = app
+                    .session
+                    .active()
+                    .and_then(|d| d.wb.active())
+                    .map(|s| (s.print.margins, s.print.page_order))
+                    .unwrap_or(([0.7, 0.7, 0.75, 0.75, 0.3, 0.3], Default::default()));
                 // Round off f32 noise so the form shows 0.1, not 0.10000000149.
-                let [left, right, top, bottom, header, footer] = m.map(|v| (f64::from(v) * 1e4).round() / 1e4);
+                let [left, right, top, bottom, header, footer] = margins.map(|v| (f64::from(v) * 1e4).round() / 1e4);
                 Dialog::form(
                     "pageSetup",
                     "Page Setup",
-                    "pageLayout.margins",
+                    "pageLayout.pageSetup",
                     vec![
                         Number { key: "left", label: "Left margin (in):" },
                         Number { key: "right", label: "Right margin (in):" },
@@ -566,8 +572,13 @@ impl Dialog {
                         Number { key: "bottom", label: "Bottom margin (in):" },
                         Number { key: "header", label: "Header (in):" },
                         Number { key: "footer", label: "Footer (in):" },
+                        Choice {
+                            key: "pageOrder",
+                            label: "Page order",
+                            options: vec![("downThenOver", "Down, then over"), ("overThenDown", "Over, then down")],
+                        },
                     ],
-                    json!({"left": left, "right": right, "top": top, "bottom": bottom, "header": header, "footer": footer}),
+                    json!({"left": left, "right": right, "top": top, "bottom": bottom, "header": header, "footer": footer, "pageOrder": order.id()}),
                 )
             }
             "textToColumns" => Dialog::form(
@@ -616,6 +627,7 @@ impl Dialog {
                 }
                 d
             }
+            "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
