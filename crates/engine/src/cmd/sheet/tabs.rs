@@ -159,6 +159,8 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };
         if copy {
             let mut sh = (*src).clone();
+            // The copy is a sheet of its own, not the one it was copied from.
+            sh.uid = gridcraft_model::SheetUid::fresh();
             let base = sh.name.clone();
             // `Name (2)`: the name is shortened so the suffix fits in Excel's 31 characters.
             let name = (2..)

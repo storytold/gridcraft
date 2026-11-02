@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
@@ -52,9 +53,44 @@ impl SheetViewMode {
     }
 }
 
+/// A sheet's identity while the app runs, for what must follow one sheet (an open cell draft): a
+/// sheet made new (added, inserted, copied, read from a file or from JSON) gets a fresh one, and it
+/// stays with the sheet through renames, moves and the copies undo keeps. Never saved.
+/// It is not content: any two compare equal, so comparing sheets compares what they hold; compare
+/// identities with [`SheetUid::get`].
+#[derive(Clone, Copy, Debug)]
+pub struct SheetUid(u64);
+
+/// The next [`SheetUid`]; 0 is never given out.
+static NEXT_SHEET_UID: AtomicU64 = AtomicU64::new(1);
+
+impl SheetUid {
+    pub fn fresh() -> SheetUid {
+        SheetUid(NEXT_SHEET_UID.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for SheetUid {
+    fn default() -> SheetUid {
+        SheetUid::fresh()
+    }
+}
+
+impl PartialEq for SheetUid {
+    fn eq(&self, _: &SheetUid) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// The sheet's identity while the app runs ([`SheetUid`]). Not in JSON or the file.
+    #[serde(skip)]
+    pub uid: SheetUid,
     /// The `sheetId` the file gave the sheet, written back on save so that what refers to the
     /// sheet by its id keeps finding it; 0 for a sheet the file did not have. Not in JSON.
     #[serde(skip)]
@@ -149,6 +185,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            uid: SheetUid::fresh(),
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
@@ -513,6 +550,26 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    #[test]
+    fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
+        let a = Sheet::new("A");
+        let b = Sheet::new("A");
+        assert_ne!(a.uid.get(), b.uid.get(), "two new sheets");
+        assert_ne!(a.uid.get(), 0);
+        // A clone (an undo snapshot, a rename through Arc::make_mut) is the same sheet.
+        let mut renamed = a.clone();
+        renamed.name = "B".into();
+        assert_eq!(renamed.uid.get(), a.uid.get());
+        // Not content: equal sheets compare equal whatever their identity.
+        assert_eq!(a, b);
+        // Not in JSON: a sheet read back is a new one.
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(!json.contains("uid"), "{json}");
+        let read: Sheet = serde_json::from_str(&json).unwrap();
+        assert_ne!(read.uid.get(), a.uid.get());
+        assert_eq!(read, a);
+    }
 
     #[test]
     fn line_index_matches_linear() {
