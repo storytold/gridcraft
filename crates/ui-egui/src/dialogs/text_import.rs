@@ -5,6 +5,24 @@ use super::{Dialog, Json, Map, SheetApp, Stroke, json, vec2};
 const TEXT_IMPORT_DELIMITERS: [(&str, &str, &str); 4] =
     [("tab", "\t", "Tab"), ("semicolon", ";", "Semicolon"), ("comma", ",", "Comma"), ("space", " ", "Space")];
 
+/// Text Import (#2553): the file rides along like the password dialog's, and OK opens it with
+/// `file.open` and the settings.
+pub(super) fn text_import_dialog(params: &Json) -> Dialog {
+    let mut values = json!({
+        "mode": "detect", "tab": true, "semicolon": false, "comma": false, "space": false, "otherOn": false, "other": "",
+        "consecutive": false, "qualifier": "\"", "fixedWidths": "", "startRow": null, "decimal": "auto", "asText": false,
+    });
+    // The file, and any setting the caller gives (the control channel, a snapshot).
+    for (k, v) in params.as_object().into_iter().flatten() {
+        if values.get(k).is_some() || matches!(k.as_str(), "path" | "name" | "base64") {
+            values[k.as_str()] = v.clone();
+        }
+    }
+    let mut d = Dialog::custom("textImport", "Text Import", values);
+    d.command = Some("file.open");
+    d
+}
+
 /// The `file.open` params for Text Import's values: the file and how it splits.
 pub(super) fn text_import_params(values: &Map<String, Json>) -> Json {
     let get = |k: &str| values.get(k);

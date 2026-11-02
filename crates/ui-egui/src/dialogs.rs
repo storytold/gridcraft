@@ -37,6 +37,7 @@ pub(crate) use names::insert_name;
 use names::pasteable_names;
 pub(crate) use show::build_params;
 pub use show::show;
+use text_import::text_import_dialog;
 use zoom::zoom_preset;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -403,23 +404,7 @@ impl Dialog {
                     values,
                 )
             }
-            // Text Import (#2553): the file rides along like the password dialog's, and OK opens
-            // it with `file.open` and the settings.
-            "textImport" => {
-                let mut values = json!({
-                    "mode": "detect", "tab": true, "semicolon": false, "comma": false, "space": false, "otherOn": false, "other": "",
-                    "consecutive": false, "qualifier": "\"", "fixedWidths": "", "startRow": null, "decimal": "auto", "asText": false,
-                });
-                // The file, and any setting the caller gives (the control channel, a snapshot).
-                for (k, v) in params.as_object().into_iter().flatten() {
-                    if values.get(k).is_some() || matches!(k.as_str(), "path" | "name" | "base64") {
-                        values[k.as_str()] = v.clone();
-                    }
-                }
-                let mut d = Dialog::custom("textImport", "Text Import", values);
-                d.command = Some("file.open");
-                d
-            }
+            "textImport" => text_import_dialog(&params),
             "unprotectSheet" => Dialog::form(
                 "unprotectSheet",
                 "Unprotect Sheet",
