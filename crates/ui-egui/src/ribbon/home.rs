@@ -159,7 +159,11 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
-            crate::rtl::menu(&ba).show(|ui| {
+            // Alt, H, B opens the menu with each item's letter, as Excel's does (#2964); a letter
+            // or Esc changes the prefix, which closes it again (`ribbon_keys`).
+            let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
+            let keyed = keytip_table::opens_menu(&prefix, "home.borders");
+            crate::rtl::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
                 for (label, preset) in [
                     ("Bottom Border", "bottom"),
                     ("Top Border", "top"),
@@ -176,13 +180,21 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ("Top and Double Bottom Border", "topDoubleBottom"),
                     ("Inside Borders", "inside"),
                 ] {
-                    if crate::border_preview::preset_button(ui, label, preset).clicked() {
+                    let item = crate::border_preview::preset_button(ui, label, preset);
+                    if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
+                        keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
+                    }
+                    if item.clicked() {
                         app.grid.last_border = preset.to_string();
                         act(app, "home.borders", json!({"preset": preset}));
                     }
                 }
                 ui.separator();
-                if ui.button(lang.tr("More Borders…")).clicked() {
+                let more = ui.button(lang.tr("More Borders…"));
+                if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
+                    keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
+                }
+                if more.clicked() {
                     app.open_dialog("formatCells", json!({"tab": "Border"}));
                 }
             });
@@ -469,7 +481,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            crate::rtl::menu(&sa).show(|ui| autosum_menu(app, ui));
+            crate::rtl::menu(&sa).show(|ui| crate::function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -560,21 +572,6 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-}
-
-/// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
-/// Function dialog.
-pub(super) fn autosum_menu(app: &mut SheetApp, ui: &mut Ui) {
-    let lang = app.ui.language;
-    for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-        if ui.button(f).clicked() {
-            act(app, "formulas.autoSum", json!({"function": f}));
-        }
-    }
-    ui.separator();
-    if ui.button(lang.tr("More Functions…")).clicked() {
-        app.open_dialog("insertFunction", json!({}));
-    }
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {

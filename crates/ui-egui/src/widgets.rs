@@ -182,6 +182,12 @@ fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], 
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    small_button_accent(ui, icon, None, label, tip, dropdown)
+}
+
+/// Small ribbon button whose icon takes an accent colour (see [`icons::paint_accent`]); `None`
+/// draws it like [`small_button`]. A labelled button reports its label to accessibility.
+pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let label = tr(ui, label);
@@ -194,7 +200,13 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     let rtl = crate::rtl::on(ui.ctx());
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, rect, 12.0), rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_accent(
+        ui.painter(),
+        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, rect, 12.0), rect.center().y), vec2(16.0, 16.0)),
+        icon,
+        t.text,
+        accent,
+    );
     if !label.is_empty() {
         ui.painter().text(pos2(crate::rtl::lead_x(rtl, rect, 24.0), rect.center().y), crate::rtl::lead_center(rtl), label, font, t.text);
     }

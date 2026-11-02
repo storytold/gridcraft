@@ -432,7 +432,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
                             ui.ctx().accesskit_node_builder(slider.id, |node| node.set_label(app.ui.language.tr("Zoom")));
                             if slider.changed() {
+                                let from = crate::grid::Trace::key(app);
                                 let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
+                                crate::grid::Trace::keep_through_zoom(app, from);
                             }
                         };
                         if rtl {
