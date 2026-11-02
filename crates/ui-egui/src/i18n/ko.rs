@@ -156,6 +156,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "오류 검사",
         "Trace Error" => "오류 추적",
         "Circular References" => "순환 참조",
+        "Python Mode" => "Python 모드",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",
