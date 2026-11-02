@@ -2,6 +2,7 @@
 //! a button that collapses the dialog to the box while the person selects.
 
 use gridcraft_engine::DocState;
+use gridcraft_engine::core::split_areas;
 use gridcraft_engine::model::{Sheet, SheetUid, Workbook};
 
 use super::data::abs;
@@ -431,27 +432,6 @@ fn anchors(part: &str) -> Option<Anchors> {
     Some(Anchors { letters, digits, col_abs, row_abs })
 }
 
-/// The areas of a reference list, split at the commas between them. A comma inside a quoted
-/// sheet name (`'Sales, West'!A1`) is part of the name, and a doubled quote inside the quotes
-/// (`'O''Brien, Jr'!A1`) is an escaped quote, not the end of the name: a quote toggles the
-/// quoted state, so a doubled one toggles it twice.
-fn split_areas(reference: &str) -> Vec<&str> {
-    let mut areas = Vec::new();
-    let (mut start, mut quoted) = (0, false);
-    for (i, c) in reference.char_indices() {
-        match c {
-            '\'' => quoted = !quoted,
-            ',' if !quoted => {
-                areas.push(reference.get(start..i).unwrap_or_default());
-                start = i.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-    areas.push(reference.get(start..).unwrap_or_default());
-    areas
-}
-
 /// Excel's F4 in a reference box: `A1` → `$A$1` → `A$1` → `$A1` → `A1`, every part of every
 /// area moving together from the first part's anchors (`A1:B2,D4` → `$A$1:$B$2,$D$4`), sheet
 /// names kept; whole columns and rows have one anchor each (`A:A` → `$A:$A` → `A:A`). Text that
@@ -497,16 +477,7 @@ pub(crate) fn cycle_anchors(reference: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{cycle_anchors, split_areas};
-
-    #[test]
-    fn areas_split_only_at_commas_outside_quoted_sheet_names() {
-        assert_eq!(split_areas("B2:B4,D1"), ["B2:B4", "D1"]);
-        assert_eq!(split_areas("'Sales, West'!$A$1"), ["'Sales, West'!$A$1"]);
-        assert_eq!(split_areas("'O''Brien, Jr'!A1:B2,D4"), ["'O''Brien, Jr'!A1:B2", "D4"]);
-        assert_eq!(split_areas("'Q1, Q2'!A1,'Q3, Q4'!B2"), ["'Q1, Q2'!A1", "'Q3, Q4'!B2"]);
-        assert_eq!(split_areas(""), [""]);
-    }
+    use super::cycle_anchors;
 
     #[test]
     fn f4_keeps_a_comma_inside_a_quoted_sheet_name() {

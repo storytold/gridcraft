@@ -1819,3 +1819,38 @@ fn hostile_models_are_refused_without_panicking() {
     let r = s.execute("data.solver", json!({"objective": "D1", "variables": "A1", "maxEvaluations": 1e300})).unwrap();
     assert_ne!(r["status"], "converged");
 }
+
+#[test]
+fn a_comma_inside_a_quoted_sheet_name_does_not_split_a_reference() {
+    // Wyndor Glass on sheets whose names hold a comma (and, for the second, a doubled quote),
+    // solved from Sheet1 with references that carry those names.
+    for (name, quoted) in [("Sales, West", "'Sales, West'"), ("O'Brien, Jr", "'O''Brien, Jr'")] {
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": name, "before": 1})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")]);
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let r = s
+            .execute(
+                "data.solver",
+                json!({
+                    "objective": format!("{quoted}!$B$1"),
+                    "goal": "max",
+                    "variables": format!("{quoted}!$A$1,{quoted}!$A$2"),
+                    "constraints": [format!("{quoted}!$A$1 <= 4"), format!("{quoted}!$B$2 <= 12"), format!("{quoted}!$B$3 <= 18")],
+                    "method": "simplex",
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        let sheet = &s.doc().unwrap().wb.sheets[1];
+        let v = |a: &str| sheet.value(CellRef::parse(a).unwrap()).as_f64().unwrap_or(f64::NAN);
+        assert!((v("A1") - 2.0).abs() < 1e-9 && (v("A2") - 6.0).abs() < 1e-9, "{name}");
+        assert!((v("B1") - 36.0).abs() < 1e-9, "{name}");
+        // The saved model keeps both variable cells, and loads back as the same model.
+        let model = super::saved_model(&s.doc().unwrap().wb, 1).unwrap_or_else(|| panic!("{name}: no saved model"));
+        assert_eq!(model["objective"], "B1", "{name}: {model}");
+        assert_eq!(model["variables"], "A1,A2", "{name}: {model}");
+        assert_eq!(model["constraints"][0], "A1 <= 4", "{name}: {model}");
+    }
+}

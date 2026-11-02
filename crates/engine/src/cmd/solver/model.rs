@@ -1,3 +1,5 @@
+use gridcraft_core::split_areas;
+
 use super::{
     CMD, CellRef, DEFAULT_EVALS, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_EVALS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef,
     Result, Session, Workbook, bad, bool_param, f64_param, json, split_sheet, str_param,
@@ -138,7 +140,8 @@ pub(super) struct Model {
 fn cells_of(wb: &Workbook, t: &str, default_sheet: usize, cap: usize) -> Result<(usize, Vec<CellRef>)> {
     let mut sheet = None;
     let mut out = Vec::new();
-    for part in t.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+    // A comma inside a quoted sheet name (`'Sales, West'!$A$1`) does not end the area.
+    for part in split_areas(t).into_iter().map(str::trim).filter(|x| !x.is_empty()) {
         let (sh, body) = split_sheet(part);
         let si = match sh {
             Some(n) => wb.sheet_index(&n).ok_or_else(|| bad(CMD, format!("no sheet named `{n}`")))?,
@@ -337,8 +340,8 @@ pub fn sensitivity_applies(p: &Json) -> bool {
 /// `"B2:B4,D1"` as absolute references, each qualified by `sheet_name` when given.
 fn abs_text(sheet_name: Option<&str>, cells: &str) -> String {
     let q = sheet_name.map(|n| format!("{}!", crate::pivot::quote_sheet(n))).unwrap_or_default();
-    cells
-        .split(',')
+    split_areas(cells)
+        .into_iter()
         .map(str::trim)
         .filter(|x| !x.is_empty())
         .filter_map(|part| {
@@ -446,7 +449,7 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
     let named = |n: &str, scope: Option<usize>| wb.names.iter().find(|d| d.name.eq_ignore_ascii_case(n) && d.scope == scope);
     let scope = if named("solver_opt", Some(sheet)).is_some() { Some(sheet) } else { None };
     let get = |n: &str| named(n, scope).map(|d| d.formula.trim().trim_start_matches('=').to_string());
-    let local = |t: String| -> String { t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",") };
+    let local = |t: String| local_refs(&t);
     let objective = local(get("solver_opt")?);
     if objective.trim_matches('"').trim().is_empty() {
         return None;
@@ -608,7 +611,7 @@ fn call_args(t: &str, name: &str) -> Option<String> {
 
 /// References without sheet names or `$`.
 fn local_refs(t: &str) -> String {
-    t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
+    split_areas(t).into_iter().map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
 }
 
 fn not_a_model() -> EngineError {
