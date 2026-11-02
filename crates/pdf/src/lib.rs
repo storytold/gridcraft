@@ -7,6 +7,7 @@
 //!   registered one with [`set_unicode_font_loader`]; otherwise it uses the non-embedded CID fallback.
 //! - Explicit [`TextFonts`] replace all text faces per document, including Latin, and supply
 //!   matching advance widths for layout.
+//! - Symbol uses its own built-in encoding ([`symbol_code`]) for mathematical glyphs.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -17,8 +18,11 @@
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod symbol;
 mod system_fonts;
 mod truetype;
+
+pub use symbol::{symbol_code, symbol_width};
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -181,7 +185,7 @@ impl TextFonts {
             let want = usize::from(font.is_bold()) + 2 * usize::from(font.is_italic());
             return Some(if self.faces.get(want).is_some_and(Option::is_some) { want } else { 0 });
         }
-        if !needs_unicode(text) {
+        if font == Font::Symbol || !needs_unicode(text) {
             return None;
         }
         let want = usize::from(font.is_bold());
@@ -193,18 +197,22 @@ impl TextFonts {
     /// Width using exactly the face that will draw the text, in points.
     pub fn text_width(&self, font: Font, size: f32, text: &str) -> f32 {
         let slot = self.slot(font, text);
-        let units =
-            if slot.is_some() || self.custom || matches!(font, Font::Embedded(_)) || !needs_unicode(text) || self.faces.iter().all(Option::is_none) {
-                self.run_units(font, text, slot)
-            } else {
-                let mut rest = text;
-                let mut units = 0u64;
-                while let Some((slot, run)) = self.fallback_run(font, rest) {
-                    units = units.saturating_add(self.run_units(font, run, slot));
-                    rest = rest.get(run.len()..).unwrap_or_default();
-                }
-                units
-            };
+        let units = if slot.is_some()
+            || self.custom
+            || matches!(font, Font::Embedded(_) | Font::Symbol)
+            || !needs_unicode(text)
+            || self.faces.iter().all(Option::is_none)
+        {
+            self.run_units(font, text, slot)
+        } else {
+            let mut rest = text;
+            let mut units = 0u64;
+            while let Some((slot, run)) = self.fallback_run(font, rest) {
+                units = units.saturating_add(self.run_units(font, run, slot));
+                rest = rest.get(run.len()..).unwrap_or_default();
+            }
+            units
+        };
         units as f32 * size / 1000.0
     }
 
@@ -274,7 +282,7 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus ZapfDingbats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -292,7 +300,12 @@ pub enum Font {
     CourierBoldOblique,
     /// A face resolved by [`TextFonts::font`], local to that document's font set.
     Embedded(usize),
+    /// Greek letters and mathematical symbols, in the font's own encoding.
+    Symbol,
 }
+
+/// How many fonts a document can use.
+const FONT_COUNT: usize = 13;
 
 /// A font family for [`Font::styled`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -304,7 +317,7 @@ pub enum Family {
 }
 
 impl Font {
-    pub const ALL: [Font; 12] = [
+    pub const ALL: [Font; FONT_COUNT] = [
         Font::Helvetica,
         Font::HelveticaBold,
         Font::HelveticaOblique,
@@ -317,6 +330,7 @@ impl Font {
         Font::CourierBold,
         Font::CourierOblique,
         Font::CourierBoldOblique,
+        Font::Symbol,
     ];
 
     /// PostScript base font name.
@@ -335,6 +349,7 @@ impl Font {
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
             Font::Embedded(_) => "Helvetica",
+            Font::Symbol => "Symbol",
         }
     }
 
@@ -394,8 +409,21 @@ impl Font {
         )
     }
 
+    /// Whether a standard font can show `c` in its own encoding, without a fallback.
+    /// Embedded handles require their document font set and return false here.
+    pub fn can_encode(self, c: char) -> bool {
+        match self {
+            Font::Symbol => symbol_code(c).is_some(),
+            Font::Embedded(_) => false,
+            _ => c == '?' || win_ansi(c) != b'?',
+        }
+    }
+
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if self == Font::Symbol {
+            return symbol_code(c).and_then(symbol_width).unwrap_or(500);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -495,10 +523,16 @@ fn pdf_utf16_string(text: &str) -> String {
 
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
+    pdf_string_in(text, false)
+}
+
+/// A PDF literal string for `text` in WinAnsiEncoding, or in Symbol's encoding (where a
+/// character Symbol lacks becomes `?`).
+fn pdf_string_in(text: &str, symbol: bool) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
     for c in text.chars() {
-        let b = win_ansi(c);
+        let b = if symbol { symbol_code(c).unwrap_or(b'?') } else { win_ansi(c) };
         match b {
             b'(' | b')' | b'\\' => {
                 s.push('\\');
@@ -858,7 +892,7 @@ impl Page {
         let slot = self.unicode.slot(font, text);
         if slot.is_none()
             && !self.unicode.custom
-            && !matches!(font, Font::Embedded(_))
+            && !matches!(font, Font::Embedded(_) | Font::Symbol)
             && needs_unicode(text)
             && self.unicode.faces.iter().any(Option::is_some)
         {
@@ -902,6 +936,16 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        if font == Font::Symbol {
+            if let Some(f) = self.fonts.get_mut(fi) {
+                *f = true;
+            }
+            let _ = writeln!(s, "/F{} {} Tf\n{} Tj", fi + 1, size, pdf_string_in(text, true));
+            s.push_str("ET");
+            self.op(&s);
+            return;
+        }
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;

@@ -706,3 +706,61 @@ fn a_loader_registered_after_initial_lookups_supplies_cached_fonts_to_new_docume
     assert!(find(&existing_pdf, b"/FontFile2").is_none());
     Ok(())
 }
+
+#[test]
+fn symbol_font_draws_maths_in_its_own_encoding() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
+    p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
+    let pdf = doc.finish();
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
+    assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
+    // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
+    assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
+    check_xref(&pdf).unwrap();
+    assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
+    assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
+}
+
+#[test]
+fn symbol_encoding_survives_registered_unicode_fallbacks() {
+    let face = Arc::new(UnicodeFont::parse(tiny_ttf(&['∑', 'α', '≤', '∞'], 900, 0)).unwrap());
+    let fonts = TextFonts::fallback([Some(face), None, None, None]);
+    assert_eq!(fonts.text_width(Font::Symbol, 10.0, "∑"), 7.13);
+    assert_eq!(fonts.text_width(Font::Helvetica, 10.0, "α"), 9.0);
+    let mut doc = PdfDoc::with_text_fonts(fonts);
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞");
+    p.text_rotated(Point::new(80.0, 80.0), 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞", 0.5);
+    p.text(10.0, 100.0, 12.0, Font::Helvetica, [0, 0, 0], "α");
+    let pdf = doc.finish();
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/F13 12 Tf").count(), 2, "math keeps the Symbol resource");
+    assert_eq!(text.matches("(\\345a\\243\\245) Tj").count(), 2);
+    assert!(text.contains("/U1 12 Tf"), "ordinary Greek still uses its embedded fallback");
+    assert_eq!(text.matches("/FontFile2").count(), 1);
+    assert!(!text.contains("UniGB-UTF16-H"));
+    check_xref(&pdf).unwrap();
+}
+
+#[test]
+fn explicit_custom_faces_override_symbol_with_matching_metrics() {
+    let bytes = tiny_ttf(&['∑', 'α', '≤', '∞', 'x'], 640, 0);
+    let face = Arc::new(UnicodeFont::parse(bytes.clone()).unwrap());
+    let fonts = TextFonts::custom(face, None, None, None);
+    assert_eq!(fonts.text_width(Font::Symbol, 10.0, "∑"), 6.4);
+    assert_eq!(fonts.missing_glyph(Font::Symbol, "∑α≤∞x"), None);
+    let mut doc = PdfDoc::with_text_fonts(fonts);
+    doc.add_page(200.0, 200.0).text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞x");
+    let pdf = doc.finish();
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(find(&pdf, &bytes).is_some());
+    assert!(text.contains("/U1 12 Tf"));
+    assert!(!text.contains("/BaseFont /Symbol"));
+    assert!(text.contains("<0001> <2211>"));
+    assert!(text.contains("<0002> <03B1>"));
+    check_xref(&pdf).unwrap();
+}
