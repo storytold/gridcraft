@@ -737,6 +737,7 @@ mod tests {
                 source: None,
                 by_rows: false,
                 pivot: None,
+                data_table: None,
             }),
             ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
             ObjKind::Shape => s.shapes.push(Shape {

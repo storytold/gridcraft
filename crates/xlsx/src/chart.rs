@@ -268,6 +268,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
+            show_keys: bool_val(t, "showKeys"),
+            horizontal_border: bool_val(t, "showHorzBorder"),
+            vertical_border: bool_val(t, "showVertBorder"),
+            outline: bool_val(t, "showOutline"),
+        }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -865,6 +871,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if secondary.is_some() {
         s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
         s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    }
+    if let Some(t) = &ch.data_table {
+        let _ = write!(
+            s,
+            "<c:dTable><c:showHorzBorder val=\"{}\"/><c:showVertBorder val=\"{}\"/><c:showOutline val=\"{}\"/><c:showKeys val=\"{}\"/></c:dTable>",
+            u8::from(t.horizontal_border),
+            u8::from(t.vertical_border),
+            u8::from(t.outline),
+            u8::from(t.show_keys)
+        );
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
