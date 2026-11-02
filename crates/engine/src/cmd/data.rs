@@ -99,16 +99,16 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
-        cmd!(
+        cmd!(platform
             "data.group",
             "Group",
             ["Data", "Outline"],
-            Some("Alt+Shift+Right"),
+            Some("Cmd+Shift+K"), Some("Alt+Shift+Right"),
             "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
             has_doc,
             |s, p| group(s, p, true)
         ),
-        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
+        cmd!(platform "data.ungroup", "Ungroup", ["Data", "Outline"], Some("Cmd+Shift+J"), Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
             group(s, p, false)
         }),
         cmd!(
