@@ -193,7 +193,8 @@ Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the da
 follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
 elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
-keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. A
+keeps picking, while the arrow keys and Escape belong to the Name Box as long as it has the
+keyboard; a command that moves the selection (Undo, Go To) moves the reference with it. A
 box the dialog stops showing (Solver's Options view, the Model Range of a hidden Load/Save area,
 the constraint value once the operator is int or bin) is no longer picked into: a selection
 made meanwhile does not land in it when it is shown again.

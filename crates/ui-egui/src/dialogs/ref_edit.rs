@@ -39,6 +39,11 @@ pub(super) struct RefBoxes {
     rect: Option<egui::Rect>,
     /// The dialog was drawn collapsed last frame.
     was_collapsed: bool,
+    /// A text field other than the collapsed box (the Name Box, say) owned the keyboard when
+    /// the last frame ended: its keys are its own, not the collapsed picker's (see
+    /// [`place_window`]). Kept from the frame before because egui drops the focus for Escape
+    /// before anything is drawn, so the frame of the Escape no longer says who had it.
+    other_field: bool,
 }
 
 /// Where picking began: the dialog's own sheet, kept for as long as the dialog is open (a failed
@@ -288,9 +293,10 @@ fn selection_ref(app: &SheetApp, home: Option<&Home>, several: bool) -> String {
 
 /// Places the dialog's window before it is drawn, and returns the reference box the dialog is
 /// collapsed to. Escape or Enter expands a collapsed dialog again, rather than closing it or
-/// pressing OK, and the arrow keys select on the grid. Collapsed, the dialog shrinks to the box
-/// where its top-left corner was, leaving the sheet free for selecting; expanded again, it comes
-/// back where it was.
+/// pressing OK, and the arrow keys select on the grid, unless another text field (the Name Box)
+/// owns the keyboard: its keys stay its own, as they were before the dialog collapsed.
+/// Collapsed, the dialog shrinks to the box where its top-left corner was, leaving the sheet
+/// free for selecting; expanded again, it comes back where it was.
 pub(super) fn place_window<'a>(
     app: &mut SheetApp,
     ctx: &egui::Context,
@@ -299,10 +305,16 @@ pub(super) fn place_window<'a>(
     window_id: egui::Id,
 ) -> (egui::Window<'a>, Option<String>) {
     follow_home(app, &mut d.refs);
-    if d.refs.collapsed.is_some() {
+    if let Some(key) = d.refs.collapsed.as_deref() {
+        let other_field = d.refs.other_field || other_field_focused(ctx, key);
+        // Escape and Enter are used up either way: left in the frame's input, the dialog would
+        // read them as its own and close or confirm. When another field owned them, that field
+        // (drawn before the dialogs) has read them already, and nothing more happens here.
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-            d.refs.collapsed = None;
-        } else {
+            if !other_field {
+                d.refs.collapsed = None;
+            }
+        } else if !other_field {
             arrows_move_selection(app, ctx);
         }
     }
@@ -323,6 +335,11 @@ pub(super) fn place_window<'a>(
         _ => window,
     };
     (window, collapsed)
+}
+
+/// Whether a text field other than the reference box `key` has the keyboard.
+fn other_field_focused(ctx: &egui::Context, key: &str) -> bool {
+    ctx.text_edit_focused() && ctx.memory(|m| m.focused()) != Some(ref_edit_id(key))
 }
 
 /// While the dialog is collapsed, the arrow keys move the selection on the grid, Shift+arrow
@@ -372,6 +389,7 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
         d.refs.rect = rect;
     }
     d.refs.was_collapsed = collapsed;
+    d.refs.other_field = d.refs.collapsed.as_deref().is_some_and(|key| other_field_focused(ctx, key));
     // The box compares the grid selection with the one it last saw only while it is drawn: a
     // hidden box would take a selection made meanwhile when it comes back.
     if !std::mem::take(&mut d.refs.target_drawn) {

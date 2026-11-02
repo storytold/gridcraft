@@ -1375,3 +1375,33 @@ fn an_int_constraint_ends_picking_into_the_hidden_constraint_value_box() {
     drag(&mut h, "F6", "F6");
     assert_eq!(field(&h, "newRhs"), "$D$4");
 }
+
+#[test]
+fn the_name_box_keeps_its_arrow_keys_and_escape_while_a_dialog_is_collapsed() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3");
+    // The Name Box takes the keyboard: its arrow keys edit its text, not the grid selection.
+    let name_box = egui::Id::unique("gridcraft.name_box");
+    let center = h.get_by_label("Name Box").rect().center();
+    click_at(&mut h, center);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(name_box), "the Name Box has the keyboard");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(name_box), "the Name Box keeps the keyboard");
+    assert_eq!(selection(&h), (0, "C3".into()), "the grid selection is unchanged");
+    assert_eq!(field(&h, "changing"), "$C$3", "the picked reference is unchanged");
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"));
+    // Escape leaves the Name Box, as it did before (the grid takes the keyboard back); the dialog
+    // stays collapsed.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(name_box), "Escape left the Name Box");
+    assert_eq!(collapsed(&h).as_deref(), Some("changing"), "that Escape was the Name Box's");
+    assert!(h.state().dialog.is_some());
+    // With no other field on the keyboard, the collapsed picker takes the keys again.
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$C$4");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None, "Escape expands the dialog");
+}
