@@ -207,7 +207,7 @@ fn plain_number(s: &str, frac: bool) -> Option<f64> {
 fn parse_fraction(t: &str) -> Option<f64> {
     let (whole, frac) = t.split_once(' ')?;
     let neg = whole.starts_with('-');
-    let w = plain_number(whole.trim_start_matches('-'), false)?;
+    let w = plain_number(whole.strip_prefix(['-', '+']).unwrap_or(whole), false)?;
     let (a, b) = frac.trim().split_once('/')?;
     let a = plain_number(a, false)?;
     let b = plain_number(b, false)?;
