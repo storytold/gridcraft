@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::show::build_params;
 use super::show::{form_fields, ok_cancel};
-use super::*;
+use super::{Dialog, Field, Icon, Json, SheetApp, json, vec2};
 
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
