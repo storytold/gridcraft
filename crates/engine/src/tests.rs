@@ -6453,3 +6453,63 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn tables_never_hold_merged_cells() {
+    // Excel removes a table that contains a merged cell when it opens the file. Merging in a
+    // table is refused; making or resizing a table over merged cells unmerges them; pasting into
+    // a table skips the merges.
+    let base = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:D4", "values": [["A", "B", "C", "D"], [1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]}))
+            .unwrap();
+        s
+    };
+    let merges = |s: &Session| s.doc().unwrap().wb.active().unwrap().merges.clone();
+
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    for id in ["home.mergeCells", "home.mergeCenter", "home.mergeAcross"] {
+        for range in ["A2:B2", "A1:B1", "C3:D3"] {
+            let e = s.execute(id, json!({"range": range})).unwrap_err().to_string();
+            assert!(e.contains("can't merge cells in a table"), "{id} {range}: {e}");
+        }
+    }
+    assert!(merges(&s).is_empty());
+    s.execute("home.mergeCells", json!({"range": "E2:F2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F2").unwrap()]);
+
+    // A table over merged cells unmerges them; undo brings them back.
+    let mut s = base();
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C3:D4"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:G1"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("F1:G1").unwrap()]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(merges(&s).len(), 3);
+    s.execute("edit.redo", json!({})).unwrap();
+
+    // Resizing a table over merged cells unmerges them too.
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
+    assert!(merges(&s).is_empty());
+
+    // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
+    s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F3").unwrap(), gridcraft_core::RangeRef::parse("H2:I3").unwrap()]);
+
+    // The saved file has no merge inside the table.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = crate::io::open_bytes("t.xlsx", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    assert_eq!(sh.tables.len(), 1);
+    assert_eq!(sh.tables[0].range, gridcraft_core::RangeRef::parse("A1:C4").unwrap());
+    assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
+}

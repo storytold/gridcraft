@@ -361,6 +361,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
                     let nm = RangeRef::new(a, b);
                     let sh = cx.sheet_mut(dest_sheet)?;
+                    // A table can't hold merged cells (Excel removes the table on open): the
+                    // cells are pasted there unmerged.
+                    if sh.tables.iter().any(|t| t.range.intersects(&nm)) {
+                        continue;
+                    }
                     sh.merges.retain(|x| !x.intersects(&nm));
                     sh.merges.push(nm);
                 }

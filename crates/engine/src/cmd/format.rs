@@ -637,6 +637,11 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let how =
         if how == "center" && s.doc()?.wb.sheet(sheet).is_some_and(|sh| ranges.iter().all(|r| sh.merges.contains(r))) { "unmerge" } else { how };
+    // Excel has no merged cells in a table (a file with one loses the table when Excel opens it):
+    // merging there is refused, unmerging is still allowed.
+    if how != "unmerge" && s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| ranges.iter().any(|r| t.range.intersects(r)))) {
+        return Err(EngineError::Other("You can't merge cells in a table.".into()));
+    }
     edit(s, |cx| {
         let mut touched = Vec::new();
         // Areas whose merging changes: a merged cell blocks a dynamic array's spill.
