@@ -106,6 +106,12 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+Worksheet cells follow the interface appearance until explicitly overridden. Use
+`engine.execute` with `{command: "view.worksheetDarkMode", params: {on: true}}`
+to display a dark worksheet, or `on: false` for light cells. Omitting `on` toggles
+the worksheet appearance (View › Switch Modes). The choice persists with UI preferences
+across documents and restarts; it does not modify workbook fills, font colors, or exports.
+
 `{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.

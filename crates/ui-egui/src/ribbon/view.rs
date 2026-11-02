@@ -119,6 +119,14 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             })
             .response
             .labelled_by(label_response.id);
+        let sheet_dark = app.ui.worksheet_dark.unwrap_or(t.dark);
+        if ui
+            .button(lang.tr("Switch Modes"))
+            .on_hover_text(lang.tr("Switch worksheet cells between light and dark; saved formatting is unchanged"))
+            .clicked()
+        {
+            act(app, "view.worksheetDarkMode", json!({"on": !sheet_dark}));
+        }
         let mut animations = app.ui.animations;
         let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
         if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {

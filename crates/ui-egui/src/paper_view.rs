@@ -218,6 +218,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
     let Some(pg) = geo.paper.clone() else { return };
     let Some(d) = app.session.active() else { return };
     let p = p.with_clip_rect(geo.cells);
+    let ink = Tokens::get(ui.ctx()).cell_text;
     let editing = app.grid.hf_edit.as_ref().map(|e| (e.page, e.footer));
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|q| geo.cells.contains(*q)).and_then(|q| {
         let (x, y) =
@@ -279,7 +280,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 let block = line_h * lines.len() as f32;
                 let top = if footer { screen(geo, 0.0, py + h - fm).y - block } else { screen(geo, 0.0, py + hm).y };
                 for (li, line) in lines.iter().enumerate() {
-                    p.text(pos2(x, top + li as f32 * line_h), anchor, *line, font.clone(), Color32::BLACK);
+                    p.text(pos2(x, top + li as f32 * line_h), anchor, *line, font.clone(), ink);
                 }
             }
         }

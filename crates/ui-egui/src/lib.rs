@@ -83,6 +83,8 @@ pub struct UiState {
     /// The manual preference, retained when following the system appearance.
     pub dark: bool,
     pub system_theme: bool,
+    /// Worksheet appearance, separate from file formatting. None follows the interface theme.
+    pub worksheet_dark: Option<bool>,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
@@ -132,6 +134,7 @@ impl Default for UiState {
         UiState {
             dark: false,
             system_theme: false,
+            worksheet_dark: None,
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,

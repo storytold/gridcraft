@@ -193,6 +193,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
                 ("view.darkMode", "Dark Mode", ""),
+                (
+                    "view.worksheetDarkMode",
+                    "Switch Worksheet Modes",
+                    "{on?: bool} (toggles without it) → {on}; display only, saved formatting is unchanged",
+                ),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),

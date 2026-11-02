@@ -16,6 +16,27 @@ fn fixture() -> Harness {
     fixture_with(false, None)
 }
 
+#[test]
+fn worksheet_mode_keeps_page_layout_headers_readable() {
+    let mut h = fixture();
+    for dark in [true, false] {
+        h.state_mut().run("view.worksheetDarkMode", json!({"on": dark})).unwrap();
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        let ink = gridcraft_ui_egui::theme::Tokens::get(&ctx).cell_text;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let app = h.state_mut();
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        assert!(
+            output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t)
+            if t.galley.job.text == "Left" && t.galley.job.sections.iter().all(|s| s.format.color == ink))),
+            "header must follow worksheet ink"
+        );
+    }
+}
+
 /// `rtl` mirrors the sheet; `setup` is extra `pageLayout.pageSetup` params.
 fn fixture_with(rtl: bool, setup: Option<serde_json::Value>) -> Harness {
     let mut session = Session::new();

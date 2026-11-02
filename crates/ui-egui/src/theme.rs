@@ -10,7 +10,7 @@
 //! interface text; no font file is stored in this repo.
 //!
 //! Chrome colours belong in [`Tokens`], each with a light and a dark value; colours
-//! drawn on the sheet keep their light value in both themes, because the sheet stays white. The
+//! drawn on the sheet follow the separate worksheet display preference. The
 //! foreground/background pairs are listed in `contrast_tests`, which holds them to WCAG 2 (4.5:1
 //! for text, 3:1 for glyphs) in both themes: a new token goes there too.
 
@@ -90,7 +90,7 @@ pub struct Tokens {
     pub paper: Color32,
     /// Reference colours for formulas edited in the window-coloured formula bar.
     pub ref_colors: [Color32; 8],
-    /// Reference colours on the sheet (outlines and the in-cell editor). The sheet stays white.
+    /// Reference colours on the sheet (outlines and the in-cell editor), resolved by `get`.
     pub sheet_ref_colors: [Color32; 8],
     /// Code colours in the code editor (and the window-coloured fields it sits in).
     pub syntax: Syntax,
@@ -141,8 +141,7 @@ const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-/// Reference colours on the white sheet, the same in both themes (the sheet does not follow the
-/// theme). The light theme's formula bar is white too, so it uses them as well.
+/// Reference colours on a light worksheet. The light theme's formula bar uses them as well.
 const SHEET_REF_COLORS: [Color32; 8] =
     [rgb(0x2E6FD8), rgb(0xD03C3C), rgb(0x7A4FC9), rgb(0x23803D), rgb(0xB5531A), rgb(0x16798A), rgb(0xB83B8E), rgb(0x77681A)];
 /// Macro overlays on the sheet, the same in both themes (the sheet stays white).
@@ -256,8 +255,19 @@ impl Tokens {
         }
     }
 
+    /// Resolve interface tokens and the independently selected worksheet appearance.
     pub fn get(ctx: &egui::Context) -> Tokens {
-        if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
+        let mut t = if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() };
+        let sheet_dark = ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("gridcraft.worksheet_dark"))).unwrap_or(t.dark);
+        if sheet_dark {
+            t.grid_bg = Color32::BLACK;
+            t.gridline = rgb(0x414141);
+            t.cell_text = rgb(0xEEEEEE);
+            t.sel_border = rgb(0x5CC587);
+            t.sel_fill = Color32::from_rgba_unmultiplied(0x5C, 0xC5, 0x87, 0x24);
+            t.sheet_ref_colors = Tokens::dark().ref_colors;
+        }
+        t
     }
 
     /// One colour of the category palette.

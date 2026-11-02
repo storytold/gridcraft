@@ -22,6 +22,7 @@ fn caret(fill: Option<&str>, dark: bool) -> Color32 {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = crate::common::app(session);
+    app.ui.dark = dark;
     if let Some(color) = fill {
         app.run("home.fillColor", json!({"range": "A1", "color": color})).unwrap();
     }
@@ -34,7 +35,7 @@ fn caret(fill: Option<&str>, dark: bool) -> Color32 {
     }
     let output = frame(&ctx, &mut app);
     // The editor paints its backdrop first; the caret is the vertical segment after it.
-    let paper = fill.map_or(Color32::WHITE, |c| Color32::from_hex(c).unwrap());
+    let paper = fill.map_or(theme::Tokens::get(&ctx).grid_bg, |c| Color32::from_hex(c).unwrap());
     let backdrop = output
         .shapes
         .iter()
@@ -54,6 +55,7 @@ fn caret_contrasts_with_the_cell_fill() {
     assert_eq!(caret(Some("#1F3864"), false), Color32::WHITE, "dark fill, light theme");
     assert_eq!(caret(Some("#1F3864"), true), Color32::WHITE, "dark fill, dark theme");
     assert_eq!(caret(Some("#FFFF00"), true), Color32::BLACK, "light fill, dark theme");
-    assert_eq!(caret(None, true), Color32::BLACK, "no fill, dark theme: the cell is still white paper");
+    assert_eq!(caret(None, true), Color32::WHITE, "no fill follows the dark worksheet");
     assert_eq!(caret(None, false), Color32::BLACK, "no fill, light theme");
+    assert_eq!(caret(Some("#00FF00"), true), Color32::BLACK, "bright green needs black ink by WCAG contrast");
 }
