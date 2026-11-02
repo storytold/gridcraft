@@ -384,20 +384,33 @@ fn deleting_the_data_python_code_reads_drops_its_kept_result() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "3"})).unwrap();
     py(&mut s, "C5", "xl(\"A1:A2\") * 2");
     cache(&mut s, "C5", array(2, 1, vec![2.0.into(), 4.0.into()]), "list");
+    py(&mut s, "E5", "xl(\"A1:A3\")");
+    cache(&mut s, "E5", Value::Number(3.0), "int");
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(v(&s, "C6"), Value::Number(4.0));
     // A move keeps the result: the reference still names the same data.
     s.execute("home.insertRows", json!({"rows": "1"})).unwrap();
     assert!(code(&s, "C6").is_some_and(|p| p.output.is_some() && !p.code.contains("A1:A2")), "{:?}", code(&s, "C6"));
     assert_eq!(v(&s, "C7"), Value::Number(4.0));
-    // Deleting the rows it reads leaves `#REF!`: the kept result no longer belongs to the code.
+    assert!(code(&s, "E6").is_some_and(|p| p.output.is_some()));
+    // Deleting the rows C6 reads leaves `#REF!`, and deleting part of E6's range shrinks it: in
+    // both, the kept result no longer belongs to the code.
     s.execute("home.deleteRows", json!({"rows": "2:3"})).unwrap();
     let c4 = code(&s, "C4").expect("the Python cell moved up to C4");
     assert!(c4.code.contains("#REF!") && c4.output.is_none(), "{c4:?}");
     assert_eq!(v(&s, "C4"), Value::Error(CellError::Blocked));
     assert_eq!(v(&s, "C5"), Value::Empty, "its spill is gone");
+    let e4 = code(&s, "E4").expect("the Python cell moved up to E4");
+    assert!(!e4.code.contains("#REF!") && e4.output.is_none(), "{e4:?}");
+    assert_eq!(v(&s, "E4"), Value::Error(CellError::Blocked));
+    // Rows inserted inside a range grow it: also new data.
+    py(&mut s, "G1", "xl(\"A1:A2\")");
+    cache(&mut s, "G1", Value::Number(2.0), "int");
+    s.execute("home.insertRows", json!({"rows": "2"})).unwrap();
+    assert!(code(&s, "G1").is_some_and(|p| p.output.is_none()), "{:?}", code(&s, "G1"));
 }
 
 #[test]

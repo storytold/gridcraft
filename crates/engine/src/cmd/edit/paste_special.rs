@@ -399,8 +399,9 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 /// cut-move, sheet rename and delete) runs it, as it adjusts formulas. A literal is only replaced
 /// when the reference it names changed, and text that doesn't parse is kept. A cell's cached
 /// result is kept while its references still name the same data (a rename, a move); a reference
-/// the edit deleted (`#REF!`) leaves the result stale, so the cell is new code (`#BLOCKED!`) and
-/// the recalculation removes its spill. A rewrite that would
+/// the edit deleted (`#REF!`), or one that grew or shrank (rows or columns inserted or deleted
+/// inside it), leaves the result stale, so the cell is new code (`#BLOCKED!`) and the
+/// recalculation removes its spill. A rewrite that would
 /// make a cell's code longer than one cell holds (a longer sheet name, `Z1` becoming `AA1`) refuses
 /// the whole edit, which then changes nothing: see [`check_python_fits`].
 pub(crate) fn rewrite_python_refs(
@@ -418,7 +419,7 @@ pub(crate) fn rewrite_python_refs(
                 let expr = gridcraft_formula::parse(reference).ok()?;
                 let before = gridcraft_formula::print(&expr);
                 let after = gridcraft_formula::print(&f(&host, expr));
-                lost |= after.contains("#REF!") && !before.contains("#REF!");
+                lost |= (after.contains("#REF!") && !before.contains("#REF!")) || area_shape(&before) != area_shape(&after);
                 (after != before).then_some(after)
             });
             if let Some(code) = changed {
@@ -444,6 +445,13 @@ pub(crate) fn rewrite_python_refs(
         }
     }
     Ok(())
+}
+
+/// The rows and columns a printed reference covers (`A1:B3`, `Sheet2!$A$1`, `C:E`), or `None`
+/// for any other form (a name, an error).
+fn area_shape(reference: &str) -> Option<(u32, u32)> {
+    let r = RangeRef::parse(reference.rsplit('!').next()?)?;
+    Some((r.height(), r.width()))
 }
 
 /// Refuses Python code an edit has made longer than one cell holds: the limit `python.set`
