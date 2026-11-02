@@ -99,6 +99,11 @@ fn command_search_shows_engine_shortcuts() {
         for (query, expected) in [
             ("home.bold", if os == OperatingSystem::Mac { "Bold  (Cmd+B)" } else { "Bold  (Ctrl+B)" }),
             ("data.filter", "Filter  (Ctrl+Shift+L)"),
+            ("edit.copy", if os == OperatingSystem::Mac { "Copy  (Cmd+C)" } else { "Copy  (Ctrl+C)" }),
+            ("edit.paste", if os == OperatingSystem::Mac { "Paste  (Cmd+V)" } else { "Paste  (Ctrl+V)" }),
+            ("home.italic", if os == OperatingSystem::Mac { "Italic  (Cmd+I)" } else { "Italic  (Ctrl+I)" }),
+            ("home.underline", if os == OperatingSystem::Mac { "Underline  (Cmd+U)" } else { "Underline  (Ctrl+U)" }),
+            ("edit.fillDown", if os == OperatingSystem::Mac { "Fill Down  (Cmd+D)" } else { "Fill Down  (Ctrl+D)" }),
             ("edit.flashFill", "Flash Fill  (Ctrl+E)"),
             ("home.alignLeft", if os == OperatingSystem::Mac { "Align Left  (Cmd+L)" } else { "Align Left    Home" }),
             ("home.alignCenter", if os == OperatingSystem::Mac { "Center  (Cmd+E)" } else { "Center    Home" }),
@@ -144,22 +149,36 @@ fn command_palette_shortcuts_come_from_engine_metadata() {
     let session = gridcraft_engine::Session::new();
     let commands = session.commands();
 
-    for (id, expected) in [
-        ("home.bold", "Cmd+B"),
-        ("data.filter", "Ctrl+Shift+L"),
-        ("edit.flashFill", "Ctrl+E"),
-        ("edit.pasteSpecial", "Ctrl+Cmd+V"),
-        ("selection.row", "Shift+Space"),
-        ("selection.column", "Ctrl+Space"),
-        ("selection.currentRegion", "Ctrl+Shift+8"),
-        ("home.alignLeft", "Cmd+L"),
-        ("home.alignCenter", "Cmd+E"),
-        ("data.group", "Alt+Shift+Right"),
-        ("data.ungroup", "Alt+Shift+Left"),
+    for (id, mac, other) in [
+        ("home.bold", Some("Cmd+B"), Some("Ctrl+B")),
+        ("edit.selectAll", Some("Cmd+A"), Some("Ctrl+A")),
+        ("edit.undo", Some("Cmd+Z"), Some("Ctrl+Z")),
+        ("edit.redo", Some("Cmd+Y"), Some("Ctrl+Y")),
+        ("edit.copy", Some("Cmd+C"), Some("Ctrl+C")),
+        ("edit.cut", Some("Cmd+X"), Some("Ctrl+X")),
+        ("edit.paste", Some("Cmd+V"), Some("Ctrl+V")),
+        ("edit.fillDown", Some("Cmd+D"), Some("Ctrl+D")),
+        ("edit.fillRight", Some("Cmd+R"), Some("Ctrl+R")),
+        ("home.italic", Some("Cmd+I"), Some("Ctrl+I")),
+        ("home.underline", Some("Cmd+U"), Some("Ctrl+U")),
+        ("edit.pasteSpecial", Some("Ctrl+Cmd+V"), Some("Ctrl+Alt+V")),
+        ("home.alignLeft", Some("Cmd+L"), None),
+        ("home.alignCenter", Some("Cmd+E"), None),
+        ("data.group", Some("Cmd+Shift+K"), Some("Alt+Shift+Right")),
+        ("data.ungroup", Some("Cmd+Shift+J"), Some("Alt+Shift+Left")),
+        ("edit.flashFill", Some("Ctrl+E"), Some("Ctrl+E")),
+        ("data.filter", Some("Ctrl+Shift+L"), Some("Ctrl+Shift+L")),
+        ("selection.row", Some("Shift+Space"), Some("Shift+Space")),
+        ("selection.column", Some("Ctrl+Space"), Some("Ctrl+Space")),
     ] {
         let command = commands.iter().find(|c| c.id == id).unwrap();
-        assert_eq!(command.shortcut, Some(expected), "{id}");
+        assert_eq!(command.shortcut_for_platform(true), mac, "{id}: macOS");
+        assert_eq!(command.shortcut_for_platform(false), other, "{id}: Windows/Linux");
     }
+
+    let command = commands.iter().find(|c| c.id == "home.alignRight").unwrap();
+    assert_eq!(command.shortcut_for_platform(true), None);
+    assert_eq!(command.shortcut_for_platform(false), None);
 }
 /// Current Region displays the shortcut declared in engine metadata.
 #[test]
@@ -180,5 +199,43 @@ fn command_search_shows_current_region_shortcut() {
 
         h.run_steps(3);
         h.get_by_label_contains(expected);
+    }
+}
+
+/// Disabled commands are absent; commands without shortcuts show no invented keys.
+#[test]
+fn command_search_hides_disabled_and_handles_missing_shortcuts() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        // Undo is disabled in a fresh workbook with no undo history.
+        let undo = h.state().session.commands().into_iter().find(|c| c.id == "edit.undo").unwrap();
+
+        assert!(!undo.enabled, "Undo should initially be disabled");
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "edit.undo".into();
+        h.run_steps(3);
+
+        assert!(
+            h.query_by_label("Undo  (Cmd+Z)    Edit").is_none() && h.query_by_label("Undo  (Ctrl+Z)    Edit").is_none(),
+            "Disabled Undo must not appear in the palette"
+        );
+
+        // Align Right has no shortcut on either platform.
+        h.state_mut().dialog.as_mut().unwrap().search = "home.alignRight".into();
+        h.run_steps(3);
+
+        let align = h.state().session.commands().into_iter().find(|c| c.id == "home.alignRight").unwrap();
+
+        assert_eq!(align.shortcut_for_platform(os == OperatingSystem::Mac), None);
+
+        h.get_by_label_contains("Align Right    Home");
     }
 }

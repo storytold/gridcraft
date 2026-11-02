@@ -31,7 +31,7 @@ const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Table", "⌘T", "Ctrl+T"),
     ("Insert Link", "⌘K", "Ctrl+K"),
     ("Filter", "⌘⇧F", "Ctrl+Shift+L"),
-    ("Flash Fill", "Control+E", "Ctrl+E"),
+    ("Flash Fill", "⌘E", "Ctrl+E"),
     // The Control key, written the way each platform names it. macOS's ⌃ is supplied by its
     // system fonts; elsewhere the Windows spelling avoids a glyph no bundled face has.
     ("Show Formulas", "⌃`", "Ctrl+`"),
@@ -716,7 +716,7 @@ mod tooltip_shortcut_tests {
         assert_eq!(tooltip_shortcut("Search commands", false), None);
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
             assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
-            assert!(mac.starts_with('⌘') || mac.starts_with('⌃') || (*name == "Flash Fill" && *mac == "Control+E"), "{name}: {mac}");
+            assert!(mac.starts_with('⌘') || mac.starts_with('⌃'), "{name}: {mac}");
         }
     }
 
@@ -724,7 +724,7 @@ mod tooltip_shortcut_tests {
     fn ribbon_tip_text_obeys_runtime_os() {
         use egui::os::OperatingSystem;
 
-        for (os, expected) in [(OperatingSystem::Windows, "Flash Fill (Ctrl+E)"), (OperatingSystem::Mac, "Flash Fill (Control+E)")] {
+        for (os, expected) in [(OperatingSystem::Windows, "Flash Fill (Ctrl+E)"), (OperatingSystem::Mac, "Flash Fill (⌘E)")] {
             let ctx = egui::Context::default();
             ctx.set_os(os);
 
