@@ -1080,3 +1080,214 @@ fn undoing_and_redoing_the_dialogs_sheets_rename_still_follow_it() {
     assert!(h.state().dialog.is_none());
     assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
 }
+
+/// The sheet shown, at `index`, carries the dialog's sheet's name but is another sheet: picks on
+/// it carry its name, OK is refused with the "was deleted" message and runs nothing, and Cancel
+/// leaves the selection on it where it is.
+fn replacement_is_refused(h: &mut H, index: usize) {
+    drag(h, "C3", "C3");
+    assert_eq!(field(h, "changing"), "Sheet1!$C$3", "the new sheet is not the dialog's own: picks carry its name");
+    key(h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "OK is refused");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    let b2 = h.state().session.active().unwrap().wb.sheets[index].value(CellRef::parse("B2").unwrap());
+    assert!(b2.is_empty(), "Goal Seek changed nothing on the new sheet: {b2:?}");
+    h.state_mut().message = None;
+    key(h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(h), (index, "C3".into()), "cancelling does not put the old selection onto the new sheet");
+}
+
+#[test]
+fn a_sheet_deleted_and_recreated_under_its_own_name_is_not_the_dialogs_sheet() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // One script batch, between two frames: the dialog's sheet goes and a new sheet is given its
+    // name, so a sheet called Sheet1 is there as before.
+    let s = &mut h.state_mut().session;
+    s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Sheet1"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates", "Sheet1"]);
+    assert_eq!(selection(&h).0, 1, "the new sheet is shown");
+    replacement_is_refused(&mut h, 1);
+}
+
+#[test]
+fn a_sheet_recreated_under_its_own_name_at_its_old_index_is_not_the_dialogs_sheet() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The new sheet takes the old one's name and index: the sheet list reads exactly as before.
+    let s = &mut h.state_mut().session;
+    s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Sheet1", "before": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Sheet1", "Rates"]);
+    assert_eq!(selection(&h).0, 0);
+    replacement_is_refused(&mut h, 0);
+}
+
+#[test]
+fn a_sheet_recreated_under_its_own_name_among_inserted_and_moved_sheets_is_not_the_dialogs_sheet() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    let s = &mut h.state_mut().session;
+    s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra", "before": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Sheet1", "before": 1})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 2, "to": 0})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 2})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates", "Extra", "Sheet1"]);
+    replacement_is_refused(&mut h, 2);
+}
+
+#[test]
+fn undoing_the_deletion_of_the_dialogs_sheet_brings_it_back_and_redoing_takes_it_again() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2", "deleted: picks carry the sheet name");
+    // Undo brings the very sheet back: it is the dialog's own again.
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Sheet1", "Rates"]);
+    assert_eq!(selection(&h).0, 0);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "restored by undo, the sheet is the dialog's own");
+    // Redo deletes it again: OK is refused.
+    h.state_mut().session.execute("edit.redo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates"]);
+    drag(&mut h, "A3", "A3");
+    assert_eq!(field(&h, "changing"), "Rates!$A$3");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "OK is refused");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    h.state_mut().message = None;
+    // Undone once more, OK works and resolves on the restored sheet.
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Sheet1", "Rates"]);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    // B5 = B2 * 3 + 4 = 25 wants B2 = 7.
+    let b2 = h.state().session.active().unwrap().wb.sheets[0].value(CellRef::parse("B2").unwrap());
+    assert!((b2.as_f64().unwrap() - 7.0).abs() < 1e-6, "Goal Seek ran on the restored sheet: {b2:?}");
+    assert_eq!(selection(&h), (0, "B5".into()), "back on the dialog's sheet and selection");
+}
+
+#[test]
+fn a_new_sheet_given_the_dialogs_sheets_old_name_is_not_taken_for_it() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    h.run_steps(3);
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Sheet1", "before": 2})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Model", "Rates", "Sheet1"]);
+    assert_eq!(selection(&h).0, 2, "the new sheet is shown");
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "Sheet1!$C$3", "the new Sheet1 is not the dialog's sheet");
+    // The dialog's sheet is Model: picks there are unqualified, and OK resolves against it.
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "B2", "B2");
+    assert_eq!(field(&h, "changing"), "$B$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let to = dialog_boxes(&h)[1];
+    click_at(&mut h, to.center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "25");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    // B5 = B2 * 3 + 4 = 25 wants B2 = 7, on Model.
+    let b2 = wb.sheets[0].value(CellRef::parse("B2").unwrap());
+    assert!((b2.as_f64().unwrap() - 7.0).abs() < 1e-6, "{b2:?}");
+    assert!(wb.sheets[2].value(CellRef::parse("B2").unwrap()).is_empty(), "the new Sheet1 is untouched");
+    assert_eq!(selection(&h), (0, "B5".into()));
+}
+
+/// `two_sheets`, saved as xlsx and opened again, so that its sheets carry the file's sheet ids.
+fn two_sheets_from_file() -> Session {
+    let mut s = two_sheets();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "Book.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(s.active().unwrap().wb.sheets.iter().all(|sh| sh.file_id != 0), "the sheets came from a file");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    s
+}
+
+#[test]
+fn one_undo_step_that_deletes_and_recreates_a_saved_sheet_is_seen_through_its_file_id() {
+    let mut h = harness(two_sheets_from_file());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // One recorded step (a macro's undo group, say): the sheet list reads as before, and only the
+    // file id of the new Sheet1 (0, never saved) tells it from the dialog's sheet.
+    h.state_mut()
+        .session
+        .grouped("Replace Sheet1", |s| {
+            s.execute("home.deleteSheet", json!({"sheet": 0}))?;
+            s.execute("home.insertSheet", json!({"name": "Sheet1", "before": 0}))
+        })
+        .unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Sheet1", "Rates"]);
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1, "one undo step");
+    assert_eq!(h.state().session.active().unwrap().wb.sheets[0].file_id, 0);
+    replacement_is_refused(&mut h, 0);
+}
+
+#[test]
+fn one_undo_step_that_replaces_an_empty_saved_sheet_is_not_taken_for_a_rename() {
+    let mut s = two_sheets_from_file();
+    // The dialog's sheet is Rates, which has no cells, as a sheet inserted in its place has none.
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut()
+        .session
+        .grouped("Replace Rates", |s| {
+            s.execute("home.deleteSheet", json!({"sheet": 1}))?;
+            s.execute("home.insertSheet", json!({"name": "Fresh", "before": 1}))
+        })
+        .unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Sheet1", "Fresh"], "same count, one name changed at the sheet's index, no cells either side");
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "Fresh!$C$3", "a different file id: not a rename");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "OK is refused");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+}
