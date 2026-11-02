@@ -849,6 +849,10 @@ const LOGO: &[u8] = b"\x89PNG\r\n\x1a\n letterhead logo";
 const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n footer signature";
 const HF_VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/><v:shape id="LH" o:spid="_x0000_s1025" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:120pt;height:40pt;z-index:1"><v:imagedata o:relid="rId1" o:title="logo"/><o:lock v:ext="edit" rotation="t"/></v:shape><v:shape id="CF" o:spid="_x0000_s1026" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:80pt;height:20pt;z-index:2"><v:imagedata o:relid="rId2" o:title="signature"/><o:lock v:ext="edit" rotation="t"/></v:shape></xml>"##;
 
+/// The VML drawing of one note and nothing else. [`VML`] also holds a check box that only the
+/// drawing lists, which is kept with the drawing (and its source shape block).
+const NOTE_VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shape id="_x0000_s1027" type="#_x0000_t202" style="position:absolute"><v:textbox><div>old note<br></div></v:textbox><x:ClientData ObjectType="Note"><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape></xml>"##;
+
 /// #1257: a letterhead in the header and a picture in the footer (`&G`), drawn from a VML part
 /// that `<legacyDrawingHF>` names, next to a note whose VML drawing GridCraft rewrites.
 fn header_picture_package() -> Vec<u8> {
@@ -875,7 +879,7 @@ fn header_picture_package() -> Vec<u8> {
         ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
         ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
         ("xl/comments1.xml", COMMENTS.as_bytes()),
-        ("xl/drawings/vmlDrawing1.vml", VML.as_bytes()),
+        ("xl/drawings/vmlDrawing1.vml", NOTE_VML.as_bytes()),
         ("xl/drawings/vmlDrawing2.vml", HF_VML.as_bytes()),
         ("xl/drawings/_rels/vmlDrawing2.vml.rels", hf_rels.as_bytes()),
         ("xl/media/image1.png", LOGO),

@@ -283,9 +283,10 @@ impl KeptReader {
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    /// Sheet-level content of the sheet part `part`. `read_controls` are the VML shape numbers of
-    /// the form controls the sheet reader modelled; they are left out of the kept content.
-    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, read_controls: &HashSet<u64>) -> Option<Arc<Preserved>> {
+    /// Sheet-level content of the sheet part `part`. `controls` says which form controls the
+    /// sheet reader modelled (their VML shapes are left out of the kept content) and whether the
+    /// VML drawing holds others that only it lists.
+    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, controls: &crate::controls::ReadControls) -> Option<Arc<Preserved>> {
         if !self.on {
             return None;
         }
@@ -306,8 +307,8 @@ impl KeptReader {
         // Notes have one VML drawing per sheet; another one holds the header and footer pictures.
         let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
-        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes {
-            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, read_controls);
+        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled {
+            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, controls);
         }
         (!p.is_empty()).then(|| Arc::new(p))
     }
@@ -321,8 +322,9 @@ impl KeptReader {
         rels: &[PreservedRel],
         p: &mut Preserved,
         seen: &mut HashSet<String>,
-        read_controls: &HashSet<u64>,
+        controls: &crate::controls::ReadControls,
     ) {
+        let read_controls = &controls.modelled;
         let scan = match cx.pkg.read(part) {
             Ok(Some(bytes)) => scan_sheet(&bytes),
             _ => None,
@@ -361,8 +363,9 @@ impl KeptReader {
             .into_iter()
             .filter_map(|(slot, x)| if slot == "controls" { without_controls(&x, read_controls).map(|x| (slot, x)) } else { Some((slot, x)) })
             .collect();
-        // Controls and OLE objects are drawn from shapes in the legacy VML drawing.
-        if frags.iter().any(|(slot, _)| slot != "picture") {
+        // Controls and OLE objects are drawn from shapes in the legacy VML drawing. Controls only
+        // the drawing lists need it too, whether or not a `<controls>` element is left.
+        if frags.iter().any(|(slot, _)| slot != "picture") || controls.vml_only_unmodelled {
             match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen, read_controls) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
@@ -392,7 +395,7 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("sheet \"{name}\": {slot} were dropped: {why}")),
             }
         }
-        if p.elements.iter().any(|e| e.slot == "oleObjects" || e.slot == "controls") {
+        if p.elements.iter().any(|e| e.slot == "oleObjects" || e.slot == "controls") || (controls.vml_only_unmodelled && p.vml.is_some()) {
             cx.warn(format!("sheet \"{name}\": embedded objects and form controls are not shown; they are kept for saving"));
         } else {
             p.vml = None;

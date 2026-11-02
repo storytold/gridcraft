@@ -574,3 +574,154 @@ fn controls_naming_one_properties_part_read_it_once() {
     }));
     assert_eq!(sh.comments.len(), 1, "a part read after the controls still reads: {:?}", report.warnings);
 }
+
+/// A legacy VML drawing with a button (`1025`, modelled), a check box (`1026`) and an option
+/// button (`1027`, with a picture through the drawing's own relationship) that only the drawing
+/// lists, plus `note` (a note shape for A1, with its comments part) when set. `listed`: the sheet's
+/// `<controls>` lists the button.
+fn vml_only_others(listed: bool, button: bool, note: bool) -> Vec<u8> {
+    const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut rels = format!(r#"<Relationship Id="rId9" Type="{REL}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>"#);
+    if listed {
+        rels.push_str(&format!(r#"<Relationship Id="rIdA" Type="{REL}/ctrlProp" Target="../ctrlProps/a.xml"/>"#));
+    }
+    if note {
+        rels.push_str(&format!(r#"<Relationship Id="rIdN" Type="{REL}/comments" Target="../comments1.xml"/>"#));
+    }
+    let rels =
+        format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#);
+    let vml_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{REL}/image" Target="../media/image1.png"/></Relationships>"#
+    );
+    let prop_a = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Button" lockText="1"/>"#;
+    let mut shapes = String::new();
+    if note {
+        shapes.push_str(r##"<v:shape id="_x0000_s1028" type="#_x0000_t202"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 0, 2, 3, 15, 4, 4</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>"##);
+    }
+    if button {
+        shapes.push_str(r##"<v:shape id="_x0000_s1025" type="#_x0000_t201"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 3, 0, 4, 0, 5, 0</x:Anchor><x:FmlaMacro>[0]!Go</x:FmlaMacro></x:ClientData></v:shape>"##);
+    }
+    shapes.push_str(r##"<v:shape id="_x0000_s1026" type="#_x0000_t201"><v:textbox><div>Paid</div></v:textbox><x:ClientData ObjectType="Checkbox"><x:Anchor>2, 0, 7, 0, 4, 0, 8, 0</x:Anchor><x:FmlaLink>$B$7</x:FmlaLink><x:Checked>1</x:Checked></x:ClientData></v:shape>"##);
+    shapes.push_str(r##"<v:shape id="_x0000_s1027" type="#_x0000_t201"><v:imagedata o:relid="rId1" o:title=""/><x:ClientData ObjectType="Radio"><x:Anchor>2, 0, 9, 0, 4, 0, 10, 0</x:Anchor><x:FmlaLink>$B$9</x:FmlaLink></x:ClientData></v:shape>"##);
+    let vml = format!(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>{shapes}</xml>"#
+    );
+    let controls = if listed {
+        r#"<controls xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><control shapeId="1025" r:id="rIdA" name="Button 1"><controlPr><anchor><from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></controlPr></control></controls>"#
+    } else {
+        ""
+    };
+    let notes = r#"<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Ann</author></authors><commentList><comment ref="A1" authorId="0"><text><t>check the totals</t></text></comment></commentList></comments>"#;
+    let mut parts: Vec<(&str, &str)> = vec![
+        ("xl/worksheets/_rels/sheet1.xml.rels", &rels),
+        ("xl/drawings/vmlDrawing1.vml", &vml),
+        ("xl/drawings/_rels/vmlDrawing1.vml.rels", &vml_rels),
+        ("xl/media/image1.png", "not really a png"),
+    ];
+    if listed {
+        parts.push(("xl/ctrlProps/a.xml", prop_a));
+    }
+    if note {
+        parts.push(("xl/comments1.xml", notes));
+    }
+    // As `minimal` builds it, with content types for the picture and the drawing.
+    let ct = super::CT.replace(
+        "</Types>",
+        r#"<Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/></Types>"#,
+    );
+    let base = minimal(&format!(r#"<sheetData/><legacyDrawing r:id="rId9"/>{controls}"#), &parts, "", "");
+    let mut zip = Package::open(&base).unwrap();
+    let mut files: Vec<(String, Vec<u8>)> = vec![("[Content_Types].xml".into(), ct.into_bytes())];
+    for n in zip.names() {
+        if n != "[Content_Types].xml" {
+            let data = zip.read(&n).unwrap().unwrap();
+            files.push((n, data));
+        }
+    }
+    super::make_zip(&files.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect::<Vec<_>>())
+}
+
+/// Checks a saved package keeps the check box and option button shapes once each, in the sheet's
+/// one VML drawing, with that drawing's one relationship to its one picture; returns the drawing.
+fn kept_vml_only_others(out: &[u8]) -> String {
+    let mut pkg = Package::open(out).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    assert_eq!(sheet.matches("<legacyDrawing ").count(), 1, "{sheet}");
+    let rels = text(&mut pkg, "xl/worksheets/_rels/sheet1.xml.rels");
+    assert_eq!(rels.matches("/vmlDrawing\"").count(), 1, "one VML drawing relationship: {rels}");
+    let names = pkg.names();
+    let vmls: Vec<&String> = names.iter().filter(|n| n.ends_with(".vml")).collect();
+    assert_eq!(vmls.len(), 1, "{names:?}");
+    let vml_name = vmls[0].clone();
+    let vml = text(&mut pkg, &vml_name);
+    assert_eq!(vml.matches("ObjectType=\"Checkbox\"").count(), 1, "the check box is kept once: {vml}");
+    assert_eq!(vml.matches("ObjectType=\"Radio\"").count(), 1, "the option button is kept once: {vml}");
+    let (dir, file) = vml_name.rsplit_once('/').unwrap();
+    let vml_rels = text(&mut pkg, &format!("{dir}/_rels/{file}.rels"));
+    assert_eq!(vml_rels.matches("<Relationship ").count(), 1, "{vml_rels}");
+    let media: Vec<&String> = names.iter().filter(|n| n.starts_with("xl/media/")).collect();
+    assert_eq!(media.len(), 1, "the option button's picture once: {names:?}");
+    vml
+}
+
+/// The sheet's `<controls>` lists only a button, which is modelled; a check box and an option
+/// button in the same VML drawing have no worksheet entry. With the button's entry gone from the
+/// kept content no `<controls>` element is left, but the drawing still holds the two, so it is
+/// kept: the save writes them beside the regenerated button, and they survive a second round trip.
+#[test]
+fn vml_only_controls_survive_when_the_last_listed_control_is_modelled() {
+    let bytes = vml_only_others(true, true, false);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1, "the button is modelled");
+    assert_eq!(sh.controls[0].kind, ControlKind::Button);
+    assert!(sh.preserved.as_ref().is_some_and(|p| p.vml.is_some()), "the drawing is kept: {:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("form controls are not shown")), "{:?}", report.warnings);
+    let out = write_xlsx(&wb).unwrap();
+    let vml = kept_vml_only_others(&out);
+    assert_eq!(vml.matches("ObjectType=\"Button\"").count(), 1, "the button once, written from the model: {vml}");
+    let (back, _) = read_xlsx(&out).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1);
+    assert_eq!(sh.controls[0].text, "Go");
+    // Saved again: still once each.
+    let again = write_xlsx(&back).unwrap();
+    let vml = kept_vml_only_others(&again);
+    assert_eq!(vml.matches("ObjectType=\"Button\"").count(), 1, "{vml}");
+}
+
+/// A sheet whose only controls are a check box and an option button that only the VML drawing
+/// lists (no `<controls>`, no notes, nothing modelled): the drawing is kept on its own.
+#[test]
+fn a_sheet_whose_only_controls_are_vml_only_and_unmodelled_keeps_them() {
+    let bytes = vml_only_others(false, false, false);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert!(wb.sheet(0).unwrap().controls.is_empty());
+    let out = write_xlsx(&wb).unwrap();
+    let vml = kept_vml_only_others(&out);
+    assert!(!vml.contains("ObjectType=\"Button\""), "{vml}");
+    let (back, _) = read_xlsx(&out).unwrap();
+    let again = write_xlsx(&back).unwrap();
+    kept_vml_only_others(&again);
+    assert!(report.warnings.iter().any(|w| w.contains("form controls are not shown")), "{:?}", report.warnings);
+}
+
+/// The same with a note in the drawing (one VML drawing for one comments part) and a VML-only
+/// button that is modelled: the note and the button are written from the model, the check box and
+/// option button stay, all in the one drawing.
+#[test]
+fn vml_only_controls_beside_a_note_are_kept() {
+    let bytes = vml_only_others(false, true, true);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!((sh.controls.len(), sh.comments.len()), (1, 1), "{:?}", report.warnings);
+    let out = write_xlsx(&wb).unwrap();
+    let vml = kept_vml_only_others(&out);
+    assert_eq!(vml.matches("ObjectType=\"Note\"").count(), 1, "{vml}");
+    assert_eq!(vml.matches("ObjectType=\"Button\"").count(), 1, "{vml}");
+    let (back, _) = read_xlsx(&out).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!((sh.controls.len(), sh.comments.len()), (1, 1));
+    let vml = kept_vml_only_others(&write_xlsx(&back).unwrap());
+    assert_eq!(vml.matches("ObjectType=\"Note\"").count(), 1, "{vml}");
+}
