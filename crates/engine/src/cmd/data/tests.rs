@@ -481,6 +481,41 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 }
 
 #[test]
+fn list_validation_from_date_cells_shows_formatted_labels() {
+    // Source cells formatted as dates must appear in the dropdown as `Jan-26`, not the serial
+    // `46023`. Selecting the label (or typing the serial) must both validate, and committing the
+    // label must store the date rather than text.
+    let mut s = Session::new();
+    s.new_workbook();
+    for (cell, serial, code) in [("K1", "46023", "mmm-yy"), ("K2", "46054", "mmm-yy"), ("K3", "46023", "d-mmm-yy")] {
+        s.execute("cell.set", json!({"cell": cell, "input": serial})).unwrap();
+        s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
+    }
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "$K$1:$K$3"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Months", "refersTo": "=Sheet1!$K$1:$K$2"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1", "type": "list", "formula1": "Months"})).unwrap();
+
+    let wb = s.doc().unwrap().wb.clone();
+    let sh = wb.active().unwrap();
+    let a1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "A1")).unwrap();
+    let b1 = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "B1")).unwrap();
+    assert_eq!(list_items(&wb, 0, a1), ["Jan-26", "Feb-26", "1-Jan-26"]);
+    assert_eq!(list_items(&wb, 0, b1), ["Jan-26", "Feb-26"]);
+
+    let at = CellRef::parse("A1").unwrap();
+    assert!(check_validation(&wb, 0, at, "Jan-26").is_none());
+    assert!(check_validation(&wb, 0, at, "1-Jan-26").is_none());
+    assert!(check_validation(&wb, 0, at, "46023").is_none(), "raw serial of a source date still matches");
+    assert!(check_validation(&wb, 0, at, "Pending").is_some());
+
+    s.execute("cell.set", json!({"cell": "A1", "input": "Jan-26"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(at), Value::Number(46023.0));
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, sh, at), "Jan-26");
+    assert!(check_validation(&s.doc().unwrap().wb, 0, at, &sh.input_text(at)).is_none());
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.

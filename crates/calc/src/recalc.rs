@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Area, Ev, Evaluator, Host, precedents, stack_position};
 
 mod graph;
 mod pass_host;
@@ -517,6 +517,24 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
+}
+
+/// When `formula` evaluates to a reference (a range, name or table), the areas it points at,
+/// trimmed the same way evaluation would read them. Used by list validation so dropdown labels
+/// can use each source cell's number format (dates as `Jan-26`, not `46023`).
+pub fn evaluate_areas(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Option<Vec<Area>> {
+    let body = formula.strip_prefix('=').unwrap_or(formula);
+    let expr = gridcraft_formula::parse(body).ok()?;
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at);
+    match ev.eval(&expr) {
+        Ev::R(areas) if !areas.is_empty() => {
+            Some(areas.into_iter().map(|a| Area { sheet: a.sheet, range: ev.readable_range(&a) }).collect())
+        }
+        _ => None,
+    }
 }
 
 fn prof_now() -> f64 {
