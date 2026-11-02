@@ -204,10 +204,15 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         let mut used_names: HashSet<String> = HashSet::new();
         for (t, cols) in &tables {
             out.tables += 1;
-            out.table_id += 1;
             let n = out.tables;
-            let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            // The model's own Table.id is the part's id, so the id survives the save/reopen
+            // round trip: a saved From Web connection's table_id (the model's id) finds the
+            // same table after the file comes back, instead of a sequential number the
+            // reader would hand a different table. (An id of 0 - a workbook without one
+            // assigned - keeps the sequential fallback.)
+            let id = if t.id > 0 { t.id } else { { out.table_id += 1; out.table_id } };
+            let name = table_name(&t.name, &mut used_names, id);
+            let xml = table_xml(t, cols, &name, id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");

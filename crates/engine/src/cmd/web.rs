@@ -1660,4 +1660,41 @@ mod tests {
         assert_eq!(a1(&s, "A2"), "'90s", "the apostrophe is stored, not stripped");
         assert_eq!(a1(&s, "B2"), "=SUM(1)", "the formula-looking text is stored as text");
     }
+#[test]
+    /// The connection's table id survives an XLSX save and reopen (the part's id is the
+    /// model's Table.id, not a sequential number), so a refresh after reopening still
+    /// finds and updates the imported table instead of dropping the connection.
+    fn the_table_id_survives_an_xlsx_round_trip() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The imported table's model id.
+        let id_before = {
+            let d = s.active().unwrap();
+            d.wb.active().unwrap().tables[0].id
+        };
+        assert!(id_before > 0);
+        // Save as XLSX and reopen.
+        let bytes = gridcraft_xlsx::write_xlsx(s.active().unwrap().wb.as_ref()).expect("saves");
+        let mut s2 = session_with_source();
+        let open = json!({"base64": crate::io::base64_encode(&bytes), "name": "Web.xlsx"});
+        s2.execute("file.open", open).unwrap();
+        // The model id came back, and the connection's id matches it.
+        let (id_after, conn_id) = {
+            let d = s2.active().unwrap();
+            (d.wb.active().unwrap().tables[0].id, d.wb.web_queries[0].table_id)
+        };
+        assert_eq!(id_after, id_before, "the table's id survives the round trip");
+        assert_eq!(conn_id, Some(id_before), "the connection still points at it");
+        // A refresh updates the reopened table, not a dropped connection.
+        s2.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>Z</td><td>99</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s2.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1, "the connection refreshed (errors: {})", r["errors"]);
+        assert_eq!(a1(&s2, "B2"), "99", "the reopened table was updated in place");
+    }
 }
