@@ -449,8 +449,10 @@ fn discrete() {
     close(ev("BINOM.DIST.RANGE", vec![n(2.9), n(0.5), n(0.9)]), 0.25);
     is_err(ev("HYPGEOM.DIST", vec![n(-0.1), n(2.0), n(2.0), n(4.0), b(false)]), CellError::Num);
     is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(-0.1), n(2.0), n(4.0), b(false)]), CellError::Num);
-    is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(false)]), CellError::Num);
-    is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(false)]), CellError::Num);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(false)]), 1.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(true)]), 1.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(false)]), 1.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(true)]), 1.0);
     is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(-0.1), n(4.0), b(false)]), CellError::Num);
     is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(2.0), n(-0.1), b(false)]), CellError::Num);
     close(ev("HYPGEOM.DIST", vec![n(0.9), n(2.0), n(2.0), n(4.0), b(false)]), 1.0 / 6.0);
