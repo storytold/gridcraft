@@ -1,5 +1,5 @@
 use super::format::{cell_format_code, r1c1_to_a1};
-use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, MAX_CELLS, Value, err};
+use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, MAX_CELLS, Value, err, linked_parts};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use std::sync::Arc;
 
@@ -15,7 +15,9 @@ impl<'h> Evaluator<'h> {
             return err(CellError::Value);
         }
         let base = match self.eval(&args[0]) {
-            Ev::R(a) if a.len() == 1 => a[0],
+            // OFFSET needs the source workbook open: a closed linked one hands it values, not a
+            // reference, which is `#VALUE!` as for the *IF(S) range parameters.
+            Ev::R(a) if a.len() == 1 && linked_parts(a[0].sheet).is_none() => a[0],
             Ev::V(Value::Error(e)) => return err(e),
             _ => return err(CellError::Value),
         };
@@ -78,7 +80,9 @@ impl<'h> Evaluator<'h> {
         match gridcraft_formula::parse(&text) {
             Ok(Expr::Ref(_)) if !a1_ok => err(CellError::Ref),
             Ok(e @ (Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_))) => match self.eval(&e) {
-                r @ Ev::R(_) => r,
+                // INDIRECT reads another workbook only while it is open (Microsoft's INDIRECT
+                // documentation): `#REF!` for a linked one.
+                Ev::R(a) if a.iter().all(|x| linked_parts(x.sheet).is_none()) => Ev::R(a),
                 _ => err(CellError::Ref),
             },
             _ => err(CellError::Ref),
@@ -267,9 +271,9 @@ impl<'h> Evaluator<'h> {
             "address" => Ev::V(Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1))),
             "row" => Ev::V(Value::number(c.row as f64 + 1.0)),
             "col" => Ev::V(Value::number(c.col as f64 + 1.0)),
-            "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
+            "contents" => Ev::V(self.cell(a.sheet, c)),
             "type" => {
-                let v = self.host.cell_value(a.sheet, c);
+                let v = self.cell(a.sheet, c);
                 Ev::V(Value::text(match v {
                     Value::Empty => "b",
                     Value::Text(_) => "l",

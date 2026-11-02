@@ -21,7 +21,7 @@ impl Shape {
 }
 
 pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
-    let Some(expr) = formula.expr_arc() else { return false };
+    let Some(expr) = formula.expr_arc().filter(|_| !crate::external::saved_as_read(formula)) else { return false };
     // The budget covers every node of a formula as long as Excel allows (8,192 characters make
     // at most about 8,200 nodes), so only names that expand a lot fall back to array evaluation.
     let mut scan = Scan { wb, at, remaining: 16_384, locals: Vec::new() };

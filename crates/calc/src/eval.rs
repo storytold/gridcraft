@@ -9,7 +9,7 @@ use std::sync::Arc;
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
 use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
-use gridcraft_model::Workbook;
+use gridcraft_model::{ExternalBook, ExternalName, ExternalSheet, Workbook};
 
 mod array;
 mod call;
@@ -21,7 +21,11 @@ mod special;
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
-pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
+pub(crate) use special::used_range_of;
+pub use special::{
+    DynamicReads, SPECIAL_FUNCTIONS, dynamic_reads, is_known_function, linked_parts, linked_value, precedents, resized_sum_range, takes_reference,
+};
+use special::{external_name, external_sheet, linked_definition_readable, linked_sheet_number};
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
@@ -34,6 +38,14 @@ const FULL_SIZE_CELLS: u64 = 16_384;
 /// range, so that formulas over them stay fast.
 const FULL_SIZE_BOUNDED_CELLS: u64 = 1_048_576;
 const MAX_DEPTH: usize = 400;
+/// Areas in a linked workbook (`[2]Prices!A:A`) have sheet numbers from here up, so that they stay
+/// references (`@`, INDEX, ROWS and the like see their position and size) while their cells are
+/// read from the values saved with the link: see [`linked_sheet_number`]. 2^30 + 2^30 - 1 still
+/// fits a 32-bit `usize` (wasm).
+const LINKED_SHEETS: usize = 1 << 30;
+/// Bits of a linked area's sheet number for the sheet within its workbook, and for the workbook.
+const LINKED_SHEET_BITS: u32 = 16;
+const LINKED_BOOK_BITS: u32 = 30 - LINKED_SHEET_BITS;
 /// Lambda invocations one cell may make. A semantically bounded formula in Excel can invoke
 /// its lambda at most once per cell of an array (capped here by `MAX_CELLS`), so this covers
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
@@ -97,6 +109,11 @@ pub trait Host {
     fn random(&mut self) -> f64;
     /// Called when a volatile or dynamic-reference function is used.
     fn note_volatile(&mut self) {}
+    /// Called when a formula uses a linked workbook's name whose definition can't be calculated
+    /// from the values saved with the link (no definition, `#REF!`, or sheets, names or tables
+    /// the link didn't save). Excel keeps showing the value it saved for such a formula, since
+    /// linked values only change when the link is updated; hosts that hold that value use it.
+    fn note_unknown_link(&mut self) {}
     /// The spill range of the dynamic array anchored at `anchor` (`None`: it doesn't spill).
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         self.workbook().sheet(sheet)?.spill_ranges.get(&anchor).copied()
@@ -105,10 +122,10 @@ pub trait Host {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
     }
-    /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
-    /// keep the workbook unchanged while evaluating can remember it.
+    /// The sheet's used range ([`used_range_of`]). Hosts that keep the workbook unchanged while
+    /// evaluating can remember it.
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
-        self.workbook().sheet(sheet).and_then(|s| s.used_range())
+        used_range_of(self.workbook(), sheet)
     }
     /// Calls `f` on each stored value of a block, row-major (formula cells evaluated first),
     /// until `f` returns false. `false` when this host can't (callers use `range_values`).
@@ -236,13 +253,112 @@ impl<'h> Evaluator<'h> {
         Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
     }
 
+    /// A reference into a linked workbook (`'[2]Prices'!B2`, `[2]Prices!A:A`): an area that keeps
+    /// the position and size written, read from the values saved with the link, as Excel
+    /// calculates while the source is closed (see [`LINKED_SHEETS`]). `None` = not a reference
+    /// into a linked workbook; `#REF!` = the link didn't save that workbook or sheet, noted to the
+    /// host when the link has no saved workbook to look in (see [`Host::note_unknown_link`]).
+    fn linked_area(&mut self, r: &Reference) -> Option<Result<Area, CellError>> {
+        let SheetSel::Named(name) = &r.sheet else { return None };
+        let (book, sheet) = external_sheet(name)?;
+        let wb = self.host.workbook();
+        let linked = book.checked_sub(1).and_then(|b| Some((b, wb.external_books.get(b)?)));
+        if linked.is_some_and(|(_, l)| l.opaque) {
+            self.host.note_unknown_link();
+            return Some(Err(CellError::Ref));
+        }
+        let found = linked.and_then(|(b, l)| Some((b, l.sheet_index(sheet)?)));
+        Some(found.and_then(|(b, s)| linked_sheet_number(b, s)).map(|sheet| Area { sheet, range: r.range() }).ok_or(CellError::Ref))
+    }
+
+    /// The saved sheet of a linked workbook that an area's sheet number stands for.
+    fn linked_sheet(&self, sheet: usize) -> Option<&ExternalSheet> {
+        let (book, s) = linked_parts(sheet)?;
+        self.host.workbook().external_books.get(book)?.sheets.get(s)
+    }
+
+    /// The value of a cell, in this workbook or in a linked one's saved values.
+    fn cell(&mut self, sheet: usize, c: CellRef) -> Value {
+        if linked_parts(sheet).is_none() {
+            return self.host.cell_value(sheet, c);
+        }
+        match self.linked_sheet(sheet) {
+            Some(s) => linked_value(s, s.value(c)),
+            None => Value::Error(CellError::Ref),
+        }
+    }
+
+    /// Values of a block, row-major, in this workbook or in a linked one's saved values.
+    pub(crate) fn block_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        if linked_parts(sheet).is_none() {
+            return self.host.range_values(sheet, range);
+        }
+        let Some(s) = self.linked_sheet(sheet) else { return vec![Value::Error(CellError::Ref); range.count() as usize] };
+        let w = range.width() as usize;
+        let mut out = vec![linked_value(s, Value::Empty); range.height() as usize * w];
+        for (c, v) in s.cells_in(range) {
+            let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
+            if let Some(slot) = out.get_mut(i) {
+                *slot = v.clone();
+            }
+        }
+        out
+    }
+
+    /// A defined name of a linked workbook (`[1]!Rates`, `[1]Prices!Rates`): what it refers to in
+    /// that workbook, read from the values saved with the link. A name the link doesn't define is
+    /// `#REF!`; one it defines but whose definition can't be read from the saved values is `#REF!`
+    /// noted to the host (see [`Host::note_unknown_link`]). Through a link that isn't to a
+    /// workbook (DDE, OLE) only a DDE item saved with its value is known (`[1]!Price`); anything
+    /// else is noted the same way.
+    fn external_name(&mut self, book: usize, sheet: &str, name: &str) -> Ev {
+        let wb = self.host.workbook();
+        let Some(b) = book.checked_sub(1).and_then(|i| wb.external_books.get(i)) else { return err(CellError::Ref) };
+        if b.opaque {
+            if sheet.is_empty()
+                && let Some(v) = b.item(name)
+            {
+                return Ev::V(v.clone());
+            }
+            self.host.note_unknown_link();
+            return err(CellError::Ref);
+        }
+        let Some(def) = b.name(name, (!sheet.is_empty()).then_some(sheet)) else { return err(CellError::Ref) };
+        let scope = def.sheet.and_then(|i| b.sheets.get(i)).map(|s| format!("[{book}]{}", s.name));
+        let parsed = gridcraft_formula::parse(&def.refers_to).ok().filter(|e| linked_definition_readable(b, def, e));
+        let Some(expr) = parsed else {
+            self.host.note_unknown_link();
+            return err(CellError::Ref);
+        };
+        // Everything it names is in the linked workbook: its sheets and names (checked above).
+        let expr = expr.map(&mut |e| match e {
+            Expr::Ref(mut r) => {
+                r.sheet = match r.sheet {
+                    SheetSel::Named(s) => SheetSel::Named(format!("[{book}]{s}")),
+                    SheetSel::Current => match &scope {
+                        Some(s) => SheetSel::Named(s.clone()),
+                        None => return Expr::Error(CellError::Ref),
+                    },
+                    SheetSel::Span(..) => return Expr::Error(CellError::Ref),
+                };
+                Expr::Ref(r)
+            }
+            Expr::Name(n) => Expr::Name(match (n.split_once('!'), &scope) {
+                (Some(_), _) => format!("[{book}]{n}"),
+                (None, Some(s)) => format!("{s}!{n}"),
+                (None, None) => format!("[{book}]!{n}"),
+            }),
+            Expr::Struct(_) => Expr::Error(CellError::Ref),
+            e => e,
+        });
+        self.eval(&expr)
+    }
+
+    /// Dereferences: one cell → its value; a block → an array (trimmed to the used range);
+    /// several areas → `#VALUE!`.
     /// Dereferences: one cell → its value; a block → an array; several areas → `#VALUE!`.
     ///
-    /// A block keeps its full shape (blanks included) when it holds at most `FULL_SIZE_CELLS`
-    /// cells, or when it holds at most `FULL_SIZE_BOUNDED_CELLS` cells (one full column's worth)
-    /// and does not run to the sheet's last row or column. Every other block (larger, or a
-    /// bigger one that runs to the sheet's edge, such as `A:A` or `1:1`) is trimmed to the
-    /// sheet's used range before its values are read. An array over `MAX_CELLS` is `#NUM!`.
+    /// A block keeps its full shape (blanks included) when it holds at most `FULL_SIZE_CELLS` cells, or when it holds at most `FULL_SIZE_BOUNDED_CELLS` cells (one full column's worth) and does not run to the sheet's last row or column. Every other block (larger, or a bigger one that runs to the sheet's edge, such as `A:A` or `1:1`) is trimmed to the sheet's used range before its values are read. An array over `MAX_CELLS` is `#NUM!`.
     pub fn deref(&mut self, ev: Ev) -> Value {
         match ev {
             Ev::V(v) => v,
@@ -256,7 +372,7 @@ impl<'h> Evaluator<'h> {
 
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
-            return self.host.cell_value(a.sheet, a.range.start);
+            return self.cell(a.sheet, a.range.start);
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
@@ -270,22 +386,26 @@ impl<'h> Evaluator<'h> {
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
         }
-        let data = self.host.range_values(a.sheet, range);
+        let data = self.block_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
     /// positions stay right).
     pub fn trim(&mut self, a: &Area) -> RangeRef {
-        if self.host.workbook().sheet(a.sheet).is_none() {
+        if linked_parts(a.sheet).is_none() && self.host.workbook().sheet(a.sheet).is_none() {
             return a.range;
         }
+        // Past the cells a refresh-error sheet saved, everything is `#REF!`, not blank: keep one
+        // row and column past them, so `[1]Data!A:A` reads an uncached cell and agrees with
+        // `[1]Data!A1:A2`.
+        let past = u32::from(self.linked_sheet(a.sheet).is_some_and(|s| s.refresh_error));
         let used = self.host.used_range(a.sheet);
         let (mut r1, mut c1) = (a.range.end.row, a.range.end.col);
         match used {
             Some(u) => {
-                r1 = r1.min(u.end.row.max(a.range.start.row));
-                c1 = c1.min(u.end.col.max(a.range.start.col));
+                r1 = r1.min(u.end.row.saturating_add(past).max(a.range.start.row));
+                c1 = c1.min(u.end.col.saturating_add(past).max(a.range.start.col));
             }
             None => {
                 r1 = a.range.start.row;
@@ -320,6 +440,7 @@ impl<'h> Evaluator<'h> {
             Expr::Text(t) => Ev::V(Value::Text(t.clone())),
             Expr::Bool(b) => Ev::V(Value::Bool(*b)),
             Expr::Error(x) => err(*x),
+            Expr::LinkedRefError(_) => err(CellError::Ref),
             Expr::Missing => Ev::V(Value::Empty),
             Expr::Paren(x) => self.eval(x),
             Expr::Array(rows) => {
@@ -336,7 +457,11 @@ impl<'h> Evaluator<'h> {
             }
             Expr::Ref(r) => match self.reference_areas(r) {
                 Ok(a) => Ev::R(a),
-                Err(x) => err(x),
+                Err(x) => match self.linked_area(r) {
+                    Some(Ok(a)) => Ev::R(vec![a]),
+                    Some(Err(e)) => err(e),
+                    None => err(x),
+                },
             },
             Expr::Name(n) => self.name(n),
             Expr::Struct(s) => self.structured(s),
@@ -357,6 +482,9 @@ impl<'h> Evaluator<'h> {
     fn name(&mut self, n: &str) -> Ev {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
             return v.clone();
+        }
+        if let Some((book, sheet, bare)) = external_name(n) {
+            return self.external_name(book, sheet, bare);
         }
         let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
@@ -496,7 +624,7 @@ impl<'h> Evaluator<'h> {
             return match ev {
                 Ev::R(areas) => match areas.as_slice() {
                     [a] => match self.implicit_intersect(a) {
-                        Some(c) => Ev::V(self.host.cell_value(a.sheet, c)),
+                        Some(c) => Ev::V(self.cell(a.sheet, c)),
                         None => err(CellError::Value),
                     },
                     _ => err(CellError::Value),

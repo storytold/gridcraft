@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
 use gridcraft_model::{
-    Anchor, AnchorMode, AutoFilter, Cell, CfOperator, Comment, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Sheet, Validation,
-    ValidationKind, Workbook,
+    Anchor, AnchorMode, AutoFilter, Cell, CfOperator, Comment, ErrorStyle, FilterCriterion, Hyperlink, LineInfo, Sheet, Validation, ValidationKind,
+    Workbook,
 };
 use serde_json::{Value as Json, json};
 

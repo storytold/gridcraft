@@ -39,6 +39,16 @@ pub enum SheetSel {
     Span(String, String),
 }
 
+/// `[2]Prices` (a sheet in linked workbook 2) → `(2, "Prices")`; `[2]` alone (before a linked
+/// workbook's name) → `(2, "")`. `None` when the name has no workbook index.
+pub(crate) fn book_prefix(sheet: &str) -> Option<(usize, &str)> {
+    let (book, rest) = sheet.strip_prefix('[')?.split_once(']')?;
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((book.parse().ok()?, rest))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reference {
     pub sheet: SheetSel,
@@ -208,6 +218,9 @@ pub enum Expr {
     Invoke(Box<Expr>, Vec<Expr>),
     /// An omitted argument `F(1,,3)`.
     Missing,
+    /// A reference Excel found deleted in a linked workbook, kept with its link
+    /// (`[1]Data!#REF!`, `[1]Jan:Dec!#REF!`): `#REF!`, written back with the sheet it was in.
+    LinkedRefError(SheetSel),
     Paren(Box<Expr>),
 }
 
@@ -305,6 +318,7 @@ impl Clone for Expr {
             Expr::Invoke(c, args) => Expr::Invoke(c.clone(), args.clone()),
             Expr::Missing => Expr::Missing,
             Expr::Paren(e) => Expr::Paren(e.clone()),
+            Expr::LinkedRefError(s) => Expr::LinkedRefError(s.clone()),
         };
         while let Some((op, b)) = spine.pop() {
             acc = Expr::Binary(op, Box::new(acc), b.clone());
@@ -343,6 +357,7 @@ impl PartialEq for Expr {
                 (Expr::Invoke(c1, a), Expr::Invoke(c2, b)) => break c1 == c2 && a == b,
                 (Expr::Missing, Expr::Missing) => break true,
                 (Expr::Paren(a), Expr::Paren(b)) => break a == b,
+                (Expr::LinkedRefError(a), Expr::LinkedRefError(b)) => break a == b,
                 _ => break false,
             }
         };
