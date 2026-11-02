@@ -574,7 +574,8 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
 
 /// The cells Save Model writes, top to bottom, as formula text.
 pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
-    let one_area = |t: &str| !t.contains(',');
+    // A comma inside a quoted sheet name (`'Sales, West'!$A$1`) doesn't start another area.
+    let one_area = |t: &str| split_areas(t).into_iter().filter(|a| !a.trim().is_empty()).count() <= 1;
     let mut rows = Vec::with_capacity(m.cons.len() + 3);
     let obj = abs_text(None, &m.objective.a1());
     rows.push(match m.goal {
@@ -584,7 +585,8 @@ pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
     });
     rows.push(format!("=COUNT({})", abs_text(None, &m.vars_text)));
     for c in &m.cons {
-        if !one_area(&c.lhs_text) || !one_area(&c.rhs_text) {
+        // A number on the right side (`1,000`) is no range, whatever its separators.
+        if !one_area(&c.lhs_text) || (matches!(c.rhs, Rhs::Cells(_)) && !one_area(&c.rhs_text)) {
             return Err(EngineError::Other("Save Model needs each side of a constraint to be one range.".into()));
         }
         let lhs = abs_text(None, &c.lhs_text);

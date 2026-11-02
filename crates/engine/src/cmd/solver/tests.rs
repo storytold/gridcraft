@@ -1913,3 +1913,39 @@ fn a_relation_inside_a_quoted_sheet_name_does_not_split_a_constraint() {
         assert_eq!((m["objective"].as_str(), m["goal"].as_str(), m["value"].as_f64()), (Some("B1"), Some("value"), Some(37.0)), "{name}: {m}");
     }
 }
+
+#[test]
+fn save_model_counts_areas_outside_quoted_sheet_names() {
+    // Wyndor Glass on a sheet whose name holds a comma (and, for the second, a doubled quote),
+    // saved on cells with references that carry the name.
+    for name in ["Sales, West", "O'Brien, Jr"] {
+        let q = gridcraft_core::quote_sheet(name);
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": name, "before": 1})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2"), ("C3", "18")]);
+        let constraints = [
+            format!("{q}!$A$1 <= 4"),
+            format!("{q}!$B$2 <= 12"),
+            format!("{q}!$B$3 <= {q}!$C$3"),
+            format!("{q}!$A$1:$A$2 int"),
+            // A number with a thousands separator is one value, not two areas.
+            format!("{q}!$B$1 <= 1,000"),
+        ];
+        let model = json!({"objective": format!("{q}!$B$1"), "variables": format!("{q}!$A$1:$A$2"), "constraints": constraints, "method": "simplex"});
+        let out = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(out["range"], "H1:H8", "{name}: {out}");
+        let rows: Vec<String> = (3..=7).map(|r| formula(&s, &format!("H{r}"))).collect();
+        assert_eq!(rows, ["AND($A$1<=4)", "AND($B$2<=12)", "AND($B$3<=$C$3)", "AND($A$1:$A$2=INT($A$1:$A$2))", "AND($B$1<=1000)"], "{name}");
+        // The model loads back from the cells and solves.
+        let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(loaded["model"]["constraints"], json!(["A1 <= 4", "B2 <= 12", "B3 <= C3", "A1:A2 int", "B1 <= 1000"]), "{name}: {loaded}");
+        let r = s.execute("data.solver", json!({"saved": true})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        assert!((n(&s, "B1") - 36.0).abs() < 1e-9, "{name}");
+        // A side of two areas, each carrying the name, is still refused.
+        let two = json!({"objective": format!("{q}!$B$1"), "variables": format!("{q}!$A$1:$A$2"), "constraints": [format!("{q}!$A$1:$A$2 <= {q}!$C$1,{q}!$C$2")]});
+        let e = s.execute("data.solverSaveModel", json!({"to": "J1", "model": two})).unwrap_err().to_string();
+        assert!(e.contains("one range"), "{name}: {e}");
+    }
+}
