@@ -92,6 +92,9 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        if matches!(id, "file.save" | "file.saveAs") && self.choose_provider_save(id == "file.saveAs") {
+            return;
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -140,6 +143,15 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "file.openProviderResource" => self.open_provider_resource(p),
+            "ui.chooseProviderSave" => {
+                if p.get("saveAs").is_some_and(|value| !value.is_boolean()) {
+                    return Some(Err("saveAs must be a boolean".into()));
+                }
+                let save_as = p.get("saveAs").and_then(Json::as_bool).unwrap_or(false);
+                let handled = self.session.active().is_some() && self.choose_provider_save(save_as);
+                Ok(json!({"handled":handled}))
+            }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)

@@ -88,6 +88,49 @@ impl SheetApp {
         std::mem::swap(&mut self.session.mode, mode);
     }
 
+    /// Pending workbook edits can be parked in another window while a save is awaiting a choice.
+    pub(crate) fn provider_drafts_for(&self, uid: u64) -> bool {
+        let owned = |editor: &Option<editor::EditState>, text: &Option<text_box::EditState>| {
+            editor.as_ref().is_some_and(|edit| edit.doc == uid) || text.as_ref().is_some_and(|edit| edit.belongs_to(uid))
+        };
+        owned(&self.editor, &self.text_box_editor) || self.parked.values().any(|state| owned(&state.editor, &state.text_box_editor))
+    }
+
+    /// Resolve every window's draft for this workbook without touching another workbook's draft.
+    pub(crate) fn settle_provider_drafts(&mut self, uid: u64) -> Result<(), String> {
+        self.follow_active_window();
+        let mut windows = self
+            .parked
+            .iter()
+            .filter(|(_, state)| {
+                state.editor.as_ref().is_some_and(|edit| edit.doc == uid) || state.text_box_editor.as_ref().is_some_and(|edit| edit.belongs_to(uid))
+            })
+            .map(|(window, _)| *window)
+            .collect::<Vec<_>>();
+        if (self.editor.as_ref().is_some_and(|edit| edit.doc == uid) || self.text_box_editor.as_ref().is_some_and(|edit| edit.belongs_to(uid)))
+            && let Some(window) = self.ui_window
+        {
+            windows.push(window);
+        }
+        let back = self.session.active_window();
+        for window in windows {
+            if self.session.window(window).is_none() {
+                return Err("The draft window was closed before capture".into());
+            }
+            self.enter_window(window);
+            // A refusal keeps its original window and draft in front, as a native file command does.
+            self.settle_drafts()?;
+            self.store_view_state();
+        }
+        if let Some(back) = back {
+            self.enter_window(back);
+        }
+        if self.session.active().is_some_and(|doc| doc.uid == uid) {
+            self.store_view_state();
+        }
+        Ok(())
+    }
+
     /// The window whose interface state is in the per-window fields.
     pub fn ui_window(&self) -> Option<u64> {
         self.ui_window

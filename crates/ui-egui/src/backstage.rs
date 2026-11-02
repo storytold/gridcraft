@@ -258,7 +258,9 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
     }
-    if app.session.active().is_some_and(|d| d.path.is_some()) {
+    let provider_bound =
+        app.session.active().is_some_and(|doc| app.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(doc.uid)));
+    if app.session.active().is_some_and(|d| d.path.is_some()) || provider_bound {
         app.run_or_alert("file.save", json!({}));
         out.close = true;
     } else {
@@ -371,9 +373,27 @@ fn split_path(path: &str) -> (String, String) {
 /// Width of the column that tells when a recent workbook was last changed.
 const MODIFIED_W: f32 = 150.0;
 
+fn provider_recent_list(app: &mut SheetApp, ui: &mut Ui, limit: usize) {
+    let Some((label, resources)) = app.services.file_providers.as_ref().and_then(|host| host.recent_entries()) else { return };
+    let lang = app.ui.language;
+    let t = Tokens::get(ui.ctx());
+    section(ui, lang, &format!("{} — {label}", lang.tr("Recent")));
+    if resources.is_empty() {
+        dim(ui, lang.tr("No recent provider files."));
+    }
+    for resource in resources.into_iter().take(limit) {
+        if ui.button(RichText::new(&resource.name).color(t.text)).on_hover_text(&resource.updated_at).clicked() {
+            app.run_or_alert("file.openProviderResource", json!({"resource":resource.id}));
+        }
+    }
+    ui.separator();
+    dim(ui, lang.tr("Recent on this device"));
+}
+
 /// Recent workbooks, newest first, each with when it was last changed. Opening one is the user's
 /// explicit choice.
 fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, limit: usize) {
+    provider_recent_list(app, ui, limit);
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     if app.ui.recent.is_empty() {
@@ -695,23 +715,44 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             .labelled_by(label.id);
     });
     ui.add_space(14.0);
-    // Desktop: the system Save dialog. Web: the file downloads.
+    // Provider workbooks choose a destination; other actions use the local picker or download.
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
-    let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
+    let provider_save = fmt == "xlsx" && app.services.file_providers.as_ref().is_some_and(|host| host.enabled());
+    let label = match (provider_save, web) {
+        (true, _) => lang.tr("Save").to_string(),
+        (false, true) => format!("{} (.{fmt})", lang.tr("Download")),
+        (false, false) => lang.tr("Browse…").to_string(),
+    };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
-            let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
-            let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
-                out.close = true;
-            }
+            save_as_workbook(app, out);
         } else if export_as(app, fmt) {
             out.close = true;
         }
     }
     ui.add_space(18.0);
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+}
+
+/// Offers the explicit provider UI command before the normal local Save As picker/download.
+fn save_as_workbook(app: &mut SheetApp, out: &mut Outcome) {
+    match app.run("ui.chooseProviderSave", json!({"saveAs":true})) {
+        Ok(result) if result["handled"] == true => {
+            out.close = true;
+            return;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            app.message = Some(("GridCraft".into(), error));
+            return;
+        }
+    }
+    let before = app.session.active().map(|doc| (doc.path.clone(), doc.is_dirty()));
+    app.open_dialog("saveAs", json!({}));
+    let after = app.session.active().map(|doc| (doc.path.clone(), doc.is_dirty()));
+    if after != before || app.services.pick_save.is_none() {
+        out.close = true;
+    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
@@ -826,6 +867,202 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Render the actual Backstage pages with the largest accepted provider list.
+    fn recent_page_text(page: Page, height: f32) -> Vec<String> {
+        let host = crate::file_providers::Host::default();
+        host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+        let connection = host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+        let resources = (0..100)
+            .map(|index| crate::file_providers::Resource {
+                id: format!("resource-{index:03}"),
+                name: format!("Provider{index:03}.xlsx"),
+                updated_at: String::new(),
+            })
+            .collect();
+        host.set_resources(&connection, resources).unwrap();
+        let services = crate::Services { file_providers: Some(host), ..Default::default() };
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+        app.ui.language = Language::En;
+        app.ui.recent.push("Device-only.xlsx".into());
+        app.backstage = Some(Backstage::new(page));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::pinned_font_definitions());
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, height))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| show(&mut app, ui));
+        output.textures_delta.clear(); // No renderer consumes texture uploads in this test.
+        fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(shape) => text.push(shape.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, text)),
+                _ => {}
+            }
+        }
+        let mut text = Vec::new();
+        for shape in &output.shapes {
+            collect_text(&shape.shape, &mut text);
+        }
+        text
+    }
+
+    #[test]
+    fn home_limits_provider_recents_and_keeps_device_history_visible() {
+        let text = recent_page_text(Page::Home, 900.0);
+        assert_eq!(text.iter().filter(|text| text.starts_with("Provider")).count(), 8);
+        assert!(text.iter().any(|text| text == "Provider000.xlsx"));
+        assert!(text.iter().any(|text| text == "Provider007.xlsx"));
+        assert!(!text.iter().any(|text| text == "Provider008.xlsx"));
+        assert!(text.iter().any(|text| text == "Recent on this device"));
+        assert!(text.iter().any(|text| text == "Device-only.xlsx"));
+    }
+
+    #[test]
+    fn open_page_keeps_the_complete_provider_recent_list() {
+        let text = recent_page_text(Page::Open, 6000.0);
+        assert_eq!(text.iter().filter(|text| text.starts_with("Provider")).count(), 100);
+        assert!(text.iter().any(|text| text == "Provider099.xlsx"));
+        assert!(text.iter().any(|text| text == "Device-only.xlsx"));
+    }
+
+    /// Open a real provider XLSX, then edit it without introducing a device path.
+    fn provider_book() -> (SheetApp, crate::file_providers::Host) {
+        let host = crate::file_providers::Host::default();
+        host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+        let connection = host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "existing-book".into(), name: "Original.xlsx".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        let mut source = gridcraft_engine::Session::new();
+        source.new_workbook();
+        let bytes = gridcraft_engine::io::save_bytes(&source.active().unwrap().wb, "Original.xlsx").unwrap();
+        let read = host.request_open("existing-book").unwrap();
+        host.open(read, "Original.xlsx".into(), bytes).unwrap();
+        let services = crate::Services { file_providers: Some(host.clone()), ..Default::default() };
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+        app.provider_tick();
+        host.take_events();
+        let doc = app.session.active().unwrap();
+        assert!(doc.path.is_none());
+        assert!(host.bound(doc.uid));
+        app.session.run("cell.set", json!({"cell":"A1","input":"Edit after provider open"})).unwrap();
+        (app, host)
+    }
+
+    #[test]
+    fn backstage_save_retains_the_bound_provider_overwrite_destination() {
+        let (mut app, host) = provider_book();
+        let mut out = Outcome::default();
+        save(&mut app, &mut out);
+        assert!(out.close);
+        assert_eq!(out.page, None);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["saveAs"], false);
+        assert_eq!(events[0].metadata["resourceId"], "existing-book");
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "provider", "").unwrap();
+        app.provider_tick();
+        let events = host.take_events();
+        let saved = events.iter().find(|event| event.metadata["type"] == "save").unwrap();
+        assert_eq!(saved.metadata["resourceId"], "existing-book");
+        assert!(saved.bytes.as_ref().is_some_and(|bytes| !bytes.is_empty()));
+        assert!(app.session.active().unwrap().is_dirty());
+        host.result(request.into(), "saved".into(), "existing-book".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn backstage_save_keeps_save_as_for_unbound_or_disabled_provider_books() {
+        for bound in [false, true] {
+            let (mut app, host) = provider_book();
+            if bound {
+                host.set_enabled(false).unwrap();
+            } else {
+                host.disconnect().unwrap();
+                host.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+            }
+            let mut out = Outcome::default();
+            save(&mut app, &mut out);
+            assert!(!out.close);
+            assert_eq!(out.page, Some(Page::SaveAs));
+            assert!(host.take_events().is_empty());
+        }
+    }
+
+    #[test]
+    fn save_as_provider_handoff_is_a_discoverable_result_bearing_ui_command() {
+        let (mut app, host) = provider_book();
+        let ctx = egui::Context::default();
+        let crate::control::Outcome::Done(commands) =
+            crate::control::handle(&mut app, &ctx, "engine.commands", &json!({"search":"chooseProviderSave"}))
+        else {
+            panic!("command discovery must be synchronous");
+        };
+        assert!(commands["result"].as_array().unwrap().iter().any(|command| command["id"] == "ui.chooseProviderSave"));
+        let crate::control::Outcome::Done(result) =
+            crate::control::handle(&mut app, &ctx, "engine.execute", &json!({"command":"ui.chooseProviderSave","params":{"saveAs":true}}))
+        else {
+            panic!("the explicit UI request must return handled status");
+        };
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["handled"], true);
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["saveAs"], true);
+        assert!(events[0].metadata["resourceId"].is_null());
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "cancel", "").unwrap();
+        let mut out = Outcome::default();
+        save_as_workbook(&mut app, &mut out);
+        assert!(out.close);
+        assert_eq!(host.take_events()[0].metadata["saveAs"], true);
+    }
+
+    #[test]
+    fn save_as_local_cancel_and_browser_fallback_survive_missing_or_disabled_providers() {
+        for missing in [false, true] {
+            let (mut app, host) = provider_book();
+            if missing {
+                app.services.file_providers = None;
+            } else {
+                host.set_enabled(false).unwrap();
+            }
+            let picker_calls = std::rc::Rc::new(std::cell::Cell::new(0));
+            let calls = picker_calls.clone();
+            app.services.pick_save = Some(Box::new(move |_| {
+                calls.set(calls.get() + 1);
+                None
+            }));
+            let mut out = Outcome::default();
+            save_as_workbook(&mut app, &mut out);
+            assert_eq!(picker_calls.get(), 1);
+            assert!(!out.close, "a cancelled native picker keeps the panel open");
+            assert!(host.take_events().is_empty());
+            let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+            let copies = downloads.clone();
+            app.services.pick_save = None;
+            app.services.download = Some(Box::new(move |_, bytes| {
+                assert!(!bytes.is_empty());
+                copies.set(copies.get() + 1);
+            }));
+            save_as_workbook(&mut app, &mut out);
+            assert!(out.close);
+            assert_eq!(downloads.get(), 1);
+            assert!(app.session.active().unwrap().is_dirty());
+            assert!(host.take_events().is_empty());
+        }
+    }
+
+    #[test]
+    fn save_as_ui_command_rejects_non_boolean_modes_without_choosing() {
+        let (mut app, host) = provider_book();
+        assert!(app.run("ui.chooseProviderSave", json!({"saveAs":"yes"})).is_err());
+        assert!(host.take_events().is_empty());
+    }
 
     #[test]
     fn ages_are_told_in_words() {

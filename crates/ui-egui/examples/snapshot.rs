@@ -2,7 +2,10 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--dialog 'name={json}'] [--hf-edit header|footer] [--file-provider-preview] out.png`
+//!
+//! The provider preview shows synthetic local and external Recents on Home without changing
+//! the application defaults or contacting a storage service.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -22,6 +25,7 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut provider_preview = false;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -55,6 +59,7 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--file-provider-preview" => provider_preview = true,
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -96,6 +101,26 @@ fn main() {
             eprintln!("{id}: {e}");
         }
     }
+    let mut services = gridcraft_ui_egui::Services::default();
+    if provider_preview {
+        let host = gridcraft_ui_egui::file_providers::Host::default();
+        let result = host.set_session("00112233445566778899aabbccddeeff".into()).and_then(|()| {
+            let connection = host.connect("preview".into(), "External files".into(), "example-account".into())?;
+            host.set_resources(
+                &connection,
+                vec![gridcraft_ui_egui::file_providers::Resource {
+                    id: "budget".into(),
+                    name: "Provider budget.xlsx".into(),
+                    updated_at: "2026-10-31 12:00".into(),
+                }],
+            )
+        });
+        if let Err(error) = result {
+            eprintln!("provider preview: {error}");
+            return;
+        }
+        services.file_providers = Some(host);
+    }
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(size.0, size.1)).with_pixels_per_point(scale).with_max_steps(12).wgpu().build_ui_state(
             move |ui, app: &mut SheetApp| {
@@ -104,8 +129,12 @@ fn main() {
                 app.ui(ui);
             },
             {
-                let mut app = SheetApp::new(session, Default::default());
+                let mut app = SheetApp::new(session, services);
                 app.ui.dark = dark;
+                if provider_preview {
+                    app.ui.recent = vec!["Device budget.xlsx".into()];
+                    app.backstage = Some(gridcraft_ui_egui::backstage::Backstage::new(gridcraft_ui_egui::backstage::Page::Home));
+                }
                 if let Some(code) = &language
                     && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)
                 {

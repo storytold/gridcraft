@@ -188,6 +188,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
             let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
+                ("file.openProviderResource", "Open Provider Resource", "{resource: id} (requires an enabled provider)"),
+                ("ui.chooseProviderSave", "Choose Provider Save Destination", "{saveAs?: bool} → {handled}; false keeps the local fallback"),
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
@@ -213,7 +215,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
-                v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
+                let enabled = id != "file.openProviderResource" || app.services.file_providers.as_ref().is_some_and(|host| host.enabled());
+                v.push(json!({"id": id, "label": label, "params": params, "enabled": enabled, "ui": true}));
             }
             ok(Json::Array(filter_commands(v, s("search"))))
         }

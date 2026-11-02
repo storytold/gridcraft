@@ -28,6 +28,7 @@ pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
 pub mod editor;
+pub mod file_providers;
 mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
