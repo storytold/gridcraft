@@ -51,7 +51,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | **missing** |
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
-| Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
+| Chart styles and colour palettes | ~16 styles × colour sets | new charts use Excel style 2; explicit style numbers preserved, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
 | Chart templates (`.crtx`) | yes | **missing** |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
@@ -92,6 +92,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
+| 2026-10-28 | minor | New charts, PivotCharts and Forecast Sheet charts default to Excel style 2 instead of grey style 1; explicit chart styles are preserved (#2763) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
