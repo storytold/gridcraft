@@ -96,7 +96,8 @@ where `kind` is `chart`, `image`, `shape`, `equation` or `slicer`; the same name
 of `object.delete`, `object.move`, `object.setAnchorMode` and the `arrange.*` commands. An
 equation is a shape too, so its id works under `shape`; a plain shape's id given as `equation`,
 a `kind` that is present but not one of these names (`null` included), or an id of no object of
-the kind, is an error.
+the kind, is an error. `arrange.align` and `arrange.group` check every id in `ids` the same way;
+with fewer than two ids they change nothing.
 `object.move` and `chart.set` cap `width` and `height` at 10,000 points, or at the object's
 current size when a file made it larger: such an object keeps its size when it is moved and
 shrinks by what a resize asks, but does not grow further.

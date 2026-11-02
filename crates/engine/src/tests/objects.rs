@@ -393,11 +393,13 @@ fn arrange_and_align_match_a_shape_id_to_its_kind() {
     assert!(s.execute("arrange.bringForward", json!({"kind": "widget", "id": shape.id})).is_err());
     assert!(s.execute("arrange.bringForward", json!({"kind": "chart", "id": 9999})).is_err());
     assert!(s.execute("arrange.bringForward", json!({"kind": "shape", "id": objs[0].id})).is_err(), "a chart's id is not a shape");
-    // Align: the shape given as an equation keeps its place while the two equations line up.
+    // Align: the shape's id given as an equation is refused and nothing moves; the two equations
+    // line up on their own.
     let second = ObjRef::new(ObjKind::Equation, id_of(&s.execute("insert.equation", json!({"latex": "y", "cell": "B30"})).unwrap(), "equation"));
-    let before = anchor_of(&s, shape);
-    s.execute("arrange.align", json!({"kind": "equation", "ids": [shape.id, equation.id, second.id], "align": "left"})).unwrap();
-    assert_eq!(anchor_of(&s, shape), before, "the shape is not aligned as an equation");
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation));
+    assert!(s.execute("arrange.align", json!({"kind": "equation", "ids": [shape.id, equation.id, second.id], "align": "left"})).is_err());
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing is aligned with a refused id");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id, second.id], "align": "left"})).unwrap();
     let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
     assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
     assert!(s.execute("arrange.align", json!({"kind": "widget", "ids": [shape.id, equation.id], "align": "left"})).is_err());
@@ -422,4 +424,35 @@ fn arrange_refuses_a_kind_that_is_present_but_not_a_name() {
     // Absent, the kind is `shape`, as before.
     s.execute("arrange.bringForward", json!({"id": shape.id, "toFront": true})).unwrap();
     assert_eq!(order(&s).last(), Some(&shape.id));
+}
+
+#[test]
+fn align_refuses_an_id_that_is_not_an_object_of_the_kind() {
+    // `arrange.align` and `arrange.group` refuse an id in `ids` that is not an object of the
+    // kind, or not a number, as `arrange` and the `object.*` commands refuse it, instead of
+    // aligning the rest and reporting success; nothing moves. With fewer than two ids they
+    // change nothing and succeed.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let second = ObjRef::new(ObjKind::Equation, id_of(&s.execute("insert.equation", json!({"latex": "y", "cell": "B30"})).unwrap(), "equation"));
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation), anchor_of(&s, second));
+    for ids in [
+        json!([shape.id, equation.id, second.id]),
+        json!([equation.id, second.id, 9999]),
+        json!([equation.id, second.id, -1]),
+        json!([equation.id, second.id, "x"]),
+        json!([equation.id, second.id, 1e12]),
+        json!([equation.id, second.id, null]),
+    ] {
+        assert!(s.execute("arrange.align", json!({"kind": "equation", "ids": ids, "align": "left"})).is_err(), "{ids}");
+        assert!(s.execute("arrange.group", json!({"kind": "equation", "ids": ids})).is_err(), "{ids}");
+    }
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation), anchor_of(&s, second)), before, "nothing moved");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id], "align": "left"})).unwrap();
+    s.execute("arrange.align", json!({"kind": "equation", "align": "left"})).unwrap();
+    assert_eq!(anchor_of(&s, equation), before.1, "fewer than two ids change nothing");
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [equation.id, second.id], "align": "left"})).unwrap();
+    let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
+    assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
 }

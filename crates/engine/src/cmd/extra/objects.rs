@@ -121,8 +121,16 @@ fn anchors_of(sh: &mut Sheet, kind: ObjKind) -> Vec<(u32, &mut Anchor)> {
 
 pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = kind_param(p, "arrange.align")?;
-    let ids: Vec<u32> =
-        p.get("ids").and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as u32)).collect()).unwrap_or_default();
+    // Every id must be an object id and name an object of the kind: a stale or mismatched id is
+    // an error, as for `arrange` and the `object.*` commands, not an object silently left out.
+    let ids: Vec<u32> = p
+        .get("ids")
+        .and_then(Json::as_array)
+        .map(|a| {
+            a.iter().map(|v| v.as_u64().and_then(|x| u32::try_from(x).ok()).ok_or_else(|| bad("arrange.align", "ids must be object ids"))).collect()
+        })
+        .transpose()?
+        .unwrap_or_default();
     let how = str_param(p, "align").unwrap_or("left").to_string();
     let si = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
@@ -135,6 +143,9 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
                 .map(|(id, a)| (id, shc.col_left(a.cell.col) + a.dx as f64, shc.row_top(a.cell.row) + a.dy as f64, a.width, a.height))
                 .collect()
         };
+        if let Some(missing) = ids.iter().find(|id| !geo.iter().any(|g| g.0 == **id)) {
+            return Err(bad("arrange.align", format!("no such object: {missing}")));
+        }
         if geo.len() < 2 {
             return Ok(Json::Null);
         }
