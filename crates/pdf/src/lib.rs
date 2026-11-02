@@ -1,7 +1,9 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
+//!   ([`text_width`]) so callers can measure, align and wrap text. Latin Extended-A letters
+//!   WinAnsiEncoding lacks (ő, ű, ł, č, …) are set in the same face through a second resource with
+//!   a `/Differences` encoding of standard glyph names. Other characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
@@ -224,8 +226,10 @@ pub fn win_ansi(c: char) -> u8 {
 
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the first Latin Extended-A face (one per [`Font::ALL`] face, after the CID font).
+const EXT_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
+const FONT_SLOTS: usize = EXT_FONT + Font::ALL.len();
 /// Base font of the CID font used for characters WinAnsiEncoding lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
@@ -233,7 +237,66 @@ const CID_WIDTH: u16 = 1000;
 
 /// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
-    !c.is_control() && c != '?' && win_ansi(c) == b'?'
+    !c.is_control() && c != '?' && win_ansi(c) == b'?' && ext_code(c).is_none()
+}
+
+/// The byte of `c` in the Latin Extended-A encoding (U+0100..=U+017F at 0x80..=0xFF, and the
+/// Romanian comma-below letters Ș ș Ț ț at 0x01..=0x04), for characters WinAnsiEncoding lacks.
+/// These are set in the standard face with a `/Differences` encoding of standard glyph names,
+/// not in the CID font.
+fn ext_code(c: char) -> Option<u8> {
+    let u = c as u32;
+    if (0x100..=0x17F).contains(&u) && win_ansi(c) == b'?' {
+        return u8::try_from(u - 0x80).ok();
+    }
+    // U+0218..=U+021B → 0x01..=0x04 (`comma_below` is `Some` only in that range).
+    metrics::comma_below(c).and_then(|_| u8::try_from(u.checked_sub(0x217)?).ok())
+}
+
+/// The character at `code` in the [`ext_code`] encoding, if any.
+fn ext_char(code: u8) -> Option<char> {
+    let u = match code {
+        1..=4 => 0x217 + u32::from(code),
+        0x80..=0xFF => u32::from(code) + 0x80,
+        _ => return None,
+    };
+    char::from_u32(u).filter(|&c| ext_code(c) == Some(code))
+}
+
+/// The `/Widths` of a face's [`ext_code`] resource, codes 1..=255. A viewer takes a standard
+/// font's advances from its own metrics by glyph name, and those lack `uni0219` and the like:
+/// without these widths ș and ț would advance by nothing and overprint the next letter.
+fn ext_widths(face: Font) -> String {
+    (1..=255u8).map(|code| ext_char(code).map_or(0, |c| face.char_width(c)).to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// How a character is encoded in a text run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Ansi,
+    Ext,
+    Cid,
+}
+
+fn run_kind(c: char) -> Run {
+    if ext_code(c).is_some() {
+        Run::Ext
+    } else if needs_cid(c) {
+        Run::Cid
+    } else {
+        Run::Ansi
+    }
+}
+
+/// A PDF hex string `< … >` of `text` in the Latin Extended-A encoding of [`ext_code`].
+fn pdf_ext_string(text: &str) -> String {
+    let mut s = String::with_capacity(text.len() * 2 + 2);
+    s.push('<');
+    for c in text.chars() {
+        let _ = write!(s, "{:02X}", ext_code(c).unwrap_or(b'?'));
+    }
+    s.push('>');
+    s
 }
 
 /// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
@@ -590,10 +653,14 @@ impl Page {
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;
         while let Some(first) = rest.chars().next() {
-            let cid = needs_cid(first);
-            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let kind = run_kind(first);
+            let end = rest.char_indices().find(|(_, c)| run_kind(*c) != kind).map_or(rest.len(), |(i, _)| i);
             let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+            let (slot, string) = match kind {
+                Run::Cid => (CID_FONT, pdf_utf16_string(run)),
+                Run::Ext => (EXT_FONT + fi, pdf_ext_string(run)),
+                Run::Ansi => (fi, pdf_string(run)),
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
@@ -771,6 +838,22 @@ impl PdfDoc {
                         desc_id,
                         format!(
                             "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
+                        )
+                        .into_bytes(),
+                    ));
+                    continue;
+                }
+                if let Some(face) = i.checked_sub(EXT_FONT).and_then(|f| Font::ALL.get(f)) {
+                    let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
+                    let comma: Vec<&str> = metrics::COMMA_BELOW.iter().map(|(name, _)| *name).collect();
+                    objects.push((
+                        *id,
+                        format!(
+                            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /FirstChar 1 /LastChar 255 /Widths [{}] /Encoding << /Type /Encoding /Differences [1 /{} 128 /{}] >> >>",
+                            face.base_name(),
+                            ext_widths(*face),
+                            comma.join(" /"),
+                            names.join(" /")
                         )
                         .into_bytes(),
                     ));
