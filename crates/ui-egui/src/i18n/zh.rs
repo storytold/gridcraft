@@ -110,6 +110,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "分列",
         "Link" => "链接",
         "Symbol" => "符号",
+        "Equation" => "公式",
+        "Insert New Equation..." => "插入新公式",
         "Sparklines" => "迷你图",
         "Checkbox" => "复选框",
         "Insert checkboxes in the selected cells" => "在所选单元格中插入复选框",

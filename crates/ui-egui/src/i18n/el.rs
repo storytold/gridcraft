@@ -104,6 +104,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Κείμενο σε\nστήλες",
         "Link" => "Σύνδεση",
         "Symbol" => "Σύμβολο",
+        "Equation" => "Εξίσωση",
+        "Insert New Equation..." => "Εισαγωγή νέας εξίσωσης",
         "Sparklines" => "Μικρογραφήματα",
         "Header & Footer" => "Κεφαλίδα και υποσέλιδο",
         "Draw with ink" => "Σχεδίαση με μελάνι",

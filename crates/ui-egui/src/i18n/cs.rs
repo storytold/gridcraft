@@ -105,6 +105,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Text do\nsloupců",
         "Link" => "Odkaz",
         "Symbol" => "Symbol",
+        "Equation" => "Rovnice",
+        "Insert New Equation..." => "Vložit novou rovnici",
         "Sparklines" => "Minigrafy",
         "Header & Footer" => "Záhlaví a zápatí",
         "Draw with ink" => "Kreslit od ruky",
