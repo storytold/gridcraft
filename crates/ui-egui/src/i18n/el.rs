@@ -146,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Έλεγχος σφαλμάτων",
         "Trace Error" => "Εντοπισμός σφάλματος",
         "Circular References" => "Κυκλικές αναφορές",
+        "Python Mode" => "Λειτουργία Python",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",

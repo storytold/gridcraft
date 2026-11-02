@@ -151,6 +151,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Provera grešaka",
         "Trace Error" => "Prati grešku",
         "Circular References" => "Kružne reference",
+        "Python Mode" => "Python režim",
         "Evaluate Formula" => "Proceni formulu",
         "Watch Window" => "Prozor za praćenje",
         "Calculation\nOptions" => "Opcije\nizračunavanja",
