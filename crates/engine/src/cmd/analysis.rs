@@ -1788,7 +1788,7 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
     {
         for row in rect.start.row..=rect.end.row {
             for (c, cell) in sh.cells.row(row, rect.start.col, rect.end.col) {
-                if !cell.value.is_empty() || cell.formula.is_some() {
+                if cell.has_content() {
                     occupied.push(CellRef::new(row, c));
                 }
             }

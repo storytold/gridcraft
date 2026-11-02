@@ -492,7 +492,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
+            let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }

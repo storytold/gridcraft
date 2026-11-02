@@ -484,3 +484,49 @@ fn an_edit_that_would_make_python_code_too_long_is_refused() {
     assert_eq!(code(&s, 0, "A5").unwrap(), a5);
     assert_eq!(code(&s, 1, "C1"), None);
 }
+
+/// Makes `cell` a Python cell whose cached value is empty, as a file's `PY` formula with no cached
+/// value reads.
+fn plant_empty(s: &mut Session, cell: &str) {
+    plant(s, 0, cell, "x = 1");
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    if let Some(c) = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse(cell).unwrap()) {
+        c.value = Value::Empty;
+    }
+    d.wb = Arc::new(wb);
+}
+
+#[test]
+fn python_code_with_an_empty_value_counts_as_content() {
+    // A report or a PivotTable asks before replacing it.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["East", 1], ["West", 2], ["East", 3]]})).unwrap();
+    plant_empty(&mut s, "D2");
+    let report = json!({"tool": "Descriptive Statistics", "range": "B1:B4", "labels": true, "output": "D1"});
+    assert!(s.execute("data.analysisToolPak", report).is_err(), "the report asks for overwrite");
+    plant_empty(&mut s, "H4");
+    let pivot = s.execute("insert.pivotTable", json!({"destination": "Sheet1!H3", "rows": ["Region"], "values": ["Sales"]}));
+    assert!(pivot.is_err_and(|e| e.to_string().contains("already data")));
+    assert_eq!((code(&s, 0, "D2"), code(&s, 0, "H4")), (Some("x = 1".into()), Some("x = 1".into())), "the code is kept");
+    // Cells aren't pushed off the sheet over it.
+    plant_empty(&mut s, "K1048576");
+    assert!(s.execute("home.insertCells", json!({"range": "K1", "shift": "down"})).is_err());
+    assert_eq!(code(&s, 0, "K1048576"), Some("x = 1".into()));
+    // A table without a header row doesn't push it off the sheet either.
+    s.execute("range.setValues", json!({"range": "X1", "values": [[1], [2]]})).unwrap();
+    plant_empty(&mut s, "X1048576");
+    assert!(s.execute("insert.table", json!({"range": "X1:X2", "header": false})).is_err());
+    assert_eq!(code(&s, 0, "X1048576"), Some("x = 1".into()));
+    // It is part of the data region.
+    s.execute("range.setValues", json!({"range": "P1", "values": [[1], [""], [3]]})).unwrap();
+    plant_empty(&mut s, "P2");
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    assert_eq!(crate::selection::current_region(&sh, CellRef::parse("P1").unwrap()).a1(), "P1:P3");
+    // Pasted into part of a legacy array, it is refused like any content.
+    s.execute("selection.set", json!({"range": "R1:R3"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    plant_empty(&mut s, "T1");
+    s.execute("edit.copy", json!({"range": "T1"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
+}
