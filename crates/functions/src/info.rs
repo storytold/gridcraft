@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, compare_text};
 
-use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
+use crate::util::{A, MAX_CELLS, MAX_TEXT, R, S, array_val, has, scalar, text};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -332,6 +332,43 @@ fn value_err(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Err(CellError::Value)
 }
 
+/// One JSON value as a cell value. JSON objects and arrays have no Excel value, so selecting one
+/// without going further into it is `#VALUE!`; `null` becomes a blank cell.
+fn json_cell(j: &crate::json::Json) -> R<Value> {
+    use crate::json::Json;
+    match j {
+        Json::Null => Ok(Value::Empty),
+        Json::Bool(b) => Ok(Value::Bool(*b)),
+        Json::Number(n) => Ok(Value::number(*n)),
+        Json::Text(s) => Ok(Value::Text(s.as_str().into())),
+        Json::Array(_) | Json::Object(_) => Err(CellError::Value),
+    }
+}
+
+fn filterjson(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    let src = text(a, 0)?;
+    let path = text(a, 1)?;
+    // A cell holds at most 32,767 characters, so anything longer did not come from one.
+    if src.len() > MAX_TEXT || path.len() > MAX_TEXT {
+        return Err(CellError::Value);
+    }
+    let doc = crate::json::parse(&src).ok_or(CellError::Value)?;
+    let segs = crate::jsonpath::parse(&path).ok_or(CellError::Value)?;
+    let hits = crate::jsonpath::select(&doc, &segs);
+    match hits.len() {
+        0 => Err(CellError::Value),
+        1 => json_cell(hits.first().ok_or(CellError::Value)?),
+        n if n <= MAX_CELLS => {
+            let mut values = Vec::with_capacity(n);
+            for hit in &hits {
+                values.push(json_cell(hit)?);
+            }
+            array_val(n, 1, values)
+        }
+        _ => Err(CellError::Value),
+    }
+}
+
 pub(crate) fn specs() -> Vec<FnSpec> {
     vec![
         f!("ISBLANK", 1, 1, Information, S, "ISBLANK(value)", "TRUE when the value refers to an empty cell.", is_blank),
@@ -428,6 +465,16 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("ENCODEURL", 1, 1, Web, S, "ENCODEURL(text)", "Percent-encodes text for use in a URL.", encodeurl),
         f!("WEBSERVICE", 1, 1, Web, S, "WEBSERVICE(url)", "Fetches data from a web service (not available; returns #VALUE!).", value_err),
         f!("FILTERXML", 2, 2, Web, S, "FILTERXML(xml, xpath)", "Extracts data from XML with an XPath (not available; returns #VALUE!).", value_err),
+        f!(
+            "FILTERJSON",
+            2,
+            2,
+            Web,
+            S,
+            "FILTERJSON(json, path)",
+            "Returns the value a JSONPath selects from JSON text; several matches fill a column.",
+            filterjson
+        ),
         f!(
             "CUBEKPIMEMBER",
             3,
@@ -614,6 +661,26 @@ mod tests {
         is_text(ev("ENCODEURL", vec![t("a b&c/é")]), "a%20b%26c%2F%C3%A9");
         is_err(ev("WEBSERVICE", vec![t("http://x")]), CellError::Value);
         is_err(ev("FILTERXML", vec![t("<a/>"), t("//a")]), CellError::Value);
+        // FILTERJSON is an extension, not an Excel function: see docs/function-parity.md.
+        let trm = r#"{"valor":"3166.91","unidad":"COP","ok":true,"nulo":null}"#;
+        assert_eq!(ev("FILTERJSON", vec![t(trm), t("$.unidad")]), Value::from("COP"));
+        assert_eq!(ev("FILTERJSON", vec![t(trm), t("unidad")]), Value::from("COP"));
+        assert_eq!(ev("FILTERJSON", vec![t(trm), t("$['valor']")]), Value::from("3166.91"));
+        assert_eq!(ev("FILTERJSON", vec![t(trm), t("$.ok")]), Value::Bool(true));
+        // JSON null lands on an empty cell, as a blank does.
+        assert_eq!(ev("FILTERJSON", vec![t(trm), t("$.nulo")]), Value::Empty);
+        assert_eq!(ev("FILTERJSON", vec![t(r#"{"n":2026}"#), t("$.n")]), Value::Number(2026.0));
+        // Several matches fill a column, like the FILTERXML in #3126.
+        let list = r#"{"lista":[{"id":1},{"id":2},{"id":3}]}"#;
+        assert_eq!(rows_of(&ev("FILTERJSON", vec![t(list), t("$.lista[*].id")])), vec![vec![nv(1.0)], vec![nv(2.0)], vec![nv(3.0)]]);
+        assert_eq!(rows_of(&ev("FILTERJSON", vec![t(list), t("$..id")])).len(), 3);
+        // Everything unrepresentable, ambiguous or malformed is #VALUE!.
+        is_err(ev("FILTERJSON", vec![t(list), t("$.nada")]), CellError::Value);
+        is_err(ev("FILTERJSON", vec![t(list), t("$.lista")]), CellError::Value);
+        is_err(ev("FILTERJSON", vec![t(list), t("$")]), CellError::Value);
+        is_err(ev("FILTERJSON", vec![t("{\"a\":1,}"), t("$.a")]), CellError::Value);
+        is_err(ev("FILTERJSON", vec![t(list), t("$[?(@.id)]")]), CellError::Value);
+        is_err(ev("FILTERJSON", vec![t(""), t("$")]), CellError::Value);
         is_err(ev("CUBEVALUE", vec![t("conn")]), CellError::NA);
         is_err(ev("CUBESETCOUNT", vec![t("set")]), CellError::NA);
     }

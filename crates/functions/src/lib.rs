@@ -70,6 +70,8 @@ pub(crate) mod engineering;
 pub(crate) mod ets;
 pub(crate) mod financial;
 pub(crate) mod info;
+pub(crate) mod json;
+pub(crate) mod jsonpath;
 pub(crate) mod lift;
 pub(crate) mod lookup;
 pub(crate) mod math;
