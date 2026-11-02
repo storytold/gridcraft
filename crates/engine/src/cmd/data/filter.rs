@@ -29,7 +29,7 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
             // Reveal only rows the filter hid; rows hidden by hand or by a collapsed group stay hidden.
-            let filtered: Vec<u32> = sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect();
+            let filtered = sh.filtered_rows();
             sh.autofilter = None;
             for r in filtered {
                 if let Some(info) = sh.rows.get_mut(&r) {

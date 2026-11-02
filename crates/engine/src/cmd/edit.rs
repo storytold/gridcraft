@@ -340,10 +340,15 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
             let rows = dest.is_full_rows() && !dest.is_full_cols();
             let cols = dest.is_full_cols() && !dest.is_full_rows();
             let src_full = (rows && src.is_full_rows()) || (cols && src.is_full_cols());
+            // Rows a filter hides keep their format, as with the ribbon's formatting commands.
+            let filtered = cx.wb.sheet(dest_sheet).map(|sh| sh.filtered_rows()).unwrap_or_default();
             if rows || cols {
                 let (first, src_first, n) = if rows { (dest.start.row, src.start.row, h) } else { (dest.start.col, src.start.col, w) };
                 let lines = if rows { dest.start.row..=dest.end.row } else { dest.start.col..=dest.end.col };
                 for line in lines {
+                    if rows && filtered.contains(&line) {
+                        continue;
+                    }
                     let sl = src_first + (line - first) % n;
                     // The source cell for position `k` along the line.
                     let at = |k: u32| if rows { CellRef::new(sl, src.start.col + k % w) } else { CellRef::new(src.start.row + k % h, sl) };
@@ -390,7 +395,7 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
                 *cx.sel = crate::Selection::range(dest);
                 return Ok(());
             }
-            for c in dest.iter().take(2_000_000) {
+            for c in dest.iter().take(2_000_000).filter(|c| !filtered.contains(&c.row)) {
                 let sc = CellRef::new(src.start.row + (c.row - dest.start.row) % h, src.start.col + (c.col - dest.start.col) % w);
                 let st = src_sheet.style_id(sc);
                 let st = if same { st } else { cx.wb.styles.intern(wb.styles.get(st).clone()) };
