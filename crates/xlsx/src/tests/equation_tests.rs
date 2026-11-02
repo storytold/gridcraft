@@ -465,6 +465,7 @@ fn a_paragraph_split_in_an_equation_without_office_math_reads_back_as_the_edit()
     let s = shapes(&back);
     assert_eq!(s.len(), 1);
     assert_eq!(s[0].kind, ShapeKind::TextBox, "the split is an edit: {}", s[0].text);
-    assert_eq!(s[0].text.lines().count(), 2, "{}", s[0].text);
-    assert_eq!(s[0].text.replace([' ', '\n'], ""), cd.replace(' ', ""), "the characters are the edit's");
+    // The cut falls after the first space, which stays in the first paragraph, so the text read
+    // back is the source with a newline after that space, and nothing else moved or dropped.
+    assert_eq!(s[0].text, cd.replacen(' ', " \n", 1), "the split text, exactly");
 }
