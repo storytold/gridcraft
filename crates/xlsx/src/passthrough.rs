@@ -161,7 +161,10 @@ const OWN_DIRS: &[&str] = &[
     "docprops/custom.xml",
     "customui/",
     "xl/externallinks/",
-    "xl/connections.xml",
+    // The connections family keeps its original names (`connections2.xml` too): the
+    // relationships target them by name, and the model's merge looks the part up through
+    // its relationship's target, which a rename would break.
+    "xl/connections",
     "xl/xmlmaps.xml",
     "xl/querytables/",
     "xl/ctrlprops/",

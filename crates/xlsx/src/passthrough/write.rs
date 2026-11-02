@@ -8,6 +8,9 @@ use super::*;
 pub struct KeptOut {
     used: HashSet<String>,
     n: u32,
+    /// Whether a connections relationship survived from the input file (see
+    /// [`Self::has_connections`]).
+    has_connections: bool,
     /// The highest VML shape block a kept header and footer drawing uses: notes go after it.
     vml_blocks: u32,
     /// Package-root relationships (type, target, external), added when `_rels/.rels` is written.
@@ -17,11 +20,12 @@ pub struct KeptOut {
 impl KeptOut {
     /// True when a kept (pass-through) part already holds this exact name: the writer must
     /// not put its own part there (a zip entry cannot repeat).
-    /// True when the input file already has a connections relationship (whatever its part
-    /// is named): the writer must not add a second one, or the reopen would read the stale
-    /// original ahead of the model's own part.
+    /// True when the input file already has a connections relationship, whatever its part
+    /// is named (`xl/connections2.xml` included): the writer must not add a second one, or
+    /// the reopen would read the stale original ahead of the model's own part. Set from the
+    /// relationship's type when the kept relationships are written, never from a name shape.
     pub fn has_connections(&self) -> bool {
-        self.used.iter().any(|n| n.contains("connections.xml"))
+        self.has_connections
     }
 
     pub fn used_contains(&self, name: &str) -> bool {
@@ -454,7 +458,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     let tag_start = raw
         .match_indices("connections")
         .map(|(s, _)| s)
-        .find(|&s| raw[..s].ends_with('<') || raw[..s].rfind('<').is_some_and(|lt| raw[lt + 1..s].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')))
+        .find(|&s| raw[..s].ends_with('<') || raw[..s].rfind('<').is_some_and(|lt| raw[lt + 1..s].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ':')))
         .ok_or_else(|| IoError::Format("the connections part has no connections element".into()))?;
     let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e).ok_or_else(|| IoError::Format("the connections part's root tag is unterminated".into()))?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
@@ -464,8 +468,15 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         .filter(|a| !a.starts_with("xmlns:gc=") && a.trim_end_matches(['\"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
         .map(|a| format!(" {a}"))
         .collect();
+    // The rebuilt root keeps the SpreadsheetML namespace one way or another: an unprefixed
+    // root carried it as its default (and does again), and a prefixed one
+    // (`<x:connections>`) whose declarations are kept verbatim still has its prefix bound -
+    // but a prefixed root with NO default namespace would leave the model's unprefixed
+    // `<connection>` elements outside any namespace, so the default is emitted for it.
+    let has_default_ns = kept_decls.contains("xmlns=\"");
+    let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
     let mut w = String::from(crate::write::XML_DECL);
-    let _ = write!(w, "<connections{kept_decls} xmlns:gc=\"{}\">",
+    let _ = write!(w, "<connections{kept_decls}{default_ns} xmlns:gc=\"{}\">",
         crate::write::GC_NS);
     w.push_str(&foreign);
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
@@ -524,7 +535,9 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Resul
     // The connections part THROUGH ITS RELATIONSHIP, not by a fixed name: the file may
     // name it xl/connections2.xml, and merging into a phantom `xl/connections.xml` while
     // the real part went unchanged would leave the save stale and add a second relationship.
-    let conn_target = rels.iter().find(|r| r.rel_type.ends_with("/connections")).map(|r| normalize(&r.target));
+    let conn_rel = rels.iter().find(|r| r.rel_type.ends_with("/connections"));
+    out.kept.has_connections = conn_rel.is_some();
+    let conn_target = conn_rel.map(|r| normalize(&r.target));
     if let Some(target) = conn_target
         && let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == target)
     {

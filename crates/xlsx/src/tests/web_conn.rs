@@ -391,3 +391,66 @@ fn adding_a_web_query_after_reopen_survives_the_save() {
     // And the foreign one is still not claimed.
     assert_eq!(final_wb.web_queries.len(), 1);
 }
+
+#[test]
+/// A prefixed root with no default namespace (`<x:connections xmlns:x="...">`) keeps the
+/// SpreadsheetML namespace for the model's unprefixed `<connection>` elements: the rebuilt
+/// root emits the default when the original had none.
+fn a_prefixed_root_without_a_default_namespace_gains_one() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><x:connections xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:connection id="7" name="PQ" type="4"/></x:connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""), "the default SpreadsheetML namespace is emitted: {text}");
+    assert!(text.contains("<x:connection "), "the prefixed foreign connection is kept");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+}
+
+#[test]
+/// A connections relationship targeting a differently-named part (`xl/connections2.xml`)
+/// is detected by its type, and the writer never adds a second connections part or
+/// relationship: the merge lands in the file's own part.
+fn a_connections_part_with_a_custom_name_is_merged_not_duplicated() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections2.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections2.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections2.xml").expect("read").expect("the file's own part, kept under its own name");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("name=\"prices\""), "the merge landed in the custom-named part");
+    assert!(!text.contains("name=\"Old\""), "the stale connection is replaced");
+    // No second part at the conventional name.
+    assert!(pkg.read("xl/connections.xml").ok().flatten().is_none(), "no duplicate connections part is added");
+    // And only one connections relationship.
+    let mut rels = pkg.read("xl/_rels/workbook.xml.rels").expect("rels").expect("the rels");
+    let text = String::from_utf8_lossy(&rels).to_string();
+    assert_eq!(text.matches("/connections\"").count(), 1, "exactly one connections relationship: {text}");
+    let _ = &mut rels;
+}
