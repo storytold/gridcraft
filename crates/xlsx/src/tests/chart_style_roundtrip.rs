@@ -9,38 +9,54 @@ use crate::{read_xlsx, write_xlsx};
 
 #[test]
 fn explicit_styles_survive_xlsx_save_and_reload() {
+    // Start from the XLSX reader so this fixture follows new optional Chart fields.
+    let template: Chart = crate::chart::read_chart(
+        &crate::xml::parse(
+            concat!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">"#,
+                "<c:chart><c:plotArea><c:barChart>",
+                r#"<c:barDir val="col"/><c:grouping val="clustered"/>"#,
+                r#"<c:ser><c:idx val="0"/><c:order val="0"/></c:ser>"#,
+                "</c:barChart></c:plotArea></c:chart></c:chartSpace>",
+            )
+            .as_bytes(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
     for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::Line] {
         for style in [1, 9, 48] {
             let mut wb = Workbook::default();
             let mut sheet = Sheet::new("Data");
 
-            sheet.charts.push(Chart {
-                id: 1,
-                kind,
-                anchor: Anchor { cell: CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
-                title: Some("Style roundtrip".into()),
-                series: vec![Series {
-                    name: Some("Series 1".into()),
-                    categories: Some(r#"{"A","B","C"}"#.into()),
-                    values: "{10,20,30}".into(),
-                    bubble_sizes: None,
-                    color: None,
-                    secondary: false,
-                    kind: None,
-                    quartiles: Default::default(),
-                    smooth: false,
-                    trendlines: Vec::new(),
-                }],
-                legend: LegendPos::Bottom,
-                data_labels: false,
-                gridlines: true,
-                style,
-                x_title: None,
-                y_title: None,
-                source: None,
-                by_rows: false,
-                pivot: None,
-            });
+            let mut chart = template.clone();
+            chart.id = 1;
+            chart.kind = kind;
+            chart.anchor = Anchor { cell: CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() };
+            chart.title = Some("Style roundtrip".into());
+            chart.series = vec![Series {
+                name: Some("Series 1".into()),
+                categories: Some(r#"{"A","B","C"}"#.into()),
+                values: "{10,20,30}".into(),
+                bubble_sizes: None,
+                color: None,
+                secondary: false,
+                kind: None,
+                quartiles: Default::default(),
+                smooth: false,
+                trendlines: Vec::new(),
+            }];
+            chart.legend = LegendPos::Bottom;
+            chart.data_labels = false;
+            chart.gridlines = true;
+            chart.style = style;
+            chart.x_title = None;
+            chart.y_title = None;
+            chart.source = None;
+            chart.by_rows = false;
+            chart.pivot = None;
+            sheet.charts.push(chart);
 
             wb.sheets = vec![Arc::new(sheet)];
 
