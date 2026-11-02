@@ -109,3 +109,8 @@ sync_github_name = true
 
 [people.maxm11]
 sync_github_name = true
+
+[people.cherifsahraoui]
+real_name = "Cherif Sahraoui"
+display_name = "Cherif"
+sync_github_name = true
