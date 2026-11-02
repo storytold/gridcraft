@@ -327,3 +327,66 @@ fn an_attribute_less_connection_is_scanned() {
     assert!(text.contains("name=\"prices\""), "our connection is merged in");
     assert_eq!(text.matches("<connection").count(), 3, "three connection elements total (the two foreign plus ours)");
 }
+
+#[test]
+/// A CDATA section inside a foreign connection may hold a literal `</connection>`: the depth
+/// scan skips the section whole, so the block ends at its real close and the merge still
+/// applies (without CDATA awareness, the scan fails and stale GridCraft connections would
+/// survive the save).
+fn a_cdata_section_holding_a_closing_tag_does_not_end_the_block() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Data" type="5"><parameter><![CDATA[a </connection> b]]></parameter></connection><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    // Our current connection replaces the file's stale one; the CDATA one is foreign and kept.
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("name=\"Data\""), "the CDATA-holding foreign connection is kept");
+    assert!(text.contains("a </connection> b"), "the CDATA content is kept verbatim");
+    assert!(!text.contains("name=\"Old\""), "the stale GridCraft connection is replaced (the merge ran)");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+}
+
+#[test]
+/// Adding a web query to a reopened workbook (whose connections part is foreign-owned and
+/// kept) sticks: the merge writes ours into the kept part alongside the foreign one.
+fn adding_a_web_query_after_reopen_survives_the_save() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" name="Flags" type="4"/></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    // Round one: save and reopen (the part stays foreign-kept).
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (mut reopened, _) = read_xlsx(&bytes).expect("reopens");
+    assert!(reopened.web_queries.is_empty());
+    // The user imports a table now.
+    reopened.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: Some(5), url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: true });
+    let bytes2 = write_xlsx(&reopened).expect("saves again");
+    let (final_wb, _) = read_xlsx(&bytes2).expect("reopens again");
+    let q = final_wb.web_queries.iter().find(|q| q.name == "prices").expect("the added connection survived the save");
+    assert_eq!(q.table_id, Some(5));
+    assert!(q.refresh_on_open);
+    // And the foreign one is still not claimed.
+    assert_eq!(final_wb.web_queries.len(), 1);
+}

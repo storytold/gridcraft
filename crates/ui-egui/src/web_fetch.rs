@@ -56,6 +56,16 @@ impl SheetApp {
                 return;
             }
         };
+        // The preview this Load replaces is going away: its worker is reaped (joined when
+        // finished on a later pass), never dropped mid-flight into a detached thread.
+        if replaces_own_preview
+            && let Some(old) = self.fetch.take()
+        {
+            self.reaped.push_back(old.handle);
+            while self.reaped.len() > 8 {
+                self.reaped.pop_front();
+            }
+        }
         let fetch_urls = urls.clone();
         let handle = std::thread::spawn(move || {
             // Each page lands under its own URL; a failed page records its error instead.

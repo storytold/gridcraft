@@ -318,9 +318,15 @@ fn block_end(s: &str) -> Option<usize> {
             i += 1;
             continue;
         }
-        // A comment between tags is skipped whole: its text may hold anything.
+        // A comment or a CDATA section between tags is skipped whole: their text may hold
+        // anything, including a `</connection>` that would end the block early.
         if s[i..].starts_with("<!--") {
             let Some(end) = s[i..].find("-->").map(|e| i + e + 3) else { break };
+            i = end;
+            continue;
+        }
+        if s[i..].starts_with("<![CDATA[") {
+            let Some(end) = s[i..].find("]]>").map(|e| i + e + 3) else { break };
             i = end;
             continue;
         }
