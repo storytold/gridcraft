@@ -770,9 +770,7 @@ mod tests {
             (r#"<m:pos m:val="top"/>"#, "underbrace", "limUpp", "limLow", '_'),
             (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp", '^'),
         ] {
-            let base = format!(
-                "<m:groupChr><m:groupChrPr>{properties}</m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>"
-            );
+            let base = format!("<m:groupChr><m:groupChrPr>{properties}</m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>");
             let limit = |kind: &str| format!("<m:{kind}><m:e>{base}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:{kind}>");
             let placement = if opposite == "limLow" { "underset" } else { "overset" };
             assert_eq!(latex(&limit(opposite)), Some(format!("\\{placement}{{n}}{{\\{brace}{{x}}}}")), "{properties}");
