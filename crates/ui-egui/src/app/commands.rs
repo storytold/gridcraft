@@ -46,8 +46,20 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // The macro editor's unsaved draft is part of its workbook: closing the workbook asks
+        // about it first, and goes on once the editor has closed. A close asked while it is
+        // asking waits for the answer, or is refused when it asks for a different close.
+        if matches!(id, "file.close" | "window.close")
+            && let Some(r) = crate::macro_editor::ask_before_closing(self, id, &params)
+        {
+            return r;
+        }
         let before = self.session.active_window();
+        let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        if let Some(from) = zoom_from {
+            crate::grid::Trace::keep_through_zoom(self, from);
+        }
         if id.starts_with("file.") && self.session.active_window() != before {
             // File › New or Open from the Backstage view: the window it was in goes back to its sheet.
             self.backstage = None;
@@ -55,6 +67,15 @@ impl SheetApp {
         // Requests the command made (a dialog, a draft) belong to the window it left active.
         self.follow_active_window();
         self.after_engine();
+        if id == "formulas.autoSum"
+            && let Some(ed) = self.editor.as_mut()
+            && ed.text.starts_with('=')
+            && ed.text.ends_with("()")
+        {
+            ed.caret = ed.text.chars().count().saturating_sub(1);
+            ed.anchor = ed.caret;
+            ed.sync_caret = true;
+        }
         if id == "view.arrangeAll"
             && self.native_windows
             && let Ok(r) = &r
@@ -329,6 +350,14 @@ impl SheetApp {
             "backstage" => {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
+            }
+            // The macro step editor stays until it closes itself (its draft, overlays and debug
+            // run go with it), so another dialog can't replace it.
+            _ if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") => {
+                self.message = Some((
+                    "Macro".into(),
+                    "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
+                ));
             }
             other => self.dialog = dialogs::Dialog::open(self, other, params),
         }

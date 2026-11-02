@@ -1014,11 +1014,13 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
     }
 }
 
-/// Used by `EditState` users to keep the active cell visible while pointing.
-pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
+/// Moves the pointed cell one step, or with `jump` (Ctrl+arrow) to the edge of its data region;
+/// `extend` (Shift) moves the far end of the pointed range instead. Keeps the pointed cell visible.
+pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool, jump: bool) {
     let Some(d) = app.session.active() else { return };
+    let Some(sheet) = d.wb.active() else { return };
     let from = ed.point_cell.unwrap_or(ed.cell);
-    let to = from.offset_clamped(dr, dc);
+    let to = if jump { gridcraft_engine::selection::jump(sheet, from, dr.signum(), dc.signum()) } else { from.offset_clamped(dr, dc) };
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
