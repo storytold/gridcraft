@@ -172,3 +172,22 @@ fn unstorable_picture_is_left_out_of_the_file() {
     assert!(!sheet.cell_pictures.contains_key(&a1));
     assert!(sheet.cell(a1).and_then(|c| c.formula.as_ref()).is_some());
 }
+
+/// After a load, an IMAGE call in parentheses gets IMAGE's value (the alt text), and an IMAGE call
+/// inside another function still gets its sizing back.
+#[test]
+fn wrapped_image_formulas_keep_value_and_sizing_after_load() {
+    use gridcraft_engine::core::PictureSizing;
+    let mut s = Session::new();
+    s.new_workbook();
+    s.set_image_fetcher(Some(Arc::new(CannedImages)));
+    set(&mut s, "A1", "=(IMAGE(\"https://img.test/logo.png\",\"Logo\",1))");
+    set(&mut s, "A2", "=IF(TRUE,IMAGE(\"https://img.test/logo.png\",\"Logo\",3,30,40),\"\")");
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (wb, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    let (a1, a2) = (CellRef::parse("A1").unwrap(), CellRef::parse("A2").unwrap());
+    assert_eq!(sheet.value(a1), Value::from("Logo"));
+    assert_eq!(sheet.cell_pictures[&a1].sizing, PictureSizing::Fill);
+    assert_eq!(sheet.cell_pictures[&a2].sizing, PictureSizing::Custom { width: 40, height: 30 });
+}

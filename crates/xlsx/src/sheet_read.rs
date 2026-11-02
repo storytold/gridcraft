@@ -555,17 +555,33 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 
 /// The sizing an IMAGE formula asks for, read from its literal arguments. Fit when the formula is
 /// not an IMAGE call with literal sizing, height and width, or when they do not make a valid sizing.
-/// Whether the formula is a call to IMAGE.
+/// Whether the formula is a call to IMAGE, maybe in parentheses: then the cell's value is
+/// IMAGE's own result, the alt text. A formula that wraps IMAGE in something else (`IF`, `&`)
+/// has a value only calculation gives, so it keeps the picture's fallback until then.
 fn is_image_call(formula: &Formula) -> bool {
-    formula.expr_arc().is_some_and(|e| matches!(&*e, Expr::Call(name, _) if name == "IMAGE"))
+    let Some(expr) = formula.expr_arc() else { return false };
+    let mut e: &Expr = &expr;
+    while let Expr::Paren(inner) = e {
+        e = inner;
+    }
+    matches!(e, Expr::Call(name, _) if name == "IMAGE")
 }
 
+/// The sizing the formula's IMAGE call asks for (the first one, wherever it sits, as in
+/// `IF(x, IMAGE(...), "")`), read from its literal arguments. Fit when there is no such call or
+/// its sizing, height and width are not literals that make a valid sizing.
 fn image_sizing(formula: &Formula) -> PictureSizing {
     let Some(expr) = formula.expr_arc() else { return PictureSizing::Fit };
-    let Expr::Call(name, args) = &*expr else { return PictureSizing::Fit };
-    if name != "IMAGE" {
-        return PictureSizing::Fit;
-    }
+    let mut call = None;
+    expr.walk(&mut |e| {
+        if call.is_none()
+            && let Expr::Call(name, args) = e
+            && name == "IMAGE"
+        {
+            call = Some(args);
+        }
+    });
+    let Some(args) = call else { return PictureSizing::Fit };
     let literal = |i: usize| match args.get(i) {
         None | Some(Expr::Missing) => Some(None),
         Some(Expr::Number(n)) if n.is_finite() && n.fract() == 0.0 => Some(Some(*n as i64)),
