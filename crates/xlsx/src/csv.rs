@@ -549,7 +549,7 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
                     },
                     None => StyleId::DEFAULT,
                 };
-                Cell { value: p.value, formula: None, style }
+                Cell { value: p.value, formula: None, style, py: None }
             } else {
                 Cell::value(Value::Text(Arc::from(f)))
             };
