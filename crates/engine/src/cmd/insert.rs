@@ -234,14 +234,28 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
 }
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
-    if p.get("range").is_some() {
-        return target_ranges(s, p);
+    let mut areas = if p.get("range").is_some() {
+        target_ranges(s, p)?
+    } else if s.doc()?.selection.ranges.len() > 1 {
+        s.doc()?.selection.ranges.clone()
+    } else {
+        vec![block(s, p)?]
+    };
+    // Whole columns/rows span a million cells: clip the far edges to the cells in use, so only
+    // a block that really is too large gets refused.
+    let sheet = target_sheet(s, p)?;
+    if let Some(used) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
+        // Areas that start outside the used range keep their extent as given.
+        for r in &mut areas {
+            if r.start.row <= used.end.row {
+                r.end.row = r.end.row.min(used.end.row);
+            }
+            if r.start.col <= used.end.col {
+                r.end.col = r.end.col.min(used.end.col);
+            }
+        }
     }
-    let d = s.doc()?;
-    if d.selection.ranges.len() > 1 {
-        return Ok(d.selection.ranges.clone());
-    }
-    Ok(vec![block(s, p)?])
+    Ok(areas)
 }
 
 // ---------------------------------------------------------------- tables
@@ -1747,6 +1761,30 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_from_whole_columns_uses_the_rows_in_use() {
+        // #3114: selecting two whole columns of data refused the chart as "range too large".
+        let mut s = Session::new();
+        s.new_workbook();
+        let values: Vec<Vec<String>> = (1..=5).map(|i| vec![i.to_string(), (i * 10).to_string()]).collect();
+        s.execute("range.setValues", json!({"range": "A1:B5", "values": values})).unwrap();
+        s.execute("selection.set", json!({"range": "A:B"})).unwrap();
+        s.execute("insert.chart", json!({"type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$5", "Sheet1!$B$1:$B$5"]);
+        // A block that really is too large still is.
+        s.execute("cell.set", json!({"cell": "B600000", "input": "1"})).unwrap();
+        assert!(s.execute("insert.chart", json!({"range": "A:B", "type": "line"})).is_err());
+        // A bounded block entirely below the data keeps its extent.
+        s.execute("insert.chart", json!({"range": "C700000:C700010", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$C$700000:$C$700010"]);
+    }
 
     #[test]
     fn manage_rules_delete_then_move() {
