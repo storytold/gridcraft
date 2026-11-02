@@ -221,6 +221,86 @@ fn fallback_covers_its_script() {
     }
 }
 
+/// Recent currency signs (₽ ₹ ₺ ₸ ₾ ₼) that many cell fonts lack: macOS has them in its UI fonts
+/// but not in Arial, Calibri or Apple Symbols (#2035).
+const CURRENCY_SIGNS: &str = "₽₹₺₸₾₼";
+
+/// The first face of `family`'s chain whose character map has `c`: the one epaint draws it with.
+fn first_face_with(fonts: &FontDefinitions, family: &str, c: char) -> Option<String> {
+    use skrifa::MetadataProvider;
+    let chain = fonts.families.get(&FontFamily::Name(family.into()))?;
+    chain
+        .iter()
+        .find(|k| {
+            fonts.font_data.get(*k).is_some_and(|fd| skrifa::FontRef::from_index(fd.bytes(), fd.index).is_ok_and(|f| f.charmap().map(c).is_some()))
+        })
+        .cloned()
+}
+
+/// Returns the characters of `sample` with no glyph in `family`.
+fn without_glyph(ctx: &egui::Context, family: FontFamily, sample: &str) -> String {
+    let font = FontId::new(14.0, family);
+    sample.chars().filter(|&c| !ctx.fonts_mut(|f| f.has_glyph(&font, c))).collect()
+}
+
+#[test]
+/// A cell draws every currency sign the interface font draws, in every cell role and in an installed workbook font (#2035).
+fn cells_draw_the_currency_signs_the_interface_draws() {
+    // The app scans the installed fonts in the background; wait for the catalog here.
+    let _ = crate::fonts::catalog();
+    let installed = crate::fonts::installed_among(&["Arial".to_string()]);
+    let fonts = font_definitions_with(Language::En, &installed);
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts.clone());
+    let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+    out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+    // The signs the interface fonts themselves have (regular and bold), not a later face of their
+    // chains: a craft face such as Noto Sans Georgian (₾) is no interface font.
+    let interface_has = |role: &str, c: char| first_face_with(&fonts, role, c).is_some_and(|k| k.starts_with("sys-ui"));
+    let signs: String = CURRENCY_SIGNS.chars().filter(|&c| interface_has(UI, c) && interface_has(UI_BOLD, c)).collect();
+    if signs.is_empty() {
+        eprintln!("skipped: the interface font has none of {CURRENCY_SIGNS:?}");
+        return;
+    }
+    let mut families: Vec<String> = [CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO].map(String::from).to_vec();
+    if installed.is_empty() {
+        eprintln!("skipped the installed-font case: Arial is not installed");
+    }
+    for family in &installed {
+        families.extend([(false, false), (true, false), (false, true), (true, true)].map(|(b, i)| crate::fonts::role_key(family, b, i)));
+    }
+    let ui_key = format!("sys-{UI}");
+    for family in families {
+        let missing = without_glyph(&ctx, FontFamily::Name(family.as_str().into()), &signs);
+        assert!(missing.is_empty(), "{family} has no glyph for {missing:?}, which the interface font draws");
+        // From the interface font itself, not a later fallback in another style: the optional
+        // craft faces have ₽ only in LXGW WenKai, a Chinese brush face.
+        if fonts.font_data.contains_key(&ui_key) {
+            let chain = fonts.families.get(&FontFamily::Name(family.as_str().into())).map(Vec::as_slice).unwrap_or_default();
+            let ui_at = chain.iter().position(|k| k.starts_with("sys-ui"));
+            let first_craft = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
+            assert!(ui_at.is_some_and(|at| at < first_craft), "{family} must reach the interface font before the craft faces: {chain:?}");
+            // And the face that draws them is the cell's own or the interface's, never one behind
+            // them such as egui's bundled Ubuntu-Light (₹, thin) or Hack (₸, monospace).
+            let own_or_ui = |k: &str| k.starts_with("sys-ui") || k.starts_with("fnt-src:") || chain.first().is_some_and(|f| f == k);
+            for c in signs.chars() {
+                let face = first_face_with(&fonts, &family, c);
+                assert!(face.as_deref().is_some_and(own_or_ui), "{family} draws {c} with {face:?}, not its own or the interface font: {chain:?}");
+            }
+            // Bold text reaches the bold interface face, ahead of any regular one; a bold cell role
+            // also keeps the regular face behind it, for a system with no bold interface face.
+            let bold_key = format!("sys-{UI_BOLD}");
+            let bold_role = family == CELL_BOLD || family == CELL_BOLD_ITALIC;
+            if (bold_role || family.ends_with(":bn") || family.ends_with(":bi")) && fonts.font_data.contains_key(&bold_key) {
+                let bold_at = chain.iter().position(|k| *k == bold_key);
+                let regular_at = chain.iter().position(|k| *k == ui_key);
+                assert!(bold_at.is_some_and(|b| regular_at.is_none_or(|r| b < r)), "{family} must reach {bold_key} first: {chain:?}");
+                assert!(!bold_role || regular_at.is_some(), "{family} must keep {ui_key} behind {bold_key}: {chain:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn chromeos_font_layout_is_probed() {
     // #1762: Crostini mounts the host's fonts under /usr/share/fonts/chromeos, one folder per
