@@ -1,6 +1,7 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
 use crate::widgets::tr;
 
+/// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
@@ -24,10 +25,11 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     // so "gras" finds Bold in French and "bold" still does; the translated menu path counts too
     // ("accueil" lists the Home commands). Case and accents are ignored.
     let lang = app.ui.language;
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let q = fold(&d.search);
     // Label and id matches first, then commands found only through their menu path. No cap: there
     // are a few hundred commands, and a broad query ("accueil") must still list them all.
-    let mut cmds: Vec<(u8, String, String, String)> = app
+    let mut cmds: Vec<(u8, String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
@@ -42,11 +44,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
             } else {
                 return None;
             };
-            Some((rank, c.id.to_string(), shown, menu))
+            Some((rank, c.id.to_string(), shown, menu, c.shortcut_for_platform(mac)))
         })
         .collect();
     cmds.sort_by_key(|(rank, ..)| *rank);
-    let cmds: Vec<(String, String, String)> = cmds.into_iter().map(|(_, id, shown, menu)| (id, shown, menu)).collect();
+    let cmds: Vec<(String, String, String, Option<String>)> =
+        cmds.into_iter().map(|(_, id, shown, menu, shortcut)| (id, shown, menu, shortcut)).collect();
 
     let last = cmds.len().saturating_sub(1);
 
@@ -80,8 +83,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
 
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
-        for (i, (id, label, menu)) in cmds.iter().enumerate() {
-            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{label}    {menu}")).min_size(vec2(scroll_area_width, 20.0)));
+        for (i, (id, label, menu, shortcut)) in cmds.iter().enumerate() {
+            let text = match shortcut {
+                Some(keys) => format!("{label}  ({keys})    {menu}"),
+                None => format!("{label}    {menu}"),
+            };
+            let r = ui.add(egui::Button::selectable(i == d.list_index, text.clone()).truncate().min_size(vec2(scroll_area_width, 20.0)));
 
             if (down || up || home || end || pgup || pgdn) && i == d.list_index && !ui.clip_rect().contains_rect(r.rect) {
                 r.scroll_to_me(Some(if down || end || pgdn { egui::Align::Max } else { egui::Align::Min }));
@@ -92,7 +99,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
                 *confirm = true;
             }
 
-            r.on_hover_text(id);
+            r.on_hover_text(format!("{text}\n{id}"));
         }
     });
     if ui.input(|i| i.key_pressed(Key::Enter)) {
