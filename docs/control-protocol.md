@@ -94,6 +94,9 @@ them as their own parameters.
 `ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
 where `kind` is `chart`, `image`, `shape` or `slicer`; the same names go in the `kind` parameter
 of `object.delete`, `object.move`, `object.setAnchorMode` and the `arrange.*` commands.
+`object.move` and `chart.set` cap `width` and `height` at 10,000 points, or at the object's
+current size when a file made it larger: such an object keeps its size when it is moved and
+shrinks by what a resize asks, but does not grow further.
 `selectedChart` remains for existing clients: the id when the selection is a chart, otherwise
 `null`. With an object selected, `ui.key {key: "Delete"}` (or Backspace) deletes the object
 instead of clearing cells, and Escape clears the selection.

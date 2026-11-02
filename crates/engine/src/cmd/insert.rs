@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape|slicer, id, at?: \"C3\", dx?, dy?, width?, height?}",
+            "{kind: chart|image|shape|slicer, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
             has_doc,
             move_object
         ),
@@ -933,10 +933,10 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.anchor.cell = at;
         }
         if let Some(w) = f64_param(p, "width") {
-            c.anchor.width = w.clamp(20.0, 10000.0) as f32;
+            c.anchor.width = w.clamp(20.0, size_cap(c.anchor.width)) as f32;
         }
         if let Some(h) = f64_param(p, "height") {
-            c.anchor.height = h.clamp(20.0, 10000.0) as f32;
+            c.anchor.height = h.clamp(20.0, size_cap(c.anchor.height)) as f32;
         }
         if let Some(v) = f64_param(p, "dx") {
             c.anchor.dx = v as f32;
@@ -1248,6 +1248,18 @@ fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
 /// Largest offset (points) `object.move` accepts from the anchor cell.
 const MAX_OBJECT_OFFSET: f64 = 100_000.0;
 
+/// Largest width or height (points) `object.move` and `chart.set` give an object that is not
+/// already larger: see [`size_cap`].
+const MAX_OBJECT_SIZE: f64 = 10_000.0;
+
+/// The most a command may make a dimension that is `current` now: [`MAX_OBJECT_SIZE`], or the
+/// current size when a file made the object larger (the XLSX reader accepts anchors far past the
+/// limit). Such an object keeps its size when it is moved and shrinks by what a resize asks, but
+/// it never grows further, so hostile input is still capped. Never NaN: `f64::max` drops one.
+fn size_cap(current: f32) -> f64 {
+    MAX_OBJECT_SIZE.max(f64::from(current))
+}
+
 fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
@@ -1263,10 +1275,10 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
         }
         if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, 10000.0) as f32;
+            a.width = v.clamp(1.0, size_cap(a.width)) as f32;
         }
         if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, 10000.0) as f32;
+            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
         }
         Ok(Json::Null)
     })
