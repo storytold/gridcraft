@@ -461,17 +461,17 @@ fn csv_writes_displayed_text() {
         (styled("yyyy-mm-dd"), styled("$#,##0.00"), styled("0.0%"), styled("# ?/?"), styled("@"), styled("0.00"), styled("#,##0"));
     let sh = wb.sheet_mut(0).unwrap();
     let cells = [
-        ("A1", Cell { value: Value::Number(46023.0), formula: None, style: date }),
-        ("B1", Cell { value: Value::Number(1234.5), formula: None, style: money }),
-        ("C1", Cell { value: Value::Number(0.125), formula: None, style: pct }),
-        ("D1", Cell { value: Value::Number(1.5), formula: None, style: frac }),
-        ("E1", Cell { value: Value::text("007"), formula: None, style: text }),
-        ("F1", Cell { value: Value::Error(CellError::NA), formula: None, style: money }),
-        ("G1", Cell { value: Value::Bool(true), formula: None, style: StyleId::DEFAULT }),
+        ("A1", Cell { value: Value::Number(46023.0), formula: None, style: date, py: None }),
+        ("B1", Cell { value: Value::Number(1234.5), formula: None, style: money, py: None }),
+        ("C1", Cell { value: Value::Number(0.125), formula: None, style: pct, py: None }),
+        ("D1", Cell { value: Value::Number(1.5), formula: None, style: frac, py: None }),
+        ("E1", Cell { value: Value::text("007"), formula: None, style: text, py: None }),
+        ("F1", Cell { value: Value::Error(CellError::NA), formula: None, style: money, py: None }),
+        ("G1", Cell { value: Value::Bool(true), formula: None, style: StyleId::DEFAULT, py: None }),
         ("A2", Cell { value: Value::Number(46024.0), style: date, ..Cell::formula(Formula::new("A1+1")) }),
-        ("B2", Cell { value: Value::Number(12345678.9), formula: None, style: fixed }),
-        ("C2", Cell { value: Value::Number(-0.25), formula: None, style: StyleId::DEFAULT }),
-        ("D2", Cell { value: Value::Number(1234567.0), formula: None, style: thousands }),
+        ("B2", Cell { value: Value::Number(12345678.9), formula: None, style: fixed, py: None }),
+        ("C2", Cell { value: Value::Number(-0.25), formula: None, style: StyleId::DEFAULT, py: None }),
+        ("D2", Cell { value: Value::Number(1234567.0), formula: None, style: thousands, py: None }),
     ];
     for (a, c) in cells {
         sh.set_cell(CellRef::parse(a).unwrap(), c);

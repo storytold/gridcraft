@@ -88,3 +88,26 @@ fn function_dialog_controls_follow_each_interface_language() {
         assert!(h.state().dialog.is_none(), "{language:?}: Cancel must close the function dialog");
     }
 }
+
+/// Formula localization must not rewrite upstream Python code or retain it when a literal replaces the cell.
+#[test]
+fn localized_editor_preserves_python_code_and_literal_fill_replaces_it() {
+    use gridcraft_engine::core::{CellRef, Value};
+    let mut h = harness();
+    let code = "x = 1.5\nprint(\"SUM\", x)";
+    h.state_mut().run("python.set", json!({"cell":"A1", "code":code})).unwrap();
+    h.state_mut().begin_edit(None, true);
+    let editor = h.state_mut().editor.as_mut().unwrap();
+    assert!(editor.python);
+    assert_eq!(editor.text, code);
+    let edited = format!("{code}\n# unchanged decimal and comma");
+    editor.text = edited.clone();
+    assert!(h.state_mut().commit_edit(0, 0, false, false));
+    let cell = h.state().session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap();
+    assert_eq!(cell.py.as_ref().unwrap().code, edited);
+    assert!(cell.formula.is_none());
+    h.state_mut().run("range.fill", json!({"range":"A1", "input":"1,5", "literal":true})).unwrap();
+    let cell = h.state().session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap();
+    assert!(cell.py.is_none());
+    assert_eq!(cell.value, Value::text("1,5"));
+}

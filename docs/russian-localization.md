@@ -20,6 +20,8 @@ restoring their older parser/editor/help implementations.
 - Localization occurs at UI entry/display boundaries. Engine values, commands, clipboard and
   XLSX retain canonical English syntax. Workbook content and LET/LAMBDA name identity are not
   translated or folded as function aliases.
+  Python-cell code introduced by main also bypasses formula translation. A regression covers
+  editing that code under Russian and replacing a Python cell with a literal text fill.
 
 See [Adding another language](formula-input.md#adding-another-language) for extension points.
 
