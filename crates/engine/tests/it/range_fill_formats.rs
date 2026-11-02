@@ -91,3 +91,34 @@ fn a_fill_undoes_in_one_step() {
     assert_eq!(get(&mut s, "A2")["value"].as_f64(), Some(1.0));
     assert_eq!(fmt_of(&s, "A2"), "General");
 }
+
+/// Typed text filling does not parse any spelling and preserves destination formatting and undo.
+#[test]
+fn literal_fill_preserves_text_and_destination_styles_in_one_undo_step() {
+    for text in ["1,5", "1.5", "TRUE", "=1+2", "'quoted", "line\nbreak", ""] {
+        let mut s = session();
+        s.execute("cell.set", json!({"cell":"A1", "input":"7"})).unwrap();
+        s.execute("home.numberFormat", json!({"range":"B1", "format":"@"})).unwrap();
+        s.execute("selection.set", json!({"range":"A1:B1"})).unwrap();
+        s.execute("range.fill", json!({"input":text, "literal":true})).unwrap();
+        for at in ["A1", "B1"] {
+            let filled = get(&mut s, at);
+            assert_eq!(filled["type"], "text", "{text}: {at}");
+            assert_eq!(filled["value"], text, "{text}: {at}");
+        }
+        assert_eq!(fmt_of(&s, "A1"), "General");
+        assert_eq!(fmt_of(&s, "B1"), "@");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(get(&mut s, "A1")["value"], 7.0);
+        assert_eq!(get(&mut s, "B1")["type"], "empty");
+    }
+}
+
+/// Invalid literal modes fail before changing cells.
+#[test]
+fn literal_fill_rejects_non_boolean_modes() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"A1", "input":"7"})).unwrap();
+    assert!(s.execute("range.fill", json!({"input":"9", "literal":"yes"})).is_err());
+    assert_eq!(get(&mut s, "A1")["value"], 7.0);
+}

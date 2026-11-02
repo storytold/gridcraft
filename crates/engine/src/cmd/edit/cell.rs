@@ -303,10 +303,18 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count, "convertedCount": converted_count, "converted": reported}))
 }
 
+/// Fills the target ranges in one undoable edit, parsing input for each destination style.
+/// `literal: true` copies an already typed text value without numeric or formula conversion.
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
+    // An unchanged text draft is already a typed value: filling it must not parse it again.
+    let literal = match p.get("literal") {
+        None | Some(Json::Null) => false,
+        Some(Json::Bool(value)) => *value,
+        Some(_) => return Err(bad("range.fill", "literal must be true or false")),
+    };
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
         // Each cell gets what typing the input there gives: the automatic number format where
@@ -322,7 +330,16 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let c = if literal {
+                            let style = if input.contains('\n') && !cx.wb.styles.get(style).align.wrap {
+                                cx.wb.styles.derive(style, |s| s.align.wrap = true)
+                            } else {
+                                style
+                            };
+                            Some(Cell { value: Value::text(input.as_str()), formula: None, style })
+                        } else {
+                            input_to_cell(&input, sheet, at, &mut cx.wb)?
+                        };
                         by_style.insert(style, c.clone());
                         c
                     }

@@ -69,6 +69,11 @@ public [LAMBDA reference](https://support.microsoft.com/ru-ru/excel/functions/la
 The internal circular-reference marker remains `#CIRC!`. Literal text resembling a localized
 Boolean/error value keeps its type during editing.
 
+Ctrl+Enter on an unchanged stored text value fills the selection with that text through
+`range.fill`'s `literal: true` mode, without adding an apostrophe to the editor. Freshly typed
+localized numbers still follow normal numeric parsing; destination formats and one-step undo
+are preserved by the engine command.
+
 Fixed diagnostics use the catalog. Shared dynamic templates cover selected parser, argument-count
 and parameter errors; filenames, sheet names and other captured values are preserved. Unknown
 system/engine messages remain unchanged. This is not a claim to translate every diagnostic.

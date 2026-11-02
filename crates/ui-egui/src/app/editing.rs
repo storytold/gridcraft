@@ -116,7 +116,26 @@ impl SheetApp {
             self.message = Some(("GridCraft".into(), m));
             return true;
         }
-        let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
+        // Ctrl+Enter on an unchanged text draft copies its value, not a fresh typed entry.
+        // Pass the type to the engine instead of adding a quote to the visible draft.
+        let literal = if fill_selection && ed.original.as_ref() == Some(&text) {
+            self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).and_then(|sh| sh.cell(ed.cell)).and_then(|cell| {
+                if cell.formula.is_none()
+                    && let gridcraft_engine::core::Value::Text(value) = &cell.value
+                {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let text = match literal
+            .clone()
+            .map(Ok)
+            .or_else(|| self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)))
+        {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
                 self.message = Some(("GridCraft".into(), error.to_string()));
@@ -161,7 +180,7 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.session.run("range.fill", json!({"input": text, "literal": literal.is_some()}))
         } else {
             self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };

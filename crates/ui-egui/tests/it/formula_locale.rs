@@ -17,6 +17,70 @@ fn formula(app: &SheetApp) -> String {
     app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.to_string()
 }
 
+/// Unchanged numeric-looking text keeps its type on Ctrl+Enter without a quote in the editor.
+#[test]
+fn localized_text_fills_without_adding_an_apostrophe() {
+    for code in ["en", "es", "ru"] {
+        for text in ["1,5", "12,5%", " -1,5e2 "] {
+            let mut app = app();
+            app.run("app.language.set", json!({"language":code})).unwrap();
+            app.run("range.setValues", json!({"range":"A1", "values":[[text]], "parse":false})).unwrap();
+            app.run("home.numberFormat", json!({"range":"B1", "format":"@"})).unwrap();
+            app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+            // The engine already quotes some spellings (for example signed scientific text).
+            // Localization must not add another prefix to the existing editor representation.
+            let doc = app.session.active().unwrap();
+            let expected = gridcraft_engine::display::edit_text(&doc.wb, doc.wb.active().unwrap(), CellRef::new(0, 0));
+            if matches!(text, "1,5" | "12,5%") {
+                assert_eq!(expected, text);
+            }
+            app.begin_edit(None, false);
+            assert_eq!(app.editor.as_ref().unwrap().text, expected);
+            assert!(app.commit_edit(0, 0, false, true));
+            let sheet = app.session.active().unwrap().wb.active().unwrap();
+            for col in 0..2 {
+                assert_eq!(sheet.value(CellRef::new(0, col)), Value::text(text), "{code}: {text}");
+            }
+        }
+    }
+}
+
+/// Freshly typed localized numbers still become numbers when filling a selection.
+#[test]
+fn fresh_localized_numbers_still_fill_as_numbers() {
+    for code in ["es", "ru"] {
+        for (input, expected) in [("1,5", 1.5), ("12,5%", 0.125), ("-1,5e2", -150.0)] {
+            let mut app = app();
+            app.run("app.language.set", json!({"language":code})).unwrap();
+            app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+            app.begin_edit(Some(input.into()), false);
+            assert!(app.commit_edit(0, 0, false, true));
+            let sheet = app.session.active().unwrap().wb.active().unwrap();
+            for col in 0..2 {
+                assert_eq!(sheet.value(CellRef::new(0, col)), Value::number(expected), "{code}: {input}");
+            }
+        }
+    }
+}
+
+/// Editing existing text into a different number uses numeric parsing, not the unchanged-text path.
+#[test]
+fn changed_localized_text_fills_as_a_number() {
+    for code in ["es", "ru"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language":code})).unwrap();
+        app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+        app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+        app.begin_edit(None, false);
+        app.editor.as_mut().unwrap().text = "2,5".into();
+        assert!(app.commit_edit(0, 0, false, true));
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        for col in 0..2 {
+            assert_eq!(sheet.value(CellRef::new(0, col)), Value::number(2.5), "{code}");
+        }
+    }
+}
+
 /// The current function-library dialog searches Russian aliases, their е/ё variants and English names.
 #[test]
 fn russian_insert_function_search_preserves_locale_matching() {
