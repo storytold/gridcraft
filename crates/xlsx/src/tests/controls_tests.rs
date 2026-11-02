@@ -217,6 +217,68 @@ fn a_single_quoted_shape_id_is_dropped_from_the_kept_controls_too() {
     assert_eq!(back.sheet(0).unwrap().controls.len(), 1);
 }
 
+/// One `mc:AlternateContent` holds a scroll bar, which is modelled, and a list box, which stays
+/// with pass-through: only the scroll bar leaves the kept fragment, the list box keeps its
+/// worksheet entry, its VML shape and its properties part through a save, and the file reads
+/// back with the one modelled control and the kept one.
+#[test]
+fn an_unsupported_control_beside_a_modelled_one_in_one_alternate_content_is_kept() {
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rIdA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/a.xml"/><Relationship Id="rIdB" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/b.xml"/></Relationships>"#;
+    let prop_a = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Scroll" fmlaLink="$B$1" min="0" max="100" inc="1" page="10" val="40"/>"#;
+    let prop_b = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="List" fmlaRange="$D$1:$D$3" sel="2"/>"#;
+    let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1025" type="#_x0000_t201"><x:ClientData ObjectType="Scroll"><x:Anchor>2, 0, 3, 0, 5, 0, 4, 0</x:Anchor><x:FmlaLink>$B$1</x:FmlaLink><x:Val>40</x:Val><x:Min>0</x:Min><x:Max>100</x:Max><x:Inc>1</x:Inc><x:Page>10</x:Page></x:ClientData></v:shape><v:shape id="_x0000_s1026" type="#_x0000_t201"><x:ClientData ObjectType="List"><x:Anchor>2, 0, 6, 0, 5, 0, 9, 0</x:Anchor><x:FmlaRange>$D$1:$D$3</x:FmlaRange><x:Sel>2</x:Sel></x:ClientData></v:shape></xml>"##;
+    let anchor = |from: u32, to: u32| {
+        format!(
+            r#"<controlPr><anchor><from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{from}</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{to}</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></controlPr>"#
+        )
+    };
+    let controls = format!(
+        r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x14" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><controls><mc:AlternateContent><mc:Choice Requires="x14"><control shapeId="1025" r:id="rIdA" name="Scroll 1">{}</control><control shapeId="1026" r:id="rIdB" name="List 1">{}</control></mc:Choice><mc:Fallback><control shapeId="1025" r:id="rIdA" name="Scroll 1"/><control shapeId="1026" r:id="rIdB" name="List 1"/></mc:Fallback></mc:AlternateContent></controls></mc:Choice></mc:AlternateContent>"#,
+        anchor(3, 4),
+        anchor(6, 9)
+    );
+    let bytes = minimal(
+        &format!(r#"<sheetData/><legacyDrawing r:id="rId9"/>{controls}"#),
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels),
+            ("xl/ctrlProps/a.xml", prop_a),
+            ("xl/ctrlProps/b.xml", prop_b),
+            ("xl/drawings/vmlDrawing1.vml", vml),
+        ],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1, "the scroll bar is modelled, the list box is not");
+    assert_eq!((sh.controls[0].kind, sh.controls[0].name.as_str()), (ControlKind::Slider, "Scroll 1"));
+    let kept = sh.preserved.as_ref().and_then(|k| k.elements.iter().find(|e| e.slot == "controls")).map(|e| e.xml.clone()).unwrap_or_default();
+    assert!(kept.contains("List 1") && kept.contains("<mc:Fallback>"), "the list box stays, in its wrapper: {kept}");
+    assert!(!kept.contains("Scroll 1") && !kept.contains("shapeId=\"1025\""), "the scroll bar leaves every branch: {kept}");
+    // Saved: the scroll bar once (one Fallback of ours), the list box in the kept wrapper with its
+    // shape and its properties part.
+    let out = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&out).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    assert_eq!(sheet.matches("<controls").count(), 1, "{sheet}");
+    assert_eq!(sheet.matches("name=\"Scroll 1\"").count(), 2, "the modelled control, in its Choice and Fallback: {sheet}");
+    assert_eq!(sheet.matches("name=\"List 1\"").count(), 2, "the kept control, in its Choice and Fallback: {sheet}");
+    assert_eq!(sheet.matches("shapeId=\"1026\"").count(), 2, "{sheet}");
+    let vml_out = text(&mut pkg, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml_out.contains("_x0000_s1026") && vml_out.contains("ObjectType=\"List\""), "the list box's shape is kept: {vml_out}");
+    assert_eq!(vml_out.matches("ObjectType=\"Scroll\"").count(), 1, "{vml_out}");
+    // Part names come back lower-cased.
+    let props: Vec<String> = pkg.names().into_iter().filter(|n| n.starts_with("xl/ctrlprops/")).collect();
+    assert_eq!(props.len(), 2, "ours and the kept one: {props:?}");
+    assert!(props.iter().any(|n| text(&mut pkg, n).contains("objectType=\"List\"")), "the list box's properties part survives: {props:?}");
+    // Read back: the one modelled control and the kept one.
+    let (back, _) = read_xlsx(&out).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1);
+    let kept = sh.preserved.as_ref().and_then(|k| k.elements.iter().find(|e| e.slot == "controls")).map(|e| e.xml.clone()).unwrap_or_default();
+    assert!(kept.contains("List 1") && !kept.contains("Scroll 1"), "{kept}");
+}
+
 /// Shapes with a named `id` and their number in `o:spid`, as some producers write them.
 const VML_SPID: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
 <v:shape id="Button 1" o:spid="_x0000_s1025" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>

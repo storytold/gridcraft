@@ -680,21 +680,14 @@ fn attr_value<'a>(x: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// A kept `<controls>` fragment without the controls whose `shapeId` is in `drop` (they are
-/// written from the model). `None` when no control is left. A fragment that doesn't parse is
-/// returned unchanged.
+/// written from the model): a bare `<control>` child goes when it is one of them, and within an
+/// `mc:AlternateContent` child only those controls go, in each of its branches, the wrapper
+/// staying while a control remains. `None` when nothing is left. A fragment that doesn't parse
+/// is returned unchanged.
 fn without_controls(frag: &str, drop: &HashSet<u64>) -> Option<String> {
     if drop.is_empty() {
         return Some(frag.to_string());
     }
-    // A kept child names its shapes the way the control reader reads them (`shapeId` in either
-    // quote style, through mc:AlternateContent), so what the reader modelled is what is dropped.
-    let numbered = |x: &str| {
-        crate::xml::parse(x.as_bytes()).is_ok_and(|e| {
-            crate::controls::controls_of_child(&e)
-                .iter()
-                .any(|c| c.attr("shapeId").and_then(crate::controls::shape_number).is_some_and(|n| drop.contains(&n)))
-        })
-    };
     let mut reader = Reader::from_str(frag);
     let mut out = String::with_capacity(frag.len());
     let (mut last, mut left, mut inside) = (0usize, 0usize, false);
@@ -727,15 +720,61 @@ fn without_controls(frag: &str, drop: &HashSet<u64>) -> Option<String> {
             continue;
         }
         let Ok(end) = usize::try_from(reader.buffer_position()) else { return Some(frag.to_string()) };
-        if numbered(frag.get(start..end).unwrap_or("")) {
-            out.push_str(frag.get(last..start).unwrap_or(""));
-            last = end;
-        } else {
+        let text = frag.get(start..end).unwrap_or("");
+        let Some((kept, controls, dropped)) = controls_kept(text, drop) else { return Some(frag.to_string()) };
+        if dropped == 0 {
+            // Nothing of ours in it: the child stays as it is.
             left += 1;
+        } else {
+            out.push_str(frag.get(last..start).unwrap_or(""));
+            if controls > 0 {
+                out.push_str(&kept);
+                left += 1;
+            }
+            last = end;
         }
     }
     out.push_str(frag.get(last..).unwrap_or(""));
     (left > 0).then_some(out)
+}
+
+/// One child of a `<controls>` element with the `<control>` elements numbered in `drop` taken
+/// out, wherever they are in it (a bare control, or the Choice and Fallback branches of an
+/// `mc:AlternateContent`), as (the text, the controls that remain, the controls taken out). The
+/// `shapeId` is read as the control reader reads it (an attribute, in either quote style). `None`
+/// when the child doesn't parse.
+fn controls_kept(child: &str, drop: &HashSet<u64>) -> Option<(String, usize, usize)> {
+    let mut reader = Reader::from_str(child);
+    let mut out = String::with_capacity(child.len());
+    let (mut last, mut kept, mut dropped) = (0usize, 0usize, 0usize);
+    loop {
+        let start = usize::try_from(reader.buffer_position()).ok()?;
+        let (e, has_end) = match reader.read_event().ok()? {
+            Event::Eof => break,
+            Event::Start(e) => (e, true),
+            Event::Empty(e) => (e, false),
+            _ => continue,
+        };
+        if e.local_name().as_ref() != b"control" {
+            // A wrapper or a branch: its controls are the events that follow.
+            continue;
+        }
+        let number =
+            e.try_get_attribute("shapeId").ok().flatten().and_then(|a| std::str::from_utf8(&a.value).ok().and_then(crate::controls::shape_number));
+        if has_end {
+            reader.read_to_end(e.name()).ok()?;
+        }
+        let end = usize::try_from(reader.buffer_position()).ok()?;
+        if number.is_some_and(|n| drop.contains(&n)) {
+            out.push_str(child.get(last..start)?);
+            last = end;
+            dropped += 1;
+        } else {
+            kept += 1;
+        }
+    }
+    out.push_str(child.get(last..)?);
+    Some((out, kept, dropped))
 }
 
 /// Rewrites relationship-id attributes (`r:id`, `r:embed`…: any attribute in the relationships

@@ -359,7 +359,7 @@ fn build(p: Props, kind: ControlKind, anchor: Anchor, name: Option<&str>, id: u3
 
 /// The `<control>` elements one child of a `<controls>` element holds: the child itself, or those
 /// inside its `mc:AlternateContent` (the Choice, else the Fallback).
-pub(crate) fn controls_of_child(k: &El) -> Vec<&El> {
+fn controls_of_child(k: &El) -> Vec<&El> {
     match k.name.as_str() {
         "control" => vec![k],
         "AlternateContent" => k
