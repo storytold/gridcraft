@@ -149,7 +149,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -192,6 +192,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "fromWeb" => from_web(app, ui, &mut d, &mut confirm, &mut open),
                 "queriesConnections" => queries_connections(app, ui, &mut d, &mut confirm, &mut open),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
