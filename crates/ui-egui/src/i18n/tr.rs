@@ -107,6 +107,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Metni Sütunlara\nDönüştür",
         "Link" => "Köprü",
         "Symbol" => "Simge",
+        "Equation" => "Denklem",
+        "Insert New Equation..." => "Yeni Denklem Ekle",
         "Sparklines" => "Mini Grafikler",
         "Header & Footer" => "Üstbilgi ve Altbilgi",
         "Draw with ink" => "Mürekkeple Çiz",

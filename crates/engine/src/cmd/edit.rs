@@ -81,15 +81,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             paste
         ),
-        cmd!(
-            "edit.pasteSpecial",
-            "Paste Special…",
-            ["Home", "Clipboard"],
-            Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-            has_clipboard,
-            paste_special
-        ),
+        CommandSpec {
+            shortcut_mac: Some("Ctrl+Cmd+V"),
+            ..cmd!(
+                "edit.pasteSpecial",
+                "Paste Special…",
+                ["Home", "Clipboard"],
+                Some("Ctrl+Alt+V"),
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+                has_clipboard,
+                paste_special
+            )
+        },
         cmd!(noundo "edit.clearClipboard", "Cancel Copy", [], Some("Escape"), "{}", has_doc, clear_clipboard),
         cmd!("edit.clearAll", "Clear All", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "all")),
         cmd!("edit.clearFormats", "Clear Formats", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "formats")),
