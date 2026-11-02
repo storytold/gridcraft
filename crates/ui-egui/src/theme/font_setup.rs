@@ -41,6 +41,14 @@ pub const SERIF: &str = "serif";
 
 pub const MONO: &str = "mono";
 
+/// Equation faces: a maths font (upright letters, operators, Greek, double-struck and script
+/// letters), its italic for variables, and a bold. System fonts only; nothing is bundled.
+pub const MATH: &str = "math";
+
+pub const MATH_ITALIC: &str = "math-italic";
+
+pub const MATH_BOLD: &str = "math-bold";
+
 pub fn ui_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(UI.into()))
 }
@@ -365,6 +373,43 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
             add("/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Regular.ttf".into(), 0);
             add("/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf".into(), 0);
         }
+        "math" => {
+            add(format!("{mac_sup}/STIXTwoMath.otf"), 0);
+            add(format!("{win}\\cambria.ttc"), 1);
+            for p in in_dirs(
+                &lin,
+                &[
+                    "opentype/stix/STIXTwoMath-Regular.otf",
+                    "stix/STIXTwoMath-Regular.otf",
+                    "opentype/lmodern/latinmodern-math.otf",
+                    "dejavu/DejaVuSerif.ttf",
+                    "liberation/LiberationSerif-Regular.ttf",
+                ],
+            ) {
+                add(p, 0);
+            }
+            add(format!("{mac_sup}/Times New Roman.ttf"), 0);
+            add(format!("{win}\\times.ttf"), 0);
+        }
+        "math-italic" => {
+            add(format!("{mac_sup}/STIXTwoText-Italic.ttf"), 0);
+            add(format!("{mac_sup}/Times New Roman Italic.ttf"), 0);
+            add(format!("{win}\\cambriai.ttf"), 0);
+            add(format!("{win}\\timesi.ttf"), 0);
+            for p in
+                in_dirs(&lin, &["opentype/stix/STIXTwoText-Italic.otf", "liberation/LiberationSerif-Italic.ttf", "dejavu/DejaVuSerif-Italic.ttf"])
+            {
+                add(p, 0);
+            }
+        }
+        "math-bold" => {
+            add(format!("{mac_sup}/Times New Roman Bold.ttf"), 0);
+            add(format!("{win}\\cambriab.ttf"), 0);
+            add(format!("{win}\\timesbd.ttf"), 0);
+            for p in in_dirs(&lin, &["opentype/stix/STIXTwoText-Bold.otf", "liberation/LiberationSerif-Bold.ttf", "dejavu/DejaVuSerif-Bold.ttf"]) {
+                add(p, 0);
+            }
+        }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
             add(format!("{mac_sys}/Menlo.ttc"), 0);
@@ -441,7 +486,7 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
     let fallback = if system { load_fallback(&mut fonts, HanOrder::of(language)) } else { Vec::new() };
     let hack = fonts.font_data.contains_key(HACK).then_some(HACK);
-    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
         let chain = build_role_chain(&mut fonts, role, &base_prop, &base_mono, &fallback, hack, system);
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
@@ -502,6 +547,14 @@ fn build_role_chain(
         chain.push(format!("sys-{UI}"));
     } else if role.starts_with("cell-") {
         chain.push(format!("sys-{CELL}"));
+    }
+    // Equation faces fall back to the maths font (for the symbols a text face lacks), then to the
+    // serif face.
+    if role == MATH_ITALIC || role == MATH_BOLD {
+        chain.push(format!("sys-{MATH}"));
+    }
+    if role.starts_with("math") {
+        chain.push(format!("sys-{SERIF}"));
     }
     chain.extend(if role == MONO { base_mono.to_vec() } else { base_prop.to_vec() });
     // egui bundles Hack, a monospace face rich in arrows, triangles and keyboard symbols, but
