@@ -39,6 +39,10 @@ impl eframe::ViewportHooks for MacInput {
     fn raw_input(&self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.0.convert(raw_input);
     }
+
+    fn window_destroyed(&self, viewport: egui::ViewportId) {
+        self.0.forget(viewport);
+    }
 }
 
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);

@@ -54,6 +54,17 @@ impl ControlClicks {
         let window = held.entry(raw.viewport_id).or_default();
         control_click_as_secondary(&mut raw.events, window);
     }
+
+    /// Drops a closed window's press, so windows opened and closed over a session leave nothing.
+    pub fn forget(&self, viewport: egui::ViewportId) {
+        self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&viewport);
+    }
+
+    /// How many windows hold a press state (tests).
+    #[cfg(test)]
+    fn windows(&self) -> usize {
+        self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+    }
 }
 
 /// On macOS a Control-click is the secondary click: every app opens its context menu for it
@@ -189,5 +200,16 @@ mod tests {
         let mut again = RawInput::default();
         app.raw_input_hook(&ctx, &mut again);
         assert_eq!(buttons(&again.events), [PointerButton::Secondary], "the re-offered release still ends the secondary press");
+    }
+
+    #[test]
+    fn a_closed_window_leaves_no_state() {
+        let clicks = ControlClicks::default();
+        let window = ViewportId::from_hash_of("closed workbook window");
+        let mut raw = RawInput { viewport_id: window, events: vec![button(PointerButton::Primary, true, Modifiers::CTRL)], ..Default::default() };
+        clicks.convert(&mut raw);
+        assert_eq!(clicks.windows(), 1);
+        clicks.forget(window);
+        assert_eq!(clicks.windows(), 0);
     }
 }
