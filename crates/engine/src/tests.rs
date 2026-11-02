@@ -5293,6 +5293,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod equation;
 mod macros;
 mod objects;
 mod seams;
