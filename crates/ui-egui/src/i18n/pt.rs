@@ -153,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Verificação de Erros",
         "Trace Error" => "Rastrear Erro",
         "Circular References" => "Referências Circulares",
+        "Python Mode" => "Modo Python",
         "Evaluate Formula" => "Avaliar Fórmula",
         "Watch Window" => "Janela de Inspeção",
         "Calculation\nOptions" => "Opções de\nCálculo",
