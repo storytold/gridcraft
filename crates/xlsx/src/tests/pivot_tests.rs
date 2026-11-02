@@ -52,7 +52,7 @@ fn workbook() -> Workbook {
         let r = r as u32 + 1;
         data.cells.set(CellRef::new(r, 0), Cell::value(Value::text(*a)));
         data.cells.set(CellRef::new(r, 1), Cell::value(Value::text(*b)));
-        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style });
+        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style, py: None });
         data.cells.set(CellRef::new(r, 3), Cell::value(Value::number(*u)));
         data.cells.set(CellRef::new(r, 4), Cell::value(Value::number(*s)));
         data.cells.set(CellRef::new(r, 5), Cell::value(Value::text(*ch)));
