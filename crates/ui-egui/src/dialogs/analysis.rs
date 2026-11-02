@@ -1,5 +1,5 @@
 use super::show::{form_fields, ok_cancel};
-use super::*;
+use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
@@ -216,7 +216,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
     ui.horizontal(|ui| {
         edit(ui, d, "newLhs", 110.0, "Constraint Cell Reference");
         let op = text(d, "newOp");
-        egui::ComboBox::from_id_salt("solverOp")
+        craft_ui::ComboBox::from_id_salt("solverOp")
             .selected_text(op.clone())
             .width(60.0)
             .show_ui(ui, |ui| {
@@ -262,7 +262,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
             "evolutionary" => "Evolutionary",
             _ => "GRG Nonlinear",
         };
-        egui::ComboBox::from_id_salt("solverMethod")
+        craft_ui::ComboBox::from_id_salt("solverMethod")
             .selected_text(label(&method))
             .show_ui(ui, |ui| {
                 for m in ["grg", "simplex", "evolutionary"] {

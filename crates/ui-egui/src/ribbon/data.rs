@@ -1,5 +1,5 @@
 use super::controls::{act, control_keytip, keytip, menu_items, sep};
-use super::*;
+use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);

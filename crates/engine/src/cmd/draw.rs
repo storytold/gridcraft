@@ -1,10 +1,10 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

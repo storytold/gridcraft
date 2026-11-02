@@ -677,7 +677,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
     ui.horizontal(|ui| {
         let label = ui.label(lang.tr("Save as type"));
-        egui::ComboBox::from_id_salt("backstage_save_type")
+        craft_ui::ComboBox::from_id_salt("backstage_save_type")
             .width(280.0)
             .selected_text(lang.tr(current))
             .show_ui(ui, |ui| {

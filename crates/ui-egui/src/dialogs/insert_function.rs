@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Dialog, Json, SheetApp, vec2};
 
 /// Insert Function: searches names (as the formula language spells them) and descriptions, shows
 /// each hit's category and description, and starts editing `=NAME(` (or appends to the formula).
