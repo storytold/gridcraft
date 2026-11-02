@@ -29,6 +29,8 @@ mod dialog_confirm;
 mod dialog_focus;
 mod dialog_move;
 mod drag_cursor;
+mod editor_text_position;
+mod editor_vertical_align;
 mod error_checking_menu;
 mod file_menu;
 mod fill_handle_double_click;

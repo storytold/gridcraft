@@ -1,6 +1,9 @@
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{
+    Align2, CellRef, Color32, FontId, HAlign, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, VAlign, Workbook, json, pos2, theme,
+    vec2,
+};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -35,7 +38,8 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let shown = lines;
     // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
     // Otherwise it widens to the text's one-line width.
-    let wrap = st.align.wrap;
+    // Justify wraps too, as the cell draws it.
+    let wrap = st.align.wrap || st.align.h == HAlign::Justify;
     let (w, h) = if wrap {
         // The field wraps at the width it is given (the editor's less its 2 px inset a side): its
         // frame is `Frame::NONE`, so no text margin is taken off.
@@ -73,8 +77,28 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
     painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // The text sits where the cell will draw it once entered (Top, Center or Bottom), as in
+    // Excel, instead of always at the top of a tall cell.
+    // Measured as the cell lays it out: wrapped text at the cell's wrap width (padding and
+    // indent off), so a wrapped Middle or Bottom cell puts it at the same height.
+    let sample = if ed.text.is_empty() { " ".to_string() } else { ed.text.clone() };
+    let wrapped = wrap;
+    let text_h = if wrapped {
+        let wrap_w = (rect.width() - 2.0 * 2.5 * geo.z - st.align.indent as f32 * 9.0 * geo.z).max(4.0);
+        ui.painter().layout_job(egui::text::LayoutJob::simple(sample, font.clone(), Color32::BLACK, wrap_w)).size().y
+    } else {
+        ui.painter().layout_no_wrap(sample, font.clone(), Color32::BLACK).size().y
+    };
+    // In the cell's own rectangle, as when it's drawn: the editor box can be taller.
+    let place = |v: VAlign| {
+        if wrapped { super::cell_paint::wrapped_cell_text_y(v, rect, text_h, geo.z) } else { super::cell_paint::cell_text_y(v, rect, text_h, geo.z) }
+    };
+    // The field has no margin, so its top is the text's top: the y the cell draws the text at
+    // once entered, inside the editor box (a taller edit starts at its top).
+    let mut field = erect.shrink2(vec2(2.0, 0.0));
+    field.min.y = place(st.align.v).clamp(erect.top() - 2.0, (erect.bottom() - text_h).max(erect.top() - 2.0));
     let id = egui::Id::unique("gridcraft.cell_editor");
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
     child.set_clip_rect(clip);
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
