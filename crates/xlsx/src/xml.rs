@@ -213,6 +213,29 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
+/// The first element named `local_name` (namespace prefix dropped) in `xml`, read from its start tag
+/// alone: no children, and nothing after the tag is read, so unbalanced markup around it (a VML
+/// caption's unclosed `<br>`) neither hides nor moves it. `None` when there is none, or when the
+/// markup before it is malformed.
+pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
+    let mut reader = Reader::from_reader(xml);
+    {
+        let cfg = reader.config_mut();
+        cfg.check_end_names = false;
+        cfg.allow_unmatched_ends = true;
+        cfg.allow_dangling_amp = true;
+    }
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == local_name => return Some(start_el(&e)),
+            Event::Eof => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
 /// Parses a part; complete elements named in `split` that are children or grandchildren of the
 /// root (`sst/si`, `worksheet/sheetData/row`) are handed to `cb` and not kept in the returned
 /// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the

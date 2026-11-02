@@ -414,10 +414,18 @@ pub struct ReadControls {
 /// has client data that is neither a note (GridCraft writes notes) nor an embedded object's
 /// picture (`Pict`, which means nothing without its sheet entry).
 fn unlisted_kept(shape: &El) -> bool {
-    shape
-        .child("ClientData")
-        .and_then(|d| d.attr("ObjectType"))
-        .is_some_and(|t| !t.trim().eq_ignore_ascii_case("note") && !t.trim().eq_ignore_ascii_case("pict"))
+    object_type_of(shape).is_some_and(|t| !t.eq_ignore_ascii_case("note") && !t.eq_ignore_ascii_case("pict"))
+}
+
+/// A VML shape's client data `ObjectType`, trimmed (`Note`, `Button`, `Checkbox`).
+fn object_type_of(shape: &El) -> Option<&str> {
+    shape.child("ClientData").and_then(|d| d.attr("ObjectType")).map(str::trim)
+}
+
+/// Whether a VML shape's client data is a note's: its `ObjectType` is `Note` in any case and with
+/// spaces around it. Only that attribute counts, not text elsewhere in the shape (a caption).
+pub(crate) fn is_note_data(data: &El) -> bool {
+    data.attr("ObjectType").is_some_and(|t| t.trim().eq_ignore_ascii_case("note"))
 }
 
 /// Reads a sheet's buttons, scroll bars and spin buttons: each `<control>` with its properties

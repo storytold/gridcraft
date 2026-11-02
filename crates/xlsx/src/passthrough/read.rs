@@ -577,26 +577,18 @@ fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// Whether a VML shape is a note: its client data's `ObjectType` is `Note` in any case, in either
-/// quote and with spaces around it, as the control reader reads it.
-fn is_note_shape(shape: &str) -> bool {
-    shape.match_indices("ObjectType").any(|(i, m)| {
-        let Some(rest) = shape.get(i + m.len()..).map(str::trim_start).and_then(|r| r.strip_prefix('=')).map(str::trim_start) else {
-            return false;
-        };
-        let Some(q) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
-        rest.get(1..).and_then(|v| v.split(q).next()).is_some_and(|v| v.trim().eq_ignore_ascii_case("note"))
-    })
-}
-
-/// VML without its note shapes (see [`is_note_shape`]) and the shapes numbered in `drop`.
+/// VML without its note shapes and the shapes numbered in `drop`. A note is told as the control
+/// reader tells it, from the shape's client data tag and never from text elsewhere in the shape:
+/// its `ObjectType` ([`crate::controls::is_note_data`]). The tag is read on its own
+/// ([`xml::first_start`]), so a caption's unclosed `<br>` doesn't hide it.
 fn strip_shapes(vml: &str, drop: &HashSet<u64>) -> String {
     let mut out = String::with_capacity(vml.len());
     let mut last = 0;
     for (a, b) in shape_spans(vml) {
         let shape = vml.get(a..b).unwrap_or("");
+        let note = xml::first_start(shape.as_bytes(), "ClientData").is_some_and(|d| crate::controls::is_note_data(&d));
         let numbered = shape_numbers(shape).first().is_some_and(|n| drop.contains(n));
-        if is_note_shape(shape) || numbered {
+        if note || numbered {
             out.push_str(vml.get(last..a).unwrap_or(""));
             last = b;
         }

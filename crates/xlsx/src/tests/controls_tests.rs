@@ -735,9 +735,66 @@ fn a_note_spelled_in_another_case_or_quote_is_not_kept_beside_the_written_one() 
         let (wb, report) = read_xlsx(&vml_only_others(false, true, Some(attr))).unwrap();
         assert_eq!(wb.sheet(0).unwrap().comments.len(), 1, "{attr}: {:?}", report.warnings);
         let out = write_xlsx(&wb).unwrap();
-        let vml = kept_vml_only_others(&out).to_ascii_lowercase().replace(['\'', ' '], "\"");
-        assert_eq!(vml.matches("objecttype=\"note\"").count() + vml.matches("objecttype=\"\"note\"\"").count(), 1, "{attr}: {vml}");
+        let vml = kept_vml_only_others(&out);
+        assert_eq!(note_shapes(&vml), 1, "{attr}: {vml}");
         let (back, _) = read_xlsx(&out).unwrap();
         assert_eq!(back.sheet(0).unwrap().comments.len(), 1, "{attr}");
+    }
+}
+
+/// The note shapes in VML text, counted as the reader tells a note: by each shape's client data
+/// `ObjectType`, whatever its spelling.
+fn note_shapes(vml: &str) -> usize {
+    crate::xml::parse(vml.as_bytes()).unwrap().kids("shape").filter(|s| s.child("ClientData").is_some_and(crate::controls::is_note_data)).count()
+}
+
+/// The saved package's one VML drawing.
+fn only_vml(out: &[u8]) -> String {
+    let mut pkg = Package::open(out).unwrap();
+    let names: Vec<String> = pkg.names().into_iter().filter(|n| n.ends_with(".vml")).collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+    text(&mut pkg, &names[0])
+}
+
+/// A sheet's VML drawing, as the only part beside the sheet's relationships.
+fn with_vml(shapes: &str) -> Vec<u8> {
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#;
+    let vml = format!(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">{shapes}</xml>"#
+    );
+    minimal(
+        r#"<sheetData/><legacyDrawing r:id="rId9"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/vmlDrawing1.vml", &vml)],
+        "",
+        "",
+    )
+}
+
+/// Text that reads like a note's `ObjectType` in a check box's caption or in another attribute of
+/// an option button doesn't make either a note: both are kept, and a modelled button with that
+/// caption keeps it.
+#[test]
+fn a_control_whose_text_reads_like_a_note_object_type_is_kept() {
+    let bytes = with_vml(concat!(
+        r##"<v:shape id="_x0000_s1025" type="#_x0000_t201"><v:textbox><div>ObjectType="Note"</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 3, 0, 4, 0, 5, 0</x:Anchor></x:ClientData></v:shape>"##,
+        r##"<v:shape id="_x0000_s1026" type="#_x0000_t201"><v:textbox><div>ObjectType="Note"</div></v:textbox><x:ClientData ObjectType="Checkbox"><x:Anchor>2, 0, 7, 0, 4, 0, 8, 0</x:Anchor><x:FmlaLink>$B$7</x:FmlaLink></x:ClientData></v:shape>"##,
+        r##"<v:shape id="_x0000_s1027" type="#_x0000_t201" alt="ObjectType='note'"><x:ClientData ObjectType="Radio"><x:Anchor>2, 0, 9, 0, 4, 0, 10, 0</x:Anchor></x:ClientData></v:shape>"##,
+    ));
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1, "{:?}", report.warnings);
+    assert_eq!(sh.controls[0].text, "ObjectType=\"Note\"");
+    let mut out = write_xlsx(&wb).unwrap();
+    for _ in 0..2 {
+        let vml = only_vml(&out);
+        assert_eq!(vml.matches("ObjectType=\"Checkbox\"").count(), 1, "the check box is kept: {vml}");
+        assert_eq!(vml.matches("ObjectType=\"Radio\"").count(), 1, "the option button is kept: {vml}");
+        assert_eq!(vml.matches("ObjectType=\"Button\"").count(), 1, "the button once: {vml}");
+        assert_eq!(note_shapes(&vml), 0, "{vml}");
+        let (back, _) = read_xlsx(&out).unwrap();
+        let sh = back.sheet(0).unwrap();
+        assert_eq!(sh.controls.len(), 1);
+        assert_eq!(sh.controls[0].text, "ObjectType=\"Note\"");
+        out = write_xlsx(&back).unwrap();
     }
 }
