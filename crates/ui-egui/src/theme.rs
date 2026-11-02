@@ -28,9 +28,9 @@ pub use font_fallback::symbol_face_installed;
 use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};
 use font_setup::pick;
 pub use font_setup::{
-    CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MONO, SERIF, UI, UI_BOLD, available_text, cell_family, cell_text_width,
-    chinese_font_loaded, craft_font_scripts, craft_fonts_cover, craft_fonts_loaded, craft_fonts_required, font_definitions,
-    font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
+    CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
+    cell_family, cell_text_width, chinese_font_loaded, craft_font_scripts, craft_fonts_cover, craft_fonts_loaded, craft_fonts_required,
+    font_definitions, font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
 #[cfg(test)]
 use font_setup::{candidates, craft_font_faces, try_load};
@@ -114,6 +114,13 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// The PY badge in the formula bar (Python mode) and its text.
+    pub badge_py: Color32,
+    pub on_badge: Color32,
+    /// The PY tag on a Python cell and its text. They follow the sheet, so they are the same in
+    /// both themes.
+    pub sheet_py_tag: Color32,
+    pub on_sheet_py_tag: Color32,
     /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
     /// between cells showing an error. Sheet colours.
     pub sheet_trace_arrow: Color32,
@@ -172,6 +179,8 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+/// The PY tag on Python cells: a deep green, white text on it.
+const SHEET_PY_TAG: Color32 = rgb(0x1E6E4E);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -251,6 +260,10 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            badge_py: pick(dark, SHEET_PY_TAG, rgb(0x5CBF94)),
+            on_badge: pick(dark, Color32::WHITE, rgb(0x0B1F17)),
+            sheet_py_tag: SHEET_PY_TAG,
+            on_sheet_py_tag: Color32::WHITE,
             sheet_trace_arrow: SHEET_TRACE_ARROW,
             sheet_trace_error: SHEET_TRACE_ERROR,
         }
@@ -412,6 +425,11 @@ mod contrast_tests {
         add("text on current step", t.text, t.accent_soft, TEXT);
         add("current step arrow", t.accent, t.accent_soft, GLYPH);
         add("error marker on window", t.danger, t.window, GLYPH);
+        add("PY badge text", t.on_badge, t.badge_py, TEXT);
+        add("PY badge on window", t.badge_py, t.window, GLYPH);
+        add("PY badge on input", t.badge_py, t.input_bg, GLYPH);
+        add("PY tag text", t.on_sheet_py_tag, t.sheet_py_tag, TEXT);
+        add("PY tag on sheet", t.sheet_py_tag, t.grid_bg, GLYPH);
         v
     }
 

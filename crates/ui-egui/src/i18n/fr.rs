@@ -137,6 +137,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Convertir le texte\nen colonnes",
         "Link" => "Lien",
         "Symbol" => "Symbole",
+        "Equation" => "Équation",
+        "Insert New Equation..." => "Insérer une nouvelle équation",
         "Sparklines" => "Courbes de tendance",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
@@ -181,6 +183,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Vérification des erreurs",
         "Trace Error" => "Repérer une erreur",
         "Circular References" => "Références circulaires",
+        "Python Mode" => "Mode Python",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
         "Calculation\nOptions" => "Options de\ncalcul",
@@ -1228,6 +1231,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "— VBA project (preserved, not run)" => "— Projet VBA (conservé, non exécuté)",
         "— {steps} steps" => "— {steps} étapes",
         "€ Euro" => "€ Euro",
+        "Collapse dialog" => "Réduire la boîte de dialogue",
+        "Expand dialog" => "Développer la boîte de dialogue",
         _ => return None,
     })
 }
