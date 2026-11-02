@@ -115,7 +115,9 @@ pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
 }
 
 /// Draws the validation list popup, choosing above/below and left/right placement for RTL, and
-/// applies the clicked item: numbers/bools via `range.setValues` (exact value), text via `cell.set`.
+/// applies the clicked item with a value-preserving write: numbers/bools via `range.setValues`,
+/// plain text via `range.setValues`/`parse: false`, and `=…` text via `cell.set` with a forcing
+/// apostrophe. Locked cells on a protected sheet are refused first, as `cell.set` does.
 pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
     let Some(d) = app.session.active() else { return };
@@ -150,15 +152,25 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                         .add(egui::Button::new(display.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
                         .clicked()
                     {
-                        match commit {
-                            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
-                                app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[commit]]}));
-                            }
-                            serde_json::Value::String(text) => {
-                                app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": text}));
-                            }
-                            _ => {
-                                app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": display}));
+                        if let Some(m) = app.session.locked_cell_message(si, c) {
+                            app.message = Some(("GridCraft".into(), m));
+                        } else {
+                            match commit {
+                                // Raw values: no percent rescale / date reparse.
+                                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[commit]]}));
+                                }
+                                // Text as given. `parse: false` keeps `00123` text, but a leading
+                                // `=` is still a formula in that API — force text with `'`.
+                                serde_json::Value::String(text) if text.starts_with('=') => {
+                                    app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": format!("'{text}")}));
+                                }
+                                serde_json::Value::String(text) => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[text]], "parse": false}));
+                                }
+                                _ => {
+                                    app.run_or_alert("range.setValues", json!({"range": c.a1(), "values": [[display.as_str()]], "parse": false}));
+                                }
                             }
                         }
                         close = true;

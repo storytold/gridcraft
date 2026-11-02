@@ -162,10 +162,9 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     list_entries(wb, sheet, dv).into_iter().map(|e| e.display).collect()
 }
 
-/// Dropdown choices as `(display, commit)`: show `display`; write `commit` with `range.setValues`
-/// (JSON numbers/bools) or `cell.set` (strings). Numbers are committed as values so a percentage
-/// destination does not re-scale `1.5` → `0.015`, and a mid-month `mmm-yy` label does not become
-/// the 1st of the month.
+/// Dropdown choices as `(display, commit)`: show `display`; the picker writes `commit` so numbers
+/// keep their raw value (no percent rescale / lossy date reparse) and text keeps leading zeros /
+/// a leading `=` (see `list_picker`).
 pub fn list_choices(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<(String, Json)> {
     list_entries(wb, sheet, dv)
         .into_iter()
@@ -202,19 +201,36 @@ fn list_entries(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<ListEntry> 
             .collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
-    // A range, name or table source: walk the cells so each option uses that cell's number format
-    // (a date serial shows as `Jan-26`, not `46023`).
+    // A range, name or table source: walk stored cells and spills (not every blank address), so a
+    // sparse `A1:P1000000` with one value near the end does not stall the dropdown. Each option
+    // uses that cell's number format (a date serial shows as `Jan-26`, not `46023`).
     if let Some(areas) = gridcraft_calc::evaluate_areas(wb, sheet, at, f) {
         let mut out = Vec::new();
         'areas: for a in areas {
             let Some(sh) = wb.sheet(a.sheet) else { continue };
-            for c in a.range.iter() {
-                let value = sh.value(c);
+            let push = |out: &mut Vec<ListEntry>, c: CellRef, value: Value| {
                 if value.is_empty() {
-                    continue;
+                    return false;
                 }
                 out.push(ListEntry { display: crate::display::value_text(wb, sh, c), value });
-                if out.len() >= LIST_ITEMS_CAP {
+                out.len() >= LIST_ITEMS_CAP
+            };
+            for (c, cell) in sh.cells.iter_range(a.range) {
+                let value = if !cell.value.is_empty() || cell.formula.is_some() {
+                    cell.value.clone()
+                } else {
+                    // Style-only stored cell: value may come from a spill.
+                    sh.spill.get(&c).cloned().unwrap_or(Value::Empty)
+                };
+                if push(&mut out, c, value) {
+                    break 'areas;
+                }
+            }
+            for (c, v) in sh.spill.range(a.range.start..=a.range.end) {
+                if !a.range.contains(*c) || sh.cells.get(*c).is_some() {
+                    continue;
+                }
+                if push(&mut out, *c, v.clone()) {
                     break 'areas;
                 }
             }

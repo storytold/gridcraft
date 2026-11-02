@@ -534,6 +534,47 @@ fn list_validation_from_date_cells_shows_formatted_labels() {
 }
 
 #[test]
+fn list_validation_from_a_sparse_tall_range_still_finds_the_late_value() {
+    // Visiting every blank address of A1:A1000000 would stall the dropdown; stored-cell iteration
+    // must still see the only value near the end.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1000000", "input": "2026-01-15"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1000000", "code": "mmm-yy"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1", "type": "list", "formula1": "$A$1:$A$1000000"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "B1")).unwrap();
+    assert_eq!(list_items(&wb, 0, dv), ["Jan-26"]);
+    let choices = list_choices(&wb, 0, dv);
+    assert!(choices[0].1.is_number());
+}
+
+#[test]
+fn list_validation_text_choices_commit_without_reparsing() {
+    // Picker text commits keep the source text: `00123` via `range.setValues`/`parse: false`,
+    // and a leading `=` via `cell.set` with a forcing apostrophe (that API still treats `=` as a
+    // formula even when `parse` is false).
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "K1", "parse": false, "values": [["00123"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": "'=SUM(1)"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "$K$1:$K$2"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.a1() == "A1")).unwrap();
+    assert_eq!(list_items(&wb, 0, dv), ["00123", "=SUM(1)"]);
+    let choices = list_choices(&wb, 0, dv);
+    assert_eq!(choices[0].1, json!("00123"));
+    assert_eq!(choices[1].1, json!("=SUM(1)"));
+    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": [[choices[0].1.clone()]]})).unwrap();
+    let eq = choices[1].1.as_str().unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": format!("'{eq}")})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("00123"));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), Value::text("=SUM(1)"));
+    assert!(sh.cell(CellRef::parse("A2").unwrap()).unwrap().formula.is_none());
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.
