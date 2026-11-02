@@ -616,6 +616,17 @@ mod tests {
     }
 
     #[test]
+    fn a_space_in_text_mode_survives_the_round_trip() {
+        let omml = gridcraft_math::to_omml("\\text{if } x", 11.0, None).unwrap();
+        let back =
+            to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap();
+        assert!(back.contains("\\text{ }") || back.contains("if }"), "the space after `if` is still there: {back}");
+        let spaces = |l: &gridcraft_math::MathList| l.items.iter().filter(|i| matches!(i, gridcraft_math::Item::Glyph(g) if g.ch == ' ')).count();
+        let (a, b) = (gridcraft_math::layout("\\text{if } x").unwrap(), gridcraft_math::layout(&back).unwrap());
+        assert_eq!(spaces(&a), spaces(&b), "{back}");
+    }
+
+    #[test]
     fn writing_then_reading_keeps_the_maths() {
         for (_, src) in gridcraft_math::GALLERY {
             let omml = gridcraft_math::to_omml(src, 11.0, None).unwrap();

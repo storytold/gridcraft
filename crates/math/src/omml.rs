@@ -137,10 +137,14 @@ impl Writer {
             }
             self.out.push_str("</m:rPr>");
         }
+        // Word trims a run's text unless it is marked, so a run that is or ends in whitespace
+        // (the space after `\text{if }`) says so.
+        let space = if text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) { " xml:space=\"preserve\"" } else { "" };
         self.out.push_str(&format!(
-            "<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr><m:t>{}</m:t></m:r>",
+            "<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr><m:t{}>{}</m:t></m:r>",
             self.sz,
             self.fill,
+            space,
             esc(text)
         ));
     }
@@ -214,7 +218,8 @@ impl Writer {
             }
             ParseNode::SpacingNode { text, .. } => {
                 let t = match text.as_str() {
-                    "\\ " | "~" | "\\space" | "\\nobreakspace" => " ",
+                    // A literal space in text mode (`\text{if } x`) is a spacing node of " ".
+                    " " | "\\ " | "~" | "\\space" | "\\nobreakspace" => " ",
                     "\\quad" => "\u{2003}",
                     "\\qquad" => "\u{2003}\u{2003}",
                     "\\," | "\\thinspace" => "\u{2009}",
@@ -523,6 +528,18 @@ mod tests {
         assert!(to_omml(&"x".repeat(5000), 11.0, None).is_err());
         assert!(om("x").starts_with("<m:oMath>"));
         assert!(to_omml("x", f32::NAN, None).unwrap().contains("sz=\"1100\""));
+    }
+
+    #[test]
+    fn a_literal_space_in_text_mode_is_kept() {
+        // RaTeX gives a text-mode space as a spacing node whose text is " "; it is a run of its
+        // own, marked `xml:space="preserve"` so that Word keeps it, and `\text{if } x` does not
+        // come out as `ifx`.
+        let o = bare("\\text{a b}");
+        assert!(o.contains("<m:t xml:space=\"preserve\"> </m:t>"), "{o}");
+        let o = bare("\\text{if } x");
+        assert!(o.contains("<m:t xml:space=\"preserve\"> </m:t></m:r><m:r><m:t>x</m:t>"), "{o}");
+        assert!(!bare("x+1").contains("xml:space"), "runs without surrounding whitespace are not marked");
     }
 
     #[test]
