@@ -37,9 +37,13 @@ pub struct Ctx<'a> {
     /// PivotCharts (by chart id) and their series' cached points, checked against the cells once
     /// every sheet is read.
     pub pivot_charts: Vec<(u32, Vec<crate::chart::PivotSeriesCache>)>,
+    /// Shared point-expansion budget across all charts in the workbook.
+    pub chart_budget: crate::chart::ChartReadBudget,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+    /// The code of the workbook's Python cells, from its Python part.
+    pub python: crate::python_part::ScriptsIn,
 }
 
 impl Ctx<'_> {
@@ -254,7 +258,9 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cell_pictures: vec![],
         cf_ext_ids: vec![],
         pivot_charts: vec![],
+        chart_budget: crate::chart::ChartReadBudget::new(),
         known_function,
+        python: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -268,6 +274,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             vec![]
         }
     };
+    // The code of Python cells, which their formulas name by index.
+    cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
@@ -446,6 +454,9 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    if let Some(w) = cx.python.warning() {
+        cx.warn(w);
+    }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;

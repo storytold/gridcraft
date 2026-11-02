@@ -260,10 +260,11 @@ fn chart_cache_budget_bounds_many_empty_series() {
         .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1048576"/></c:numLit></c:val></c:ser>"#))
         .collect();
     let root = crate::xml::parse(chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), "").as_bytes()).unwrap();
-    let (chart, _, warned) = crate::chart::read_chart_with_budget(&root).unwrap();
+    let mut budget = crate::chart::ChartReadBudget::new();
+    let (chart, _) = crate::chart::read_chart_with_budget(&root, &mut budget).unwrap();
     assert_eq!(chart.series.len(), 1_000);
     assert!(chart.series.iter().map(|s| s.values.split(',').count()).sum::<usize>() <= 16_777_216 + chart.series.len());
-    assert!(warned);
+    assert!(budget.exceeded);
 }
 
 #[test]
@@ -272,11 +273,12 @@ fn chart_cache_budget_drops_points_beyond_boundary() {
         .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1048576"/><c:pt idx="1048575"><c:v>{i}</c:v></c:pt></c:numLit></c:val></c:ser>"#))
         .collect();
     let root = crate::xml::parse(chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), "").as_bytes()).unwrap();
-    let (chart, _, warned) = crate::chart::read_chart_with_budget(&root).unwrap();
+    let mut budget = crate::chart::ChartReadBudget::new();
+    let (chart, _) = crate::chart::read_chart_with_budget(&root, &mut budget).unwrap();
     assert_eq!(chart.series.len(), 17);
     assert!(chart.series.iter().take(16).all(|s| !s.values.is_empty()));
     assert_eq!(chart.series[16].values, "");
-    assert!(warned);
+    assert!(budget.exceeded);
 }
 
 #[test]

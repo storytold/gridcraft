@@ -102,13 +102,13 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
 }
 const MAX_CHART_CACHED_POINTS: usize = 16_777_216;
 
-struct ChartReadBudget {
+pub(crate) struct ChartReadBudget {
     remaining: usize,
-    exceeded: bool,
+    pub(crate) exceeded: bool,
 }
 
 impl ChartReadBudget {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { remaining: MAX_CHART_CACHED_POINTS, exceeded: false }
     }
 }
@@ -306,10 +306,14 @@ pub(crate) fn plot_cached(wb: &Workbook, si: usize, ch: &mut Chart, caches: &[Pi
         let stale = |f: Option<&str>, p: &&CachedPoints| !f.is_some_and(|f| live_matches(wb, si, f, p));
         let categories = c.categories.as_ref().filter(|p| stale(ser.categories.as_deref(), p)).map(|p| literal(&p.points, p.numeric));
         let values = c.values.as_ref().filter(|p| stale(Some(&ser.values), p)).map(|p| literal(&p.points, p.numeric));
+        let name_stale = c.name.as_ref().is_some_and(|name| {
+            let cached = CachedPoints { points: vec![Some(name.clone())], numeric: false, multi_level: false };
+            !ser.name.as_deref().is_some_and(|f| live_matches(wb, si, f, &cached))
+        });
         if categories.is_none() && c.categories.as_ref().is_some_and(|p| p.multi_level) {
             ser.innermost_categories = true;
         }
-        if categories.is_none() && values.is_none() {
+        if categories.is_none() && values.is_none() && !name_stale {
             continue;
         }
         if categories.is_some() {
@@ -319,7 +323,7 @@ pub(crate) fn plot_cached(wb: &Workbook, si: usize, ch: &mut Chart, caches: &[Pi
             ser.values = v;
             ser.number_format.clone_from(&c.number_format);
         }
-        if let Some(name) = &c.name {
+        if name_stale && let Some(name) = &c.name {
             ser.name = Some(format!("\"{}\"", name.replace('"', "\"\"")));
         }
     }
@@ -447,10 +451,11 @@ fn axis_ids(g: &El) -> Vec<String> {
 /// A chart part, with the cached points of each series when it is a PivotChart (empty otherwise),
 #[cfg(test)]
 pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
-    read_chart_with_budget(root).map(|(chart, caches, _)| (chart, caches))
+    let mut budget = ChartReadBudget::new();
+    read_chart_with_budget(root, &mut budget)
 }
 
-pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>, bool)> {
+pub(crate) fn read_chart_with_budget(root: &El, budget: &mut ChartReadBudget) -> Option<(Chart, Vec<PivotSeriesCache>)> {
     let chart = root.child("chart")?;
     let plot = chart.child("plotArea")?;
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
@@ -459,10 +464,9 @@ pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSerie
     let pivot = root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty());
     let mut series = vec![];
     let mut caches = vec![];
-    let mut budget = ChartReadBudget::new();
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
-            let mut ser = read_series(s, &mut budget);
+            let mut ser = read_series(s, budget);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
                 ser.kind = Some(*k);
@@ -472,7 +476,7 @@ pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSerie
             }
             series.push(ser);
             if pivot.is_some() {
-                caches.push(pivot_series_cache(s, &mut budget));
+                caches.push(pivot_series_cache(s, budget));
             }
         }
     }
@@ -511,6 +515,12 @@ pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSerie
         series,
         legend,
         data_labels,
+        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
+            show_keys: bool_val(t, "showKeys"),
+            horizontal_border: bool_val(t, "showHorzBorder"),
+            vertical_border: bool_val(t, "showVertBorder"),
+            outline: bool_val(t, "showOutline"),
+        }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -519,7 +529,7 @@ pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSerie
         by_rows: false,
         pivot,
     };
-    Some((ch, caches, budget.exceeded))
+    Some((ch, caches))
 }
 
 // ---------------------------------------------------------------- writing
@@ -1137,6 +1147,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if secondary.is_some() {
         s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
         s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    }
+    if let Some(t) = &ch.data_table {
+        let _ = write!(
+            s,
+            "<c:dTable><c:showHorzBorder val=\"{}\"/><c:showVertBorder val=\"{}\"/><c:showOutline val=\"{}\"/><c:showKeys val=\"{}\"/></c:dTable>",
+            u8::from(t.horizontal_border),
+            u8::from(t.vertical_border),
+            u8::from(t.outline),
+            u8::from(t.show_keys)
+        );
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {

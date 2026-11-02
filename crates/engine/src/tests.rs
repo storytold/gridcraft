@@ -4672,6 +4672,7 @@ fn a_multi_level_pivot_chart_draws_one_label_per_point_after_saves() {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
@@ -5290,7 +5291,12 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod equation;
 mod macros;
+mod objects;
+mod python_cells;
+mod python_commands;
+mod python_files;
 mod seams;
 
 #[test]
