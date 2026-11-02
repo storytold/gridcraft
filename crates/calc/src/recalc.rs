@@ -84,8 +84,11 @@ fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usi
             host.direct.extend(out.values);
             host.spills.extend(out.spills);
             host.thread_log.extend(out.threads);
-            for k in out.deferred {
-                host.calculate(k);
+            if !out.deferred.is_empty() {
+                flush_direct(host);
+                for k in out.deferred {
+                    host.calculate(k);
+                }
             }
         } else {
             for k in parallel {
@@ -93,9 +96,13 @@ fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usi
             }
         }
     }
-    flush_direct(host);
-    for k in host_side {
-        host.calculate(k);
+    // Fold worker values only when a formula still to run on the caller may read them.
+    // Otherwise they stay in order for the direct write.
+    if !host_side.is_empty() {
+        flush_direct(host);
+        for k in host_side {
+            host.calculate(k);
+        }
     }
 }
 
