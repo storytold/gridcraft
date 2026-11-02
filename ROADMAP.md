@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (floating objects share one selection, eight resize handles and keyboard deletion; chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-02 | Floating objects: charts, pictures, shapes and slicers share one selection with a frame of eight resize handles (each moves only its own edges, also on right-to-left sheets); Delete or Backspace deletes the selected object and Escape drops the selection; slicers follow row and column edits and sorts like the other objects; chart series follow cut-moves and sheet renames and deletes; a copied sheet gives its objects fresh ids; `ui.inspect` reports `selectedObject` and `ui.object.select` selects any object (#190, #213) |
 | 2026-11-01 | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
 | 2026-11-01 | XLSX keeps the first visible workbook window's active sheet and display settings together, falling back to the first view when all are hidden. Tab ratios are normalized to 0–1000 on import and export; invalid numeric text uses 600. Synthetic round trips cover isolated attributes, missing views, and active tabs after sheet deletion/reordering; firstSheet remains separate #2264 work (#3057). |
 | 2026-10-31 | Esc in File › Info, Print or Options first leaves the text field; the next Esc returns to the sheet (#3035) |
@@ -254,6 +255,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Progress log: one selection and eight resize handles for every floating object |
 | 2026-11-01 | minor | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
 | 2026-11-01 | trivial | Workbook views: selected window settings stay together, tab ratios are bounded, and regressions cover isolated settings and sheet edits; readiness estimates unchanged (#3057) |
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
