@@ -8,7 +8,7 @@ use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
@@ -72,8 +72,10 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
+            macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),
@@ -235,6 +237,8 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        macro_ui::forget_closed_editor(self);
+        macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.

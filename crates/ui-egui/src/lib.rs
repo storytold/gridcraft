@@ -6,6 +6,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// GridCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.gridcraft.png")),
+    accent: Some([0x1f, 0x9d, 0x55]),
+    ..craft_update::suite::GRIDCRAFT
+};
+
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -15,6 +24,7 @@ pub mod control;
 mod craft_fonts_policy;
 pub mod credits;
 pub mod dialogs;
+pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
 pub mod editor;
@@ -22,11 +32,14 @@ mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod macro_editor;
+pub mod macro_ui;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -266,10 +279,15 @@ pub struct SheetApp {
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
+    /// Automate › Macros: relative recording, recent macros, a macro's question.
+    pub macros: macro_ui::MacroUi,
     pub started: f64,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
+    /// to the front, also when the app is hidden or the window minimized (a Dock quit).
+    pub bring_forward: bool,
     /// View › Switch Windows opens its list on the next frame the View tab draws (asked for by a
     /// key tip, the command search or a menu, possibly while another tab was showing).
     pub(crate) open_switch_windows: bool,
