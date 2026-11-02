@@ -611,16 +611,19 @@ fn equation_array(e: &El, out: &mut String, depth: usize) -> Option<()> {
     Some(())
 }
 
+/// Effective brace orientation, including the character default and its precedence over position.
+fn group_char_is_over(e: &El) -> bool {
+    let p = e.child("groupChrPr");
+    match val(p, "chr").unwrap_or("\u{23DF}") {
+        "\u{23DE}" => true,
+        "\u{23DF}" => false,
+        _ => val(p, "pos") == Some("top"),
+    }
+}
+
 /// `m:groupChr`: a brace over or under its content.
 fn group_char(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    let p = e.child("groupChrPr");
-    let top = val(p, "pos") == Some("top");
-    out.push_str(match val(p, "chr").unwrap_or("\u{23DF}") {
-        "\u{23DE}" => "\\overbrace",
-        "\u{23DF}" => "\\underbrace",
-        _ if top => "\\overbrace",
-        _ => "\\underbrace",
-    });
+    out.push_str(if group_char_is_over(e) { "\\overbrace" } else { "\\underbrace" });
     group(e.child("e"), out, depth)
 }
 
@@ -635,11 +638,13 @@ fn limit(e: &El, out: &mut String, depth: usize) -> Option<()> {
     });
     // A brace alone under the limit is a labelled brace, as `gridcraft_math::to_omml` writes
     // `\underbrace{x}_{n}` and `\overbrace{x}^{n}`: the label is the brace's own script, below
-    // for `m:limLow` and above for `m:limUpp`, which is where a brace lays out either script.
-    let brace = base.and_then(|b| {
-        let mut content = b.children.iter().filter(|c| !c.name.ends_with("Pr"));
-        content.next().filter(|c| c.name == "groupChr" && content.next().is_none())
-    });
+    // for an underbrace and above for an overbrace. An opposite-side limit keeps its placement.
+    let brace = base
+        .and_then(|b| {
+            let mut content = b.children.iter().filter(|c| !c.name.ends_with("Pr"));
+            content.next().filter(|c| c.name == "groupChr" && content.next().is_none())
+        })
+        .filter(|brace| low != group_char_is_over(brace));
     if base_is_fn {
         seq(base?, out, depth)?;
         out.push_str(if low { "\\limits_" } else { "\\limits^" });
@@ -755,6 +760,24 @@ mod tests {
         let spaces = |l: &gridcraft_math::MathList| l.items.iter().filter(|i| matches!(i, gridcraft_math::Item::Glyph(g) if g.ch == ' ')).count();
         let (a, b) = (gridcraft_math::layout("\\text{if } x").unwrap(), gridcraft_math::layout(&back).unwrap());
         assert_eq!(spaces(&a), spaces(&b), "{back}");
+    }
+
+    #[test]
+    fn a_limit_on_the_opposite_side_of_a_brace_keeps_its_placement() {
+        for (properties, brace, opposite, same, script) in [
+            (r#"<m:chr m:val="&#x23DF;"/><m:pos m:val="top"/>"#, "underbrace", "limUpp", "limLow", '_'),
+            (r#"<m:chr m:val="&#x23DE;"/><m:pos m:val="bot"/>"#, "overbrace", "limLow", "limUpp", '^'),
+            (r#"<m:pos m:val="top"/>"#, "underbrace", "limUpp", "limLow", '_'),
+            (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp", '^'),
+        ] {
+            let base = format!(
+                "<m:groupChr><m:groupChrPr>{properties}</m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>"
+            );
+            let limit = |kind: &str| format!("<m:{kind}><m:e>{base}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:{kind}>");
+            let placement = if opposite == "limLow" { "underset" } else { "overset" };
+            assert_eq!(latex(&limit(opposite)), Some(format!("\\{placement}{{n}}{{\\{brace}{{x}}}}")), "{properties}");
+            assert_eq!(latex(&limit(same)), Some(format!("\\{brace}{{x}}{script}{{n}}")), "{properties}");
+        }
     }
 
     #[test]
