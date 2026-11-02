@@ -69,6 +69,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "formulas.tracePrecedents", "Trace Precedents", ["Formulas", "Formula Auditing"], None, "{cell?} → ranges", has_doc, trace_precedents),
         cmd!(query "formulas.traceDependents", "Trace Dependents", ["Formulas", "Formula Auditing"], None, "{cell?} → cells", has_doc, trace_dependents),
+        cmd!(
+            query "formulas.traceError",
+            "Trace Error",
+            ["Formulas", "Formula Auditing"],
+            None,
+            "{cell?} → {sheet, cell, error, source: {sheet, cell}, arrows: [{from: {sheet, range}, to: {sheet, cell}, kind: \"error\"|\"precedent\"}], truncated}: from the cell, follows the first reference that shows the same error (in a range, its first cell showing it) back to the cell the error starts in, `source`. `error` arrows link the cells on the way; `precedent` arrows lead from the source's own references into it. A cell without an error gives `error` and `source` null and no arrows. A chain longer than 10,000 links stops there with `truncated` true and `source` null.",
+            has_doc,
+            trace_error
+        ),
         cmd!(noundo "formulas.selectPrecedents", "Select Precedents", ["Formulas", "Formula Auditing"], Some("Ctrl+["), "{cell?, all?: true = every level (Ctrl+Shift+[)} → selects the precedent cells", has_doc, select_precedents),
         cmd!(noundo "formulas.selectDependents", "Select Dependents", ["Formulas", "Formula Auditing"], Some("Ctrl+]"), "{cell?, all?: true = every level (Ctrl+Shift+])}", has_doc, select_dependents),
         cmd!(noundo "formulas.removeArrows", "Remove Arrows", ["Formulas", "Formula Auditing"], None, "{}", has_doc, |_, _| ok()),
@@ -651,6 +660,79 @@ fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     deps.dedup();
     let v: Vec<Json> = deps.iter().map(|(si, c)| json!({"sheet": d.wb.sheet(*si).map(|s| s.name.clone()), "cell": c.a1()})).collect();
     Ok(Json::Array(v))
+}
+
+/// Trace Error goes back at most this many links; a longer chain stops there.
+const TRACE_ERROR_LINKS: usize = 10_000;
+
+/// Trace Error: from the cell, the first reference in its formula that shows the same error
+/// (in a range, the range's first cell showing it, row by row), then that cell's, and so on to the
+/// cell the error starts in: one none of whose references shows it, or one without references.
+/// Arrows link the cells on the way, and lead from the source's own references into it.
+fn trace_error(s: &mut Session, p: &Json) -> Result<Json> {
+    use std::collections::HashSet;
+    let d = s.doc()?;
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let sheet = d.wb.active_sheet();
+    let name = |si: usize| d.wb.sheet(si).map(|sh| sh.name.clone());
+    let cell = |(si, c): (usize, CellRef)| json!({"sheet": name(si), "cell": c.a1()});
+    let Some(error) = d.wb.sheet(sheet).and_then(|sh| sh.value(at).as_error()) else {
+        return Ok(json!({"sheet": name(sheet), "cell": at.a1(), "error": null, "source": null, "arrows": [], "truncated": false}));
+    };
+    // A value spilled by a dynamic array comes from its anchor's formula.
+    let precedents = |(si, c): (usize, CellRef)| {
+        let anchor = d.wb.sheet(si).filter(|sh| sh.cell(c).is_none_or(|x| x.formula.is_none())).and_then(|sh| sh.spill_anchor(c));
+        d.calc.graph.precedents_of((si, anchor.unwrap_or(c)))
+    };
+    // The walk keeps to cells it hasn't been to, so a circular reference ends it.
+    let mut chain = vec![(sheet, at)];
+    let mut seen: HashSet<(usize, CellRef)> = HashSet::from([(sheet, at)]);
+    let mut truncated = false;
+    let mut last = (sheet, at);
+    while let Some(next) = precedents(last).iter().find_map(|a| first_showing(&d.wb, a, error)) {
+        if !seen.insert(next) {
+            break;
+        }
+        if chain.len() > TRACE_ERROR_LINKS {
+            truncated = true;
+            break;
+        }
+        chain.push(next);
+        last = next;
+    }
+    let mut arrows = Vec::new();
+    // A chain cut short hasn't reached its source.
+    if !truncated {
+        let mut drawn = HashSet::new();
+        for a in precedents(last) {
+            if drawn.insert(a) {
+                arrows.push(json!({"from": {"sheet": name(a.sheet), "range": a.range.a1()}, "to": cell(last), "kind": "precedent"}));
+            }
+        }
+    }
+    // From the source outwards, as the error travels.
+    for pair in chain.windows(2).rev() {
+        if let [to, from] = pair {
+            arrows.push(json!({"from": {"sheet": name(from.0), "range": from.1.a1()}, "to": cell(*to), "kind": "error"}));
+        }
+    }
+    let source = if truncated { Json::Null } else { cell(last) };
+    Ok(json!({"sheet": name(sheet), "cell": at.a1(), "error": error.as_str(), "source": source, "arrows": arrows, "truncated": truncated}))
+}
+
+/// The first cell of an area, row by row, that shows `error`: a stored cell or a value spilled
+/// into the area by a dynamic array.
+fn first_showing(wb: &Workbook, a: &gridcraft_calc::Area, error: CellError) -> Option<(usize, CellRef)> {
+    let sh = wb.sheet(a.sheet)?;
+    let holds = |c: &Cell| !c.value.is_empty() || c.formula.is_some();
+    let stored = sh.cells.iter_range(a.range).find(|(_, c)| holds(c) && c.value.as_error() == Some(error)).map(|(at, _)| at);
+    let spilled = sh
+        .spill
+        .range(a.range.start..)
+        .take_while(|(at, _)| **at <= a.range.end)
+        .find(|(at, v)| a.range.contains(**at) && v.as_error() == Some(error) && !sh.cell(**at).is_some_and(holds))
+        .map(|(at, _)| *at);
+    stored.into_iter().chain(spilled).min().map(|c| (a.sheet, c))
 }
 
 /// Excel's Ctrl+[ / Ctrl+]: select the precedent (or dependent) cells. When they all live on
