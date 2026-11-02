@@ -2,8 +2,8 @@
 //!
 //! One matcher serves the search box (`dialogs::command_search`) and the programmatic
 //! `ui.search` command, so agents see exactly what a person typing the same text sees. The
-//! catalog is the engine's command registry; only commands placed on the ribbon or a menu are
-//! offered, as the search box offers ribbon actions. The search never lists itself.
+//! catalog is the engine's command registry; commands placed on the ribbon or a menu, or with a
+//! keyboard shortcut, are offered. The search never lists itself.
 
 use gridcraft_engine::{CommandInfo, Session};
 use serde_json::{Value as Json, json};
@@ -19,7 +19,7 @@ pub const MAX_RECENT: usize = 10;
 
 /// Whether the search may offer `c`: enabled, on the ribbon or a menu, and not the search itself.
 fn searchable(c: &CommandInfo) -> bool {
-    c.enabled && !c.menu.is_empty() && !SELF_IDS.contains(&c.id)
+    c.enabled && (!c.menu.is_empty() || c.shortcut.is_some()) && !SELF_IDS.contains(&c.id)
 }
 
 /// Lower rank is a better match; `None` is no match. Every word of the query must appear in the

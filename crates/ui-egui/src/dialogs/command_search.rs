@@ -71,8 +71,10 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
         for (i, c) in cmds.iter().enumerate() {
-            let shortcut = c.shortcut.map(|s| format!("    {s}")).unwrap_or_default();
-            let text = format!("{}    {}{shortcut}", c.label, c.menu.join(" › "));
+            let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+            let shortcut = c.shortcut_for_platform(mac).map(|s| format!("  ({s})")).unwrap_or_default();
+            let menu = if c.menu.is_empty() { String::new() } else { format!("    {}", c.menu.join(" › ")) };
+            let text = format!("{}{shortcut}{menu}", c.label);
             let r = ui.add(egui::Button::selectable(i == d.list_index, text).min_size(vec2(scroll_area_width, 20.0)));
             if (down || up || home || end || pgup || pgdn) && i == d.list_index && !ui.clip_rect().contains_rect(r.rect) {
                 r.scroll_to_me(Some(if down || end || pgdn { egui::Align::Max } else { egui::Align::Min }));
