@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
+separately in [parity-checklist.md](parity-checklist.md) (277 / 292).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -25,7 +25,8 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Formula bar with Name Box, expand, function hints | yes | yes; grows with its content from one to five lines (Alt+Enter, wrapped text, or viewing a multi-line cell), then scrolls with the caret in view, the Name Box and buttons staying on the first line; the chevron pins it at five; the in-cell editor shows every line | done; no drag-to-resize handle |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | Ctrl-drag (Cmd or Option on macOS) drops a copy (#971); active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Formula bar with Name Box, expand, function hints | yes | yes | done; dynamic-array spill children show the source formula muted and read-only, using current spill ownership |
-| Formulas › Error Checking arrow: Circular References | yes | yes: the button opens Error Checking and its arrow opens a menu with Error Checking… and Circular References, which lists a cell on each circular reference as `Sheet!A1`, up to 100, and selects the one picked, on its own sheet (unavailable when there are none) | done; the Error Checking… item and the limit of 100 are GridCraft's own |
+| Python cells: Python mode | yes | yes (11-01): Ctrl+Alt+Shift+P (Cmd+Option+Shift+P on a Mac), `=PY` then Tab, or editing a Python cell edits the code in the formula bar's code editor, with a PY badge beside fx; Enter starts a new line with the indentation, Tab and Shift+Tab indent, Ctrl+Enter (Cmd+Enter) puts the code in the cell through `python.set`, Esc cancels. Deleting all the code and committing clears a Python cell, as an empty entry clears any other cell. The formula bar shows while a Python edit is open, also when View › Formula Bar hides it. On a protected sheet, a Python cell formatted Hidden shows no code in the formula bar and starts no edit, as a hidden formula shows none | this build stores Python code and doesn't run it: new or changed code shows `#BLOCKED!`; no `xl()` pointing on the sheet yet |
+| Formulas › Error Checking arrow: Trace Error, Circular References | yes | yes: the button opens Error Checking and its arrow opens a menu with Error Checking…, Trace Error and Circular References. Trace Error (`formulas.traceError`, 11-01) follows the active cell's error back through the first reference showing the same error (in a range, its first cell showing it) to the cell it starts in, and draws red arrows along the way and blue ones from that cell's own references, as measured in Excel; on a cell without an error it draws nothing and the arrows shown stay. Circular References lists a cell on each circular reference as `Sheet!A1`, up to 100, and selects the one picked, on its own sheet (unavailable when there are none) | done; the Error Checking… item and the limit of 100 are GridCraft's own; a new trace replaces the arrows shown, where Excel adds to them, and there is no Remove Precedent Arrows |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); New sheet (+) right after the last tab, the strip capped at 60% of the bar (#943); manual wheel/trackpad browsing preserved; next/previous skips Hidden and VeryHidden sheets and retains the current sheet and selection when no visible destination exists; rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes; a right-click on the status bar opens a menu that turns the statistics on and off (Average, Count, Numerical Count, Minimum, Maximum, Sum; `view.statusBar`) | done for the statistics; the other status bar options are not customizable |
@@ -68,7 +69,7 @@ this logic, with one undo step.
 | A Table's header names and filter buttons in the column headings once its header row scrolls away | done (#1423): with the active cell in the Table, as in Excel; the button opens the column's filter menu, the rest of the heading still selects the column. Plain AutoFilter ranges keep their letters (Excel does the same) |
 | Copy as HTML table for other apps | done (#36, 10-10) |
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
-| Move and resize charts, pictures and shapes | charts can't be resized (#190) |
+| Move and resize charts, pictures and shapes | done (#190, #213): charts, pictures, shapes, equations and slicers select with a frame of eight handles; each handle resizes only its own edges (they never cross), the body moves the object, and the pointer shows a resize or move cursor; Delete or Backspace deletes the selected object and Escape drops the selection; double-click edits a text box, opens Format Chart for a chart. Rotation handle, Shift for proportional resizing, Alt to snap to cells and multi-object selection missing |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
@@ -136,6 +137,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Shift+F3, Ctrl+F3, Ctrl+Shift+F3 | Shift+F3, Cmd+F3 (Define Name), Cmd+Shift+F3 | Insert Function, Name Manager, Create from Selection | **added** |
 | F5, Shift+F5 (Mac), F7, Shift+F9, Ctrl+Alt+F9, F12, Ctrl+F4 | same | Go To, Find, Spelling, calculate sheet / all, Save As, close | **added** |
 | Shift+F10, Alt+Shift+F10, Ctrl+F1 | Shift+F10, Cmd+Option+R | context menu, Error Checking, ribbon | **added** |
+| Ctrl+Alt+Shift+P | Cmd+Option+Shift+P | Python mode on or off | **added** |
 | F3 | not checked | Paste Name dialog, only when the workbook has names: OK puts the name at the caret of the formula being edited (or starts `=Name`), Paste List writes each name and what it refers to from the active cell (`formulas.pasteName`) | **added** |
 | F1, F4 (repeat), F6 / Shift+F6, F8 / Shift+F8, F11, End mode | same | help, Repeat, pane cycling, extend/add mode, chart sheet | missing (no such feature yet) |
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, formula bar height, tooltips | missing |
@@ -159,11 +161,11 @@ keeps the original link and an edit can be undone in one step.
 
 Format Cells, Insert Function (search, Most Recently Used, All and each category), Find and
 Replace, Go To and Go To Special, Sort,
-Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
+Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup (margins and the page order), Goal
 Seek, Scenario Manager, Data Analysis, Forecast Sheet, Macros (macros, Automate scripts and a
 note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
 editor (Excel's VBA editor has no counterpart here) and others exist. Missing or partial: Options,
-Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
+Solver, Power Query editor, Insert Object, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker. Like Excel's, every dialog opens centred and moves by its
 title bar, keeping its place while it is open (#1250).
 Go To lists the named ranges of every sheet (a name scoped to another sheet as `Sheet2!Name`) and
@@ -196,6 +198,13 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Python mode edits a cell's code in the formula bar's code editor (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell), with the PY badge beside fx; its keys apply in input order, also several in one frame, and Ctrl+Enter commits through `python.set` (empty code clears the cell), keeping the code and showing the command's message when the code is refused |
+| 2026-11-02 | minor | Insert › Symbols: Equation split button (access keys N E), a gallery of examples, and an equation editor with quick-insert buttons, the error underlined at its position and a live preview; double-clicking an equation edits it |
+| 2026-11-02 | minor | Floating objects: one selection for charts, pictures, shapes and slicers, eight resize handles with matching cursors (right-to-left sheets included), Escape drops the selection |
+| 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
+| 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |
+| 2026-11-01 | minor | Formulas › Error Checking › Trace Error (`formulas.traceError`): red arrows from the cell an error starts in to the selected cell, through the first reference showing the same error at each step, and blue arrows from that cell's own references, as measured in Excel; the command returns the source and the arrows |
+| 2026-11-01 | minor | Trace arrows stay when the sheet is zoomed (View › Zoom, the status bar, Ctrl+wheel), as in Excel; every zoom used to remove them (#3097) |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |

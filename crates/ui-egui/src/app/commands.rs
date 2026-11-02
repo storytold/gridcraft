@@ -46,8 +46,20 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // The macro editor's unsaved draft is part of its workbook: closing the workbook asks
+        // about it first, and goes on once the editor has closed. A close asked while it is
+        // asking waits for the answer, or is refused when it asks for a different close.
+        if matches!(id, "file.close" | "window.close")
+            && let Some(r) = crate::macro_editor::ask_before_closing(self, id, &params)
+        {
+            return r;
+        }
         let before = self.session.active_window();
+        let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        if let Some(from) = zoom_from {
+            crate::grid::Trace::keep_through_zoom(self, from);
+        }
         if id.starts_with("file.") && self.session.active_window() != before {
             // File › New or Open from the Backstage view: the window it was in goes back to its sheet.
             self.backstage = None;
@@ -77,7 +89,7 @@ impl SheetApp {
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
-            self.selected_chart = Some(chart);
+            self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Chart, chart));
         }
         if id == "file.exportPdf"
             && let Ok(r) = &r
@@ -234,6 +246,21 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pythonMode" => {
+                // `{"on": true}` starts Python mode on the active cell (or switches the edit in
+                // progress to it), `{"on": false}` leaves it; without `on` it switches. A start
+                // that is refused (a locked cell, a cell inside a spill, hidden code) is an error
+                // with the reason, not `{"on": false}`.
+                let on = self.editor.as_ref().is_some_and(|e| e.python);
+                let want = p.get("on").and_then(Json::as_bool).unwrap_or(!on);
+                if want != on {
+                    self.toggle_python_mode();
+                    if want && !self.editor.as_ref().is_some_and(|e| e.python) {
+                        return Some(Err(self.python_mode_refused()));
+                    }
+                }
+                Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -259,6 +286,7 @@ impl SheetApp {
     pub fn after_engine(&mut self) {
         // The requests belong to the window the command left active.
         self.follow_active_window();
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -280,6 +308,7 @@ impl SheetApp {
                 }
             }
         }
+        self.follow_open_draft();
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
