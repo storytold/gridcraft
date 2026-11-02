@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-25 · **Change:** minor (recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-10-31 · **Change:** minor (PDF font reads require explicit macro permission and approval disclosure; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -106,7 +106,11 @@ refused rather than read as the header.
    printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
-   `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
+   `path`) needs the command in the macro's `permissions`. Explicit `fonts` or `fontFamilies`
+   in `file.exportPdf` or `file.print` also require that command's permission, even without an
+   output path. Approval states that the step reads and embeds local font files, separately from
+   writing an output file. Unresolved font selections are classified before their tokens resolve.
+   Any `path` other than `null` counts,
    including a blank one and a token, and the policy is checked again on the parameters as they
    are when the step runs. A macro that touches files, or that came with a workbook opened from
    a file, runs once the person approves it: the call fails with `approve: …` and runs with
@@ -324,3 +328,9 @@ recorded. A workbook can hold a script and a macro with the same name.
 
 A VBA project in an `.xlsm` or `.xltm` file is preserved on save and never run. GridCraft macros
 are stored apart from it.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-31 | minor | PDF exports disclose and require approval for local font reads, including byte-only output and named or tokenized font selections |

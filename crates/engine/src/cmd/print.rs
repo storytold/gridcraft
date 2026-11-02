@@ -4,8 +4,8 @@
 //! split into bands of rows and columns that fit the printable area at the page scale, honouring
 //! manual breaks, repeated title rows/columns, headings, Fit To and centring, and the pages follow
 //! the sheet's page order ("down, then over" by default, or "over, then down"). Each page is
-//! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (fonts mapped
-//! to the standard 14 PDF fonts), merged cells, wrapping, overflow into empty neighbours,
+//! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (using
+//! standard PDF fonts or custom faces), merged cells, wrapping, overflow into empty neighbours,
 //! conditional formats, table styles, charts, images, shapes and sparklines. Headers and footers
 //! support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z` codes.
 
@@ -16,7 +16,7 @@ use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId,
     StyleTable, Underline, VAlign, Visibility, Workbook,
 };
-use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
+use gridcraft_pdf::{Font, MAX_FONT_BYTES, MAX_FONT_FAMILIES, MAX_TOTAL_FONT_BYTES, Page, PdfDoc, Point, Rect, Rgb, TextFonts, UnicodeFont};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
@@ -30,7 +30,8 @@ mod text;
 use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
 use header_footer::draw_header_footer;
 pub use header_footer::{
-    HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
+    HF_FIELDS, HfContext, HfRun, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer,
+    split_header_footer,
 };
 /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
 type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
@@ -51,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}, fontFamilies?: {workbookFamily: {regular: path, bold?: path, italic?: path, boldItalic?: path}}} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup. fonts replaces all text with embeddable TrueType faces for this export; omitted styles use regular. fontFamilies preserves workbook family names with per-family faces (max 32 families, 256 MiB total).",
             has_doc,
             export_pdf
         ),
@@ -60,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}, fontFamilies?: {workbookFamily: {regular: path, bold?: path, italic?: path, boldItalic?: path}}} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
             has_doc,
             print
         ),
@@ -92,7 +93,12 @@ pub const MAX_PAGES: usize = 2000;
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
-    let mut doc = PdfDoc::new();
+    let (doc, n) = render_document(wb, layouts, file, path, TextFonts::system());
+    (doc.finish(), n)
+}
+
+fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, fonts: TextFonts) -> (PdfDoc, usize) {
+    let mut doc = PdfDoc::with_text_fonts(fonts);
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
@@ -167,17 +173,83 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    (doc, n)
 }
 
 // ---------------------------------------------------------------- commands
 
+/// Fonts are local to one export: never change the process-wide fallback loader or workbook.
+fn export_fonts(p: &Json, cmd: &str) -> Result<TextFonts> {
+    let families = match p.get("fontFamilies") {
+        None => None,
+        Some(value) => Some(value.as_object().ok_or_else(|| bad(cmd, "fontFamilies must map workbook family names to font faces"))?),
+    };
+    if families.is_some_and(|f| f.len() > MAX_FONT_FAMILIES) {
+        return Err(bad(cmd, "at most 32 PDF font families are supported per export"));
+    }
+    let mut budget = MAX_TOTAL_FONT_BYTES;
+    let mut fonts = match p.get("fonts") {
+        Some(value) => {
+            let [regular, bold, italic, bold_italic] = export_faces(value, "fonts", cmd, &mut budget)?;
+            let regular = regular.ok_or_else(|| bad(cmd, "fonts.regular is required"))?;
+            TextFonts::custom(regular, bold, italic, bold_italic)
+        }
+        None => TextFonts::system(),
+    };
+    if let Some(families) = families {
+        for (name, value) in families {
+            let name = name.trim();
+            if name.is_empty() || name.chars().take(256).count() > 255 {
+                return Err(bad(cmd, "font family names must contain 1 to 255 characters"));
+            }
+            let label = format!("fontFamilies.{name}");
+            let [regular, bold, italic, bold_italic] = export_faces(value, &label, cmd, &mut budget)?;
+            let regular = regular.ok_or_else(|| bad(cmd, format!("{label}.regular is required")))?;
+            fonts.add_family(name, regular, bold, italic, bold_italic).map_err(|e| bad(cmd, e))?;
+        }
+    }
+    Ok(fonts)
+}
+
+fn export_faces(value: &Json, label: &str, cmd: &str, budget: &mut u64) -> Result<[Option<std::sync::Arc<UnicodeFont>>; 4]> {
+    let faces = value.as_object().ok_or_else(|| bad(cmd, format!("{label} must be an object with a regular font path")))?;
+    if let Some(key) = faces.keys().find(|k| !["regular", "bold", "italic", "boldItalic"].contains(&k.as_str())) {
+        return Err(bad(cmd, format!("unknown {label} key: {key}")));
+    }
+    if !faces.contains_key("regular") {
+        return Err(bad(cmd, format!("{label}.regular is required")));
+    }
+    let mut out = [None, None, None, None];
+    for (slot, key) in ["regular", "bold", "italic", "boldItalic"].into_iter().enumerate() {
+        let Some(value) = faces.get(key) else {
+            continue;
+        };
+        let path =
+            value.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("{label}.{key} must be a non-empty font file path")))?;
+        let bytes = crate::io::read_file_limited(path, (MAX_FONT_BYTES as u64).min(*budget))?;
+        *budget = budget.saturating_sub(bytes.len() as u64);
+        let face = UnicodeFont::parse(bytes).ok_or_else(|| bad(cmd, format!("{label}.{key}: {path}: invalid or unsupported font; use a TrueType outline font permitting outline embedding (no CFF, collections or bitmap-only fonts)")))?;
+        if let Some(entry) = out.get_mut(slot) {
+            *entry = Some(std::sync::Arc::new(face));
+        }
+    }
+    Ok(out)
+}
+
 fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
+    let fonts = export_fonts(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    let (doc, pages) = render_document(&d.wb, &lays, &d.display_title(), &path, fonts);
+    if doc.text_limit_exceeded() {
+        return Err(bad(cmd, "PDF font exceeds the limit of 65,535 distinct Unicode characters across exported pages"));
+    }
+    if let Some(c) = doc.missing_glyph() {
+        return Err(bad(cmd, format!("custom PDF font has no glyph for U+{:04X} ({c}); supply a face covering the exported text", c as u32)));
+    }
+    Ok((doc.finish(), pages))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {

@@ -26,5 +26,6 @@ gridcraft-pdf = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+gridcraft-pdf = { workspace = true, features = ["test-support"] }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }

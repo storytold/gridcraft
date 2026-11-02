@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -19,7 +19,7 @@ including tests, 2026-10-10.
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
-| L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
+| L2 | `pdf` | ~1k | PDF 1.7 writer (standard fonts, embedded TrueType, CID fallback, vectors, images); per-document text faces and advance widths for print/export; font setters reject changes after the first page, while late system-loader registration applies to future documents and measurements |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
@@ -48,6 +48,17 @@ including tests, 2026-10-10.
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+
+PDF export keeps command validation and document construction in `engine/cmd/print.rs`;
+layout, drawing, text, objects and headers/footers live in its child modules. Each uses the
+same document-local font set for rendering and measurement. PDF drawing uses the writer's
+`Point`/`Rect` geometry API, including the origin of each rotated fallback run. The native fallback
+provider and shared cell-font candidates live in `pdf/system_fonts.rs`, using bounded file reads. Desktop font setup and the headless CLI share
+this dependency-free provider; the CLI does not depend on `ui-egui` or a windowing toolkit.
+Header/footer expansion retains ordered font/style runs (up to 40,000 UTF-8 bytes per section).
+PDF fallback loading retains up to four faces: primary and alternate regular/bold pairs.
+A face covering both Greek and Cyrillic wins; otherwise text is split into covered runs,
+and measurement and rotated drawing use the same faces and advances.
 
 ## UI building blocks
 
@@ -174,8 +185,19 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Move native PDF fallback loading and shared cell-font candidates into the dependency-free PDF crate; remove the CLI UI dependency; document MCP filesystem authority |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
+| 2026-10-31 | minor | Classify explicit PDF fonts as local file reads in macro approval, with or without an output path; preserve sandbox denial without permission |
+| 2026-10-29 | trivial | Reconcile PDF font export architecture with the upstream macro engine and hidden macro storage |
+| 2026-10-28 | minor | Reconcile custom PDF fonts with upstream explicit imports, Clippy gates and Point/Rect drawing arguments; preserve mixed-script rotated run origins and font regressions |
+| 2026-10-27 | minor | PDF headers/footers preserve per-run family, weight, slant and size with combined line alignment; automatic fallback prefers Greek+Cyrillic faces and retains separate script faces when needed, with matching mixed-run metrics and bounded expanded sections |
+| 2026-10-27 | minor | Preserve PDF font selection, measurement, validation and regressions across the upstream print/theme module split; isolate the bounded system fallback provider in theme/pdf.rs |
+| 2026-10-25 | minor | PDF font setters reject changes after the first page to keep shared resources and glyph mappings consistent; fallback lookups before loader registration no longer prevent later loading, and existing documents retain their faces |
+| 2026-10-25 | trivial | Correct metadata emphasis and cache immutable default PDF text faces during width measurement |
+| 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
+| 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
+| 2026-10-25 | minor | Per-document PDF text faces with matching layout metrics; engine validates and reads export font paths within the file sandbox and a 64 MiB cap |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |

@@ -652,13 +652,23 @@ fn script_sandbox_check(path: &str) -> Result<()> {
 
 /// The largest native file the reader still touches: its own cap plus one, used to stop
 /// reads whose bytes arrive faster than metadata can claim (device files, growing files).
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    read_file_limited(path, MAX_READ_BYTES)
+}
+
+/// Reads a regular file within the caller's byte budget, preserving script sandbox checks.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_file_limited(path: &str, limit: u64) -> Result<Vec<u8>> {
     use std::io::Read;
+    let limit = limit.min(MAX_READ_BYTES);
     script_sandbox_check(path)?;
+    // Reject known pipes/devices before opening: opening a FIFO can otherwise block forever.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -666,16 +676,26 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
     let mut buf = Vec::new();
-    let mut limited = (&f).take(MAX_READ_BYTES + 1);
+    let mut limited = (&f).take(limit + 1);
     limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if buf.len() as u64 > MAX_READ_BYTES {
-        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
+    if buf.len() as u64 > limit {
+        let message = if limit == MAX_READ_BYTES {
+            "files larger than 2 GB aren't supported".into()
+        } else {
+            format!("{path}: file exceeds the {limit}-byte limit")
+        };
+        return Err(EngineError::Other(message));
     }
     Ok(buf)
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    read_file_limited(path, MAX_READ_BYTES)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_file_limited(path: &str, _limit: u64) -> Result<Vec<u8>> {
     script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }

@@ -23,7 +23,7 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | Subcommand | Example |
 |---|---|
 | `info <file> [--json]` | `gridcraft-cli info book.xlsx` — sheets, used ranges, cell counts, tables, charts, names. |
-| `convert <in> <out> [--sheet NAME]` | `gridcraft-cli convert book.xlsx data.csv --sheet Sales` — output format from the extension: `.xlsx`, `.csv`, `.tsv`, `.json`, `.html`. |
+| `convert <in> <out> [--sheet NAME] [--pdf-font FONT.ttf]` | `gridcraft-cli convert book.xlsx data.csv --sheet Sales` — output format from the extension: `.xlsx`, `.csv`, `.tsv`, `.json`, `.html`, `.pdf`. |
 | `eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]` | `gridcraft-cli eval '=PMT(5%/12,360,-300000)'`; `gridcraft-cli eval '=SUM(B2:B9)' --in book.xlsx` — formulas in English with `,` between arguments. A formula that couldn't be entered in a cell (it doesn't parse, or a function gets the wrong number of arguments) is an error saying why; an unknown function is `#NAME?`, as in Excel. |
 | `cat <file> [--range R] [--sheet S] [--formulas] [--csv]` | `gridcraft-cli cat book.xlsx --range A1:F20` — aligned table of displayed values. |
 | `check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]` | `gridcraft-cli check corpus/` — calc oracle and XLSX round-trip fidelity, see below. |
@@ -33,6 +33,70 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
 | `version` | Prints `gridcraft-cli <version>`. |
+
+## PDF fonts
+
+To preserve multiple fonts in a workbook, map each workbook family name to local TrueType files.
+Repeat `--pdf-font-family` for each family; names are matched case-insensitively after trimming:
+
+```sh
+gridcraft-cli convert book.xlsx report.pdf \
+    --pdf-font-family 'Body Sans=/path/to/Body-Regular.ttf' \
+    --pdf-font-family-bold 'Body Sans=/path/to/Body-Bold.ttf' \
+    --pdf-font-family 'Heading Sans=/path/to/Heading-Regular.ttf' \
+    --pdf-font-family-italic 'Heading Sans=/path/to/Heading-Italic.ttf'
+```
+
+Use the family names stored in Excel, which may differ from the font files' names. Each mapped
+family requires a regular face. `--pdf-font-family-bold`, `--pdf-font-family-italic` and
+`--pdf-font-family-bold-italic` supply its optional styles; omitted styles use that family's regular
+face. Duplicate family/style options are errors. These mappings preserve distinct families and
+advance widths in cells, shapes and quoted header/footer font declarations (`&"Family,Style"`).
+Charts and headings without a stored family name keep their existing fonts.
+
+CLI scripts, MCP and the control channel use the same engine parameters:
+
+```sh
+gridcraft-cli run --in book.xlsx \
+    --cmd 'file.exportPdf={"path":"report.pdf","fontFamilies":{"Body Sans":{"regular":"/path/to/Body-Regular.ttf","bold":"/path/to/Body-Bold.ttf"},"Heading Sans":{"regular":"/path/to/Heading-Regular.ttf"}}}'
+```
+
+`file.print` accepts the same `fontFamilies` object. Mappings apply only to that export and do
+not change the workbook or later exports. Text alignment, wrapping and shrink-to-fit use each
+selected face's advance widths; row and column sizes remain those of the workbook.
+
+To replace all otherwise unmapped families with a single family, use the existing global options:
+
+```sh
+gridcraft-cli convert book.xlsx report.pdf \
+    --pdf-font /path/to/Regular.ttf \
+    --pdf-font-bold /path/to/Bold.ttf \
+    --pdf-font-italic /path/to/Italic.ttf \
+    --pdf-font-bold-italic /path/to/BoldItalic.ttf
+```
+
+Their engine parameter is `fonts: {"regular":"/path/to/Regular.ttf", "bold":"/path/to/Bold.ttf"}`.
+`--pdf-font` is required when supplying a global style option. You can combine global fonts with
+named mappings: named families take precedence; the global choice covers every other family,
+including charts and headings. Without a global choice, unmapped families use the existing standard
+PDF fonts and Unicode fallbacks. All these CLI options require `.pdf` output.
+
+Font paths belong to the host performing the export, including when called over MCP or the control
+channel. At most 32 mapped families and 256 MiB of font faces are accepted per export, with a 64 MiB
+limit per face. Each embedded face accepts at most 65,535 distinct Unicode characters across
+all exported pages. Distinct characters remain copyable even when the font shares their glyph.
+Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
+embedding, and characters absent from a selected face return an error before the output file is
+written. TrueType outlines in an OpenType container are accepted; extensions do not validate font
+bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures, bidi or
+variable-font axis selection; use static faces and scripts that need no complex shaping. No font
+files are bundled or added to the repository.
+
+Without explicit fonts, Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
+registered system TrueType fallback shared with the desktop. The loader lives in the dependency-free
+PDF crate; building the headless CLI does not require the UI crate or its windowing dependencies.
+Text that fallback cannot cover retains the existing non-embedded CID path, whose rendering
+depends on the PDF viewer's fonts.
 
 ## `run`
 

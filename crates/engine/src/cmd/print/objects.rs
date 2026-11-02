@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -88,7 +88,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         let (x, y, _, _) = place(r);
         let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
+        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure(pg.text_fonts()));
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
     pg.restore();
@@ -146,11 +146,11 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let fm = &shp.format;
     let text_box = shp.kind == ShapeKind::TextBox;
     let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+    let font = pg.text_fonts().font(fm.font.as_deref().unwrap_or(""), fm.bold, fm.italic);
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let lines = wrap_lines(pg.text_fonts(), &shp.text, font, size, (w - 4.0 * b.k).max(size));
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -158,7 +158,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lw = pg.text_width(font, size, l);
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,

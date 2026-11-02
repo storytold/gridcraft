@@ -258,11 +258,6 @@ pub(super) fn try_load(_paths: &[(&str, u32)]) -> Option<FontData> {
     None
 }
 
-fn home_fonts(file: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    format!("{home}/Library/Fonts/{file}")
-}
-
 /// Every file in `files` under every directory in `dirs`, directory first, in the same order a
 /// nested loop over the directories would add them.
 pub(super) fn in_dirs(dirs: &[&str], files: &[&str]) -> Vec<String> {
@@ -306,55 +301,7 @@ pub(super) fn candidates(role: &str) -> Vec<(String, u32)> {
             add("/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf".into(), 0);
         }
         "cell" | "cell-bold" | "cell-italic" | "cell-bold-italic" => {
-            let (carlito, calibri_win, calibri_mac, arial_mac, arial_win, lib, dejavu) = match role {
-                "cell" => {
-                    ("Carlito-Regular.ttf", "calibri.ttf", "Calibri.ttf", "Arial.ttf", "arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf")
-                }
-                "cell-bold" => (
-                    "Carlito-Bold.ttf",
-                    "calibrib.ttf",
-                    "Calibri Bold.ttf",
-                    "Arial Bold.ttf",
-                    "arialbd.ttf",
-                    "LiberationSans-Bold.ttf",
-                    "DejaVuSans-Bold.ttf",
-                ),
-                "cell-italic" => (
-                    "Carlito-Italic.ttf",
-                    "calibrii.ttf",
-                    "Calibri Italic.ttf",
-                    "Arial Italic.ttf",
-                    "ariali.ttf",
-                    "LiberationSans-Italic.ttf",
-                    "DejaVuSans-Oblique.ttf",
-                ),
-                _ => (
-                    "Carlito-BoldItalic.ttf",
-                    "calibriz.ttf",
-                    "Calibri Bold Italic.ttf",
-                    "Arial Bold Italic.ttf",
-                    "arialbi.ttf",
-                    "LiberationSans-BoldItalic.ttf",
-                    "DejaVuSans-BoldOblique.ttf",
-                ),
-            };
-            // Calibri if the user has it installed system-wide (never from an Office bundle).
-            add(format!("/Library/Fonts/{calibri_mac}"), 0);
-            add(home_fonts(calibri_mac), 0);
-            add(format!("{win}\\{calibri_win}"), 0);
-            for p in in_dirs(&lin, &[&format!("crosextra/{carlito}"), &format!("carlito/{carlito}")]) {
-                add(p, 0);
-            }
-            // Fedora keeps each family in its own package folder, as for the UI fonts (#54).
-            add(format!("/usr/share/fonts/google-carlito-fonts/{carlito}"), 0);
-            add(home_fonts(carlito), 0);
-            add(format!("{mac_sup}/{arial_mac}"), 0);
-            add(format!("{win}\\{arial_win}"), 0);
-            for p in in_dirs(&lin, &[&format!("liberation/{lib}"), &format!("dejavu/{dejavu}")]) {
-                add(p, 0);
-            }
-            add(format!("/usr/share/fonts/liberation-sans-fonts/{lib}"), 0);
-            add(format!("/usr/share/fonts/dejavu-sans-fonts/{dejavu}"), 0);
+            return gridcraft_engine::pdf::system_cell_font_candidates(role.contains("bold"), role.contains("italic"));
         }
         "serif" => {
             add(format!("{mac_sup}/Times New Roman.ttf"), 0);

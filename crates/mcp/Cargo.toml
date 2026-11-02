@@ -12,3 +12,6 @@ workspace = true
 gridcraft-engine = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+gridcraft-pdf = { workspace = true, features = ["test-support"] }

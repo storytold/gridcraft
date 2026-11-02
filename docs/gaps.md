@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (§4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§4: chart data tables with XLSX round-trip and print/PDF; §13: Solver Options, Load/Save Model and Reset All; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; §8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -54,10 +54,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** complete script coverage, complex shaping (Arabic, Devanagari, Thai), bidi and subset font embedding in PDF.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  Devanagari. PDF embeds explicit TrueType faces through CLI/MCP and registered Greek/Cyrillic fallback faces (adapted from #1555); uncovered text keeps the viewer-dependent CID fallback. Font selection does not add shaping or bidi.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -189,6 +189,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
+| 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
+| 2026-10-25 | minor | PDF exports accept per-request regular, bold, italic and bold-italic TrueType faces through CLI/MCP, with matching text measurement and validation; adapted embedding from #1555 while retaining the CID fallback |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
