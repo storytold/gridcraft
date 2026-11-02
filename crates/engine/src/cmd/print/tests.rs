@@ -17,6 +17,25 @@ fn contains(hay: &[u8], needle: &str) -> bool {
 }
 
 #[test]
+fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 1234], ["Q2", 5678]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "format": "#,##0.00"})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "at": "D2", "type": "column"})).unwrap();
+    let (off, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    let count = |bytes: &[u8], text: &str| String::from_utf8_lossy(bytes).matches(text).count();
+    s.execute("chart.set", json!({"dataTable": true})).unwrap();
+    let (on, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(count(&on, "(1,234.00) Tj"), count(&off, "(1,234.00) Tj") + 1);
+    assert_eq!(count(&on, "(5,678.00) Tj"), count(&off, "(5,678.00) Tj") + 1);
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1000+111"})).unwrap();
+    let (updated, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert!(!contains(&updated, "(1,234.00) Tj"));
+    assert!(count(&updated, "(1,111.00) Tj") >= 2, "cell and chart data table both print the new value");
+}
+
+#[test]
 fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();

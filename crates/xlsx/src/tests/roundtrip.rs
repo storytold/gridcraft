@@ -407,6 +407,7 @@ fn sample() -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: Some("Region".into()),
