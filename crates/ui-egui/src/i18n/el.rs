@@ -142,6 +142,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Κατάργηση βελών",
         "Show Formulas" => "Εμφάνιση τύπων",
         "Error Checking" => "Έλεγχος σφαλμάτων",
+        "Trace Error" => "Εντοπισμός σφάλματος",
         "Circular References" => "Κυκλικές αναφορές",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",

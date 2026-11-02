@@ -153,23 +153,56 @@ pub struct FillTag {
     pub undo_len: usize,
 }
 
-/// Trace Precedents / Trace Dependents arrows: they stay on the cell they were traced from, on its
-/// sheet, while the selection moves. They go away when anything but a zoom changes the workbook
-/// (`revision`): Excel removes them on edits to the traced formula and on inserted, deleted or
-/// moved cells, this also on a new value in a precedent.
+/// Trace Precedents, Trace Dependents and Trace Error arrows: they stay on the cells they were
+/// traced from while the selection moves. They go away when anything but a zoom changes the
+/// workbook (`revision`): Excel removes them on edits to the traced formula and on inserted,
+/// deleted or moved cells, this also on a new value in a precedent.
 pub struct Trace {
     pub uid: u64,
     pub revision: u64,
-    pub sheet: usize,
-    pub cell: CellRef,
-    /// The command's result: `{"sheet", "range"}` precedents or `{"sheet", "cell"}` dependents.
-    pub items: serde_json::Value,
+    pub arrows: Vec<TraceArrow>,
+}
+
+/// One trace arrow, from a cell or range (boxed) to a cell, each on its sheet. An arrow is drawn
+/// on a sheet that holds both its ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TraceArrow {
+    pub from: (usize, RangeRef),
+    pub to: (usize, RangeRef),
+    /// A link between two cells showing the error Trace Error follows, drawn in the error colour.
+    pub error: bool,
 }
 
 impl Trace {
-    /// A trace of the active cell, just run.
-    pub fn new(app: &SheetApp, items: serde_json::Value) -> Option<Trace> {
-        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet(), cell: d.selection.active, items })
+    /// The arrows of a trace of the active cell, from the command's result: `{"sheet", "range"}`
+    /// precedents (Trace Precedents), `{"sheet", "cell"}` dependents (Trace Dependents), or
+    /// `{"arrows": [{"from", "to", "kind"}]}` (Trace Error). Ends on a sheet the workbook no
+    /// longer has are left out.
+    pub fn new(app: &SheetApp, result: serde_json::Value) -> Option<Trace> {
+        let d = app.session.active()?;
+        let traced = (d.wb.active_sheet(), RangeRef::new(d.selection.active, d.selection.active));
+        let end = |v: &serde_json::Value| {
+            let sheet = match v["sheet"].as_str() {
+                Some(name) => d.wb.sheet_index(name)?,
+                None => traced.0,
+            };
+            Some((sheet, RangeRef::parse(v["range"].as_str().or(v["cell"].as_str())?)?))
+        };
+        let arrows = match result.get("arrows").and_then(|a| a.as_array()) {
+            Some(list) => {
+                list.iter().filter_map(|a| Some(TraceArrow { from: end(&a["from"])?, to: end(&a["to"])?, error: a["kind"] == "error" })).collect()
+            }
+            None => result
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|it| {
+                    let (from, to) = if it.get("range").is_some() { (end(it)?, traced) } else { (traced, end(it)?) };
+                    Some(TraceArrow { from, to, error: false })
+                })
+                .collect(),
+        };
+        Some(Trace { uid: d.uid, revision: d.revision, arrows })
     }
 
     /// The active document's uid and revision, to hand [`Trace::keep_through_zoom`] after a zoom.

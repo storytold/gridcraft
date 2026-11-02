@@ -147,6 +147,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pfeile entfernen",
         "Show Formulas" => "Formeln anzeigen",
         "Error Checking" => "Fehlerüberprüfung",
+        "Trace Error" => "Spur zum Fehler",
         "Circular References" => "Zirkelbezüge",
         "Evaluate Formula" => "Formel auswerten",
         "Watch Window" => "Überwachungsfenster",

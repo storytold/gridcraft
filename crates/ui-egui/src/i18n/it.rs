@@ -150,6 +150,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Rimuovi frecce",
         "Show Formulas" => "Mostra formule",
         "Error Checking" => "Controllo errori",
+        "Trace Error" => "Individua errore",
         "Circular References" => "Riferimenti circolari",
         "Evaluate Formula" => "Valuta formula",
         "Watch Window" => "Finestra controlli",
