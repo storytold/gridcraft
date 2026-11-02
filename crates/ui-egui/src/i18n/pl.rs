@@ -104,6 +104,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tekst jako\nkolumny",
         "Link" => "Łącze",
         "Symbol" => "Symbol",
+        "Equation" => "Równanie",
+        "Insert New Equation..." => "Wstaw nowe równanie",
         "Sparklines" => "Wykresy przebiegu w czasie",
         "Checkbox" => "Pole wyboru",
         "Insert checkboxes in the selected cells" => "Wstaw pola wyboru w zaznaczonych komórkach",
