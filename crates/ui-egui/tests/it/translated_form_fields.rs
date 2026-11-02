@@ -40,3 +40,104 @@ fn notes_with_a_pipe_show_in_full() {
         assert!(h.query_by_label_contains(url).is_some(), "{language}: the link note lost part of {url}");
     }
 }
+
+#[test]
+fn chart_format_pane_is_translated() {
+    let mut h = harness();
+    let session = &mut h.state_mut().session;
+    session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    session.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3"})).unwrap();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.state_mut().selected_chart = Some(chart["chart"].as_u64().unwrap() as u32);
+    h.state_mut().grid.pane = Some("formatChart".into());
+    h.run_steps(2);
+    // One section at a time: open together they overflow the pane and the clipped widgets leave the tree.
+    let sections: [(&str, &[&str]); 7] = [
+        ("Chart Title", &[]),
+        ("Chart Type", &["Stacked Column", "Doughnut"]),
+        ("Legend", &["Legend|None", "Bottom", "Top", "Left", "Right"]),
+        ("Elements", &["Data Labels", "Gridlines", "Horizontal axis title:"]),
+        ("Series", &["Fill…"]),
+        ("Colors & Layout", &["Colorful", "Monochromatic", "Accent1", "Layout {n}"]),
+        ("Size", &[]),
+    ];
+    let triangle = egui::accesskit::Role::DisclosureTriangle;
+    for (section, labels) in sections {
+        h.get_by_role_and_label(triangle, Language::Fr.tr(section)).click();
+        h.run_steps(2);
+        for english in labels {
+            let translated = Language::Fr.tr(english).replace("{n}", "1");
+            assert!(h.query_all_by_label(&translated).next().is_some(), "{section}: no {translated}");
+            let english = english.rsplit_once('|').map_or(*english, |(_, label)| label).replace("{n}", "1");
+            assert!(h.query_all_by_label(&english).next().is_none(), "{section}: {english} is untranslated");
+        }
+        h.get_by_role_and_label(triangle, Language::Fr.tr(section)).click();
+        h.run_steps(2);
+    }
+}
+
+#[test]
+fn custom_dialogs_are_translated() {
+    let dialogs: [(&str, &[&str]); 4] = [
+        ("find", &["Find what:", "Match case", "Match entire cell contents", "Find All", "Find Next"]),
+        ("goalSeek", &["Set cell:", "To value:", "By changing cell:"]),
+        ("nameManager", &["New…", "Edit…"]),
+        // Also the fields' accessible names and the goal radio buttons.
+        (
+            "solver",
+            &["Set Objective:", "Value Of:", "By Changing Variable Cells:", "Constraint Cell Reference", "Constraint Value", "Constraint Operator"],
+        ),
+    ];
+    for (dialog, labels) in dialogs {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+        h.state_mut().open_dialog(dialog, json!({}));
+        h.run_steps(3);
+        for english in labels {
+            let translated = Language::Fr.tr(english);
+            assert_ne!(translated, *english, "{dialog}: no French for {english}");
+            assert!(h.query_all_by_label_contains(translated).next().is_some(), "{dialog}: no {translated}");
+            assert!(h.query_all_by_label(english).next().is_none(), "{dialog}: {english} is untranslated");
+        }
+    }
+}
+
+#[test]
+fn command_search_matches_translated_and_english_labels() {
+    // (typed, a result that must show): French labels, typed without case or accents, and English.
+    for (typed, shown) in [
+        ("gras", "Gras"),
+        ("figer", "Figer les volets"),
+        ("graphique", "graphique"),
+        ("bold", "Gras"),
+        ("INSERER UN GRAPH", "Insérer un graphique"),
+        ("accueil", "Accueil"),
+    ] {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+        h.input_mut().events.push(egui::Event::Text(typed.into()));
+        h.run_steps(3);
+        // Inside the dialog: the ribbon's Bold button also reads "Gras".
+        let dialog = h.get_by_role_and_label(egui::accesskit::Role::Window, Language::Fr.tr("Search Commands"));
+        assert!(dialog.query_all_by_label_contains(shown).next().is_some(), "{typed}: no result showing {shown}");
+    }
+}
+
+#[test]
+fn command_search_lists_every_menu_match() {
+    // "accueil" matches every Home command through the menu path: more than one screenful, all reachable.
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    h.input_mut().events.push(egui::Event::Text("accueil".into()));
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::End);
+    h.run_steps(2);
+    let last = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
+    assert!(last >= 40, "Ctrl+End reached result {last}");
+}

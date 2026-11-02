@@ -1,5 +1,6 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
+use crate::widgets::tr;
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
@@ -13,7 +14,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut what = d.values.get("what").and_then(Json::as_str).unwrap_or("").to_string();
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        let label = ui.label("Find what:");
+        let label = ui.label(tr(ui, "Find what:"));
         let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0)).labelled_by(label.id);
         // Like Excel, the cursor starts in "Find what" - asked for once, so clicking another field still works.
         if !d.values.contains_key("focused") {
@@ -23,7 +24,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
     if d.tab == "Replace" {
         ui.horizontal(|ui| {
-            let label = ui.label("Replace with:");
+            let label = ui.label(tr(ui, "Replace with:"));
             ui.add(egui::TextEdit::singleline(&mut with).desired_width(244.0)).labelled_by(label.id);
         });
     }
@@ -31,9 +32,9 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut whole = d.values.get("wholeCell").and_then(Json::as_bool).unwrap_or(false);
     let mut wb = d.values.get("within").and_then(Json::as_str) == Some("workbook");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut case, "Match case");
-        ui.checkbox(&mut whole, "Match entire cell contents");
-        ui.checkbox(&mut wb, "Within workbook");
+        ui.checkbox(&mut case, tr(ui, "Match case"));
+        ui.checkbox(&mut whole, tr(ui, "Match entire cell contents"));
+        ui.checkbox(&mut wb, tr(ui, "Within workbook"));
     });
     d.values.insert("what".into(), json!(what));
     d.values.insert("with".into(), json!(with));
@@ -43,7 +44,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": if wb { "workbook" } else { "sheet" }});
     ui.horizontal(|ui| {
         if d.tab == "Replace" {
-            if ui.button("Replace All").clicked() {
+            if ui.button(tr(ui, "Replace All")).clicked() {
                 let mut p = base.clone();
                 p["with"] = json!(with);
                 p["all"] = json!(true);
@@ -52,7 +53,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
                 }
             }
-            if ui.button("Replace").clicked() {
+            if ui.button(tr(ui, "Replace")).clicked() {
                 let mut p = base.clone();
                 p["with"] = json!(with);
                 p["all"] = json!(false);
@@ -60,12 +61,12 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 let _ = app.run("edit.find", base.clone());
             }
         }
-        if ui.button("Find All").clicked() {
+        if ui.button(tr(ui, "Find All")).clicked() {
             let mut p = base.clone();
             p["all"] = json!(true);
             d.result = app.run("edit.find", p).ok();
         }
-        if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+        if ui.button(tr(ui, "Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             if let Err(e) = app.run("edit.find", base.clone()) {
                 app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
             }
@@ -135,7 +136,7 @@ pub(super) fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
         ui.text_edit_singleline(&mut r).labelled_by(label.id).request_focus();
     });
     d.values.insert("reference".into(), json!(r.clone()));
-    if ui.button("Special…").clicked() {
+    if ui.button(tr(ui, "Special…")).clicked() {
         app.open_dialog("goToSpecial", json!({}));
         return;
     }

@@ -1,5 +1,6 @@
 use super::show::ok_cancel;
 use super::{Color32, Dialog, Icon, Json, Sense, SheetApp, Stroke, StrokeKind, icons, json, vec2};
+use crate::widgets::tr;
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.
 const ALL_CHARTS: [(&str, &str, &str); 21] = [
@@ -148,10 +149,10 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
                 let label = if name.is_empty() { format!("Series{}", i + 1) } else { name.clone() };
                 ui.label(if removed { egui::RichText::new(label).strikethrough().weak() } else { egui::RichText::new(label) });
                 if removed {
-                    if ui.small_button("Keep").clicked() {
+                    if ui.small_button(tr(ui, "Keep")).clicked() {
                         remove.retain(|x| *x != i);
                     }
-                } else if ui.add_enabled(kept > 1, egui::Button::new("Remove").small()).clicked() {
+                } else if ui.add_enabled(kept > 1, egui::Button::new(tr(ui, "Remove")).small()).clicked() {
                     remove.push(i);
                 }
             });

@@ -2,6 +2,7 @@
 use super::show::build_params;
 use super::show::{form_fields, ok_cancel};
 use super::{Dialog, Field, Icon, Json, SheetApp, json, vec2};
+use crate::widgets::tr;
 
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
@@ -184,7 +185,7 @@ pub(super) fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &
 pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let lang = app.ui.language;
     let mut header = d.values.get("header").and_then(Json::as_bool).unwrap_or(true);
-    ui.checkbox(&mut header, "My list has headers");
+    ui.checkbox(&mut header, tr(ui, "My list has headers"));
     d.values.insert("header".into(), json!(header));
     let mut levels: Vec<Json> = d.values.get("levels").and_then(Json::as_array).cloned().unwrap_or_default();
     // Columns of the region around the active cell, labelled with their header (or first value).

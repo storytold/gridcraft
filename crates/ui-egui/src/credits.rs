@@ -4,6 +4,7 @@
 
 use std::cmp::Ordering;
 
+use crate::widgets::tr;
 use egui::RichText;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,14 +215,14 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Show");
+        ui.label(tr(ui, "Show"));
         for m in NameMode::ALL {
             if ui.selectable_label(v.names == m, m.label()).clicked() {
                 v.names = m;
             }
         }
         ui.separator();
-        ui.label("Sort");
+        ui.label(tr(ui, "Sort"));
         craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 if ui.selectable_label(v.key == k, k.label().0).clicked() {
@@ -230,7 +231,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
                 }
             }
         });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text("Reverse the order").clicked() {
+        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(tr(ui, "Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
@@ -246,7 +247,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     ui.separator();
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
         if list.is_empty() {
-            ui.label("No contributor data was built into this copy.");
+            ui.label(tr(ui, "No contributor data was built into this copy."));
         } else if v.table {
             table(ui, &list, &mut v);
         } else {
@@ -296,7 +297,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
 pub fn models_ui(ui: &mut egui::Ui) {
     if MODELS.is_empty() {
-        ui.label("No model credits were built into this copy.");
+        ui.label(tr(ui, "No model credits were built into this copy."));
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
