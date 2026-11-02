@@ -548,6 +548,7 @@ fn chartex_parts_as_excel_expects_them() {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
