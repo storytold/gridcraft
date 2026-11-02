@@ -131,6 +131,9 @@ pub struct Out {
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
     pub table_id: u32,
+    /// Table ids already emitted to the package: a model id is kept only the first time it
+    /// appears (a duplicate or zero id gets a fresh unused one), so `table/@id` stays unique.
+    pub used_table_ids: std::collections::HashSet<u32>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -265,6 +268,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         comments: 0,
         persons: vec![],
         table_id: 0,
+        used_table_ids: Default::default(),
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),

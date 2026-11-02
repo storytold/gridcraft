@@ -1565,7 +1565,8 @@ mod tests {
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "B");
     }
-#[test]
+
+    #[test]
     /// A cell with an explicit General format inside a Text-formatted column keeps that
     /// override through a refresh: the clear must not remove the cell (a blank through
     /// `set_cell` would drop it, and the cell would fall back to the column's `@` before
@@ -1593,7 +1594,7 @@ mod tests {
         assert_eq!(b2.value, gridcraft_core::Value::from(42.0), "the number parsed as a number, not text");
     }
 
-#[test]
+    #[test]
     /// A refresh that ADDS a row in a Text-formatted column: the new row has no stored cell,
     /// so the check must read the effective style (column format inherited through
     /// style_id), or the page's leading apostrophe would be escaped twice into a `@` cell.
@@ -1617,7 +1618,7 @@ mod tests {
         assert_eq!(a1(&s, "B3"), "'00s", "the new row (no stored cell, column format) is not escaped twice");
     }
 
-#[test]
+    #[test]
     /// A refresh writes into the user's styled cells: a Text-formatted (`@`) destination
     /// stores input unchanged, so the apostrophe escape must be skipped there or a page
     /// value of `'90s` would refresh to `''90s`. A General cell still escapes.
@@ -1643,7 +1644,7 @@ mod tests {
         assert_eq!(b2.value, gridcraft_core::Value::text("'90s"));
     }
 
-#[test]
+    #[test]
     /// Page text that begins with an apostrophe imports with the apostrophe: typed input
     /// would read `'` as its text marker and store `90s` for a page cell of `'90s`, which
     /// no longer matches the page. The escape doubles the marker, and parsing takes one off.
@@ -1660,7 +1661,8 @@ mod tests {
         assert_eq!(a1(&s, "A2"), "'90s", "the apostrophe is stored, not stripped");
         assert_eq!(a1(&s, "B2"), "=SUM(1)", "the formula-looking text is stored as text");
     }
-#[test]
+
+    #[test]
     /// The connection's table id survives an XLSX save and reopen (the part's id is the
     /// model's Table.id, not a sequential number), so a refresh after reopening still
     /// finds and updates the imported table instead of dropping the connection.

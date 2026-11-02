@@ -668,3 +668,36 @@ fn an_entity_encoded_gridcraft_connection_is_removed() {
 
     assert!(!text.contains("gridcraftwebq") && !text.contains("&#x7d;"), "no marker survives");
 }
+
+#[test]
+/// Two tables sharing a model id (a copied sheet, say) never emit duplicate `table/@id`:
+/// the second gets the next unused value, and the reader's reopened ids stay unique.
+fn duplicate_table_ids_never_collide_in_the_package() {
+    use gridcraft_model::*;
+    let mut wb = Workbook::default();
+    for sheet in ["A", "B"] {
+        let sh = Sheet::new(sheet);
+        let mut sh = sh;
+        sh.tables.push(Table { id: 7, name: format!("T{sheet}"), range: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), header_row: true, totals_row: false, columns: vec![], style: String::new(), banded_rows: false, banded_cols: false, first_col: false, last_col: false, filter_button: false, filter: vec![], table_type: None, connection_id: None });
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let bytes = write_xlsx(&wb).expect("saves");
+    // Every table part's id attribute is unique.
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let mut ids = vec![];
+    for n in 1..=2 {
+        let part = pkg.read(&format!("xl/tables/table{n}.xml")).expect("read").expect("the part");
+        let text = String::from_utf8_lossy(&part);
+        let id = text.split("id=\"").nth(1).and_then(|r| r.split('"').next()).expect("an id").to_string();
+        ids.push(id);
+    }
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1], "the duplicate model id never emits twice: {ids:?}");
+    assert_eq!(ids[0], "7", "the first table keeps the model id");
+    // And the reopen hands back unique ids.
+    let (back, _) = read_xlsx(&bytes).expect("reopens");
+    let mut seen: Vec<u32> = back.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.id)).collect();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 2, "the reopened model ids are unique: {seen:?}");
+}
