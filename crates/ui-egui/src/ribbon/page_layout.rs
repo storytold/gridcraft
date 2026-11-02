@@ -1,6 +1,7 @@
 use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, keytip, menu_items, sep};
 use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, vec2};
 
+/// Draws page-layout controls with translated display labels and canonical command identifiers.
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);
     anchor_keytip(app, ui, &th, &["pageLayout.theme"]);
@@ -11,7 +12,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                     ui.painter().rect_filled(r, 1.0, Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8));
                 }
-                if ui.button(name).clicked() {
+                if ui.button(app.ui.language.tr(name)).clicked() {
                     act(app, "pageLayout.theme", json!({"name": name}));
                 }
             });

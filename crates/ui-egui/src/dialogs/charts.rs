@@ -114,7 +114,7 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
         match app.run("insert.chart", params) {
             Ok(r) => {
                 // The new chart is selected, as after inserting any object.
-                app.selected_chart = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok());
+                app.select_object_id(r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()));
                 *open = false;
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
@@ -145,7 +145,8 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
             let i = i as u64;
             let removed = remove.contains(&i);
             ui.horizontal(|ui| {
-                let label = if name.is_empty() { format!("Series{}", i + 1) } else { name.clone() };
+                let label =
+                    if name.is_empty() { craft_i18n::fmt(app.ui.language.tr("Series{n}"), &[("n", &(i + 1).to_string())]) } else { name.clone() };
                 ui.label(if removed { egui::RichText::new(label).strikethrough().weak() } else { egui::RichText::new(label) });
                 if removed {
                     if ui.small_button("Keep").clicked() {

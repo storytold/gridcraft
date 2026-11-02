@@ -487,7 +487,12 @@ pub fn check_new_name(wb: &Workbook, name: &str) -> Result<String, String> {
 
 /// The first free `Macro1`, `Macro2`… name, also free among the kept macros ([`kept_name`]).
 pub fn next_name(wb: &Workbook) -> String {
-    (1..).map(|n| format!("Macro{n}")).find(|n| find(wb, n).is_none() && kept_name(wb, n).is_none()).unwrap_or_else(|| "Macro".into())
+    next_name_with_prefix(wb, "Macro")
+}
+
+/// Generates a unique macro name with the caller's localized prefix.
+pub fn next_name_with_prefix(wb: &Workbook, prefix: &str) -> String {
+    (1..).map(|n| format!("{prefix}{n}")).find(|n| find(wb, n).is_none() && kept_name(wb, n).is_none()).unwrap_or_else(|| prefix.into())
 }
 
 /// Every command step of `steps` (inside Repeat and If too), with its path.

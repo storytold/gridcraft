@@ -1,6 +1,8 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
 
+/// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = app.ui.language;
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
@@ -12,21 +14,34 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(lang.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
         d.focus_initialized = true;
     }
 
-    let q = d.search.to_ascii_lowercase();
-    let cmds: Vec<(String, String, String)> = app
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let q = d.search.to_lowercase();
+    let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › ")))
+        .filter(|c| {
+            q.is_empty()
+                || c.label.to_lowercase().contains(&q)
+                || lang.tr(c.label).to_lowercase().contains(&q)
+                || c.id.to_ascii_lowercase().contains(&q)
+        })
+        .map(|c| {
+            (
+                c.id.to_string(),
+                lang.tr(c.label).to_string(),
+                c.menu.iter().map(|part| lang.tr(part)).collect::<Vec<_>>().join(" › "),
+                c.shortcut_for_platform(mac),
+            )
+        })
         .take(40)
         .collect();
 
@@ -62,8 +77,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
 
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
-        for (i, (id, label, menu)) in cmds.iter().enumerate() {
-            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{label}    {menu}")).min_size(vec2(scroll_area_width, 20.0)));
+        for (i, (id, label, menu, shortcut)) in cmds.iter().enumerate() {
+            let text = match shortcut {
+                Some(keys) => format!("{label}  ({keys})    {menu}"),
+                None => format!("{label}    {menu}"),
+            };
+            let r = ui.add(egui::Button::selectable(i == d.list_index, text.clone()).truncate().min_size(vec2(scroll_area_width, 20.0)));
 
             if (down || up || home || end || pgup || pgdn) && i == d.list_index && !ui.clip_rect().contains_rect(r.rect) {
                 r.scroll_to_me(Some(if down || end || pgdn { egui::Align::Max } else { egui::Align::Min }));
@@ -74,7 +93,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
                 *confirm = true;
             }
 
-            r.on_hover_text(id);
+            r.on_hover_text(format!("{text}\n{id}"));
         }
     });
     if ui.input(|i| i.key_pressed(Key::Enter)) {

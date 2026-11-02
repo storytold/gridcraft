@@ -605,6 +605,7 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
     }
 }
 
+/// Cycles the reference under the caret through relative and absolute anchors using the draft formula syntax.
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
     let caret_b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
     for (a, b, ..) in formula_refs_in(&ed.text, ed.locale) {

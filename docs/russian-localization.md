@@ -15,6 +15,8 @@ restoring their older parser/editor/help implementations.
   than its own rendering implementation.
 - Function help uses the existing English-keyed description/argument tables. Signatures come
   from canonical function metadata, keeping optional arguments and argument order consistent.
+  All 18 translated interface languages now use these tables for the current 515 functions;
+  see [coverage and translation provenance](localization-parity.md#function-help-in-every-interface-language-2026-11-02).
 - Localization occurs at UI entry/display boundaries. Engine values, commands, clipboard and
   XLSX retain canonical English syntax. Workbook content and LET/LAMBDA name identity are not
   translated or folded as function aliases.
@@ -80,7 +82,8 @@ system/engine messages remain unchanged. This is not a claim to translate every 
 
 ## Remaining work
 
-- Verify and extend the remaining built-in function names and help with native-speaker review.
+- Verify and extend the remaining built-in function aliases; obtain native-speaker review of
+  the complete current help tables, particularly financial and statistical terminology.
 - Integrate regional Russian number/date/currency formats with the shared region work.
 - Translate remaining UI literals and diagnostics, coordinating with the other open localization
   PRs instead of adding competing per-language code paths.

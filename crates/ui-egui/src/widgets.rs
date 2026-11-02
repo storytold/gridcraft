@@ -47,7 +47,7 @@ pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
 fn tip_text(ui: &Ui, tip: &str) -> String {
     // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
     let name = tr(ui, tip).replace('\n', " ");
-    let text = match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+    let text = match tooltip_shortcut(tip, ui.ctx().os() == egui::os::OperatingSystem::Mac) {
         Some(keys) => format!("{name} ({keys})"),
         None => name,
     };
@@ -463,10 +463,10 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
         });
         ui.data_mut(|d| d.remove_temp::<Option<(usize, usize)>>(pal_id));
     }
-    if ui.button(none_label).clicked() {
+    if ui.button(tr(ui, none_label)).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(tr(ui, "Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.scope_id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -489,7 +489,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(tr(ui, "Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (col, hex) in std_hex.iter().enumerate() {
@@ -510,7 +510,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     // Recent Colors: the custom colours picked below, newest first.
     let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
     if !recent.is_empty() {
-        ui.label(egui::RichText::new("Recent Colors").small());
+        ui.label(egui::RichText::new(tr(ui, "Recent Colors")).small());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for hex in &recent {
@@ -530,7 +530,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     if more_colors {
         ui.separator();
     }
-    if more_colors && ui.button("More Colors…").clicked() {
+    if more_colors && ui.button(tr(ui, "More Colors…")).clicked() {
         let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
         more = Some(MoreColors::new(start));
     }
@@ -542,7 +542,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             m.hex = hex_of(m.hsva.to_srgb());
         }
         ui.horizontal(|ui| {
-            let label = ui.label("Hex");
+            let label = ui.label(tr(ui, "Hex"));
             let r = ui.add(egui::TextEdit::singleline(&mut m.hex).desired_width(72.0).char_limit(7)).labelled_by(label.id);
             if r.changed()
                 && let Some(c) = parse_hex(&m.hex)
@@ -553,10 +553,10 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             let (sw, _) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::hover());
             ui.painter().rect_filled(sw, 1.0, Color32::from_rgb(c[0], c[1], c[2]));
             ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-            ui.label(egui::RichText::new("New").small());
+            ui.label(egui::RichText::new(tr(ui, "New")).small());
         });
         ui.horizontal(|ui| {
-            if ui.button("  OK  ").clicked() {
+            if ui.button(tr(ui, "OK")).clicked() {
                 // A hex still being typed that is not a colour falls back to the picker's.
                 let c = parse_hex(&m.hex).unwrap_or_else(|| m.hsva.to_srgb());
                 let hex = hex_of(c);
@@ -564,7 +564,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 picked = Some(hex);
                 done = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr(ui, "Cancel")).clicked() {
                 done = true;
             }
         });
@@ -752,6 +752,25 @@ mod tooltip_shortcut_tests {
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
             assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
             assert!(mac.starts_with('⌘') || mac.starts_with('⌃'), "{name}: {mac}");
+        }
+    }
+
+    #[test]
+    fn ribbon_tip_text_obeys_runtime_os() {
+        use egui::os::OperatingSystem;
+
+        for (os, expected) in [(OperatingSystem::Windows, "Flash Fill (Ctrl+E)"), (OperatingSystem::Mac, "Flash Fill (⌘E)")] {
+            let ctx = egui::Context::default();
+            ctx.set_os(os);
+
+            let mut actual = String::new();
+
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                actual = super::tip_text(ui, "Flash Fill");
+            });
+            output.textures_delta.clear();
+
+            assert_eq!(actual, expected, "{os:?}");
         }
     }
 }

@@ -59,6 +59,7 @@ pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Ex
     parse_top(src, locale, false)
 }
 
+/// Tokenizes and parses a complete formula with the selected syntax and top-level union policy.
 fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
@@ -421,6 +422,7 @@ impl Parser {
         Ok(Expr::Name(w.to_string()))
     }
 
+    /// Parses an array literal using the locale row and column separators and validates its rectangular shape.
     fn array(&mut self) -> Result<Expr, ParseError> {
         let mut rows = vec![Vec::new()];
         loop {

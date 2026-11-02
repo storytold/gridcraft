@@ -147,7 +147,8 @@ fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool
     }
     let mut lower = String::new();
     if let Some((text, text_id)) = text {
-        let te = ui.add(egui::TextEdit::singleline(text).id(text_id).desired_width(220.0).hint_text("Type to filter…"));
+        let te =
+            ui.add(egui::TextEdit::singleline(text).id(text_id).desired_width(220.0).hint_text(crate::i18n::current(ui.ctx()).tr("Type to filter…")));
         if open_now && !te.has_focus() {
             ui.ctx().memory_mut(|m| m.request_focus(text_id));
             // Select all once focus lands so typing replaces the filter.

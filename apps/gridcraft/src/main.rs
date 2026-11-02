@@ -233,6 +233,7 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Starts the desktop application with persisted preferences, localized new-document names and native services.
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -318,7 +319,9 @@ fn main() -> eframe::Result<()> {
     load_prefs(&mut app);
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
-        app.session.new_workbook();
+        if let Err(error) = app.run("file.new", json!({})) {
+            log::warn!("new workbook: {error}");
+        }
     }
     app.after_engine(); // Show warnings from the sample.
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open

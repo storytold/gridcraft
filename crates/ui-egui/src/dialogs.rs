@@ -44,6 +44,7 @@ pub enum Field {
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
+    NameScope { key: &'static str, label: &'static str, sheets: Vec<String> },
     Check { key: &'static str, label: &'static str },
     Note(String),
 }
@@ -347,13 +348,13 @@ impl Dialog {
                             .collect()
                     })
                     .unwrap_or_default();
-                let summary = if rows.is_empty() { "No ranges yet.".to_string() } else { rows.join("\n") };
+                let summary = if rows.is_empty() { app.ui.language.tr("No ranges yet.").to_string() } else { rows.join("\n") };
                 Dialog::form(
                     "allowEditRanges",
                     "Allow Edit Ranges",
                     "review.allowEditRanges",
                     vec![
-                        Note(format!("Ranges that stay editable when the sheet is protected:\n{summary}")),
+                        Note(format!("{}\n{summary}", app.ui.language.tr("Ranges that stay editable when the sheet is protected:"))),
                         Choice {
                             key: "action",
                             label: "Action",
@@ -770,7 +771,15 @@ impl Dialog {
                     "formulas.defineName",
                     vec![
                         Text { key: "name", label: "Name:" },
-                        Text { key: "scope", label: "Scope (Workbook or sheet name):" },
+                        NameScope {
+                            key: "scope",
+                            label: "Scope:",
+                            sheets: app
+                                .session
+                                .active()
+                                .map(|doc| doc.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect())
+                                .unwrap_or_default(),
+                        },
                         Text { key: "comment", label: "Comment:" },
                         Text { key: "refersTo", label: "Refers to:" },
                     ],

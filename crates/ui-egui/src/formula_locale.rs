@@ -213,11 +213,14 @@ mod tests {
         // Spanish names and separators, from a localized name.
         assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
         assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
-        // An argument list Spanish covers only in part stays English instead of mixing (the name
-        // is whatever the Spanish formula table calls SUMIFS).
+        // The expanded Spanish help uses the same catalog and keeps optional/repeated arguments.
         let sumifs = sig("SUMIFS", Es, Language::Es);
-        assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
-        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
+        let sum_range = Language::Es.function_argument("sum_range").unwrap();
+        let criteria_range = Language::Es.function_argument("criteria_range").unwrap();
+        let criteria = Language::Es.function_argument("criteria").unwrap();
+        assert!(sumifs.ends_with(&format!("({sum_range}; {criteria_range}1; {criteria}1; ...)")), "{sumifs}");
+        let english = crate::formula_bar::function_description("SUMIFS").unwrap();
+        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Language::Es.function_description(&english));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
 }
@@ -225,6 +228,27 @@ mod tests {
 #[cfg(test)]
 mod russian_help_tests {
     use super::*;
+    /// Reported tooltip gaps use catalog translations while preserving syntax and optional arguments.
+    #[test]
+    fn reported_tooltips_translate_descriptions_and_argument_lists() {
+        for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
+            for name in ["XLOOKUP", "COLUMN", "RADIANS"] {
+                let english = crate::formula_bar::function_description(name).unwrap();
+                let expected = language.function_description(&english).unwrap();
+                assert_ne!(expected, english);
+                assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(expected));
+                let english_signature = crate::formula_bar::function_signature(name).unwrap();
+                let (_, args) = split_signature(&english_signature).unwrap();
+                let translated = signature(name, FormulaLocale::Ru, language).unwrap();
+                for arg in args {
+                    assert!(translated.contains(&translate_argument(arg, language).unwrap()), "{translated}: {arg}");
+                }
+                assert!(translated.starts_with(FormulaLocale::Ru.function_name(name)));
+                assert_eq!(signature(name, FormulaLocale::En, Language::En).as_deref(), Some(english_signature.as_str()));
+            }
+        }
+    }
+
     /// Checks Russian help combines current catalog signatures with the chosen formula syntax.
     #[test]
     fn russian_help_uses_catalog_signature_and_selected_syntax() {
@@ -236,5 +260,47 @@ mod russian_help_tests {
         let expected = Language::Ru.function_description(&english);
         assert!(expected.is_some());
         assert_eq!(description("ЕСЛИ", FormulaLocale::Ru, Language::Ru).as_deref(), expected);
+    }
+
+    /// SUM's reported hint is localized in every offered interface language.
+    #[test]
+    fn sum_hint_uses_each_language_catalog() {
+        for language in Language::ALL {
+            let locale = language.formula_locale();
+            let hint = signature("SUM", locale, language).unwrap();
+            let help = description("SUM", locale, language).unwrap();
+            if language != Language::En {
+                assert!(hint.contains(language.function_argument("number").unwrap()), "{language:?}: {hint}");
+                assert_ne!(help, "Adds all the numbers in the arguments.", "{language:?}");
+            }
+        }
+        use gridcraft_engine::core::{CellError, Value};
+        assert_eq!(localized_constant(&Value::Error(CellError::Name), FormulaLocale::Ru), Some("#ИМЯ?"));
+    }
+}
+
+#[cfg(test)]
+mod help_structure_tests {
+    use super::*;
+
+    /// Every translated hint preserves the canonical optional/repeated argument structure and locale syntax.
+    #[test]
+    fn translated_hints_preserve_catalog_structure() {
+        for function in gridcraft_engine::cmd::formulas::function_list() {
+            let name = function["name"].as_str().unwrap();
+            let english = function["signature"].as_str().unwrap();
+            let (_, arguments) = split_signature(english).unwrap();
+            for language in Language::ALL {
+                let locale = language.formula_locale();
+                let hint = signature(name, locale, language).unwrap();
+                let separators = arguments.len().saturating_sub(1);
+                assert_eq!(hint.matches(locale.list_separator()).count(), separators, "{language:?}: {name}: {hint}");
+                for punctuation in ['[', ']'] {
+                    assert_eq!(hint.matches(punctuation).count(), english.matches(punctuation).count(), "{language:?}: {name}: {hint}");
+                }
+                assert_eq!(hint.matches("...").count(), english.matches("...").count(), "{language:?}: {name}: {hint}");
+                assert!(hint.starts_with(&format!("{}(", locale.function_name(name))), "{language:?}: {name}: {hint}");
+            }
+        }
     }
 }

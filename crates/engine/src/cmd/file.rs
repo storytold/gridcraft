@@ -31,6 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Creates a blank or sample workbook, validating optional UI-provided naming prefixes before using them.
 fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     let i = match str_param(p, "sample") {
         Some(name) => {
@@ -38,7 +39,16 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
             let title = crate::sample::title(name);
             s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
-        None => s.new_workbook(),
+        None => {
+            let book = str_param(p, "bookPrefix").unwrap_or("Book");
+            let sheet = str_param(p, "sheetPrefix").unwrap_or("Sheet");
+            for prefix in [book, sheet] {
+                if prefix.trim().is_empty() || prefix.chars().count() > 16 || prefix.chars().any(|c| c.is_control() || "[]:*?/\\".contains(c)) {
+                    return Err(bad("file.new", "invalid generated-name prefix"));
+                }
+            }
+            s.new_workbook_named(book, sheet)
+        }
     };
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }

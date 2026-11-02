@@ -95,6 +95,7 @@ impl SheetApp {
         self.commit_text_box_edit()
     }
 
+    /// Commits the current localized editor draft, preserving typed literals and applying the requested selection movement.
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;

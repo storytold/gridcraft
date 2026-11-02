@@ -195,11 +195,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
-                    ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
+                    ui.label(crate::i18n::current(ui.ctx()).tr("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:"));
                     ui.add_space(4.0);
                     ui.monospace("gridcraft --control 7979        # JSON-lines control channel\ngridcraft-cli mcp --connect 7979   # MCP bridged to this window\ngridcraft-cli mcp                   # headless MCP server");
                     ui.add_space(4.0);
-                    ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
+                    ui.label(craft_i18n::fmt(app.ui.language.tr("{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md."), &[("count", &gridcraft_engine::command_specs().len().to_string())]));
                 }
                 "about" => about(ui, &mut d),
                 "journal" => {
@@ -241,14 +241,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         let name = d.values.get("alt").and_then(Json::as_str).unwrap_or("No picture selected");
                         ui.label(name);
                     } else {
-                        ui.label("Picture file path (PNG or JPEG):");
+                        ui.label(crate::i18n::current(ui.ctx()).tr("Picture file path (PNG or JPEG):"));
                         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                         if ui.text_edit_singleline(&mut path).changed() {
                             d.values.remove("base64");
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button(crate::i18n::current(ui.ctx()).tr("Browse…")).clicked() {
                         if let Some(start) = &app.services.pick_picture_async {
                             let inbox = crate::Inbox::default();
                             start(inbox.clone());
@@ -262,13 +262,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    ui.label("Description (optional):");
+                    ui.label(crate::i18n::current(ui.ctx()).tr("Description (optional):"));
                     let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
                     if ui.text_edit_singleline(&mut alt).changed() {
                         d.values.insert("alt".into(), json!(alt));
                     }
                     if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
-                        ui.label(egui::RichText::new("Fits inside the selected cell and moves with its content.").small());
+                        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Fits inside the selected cell and moves with its content.")).small());
                     }
                     ok_cancel(ui, &mut confirm, &mut open);
                 }
@@ -546,6 +546,22 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             track_pick(pick, &r, r.changed());
                         }
                     });
+                }
+                Field::NameScope { key, label, sheets } => {
+                    let mut scope = d.values.get(key).and_then(Json::as_str).unwrap_or("Workbook").to_owned();
+                    let label = ui.label(lang.tr(label));
+                    let shown = if scope == "Workbook" { lang.tr("Workbook") } else { scope.as_str() };
+                    craft_ui::ComboBox::from_id_salt(("name_scope", key))
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut scope, "Workbook".to_owned(), lang.tr("Workbook"));
+                            for sheet in &sheets {
+                                ui.selectable_value(&mut scope, sheet.clone(), sheet);
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id);
+                    d.values.insert(key.into(), json!(scope));
                 }
                 Field::Password { key, label } => {
                     // Masked as typed (Excel shows dots); "Show password" reveals it on purpose.

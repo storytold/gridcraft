@@ -10,26 +10,43 @@
 use serde::{Deserialize, Serialize};
 
 mod cs;
+mod cs_functions;
 mod de;
+mod de_functions;
 mod el;
+mod el_functions;
 mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
+mod fr_functions;
 mod it;
+mod it_functions;
 mod ja;
+mod ja_functions;
 mod ko;
+mod ko_functions;
 mod nl;
+mod nl_functions;
 mod pl;
+mod pl_functions;
 mod pt;
+mod pt_functions;
 mod ro;
+mod ro_functions;
 mod ru;
+mod ru_formats;
 mod ru_functions;
 mod sr;
+mod sr_functions;
 mod tr;
+mod tr_functions;
 mod uk;
+mod uk_functions;
 mod vi;
+mod vi_functions;
 mod zh;
+mod zh_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +75,13 @@ pub enum Language {
 }
 
 impl Language {
+    /// Number-format spelling and presets for the UI; stored format codes remain canonical.
+    pub(crate) fn format_locale(self) -> &'static crate::format_locale::FormatLocale {
+        match self {
+            Self::Ru => &ru_formats::FORMAT,
+            _ => &crate::format_locale::EN,
+        }
+    }
     pub const ALL: [Self; 19] = [
         Self::En,
         Self::Es,
@@ -257,21 +281,37 @@ impl Language {
     /// A worksheet function's description in this language, looked up by the English text of the
     /// function catalog; `None` when untranslated, and the help shows the English.
     pub fn function_description(self, english: &str) -> Option<&'static str> {
-        lookup(self.function_help()?.0, english)
+        self.function_help().and_then(|help| lookup(help.0, english))
     }
 
     /// A function argument name in this language, given as the catalog spells it without
     /// brackets or index (`number`, `logical_test`).
     pub fn function_argument(self, english: &str) -> Option<&'static str> {
-        lookup(self.function_help()?.1, english)
+        self.function_help().and_then(|help| lookup(help.1, english))
     }
 
-    /// The function help tables (descriptions, argument names) of the languages that have them.
+    /// Per-language function-help data, independent of formula aliases and message catalogs.
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
+            Self::Cs => Some((cs_functions::DESCRIPTIONS, cs_functions::ARGUMENTS)),
+            Self::De => Some((de_functions::DESCRIPTIONS, de_functions::ARGUMENTS)),
+            Self::El => Some((el_functions::DESCRIPTIONS, el_functions::ARGUMENTS)),
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Fr => Some((fr_functions::DESCRIPTIONS, fr_functions::ARGUMENTS)),
+            Self::It => Some((it_functions::DESCRIPTIONS, it_functions::ARGUMENTS)),
+            Self::Ja => Some((ja_functions::DESCRIPTIONS, ja_functions::ARGUMENTS)),
+            Self::Ko => Some((ko_functions::DESCRIPTIONS, ko_functions::ARGUMENTS)),
+            Self::Nl => Some((nl_functions::DESCRIPTIONS, nl_functions::ARGUMENTS)),
+            Self::Pl => Some((pl_functions::DESCRIPTIONS, pl_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
+            Self::Ro => Some((ro_functions::DESCRIPTIONS, ro_functions::ARGUMENTS)),
+            Self::Sr => Some((sr_functions::DESCRIPTIONS, sr_functions::ARGUMENTS)),
+            Self::Tr => Some((tr_functions::DESCRIPTIONS, tr_functions::ARGUMENTS)),
+            Self::Uk => Some((uk_functions::DESCRIPTIONS, uk_functions::ARGUMENTS)),
+            Self::Vi => Some((vi_functions::DESCRIPTIONS, vi_functions::ARGUMENTS)),
+            Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
             Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
-            _ => None,
+            Self::En => None,
         }
     }
 }
@@ -358,6 +398,11 @@ mod tests {
                 assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
                 for (english, translated) in table {
                     assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
+                    assert!(!translated.contains(['\n', '\r']), "{language:?}: multiline translation of {english:?}");
+                    assert!(
+                        !translated.contains(['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}']),
+                        "{language:?}: invisible formatting in {english:?}"
+                    );
                 }
             }
         }
@@ -568,6 +613,10 @@ mod russian_tests {
     #[test]
     fn russian_error_messages_preserve_data_and_clean_command_wrappers() {
         let ru = Language::Ru;
+        let syntax = ru.tr_error("There's a problem with this formula: expected `,` or `)`, found Semicolon");
+        assert!(syntax.starts_with("Ошибка в формуле:"));
+        assert!(!syntax.contains("Semicolon"));
+        assert!(syntax.contains(ru.tr("Semicolon")));
         assert_eq!(ru.tr_error("command `chart` is not available right now: Select a chart first."), ru.tr("Select a chart first."));
         assert_eq!(
             ru.tr_error("invalid parameters for `cell.set`: invalid cell reference `Лист{key}` for `cell`"),

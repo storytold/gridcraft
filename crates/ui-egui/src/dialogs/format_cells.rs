@@ -32,7 +32,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
-                    let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
+                    let c = lang.format_locale().preset(name).to_string();
                     if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
                     }
@@ -42,7 +42,10 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+                let mut shown = lang.format_locale().display(&code);
+                if cols[1].text_edit_singleline(&mut shown).labelled_by(label.id).changed() {
+                    code = lang.format_locale().canonical(&shown);
+                }
                 for c in [
                     "0",
                     "0.00",
@@ -61,7 +64,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "[h]:mm:ss",
                     "@",
                 ] {
-                    if cols[1].small_button(c).clicked() {
+                    let c = lang.format_locale().suggestion(c);
+                    if cols[1].small_button(lang.format_locale().display(c)).clicked() {
                         code = c.to_string();
                     }
                 }

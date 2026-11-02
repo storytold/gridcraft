@@ -90,6 +90,7 @@ pub(crate) struct SelectionPaintInput<'a> {
     pub(crate) cols: (u32, u32),
 }
 
+/// Paints the current selection, active-cell boundary and selection handles in grid coordinates.
 pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
     // Fill all areas except the active cell.

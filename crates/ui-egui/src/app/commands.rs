@@ -16,7 +16,8 @@ impl SheetApp {
         r
     }
 
-    pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+    /// Settles affected drafts, supplies UI-only defaults and dispatches engine or interface commands and their requests.
+    pub(super) fn run_command(&mut self, id: &str, mut params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -46,8 +47,29 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // The macro editor's unsaved draft is part of its workbook: closing the workbook asks
+        // about it first, and goes on once the editor has closed. A close asked while it is
+        // asking waits for the answer, or is refused when it asks for a different close.
+        if matches!(id, "file.close" | "window.close")
+            && let Some(r) = crate::macro_editor::ask_before_closing(self, id, &params)
+        {
+            return r;
+        }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
+        if matches!(id, "insert.table" | "home.formatAsTable")
+            && let Some(object) = params.as_object_mut()
+        {
+            object.entry("columnPrefix").or_insert_with(|| json!(self.ui.language.tr("Generated|Column")));
+        }
+        if let Some(object) = params.as_object_mut() {
+            if id == "file.new" {
+                object.entry("bookPrefix").or_insert_with(|| json!(self.ui.language.tr("Book")));
+                object.entry("sheetPrefix").or_insert_with(|| json!(self.ui.language.tr("Sheet")));
+            } else if id == "home.insertSheet" {
+                object.entry("namePrefix").or_insert_with(|| json!(self.ui.language.tr("Sheet")));
+            }
+        }
         let r = self.session.run(id, params);
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
@@ -81,7 +103,7 @@ impl SheetApp {
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
-            self.selected_chart = Some(chart);
+            self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Chart, chart));
         }
         if id == "file.exportPdf"
             && let Ok(r) = &r
@@ -263,6 +285,7 @@ impl SheetApp {
     pub fn after_engine(&mut self) {
         // The requests belong to the window the command left active.
         self.follow_active_window();
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),

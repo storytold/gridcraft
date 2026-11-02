@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (preserve stored text on Ctrl+Enter without changing numeric entry) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (complete current function help in every offered interface language) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -16,10 +16,38 @@ continue to fall back to English; this is coverage of catalog keys, not every li
 
 Formula input adapts #1850's 199 aliases to the current parser and help architecture. Unicode
 LET/LAMBDA name precedence and iterative handling of long flat expressions are retained.
-Russian help for 23 functions is English-keyed in `i18n/ru_functions.rs`. Localized error
+Russian help for all 515 currently registered functions (479 distinct descriptions and 283
+argument keys) is English-keyed in `i18n/ru_functions.rs`. The original rows are retained;
+new descriptions translate GridCraft's own catalog. Localized error
 literals round-trip at the editor boundary, with canonical storage/API/XLSX syntax. Fixed
 messages use `tr_error`; selected dynamic parser/parameter messages preserve captured user data.
-Russian regional number/date formats and the remaining function help are still outstanding.
+The Format Cells editor displays Russian date/time tokens while keeping canonical format
+codes in storage. Full regional number/date rendering remains outstanding.
+
+## Function help in every interface language (2026-11-02)
+
+All 19 offered interface languages now have descriptions and argument labels for the current
+515-function catalog: the English source plus Czech, German, Greek, Spanish, French, Italian,
+Japanese, Korean, Dutch, Polish, Brazilian Portuguese, Romanian, Russian, Serbian, Turkish,
+Ukrainian, Vietnamese and Simplified Chinese. Each translated table covers 479 distinct
+descriptions and 283 argument keys. Existing Spanish/Russian help and the previously added
+translated hints are retained. Mathematical variables such as `x`, `y` and `n`, and identifiers
+such as XML/XPath, intentionally stay recognizable.
+
+The existing `i18n/<lang>_functions.rs` representation is shared by all languages. A single
+hint builder combines those labels with canonical metadata and the selected formula syntax;
+optional brackets, argument indices and repeated-argument markers keep their structure.
+Help strings are not formula aliases: this expansion does not invent function names for
+languages without a formula-name table, nor change engine/API/XLSX syntax. Unknown future
+catalog strings still fall back to English instead of blocking a new function.
+
+New non-Russian rows are machine-assisted translation drafts of GridCraft's own English text
+(Google Translate), with manual corrections for terminology, rounding direction/ties,
+forecast-statistic codes and untranslated rows. Existing GridCraft translations take priority;
+no Office help text, vendor assets or another open PR's dictionary is imported. The new rows
+need native-speaker review, especially specialized financial/statistical terminology. Automated
+coverage and syntax checks establish completeness and structure, not linguistic certification.
+Serbian additions use the Latin script of the existing interface catalog.
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
@@ -35,9 +63,9 @@ Russian regional number/date formats and the remaining function help are still o
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
-  hint is assembled with the formula syntax's function name and separator. Spanish translates
-  10 common functions (SUM, AVERAGE, IF…); Russian now translates 23 through the same tables.
-  Other languages show the English help where no help table is supplied.
+  hint is assembled with the formula syntax's function name and separator. All 18 non-English
+  interface languages now cover the current 515-function catalog. English remains the fallback
+  for new catalog text not yet present in a language's table.
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
@@ -124,6 +152,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Complete help for the current 515 functions in all 18 translated interface languages; retain existing wording, separate help from formula syntax and test optional/repeated-argument structure |
+| 2026-11-02 | minor | Extend Russian help to 479 distinct descriptions and 283 argument keys; preserve original translations and canonical formula syntax; cover reported XLOOKUP, COLUMN and RADIANS tooltips |
 | 2026-11-02 | minor | Ctrl+Enter fills unchanged stored text as a typed literal without adding an apostrophe; fresh localized numeric entry retains normal parsing |
 | 2026-10-29 | minor | Russian: refresh #676 catalog, adapt #1850 formula aliases to current help/name handling, localize error literals and selected parameter/parser diagnostics at the UI boundary |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
