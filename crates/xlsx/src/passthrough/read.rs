@@ -577,17 +577,19 @@ fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// VML without its note shapes and the shapes numbered in `drop`. A note is told as the control
-/// reader tells it, from the shape's client data tag and never from text elsewhere in the shape:
-/// its `ObjectType` ([`crate::controls::is_note_data`]). The tag is read on its own
-/// ([`xml::first_start`]), so a caption's unclosed `<br>` doesn't hide it.
+/// VML without its note shapes and the shapes numbered in `drop`, each judged as the control
+/// reader judges it, from the shape's own tags and never from text elsewhere in it: a note by its
+/// client data's `ObjectType` ([`crate::controls::is_note_data`]), its number from its `id`, else
+/// its `o:spid` ([`crate::controls::number_of`]). Each tag is read on its own ([`xml::first_start`]),
+/// so a caption's unclosed `<br>` doesn't hide the client data after it. A shape with no number
+/// that isn't a note is kept.
 fn strip_shapes(vml: &str, drop: &HashSet<u64>) -> String {
     let mut out = String::with_capacity(vml.len());
     let mut last = 0;
     for (a, b) in shape_spans(vml) {
-        let shape = vml.get(a..b).unwrap_or("");
-        let note = xml::first_start(shape.as_bytes(), "ClientData").is_some_and(|d| crate::controls::is_note_data(&d));
-        let numbered = shape_numbers(shape).first().is_some_and(|n| drop.contains(n));
+        let shape = vml.get(a..b).unwrap_or("").as_bytes();
+        let note = xml::first_start(shape, "ClientData").is_some_and(|d| crate::controls::is_note_data(&d));
+        let numbered = xml::first_start(shape, "shape").and_then(|s| crate::controls::number_of(&s)).is_some_and(|n| drop.contains(&n));
         if note || numbered {
             out.push_str(vml.get(last..a).unwrap_or(""));
             last = b;

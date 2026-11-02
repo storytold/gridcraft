@@ -798,3 +798,35 @@ fn a_control_whose_text_reads_like_a_note_object_type_is_kept() {
         out = write_xlsx(&back).unwrap();
     }
 }
+
+/// Kept VML leaves out the modelled controls by the number the reader gave them: the `id`, else
+/// the `o:spid`, wherever either comes in the shape's tag. A button whose `o:spid` comes before a
+/// different `id`, and one with a plain numeric `id`, are written once, from the model; a check
+/// box whose `o:spid` is a modelled button's number but whose `id` is its own is kept; a button
+/// with no number isn't modelled and is kept; notes are dropped whatever their numbers.
+#[test]
+fn kept_vml_leaves_out_modelled_controls_by_the_readers_shape_number() {
+    let bytes = with_vml(concat!(
+        r##"<v:shape o:spid="_x0000_s1030" id="_x0000_s1025" type="#_x0000_t201"><v:textbox><div>A</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 1, 0, 4, 0, 2, 0</x:Anchor></x:ClientData></v:shape>"##,
+        r##"<v:shape id="1026" o:spid="_x0000_s1031" type="#_x0000_t201"><v:textbox><div>B</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 3, 0, 4, 0, 4, 0</x:Anchor></x:ClientData></v:shape>"##,
+        r##"<v:shape o:spid="_x0000_s1025" id="_x0000_s1027" type="#_x0000_t201"><v:textbox><div>Paid</div></v:textbox><x:ClientData ObjectType="Checkbox"><x:Anchor>2, 0, 5, 0, 4, 0, 6, 0</x:Anchor></x:ClientData></v:shape>"##,
+        r##"<v:shape id="Button 9" type="#_x0000_t201"><v:textbox><div>C</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 7, 0, 4, 0, 8, 0</x:Anchor></x:ClientData></v:shape>"##,
+        r##"<v:shape id="_x0000_s1028" o:spid="_x0000_s1040" type="#_x0000_t202"><x:ClientData ObjectType="Note"><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>"##,
+        r##"<v:shape type="#_x0000_t202"><x:ClientData ObjectType="Note"><x:Row>1</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>"##,
+    ));
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let texts: Vec<&str> = wb.sheet(0).unwrap().controls.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["A", "B"], "{:?}", report.warnings);
+    let mut out = write_xlsx(&wb).unwrap();
+    for _ in 0..2 {
+        let vml = only_vml(&out);
+        for caption in [">A</div>", ">B</div>", ">C</div>", ">Paid</div>"] {
+            assert_eq!(vml.matches(caption).count(), 1, "each control once, kept or written: {caption} {vml}");
+        }
+        assert_eq!(vml.matches("ObjectType=\"Checkbox\"").count(), 1, "the check box is kept: {vml}");
+        assert_eq!(note_shapes(&vml), 0, "{vml}");
+        let (back, _) = read_xlsx(&out).unwrap();
+        assert_eq!(back.sheet(0).unwrap().controls.len(), 2);
+        out = write_xlsx(&back).unwrap();
+    }
+}

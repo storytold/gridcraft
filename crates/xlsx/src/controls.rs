@@ -394,7 +394,7 @@ pub(crate) fn shape_number(id: &str) -> Option<u64> {
 
 /// A VML shape's number: from its `id` (`_x0000_s1025`), else from `o:spid`, where producers that
 /// give the shape a named id (`id="Button 1"`) keep it.
-fn number_of(shape: &El) -> Option<u64> {
+pub(crate) fn number_of(shape: &El) -> Option<u64> {
     shape.attr("id").and_then(shape_number).or_else(|| shape.attr("spid").and_then(shape_number))
 }
 
