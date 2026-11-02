@@ -837,7 +837,10 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     }
     // `sync_all` before the rename: without it a power loss right after the rename can leave
     // the new name pointing at an empty or truncated file while the old workbook is gone.
-    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| f.sync_all()).map_err(|e| {
+    // A file system that cannot flush at all (some network mounts; on Apple targets std asks
+    // for F_FULLFSYNC, which they refuse) keeps the old behaviour: skip the flush, still rename.
+    let synced = |f: &std::fs::File| f.sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) });
+    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| synced(&f)).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
@@ -858,6 +861,14 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// True when a flush failed only because the file system cannot do it: ENOTTY (25 on Linux,
+/// macOS and the BSDs, what `fcntl(F_FULLFSYNC)` returns on such volumes) or an
+/// unsupported-operation error (ENOTSUP/EOPNOTSUPP/ENOSYS). Any other error is a real failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn full_sync_unsupported(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(25) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 #[cfg(target_arch = "wasm32")]

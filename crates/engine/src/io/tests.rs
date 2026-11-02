@@ -347,6 +347,20 @@ fn save_writes_exact_bytes_and_fails_cleanly_without_a_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Only "this file system cannot flush" errors are tolerated when syncing a saved file.
+/// The fallback on a real network mount is not tested.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_only_unsupported_errors() {
+    use std::io::{Error, ErrorKind};
+    assert!(full_sync_unsupported(&Error::from_raw_os_error(25)));
+    assert!(full_sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(28)), "ENOSPC on Linux");
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+}
+
 /// While a script runs (#2178), file reads and writes are refused whatever command or
 /// parameter asked for them; nesting and dropping the sandbox restore access.
 #[cfg(not(target_arch = "wasm32"))]
