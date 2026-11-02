@@ -5247,6 +5247,9 @@ mod controls;
 mod equation;
 mod macros;
 mod objects;
+mod python_cells;
+mod python_commands;
+mod python_files;
 mod seams;
 
 #[test]

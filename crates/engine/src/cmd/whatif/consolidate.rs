@@ -185,7 +185,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             if v.is_empty() && style == StyleId::DEFAULT {
                 sh.remove_cell(c);
             } else {
-                sh.set_cell(c, Cell { value: v, formula: None, style });
+                sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             }
             cx.touch(dsi, c);
         }
