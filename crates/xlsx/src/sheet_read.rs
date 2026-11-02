@@ -529,8 +529,8 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
                 cx.sized_pictures.insert(key, Arc::clone(&sized));
                 picture = sized;
             } else {
-                // Past the budget the picture keeps its stored sizing until the formula is
-                // calculated again.
+                // Past the budget (shared with the stored pictures) the picture keeps its stored
+                // sizing until the formula is calculated again.
                 cx.warn("some IMAGE pictures were shown fitted to their cells: too many picture sizes in one file");
             }
         }

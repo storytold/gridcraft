@@ -37,7 +37,7 @@ pub struct Ctx<'a> {
     /// sizing, so cells that share a picture share its bytes. Keyed by the original's address,
     /// which `cell_pictures` keeps alive for the whole read.
     pub sized_pictures: HashMap<(usize, PictureSizing), Arc<CellPicture>>,
-    /// Bytes held by `sized_pictures`, against the same budget as the pictures themselves.
+    /// Picture bytes held: the distinct `cell_pictures` plus `sized_pictures`, against one budget.
     pub sized_bytes: usize,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
@@ -273,6 +273,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             vec![]
         }
     };
+    let mut seen = std::collections::HashSet::new();
+    cx.sized_bytes = cx.cell_pictures.iter().flatten().filter(|p| seen.insert(Arc::as_ptr(p))).fold(0usize, |n, p| n.saturating_add(p.data.len()));
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
