@@ -220,18 +220,18 @@ impl SheetApp {
     /// drawn, pointed from and committed on its sheet, and the point-mode anchor, held by sheet
     /// index, is let go. A draft is dropped at once with a message when its sheet is gone, or when
     /// it holds Python code that sheet protection now hides (a draft in Python mode, or one that
-    /// began on a Python cell): neither editor shows hidden code, as the Python editor window
-    /// closes then too.
+    /// began on a Python cell's code): neither editor shows hidden code, as the Python editor
+    /// window closes then too. A draft typed over a Python cell holds only what was typed, so it
+    /// stays open.
     pub(crate) fn follow_open_draft(&mut self) {
         let Some(ed) = self.editor.as_ref() else { return };
         let Some(d) = self.session.documents().iter().find(|d| d.uid == ed.doc) else { return };
         let order = editor::sheet_order(&d.wb);
         let moved = ed.sheet_uid != 0 && order != ed.sheet_order;
         let found = if moved { ed.sheet_in(&d.wb) } else { Some(ed.sheet) };
-        let hidden = found.and_then(|i| d.wb.sheet(i)).is_some_and(|sh| {
-            (ed.python || ed.py_cell || sh.cell(ed.cell).is_some_and(|c| c.py.is_some()))
-                && gridcraft_engine::display::formula_hidden(&d.wb, sh, ed.cell)
-        });
+        let hidden = found
+            .and_then(|i| d.wb.sheet(i))
+            .is_some_and(|sh| (ed.python || ed.py_cell) && gridcraft_engine::display::formula_hidden(&d.wb, sh, ed.cell));
         let why = match found {
             None => Some(DRAFT_SHEET_GONE),
             Some(_) if hidden => Some(DRAFT_CODE_HIDDEN),

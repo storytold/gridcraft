@@ -161,16 +161,18 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
 
 /// The open edit, for `ui.inspect`. The draft is left out (`text` is null, `hidden` true) while
 /// its cell's code is hidden on a protected sheet, checked now: a protection command earlier in
-/// the same batch runs before the next frame. That holds for a draft in Python mode, and for any
-/// draft of a Python cell, since leaving Python mode keeps the code as an ordinary draft. The
-/// sheet is the draft's own, found by identity: a sheet inserted, deleted or moved in the same
-/// batch puts another at its index. With its sheet gone, such a draft is left out too.
+/// the same batch runs before the next frame. That holds for a draft in Python mode, and for a
+/// draft that began on a Python cell's code, since leaving Python mode keeps the code as an
+/// ordinary draft; a draft typed over a Python cell holds only what was typed. The sheet is the
+/// draft's own, found by identity: a sheet inserted, deleted or moved in the same batch puts
+/// another at its index. With its sheet gone, such a draft is left out too.
 fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
-    let code = |sh: &gridcraft_engine::model::Sheet| e.python || sh.cell(e.cell).is_some_and(|c| c.py.is_some());
-    let hidden = app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
-        Some(sh) => code(sh) && gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
-        None => e.python || e.py_cell,
-    });
+    let code = e.python || e.py_cell;
+    let hidden = code
+        && app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
+            Some(sh) => gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
+            None => true,
+        });
     let text = if hidden { Json::Null } else { json!(e.text) };
     json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
 }

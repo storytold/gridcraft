@@ -1208,3 +1208,28 @@ fn a_draft_of_python_code_that_protection_hides_is_dropped_with_a_message() {
     execute(&mut app, &ctx, "review.protectSheet", json!({}));
     assert!(app.editor.as_ref().is_some_and(|e| e.text == "=2+2"), "a formula draft is unchanged");
 }
+
+#[test]
+fn a_draft_typed_over_a_hidden_python_cell_stays_open_through_commands() {
+    // An unlocked, hidden Python cell on a protected sheet: typing replaces it, as in Excel. The
+    // draft holds only what was typed, so a command neither drops it nor hides it from ui.inspect.
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("python.set", json!({"cell": "B2", "code": "secret = 41"})).unwrap();
+    session.execute("home.formatCells", json!({"range": "B2", "style": {"protection": {"hidden": true, "locked": false}}})).unwrap();
+    session.execute("review.protectSheet", json!({})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    call(&mut app, &ctx, "ui.edit.begin", json!({"text": "7"}));
+    execute(&mut app, &ctx, "home.insertSheet", json!({"name": "Other", "before": 1}));
+    assert!(app.editor.as_ref().is_some_and(|e| e.text == "7"), "the typed entry stays open");
+    assert!(app.message.is_none(), "{:?}", app.message);
+    let after = inspected(&mut app, &ctx);
+    assert_eq!(after["editor"]["text"], "7");
+    assert_eq!(after["editor"]["hidden"], false);
+    call(&mut app, &ctx, "ui.edit.commit", json!({"move": "none"}));
+    let b2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 1)).cloned());
+    assert_eq!(b2.map(|c| (c.input_text(), c.py.is_some())), Some(("7".to_string(), false)), "the typed entry replaces the Python cell");
+}
+
