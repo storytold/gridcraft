@@ -228,6 +228,29 @@ pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Validates calculated-field identities and formulas before accepting a replacement source.
+///
+/// A colliding source header would otherwise shadow a calculated value during refresh.
+/// Reject broken formulas or cycles atomically instead of dropping calculated values or
+/// retaining a report whose dependent calculated fields can no longer be evaluated.
+fn validate_replacement_calculated_fields(pt: &PivotTable, src: &pv::Source) -> Result<crate::pivot_calc::CalcSet> {
+    const C: &str = "pivot.changeSource";
+    let set = crate::pivot_calc::CalcSet::new(pt, &src.headers);
+    for field in &pt.calculated_fields {
+        if src.col(&field.name).is_some() {
+            return Err(bad(C, format!("source header conflicts with calculated field `{}`", field.name)));
+        }
+        let i = set.index(&field.name).ok_or_else(|| bad(C, "too many calculated fields"))?;
+        if let Some(error) = set.error(i) {
+            return Err(bad(C, format!("calculated field `{}` is invalid with this source: {error}", field.name)));
+        }
+        if set.is_cyclic(i) {
+            return Err(bad(C, format!("calculated field `{}` refers to itself through its formula", field.name)));
+        }
+    }
+    Ok(set)
+}
+
 /// Replaces a pivot's source and refreshes it without requiring the old source to be valid.
 ///
 /// Retains fields found in the replacement, preserves the position of the values axis,
@@ -239,6 +262,7 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let source = source_param(s, p)?;
     update_with_source(s, p, Some(&source), |pt, src, _| {
+        let calculated = validate_replacement_calculated_fields(pt, src)?;
         let mut dropped: Vec<String> = vec![];
         let keep = |name: &str, dropped: &mut Vec<String>| {
             let ok = src.col(name).is_some();
@@ -261,7 +285,7 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        pt.values.retain(|f| keep(&f.source_col, &mut dropped));
+        pt.values.retain(|f| calculated.index(&f.source_col).is_some() || keep(&f.source_col, &mut dropped));
         pt.filters.retain(|f| keep(&f.source_col, &mut dropped));
         Ok(json!({"source": source, "dropped": dropped}))
     })

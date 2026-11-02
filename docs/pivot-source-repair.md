@@ -1,6 +1,6 @@
 # Repairing an invalid PivotTable source
 
-> **Last updated:** 2026-10-28
+> **Last updated:** 2026-11-02
 
 An existing PivotTable can outlive its source's validity in GridCraft: an unused column header
 may be deleted, or its defined source name may disappear. GridCraft's current refresh validation
@@ -73,13 +73,13 @@ reproduction uses the existing engine command through the CLI and requires no na
 cargo test -p gridcraft-engine --test it pivot_source_repair
 ```
 
-Six tests generate their workbooks in Rust and cover four imported reports with blank
+Eight tests generate their workbooks in Rust and cover four imported reports with blank
 unused headers, a deleted defined source name, invalid replacement rejection without changing
 the workbook or history, blank replacement rejection for both parameter names with a valid
 active selection and an existing redo branch, protection and occupied report cells, undo/redo,
 and repeated XLSX save/open/refresh. This repair is independent of date parsing and GETPIVOTDATA support.
 
-The branch is aligned with upstream `main` at `45f5ab18`. The six regressions
+The branch is aligned with upstream `main` at `488f9982`. The eight regressions
 run in the consolidated engine integration-test binary, without changing the repair
 contract. The desktop-theme compatibility fix is already supplied by upstream.
 
@@ -91,9 +91,23 @@ constructed, which failures must preserve history, and what each regression veri
 
 | Date | Change |
 |---|---|
+| 2026-11-02 | Preserve valid calculated values during source repair; reject header collisions and broken calculated dependencies atomically |
 | 2026-10-28 | Distinguish GridCraft's blank-header validation from reported Excel COM behavior; preserve replacement protections |
 | 2026-10-27 | Adapt source repair to the upstream pivot command modules; preserve explicit-source validation and atomic edits |
 | 2026-10-26 | Align with current main and shared workbook windows; preserve all six repair and empty-source regressions |
 | 2026-10-24 | Reject blank source replacements without falling back to the active selection; add source and history regression coverage |
 | 2026-10-24 | Align with current main and the consolidated engine integration-test binary |
 | 2026-10-21 | Document the fictional reproduction, repair contract and regression coverage |
+
+
+## Calculated fields during source repair
+
+A valid calculated value and its calculated-field dependencies remain in the report when
+its source is repaired. The replacement is rejected atomically if one of its headers
+collides with a calculated-field name (case-insensitive), or if a calculated formula
+loses a required field or becomes cyclic. This avoids replacing a formula result with
+an unrelated source column or silently deleting a still-valid value. Rejected edits
+preserve the source, rendered values, workbook identity and undo/redo history.
+
+Two generated regressions cover direct/chained calculated values across undo, save/open
+and refresh, plus collisions and missing dependencies. Both fail before the correction.

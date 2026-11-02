@@ -224,3 +224,56 @@ fn repaired_source_and_report_values_survive_save_open_and_refresh() {
         assert_eq!(value(&s, "G6"), Value::Number(total), "refresh reads the repaired source, not a stale imported report");
     }
 }
+
+/// A report with direct and chained calculated values, followed by an invalid unused header.
+fn broken_report_with_calculated_values() -> Session {
+    let mut s = source();
+    add_report(&mut s, OLD_SOURCE, "Repair1", "F3");
+    for (name, formula) in [("Margin", "=Amount*0.5"), ("DoubleMargin", "=Margin*2")] {
+        s.execute("pivot.calculatedField", json!({"pivot": "Repair1", "name": name, "formula": formula})).unwrap();
+    }
+    assert_eq!(value(&s, "G6"), Value::Number(40.0));
+    assert_eq!(value(&s, "H6"), Value::Number(20.0));
+    assert_eq!(value(&s, "I6"), Value::Number(40.0));
+    s.execute("edit.clearContents", json!({"range": "D1:D3"})).unwrap();
+    s
+}
+
+/// A valid replacement retains calculated values and chained formulas through refresh and undo.
+#[test]
+fn repair_preserves_calculated_values_and_their_dependencies() {
+    let mut s = broken_report_with_calculated_values();
+    let repaired = s.execute("pivot.changeSource", json!({"pivot": "Repair1", "source": REPAIRED_SOURCE})).unwrap();
+    assert_eq!(repaired["dropped"], json!([]));
+    let pt = &s.doc().unwrap().wb.active().unwrap().pivots[0];
+    assert_eq!(pt.values.len(), 3);
+    assert_eq!(pt.calculated_fields.len(), 2);
+    assert_eq!(value(&s, "H6"), Value::Number(20.0));
+    assert_eq!(value(&s, "I6"), Value::Number(40.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
+    s.execute("edit.redo", json!({})).unwrap();
+    s = reopen(&mut s);
+    s.execute("cell.set", json!({"cell": "C2", "input": "19"})).unwrap();
+    s.execute("pivot.refresh", json!({"pivot": "Repair1"})).unwrap();
+    assert_eq!(value(&s, "G6"), Value::Number(42.0));
+    assert_eq!(value(&s, "H6"), Value::Number(21.0));
+    assert_eq!(value(&s, "I6"), Value::Number(42.0));
+}
+
+/// Reject replacement headers that shadow calculated fields, or break their dependencies.
+#[test]
+fn repair_rejects_calculated_field_collisions_and_invalid_dependencies_atomically() {
+    for (header, message) in [("Margin", "calculated field"), ("mArGiN", "calculated field"), ("Other", "calculated field")] {
+        let mut s = broken_report_with_calculated_values();
+        let headers = if header == "Other" { vec!["Month", "Status", "Other"] } else { vec!["Month", "Amount", header] };
+        s.execute("range.setValues", json!({"range": "Q1", "values": [headers, vec!["2026-01", "17", "999"], vec!["2026-02", "23", "999"]]}))
+            .unwrap();
+        s.execute("cell.set", json!({"cell": "Z20", "input": "temporary"})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        rejects_without_edit(&mut s, "pivot.changeSource", json!({"pivot": "Repair1", "source": "Sheet1!$Q$1:$S$3"}), message);
+        assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
+        assert_eq!(value(&s, "H6"), Value::Number(20.0));
+        assert_eq!(value(&s, "I6"), Value::Number(40.0));
+    }
+}
