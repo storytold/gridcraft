@@ -53,21 +53,29 @@ fn uses_random(e: &Expr) -> bool {
     found
 }
 
-fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usize) {
-    if !host.direct.is_empty() {
-        for (k, v) in std::mem::take(&mut host.direct) {
-            host.pending.remove(&k);
-            host.results.insert(k, v);
-        }
+fn held_back_on_host(graph: &Graph, k: Key) -> bool {
+    graph.nodes.get(&k).is_some_and(|n| n.dynamic || n.expr.as_ref().is_some_and(|e| uses_random(e)))
+}
+
+fn flush_direct(host: &mut PassHost<'_>) {
+    if host.direct.is_empty() {
+        return;
     }
+    for (k, v) in std::mem::take(&mut host.direct) {
+        host.pending.remove(&k);
+        host.results.insert(k, v);
+    }
+}
+
+fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usize) {
+    flush_direct(host);
     if threads <= 1 || level.len() < PARALLEL_MIN {
         for &k in level {
             host.calculate(k);
         }
         return;
     }
-    let (random, parallel): (Vec<Key>, Vec<Key>) =
-        level.iter().copied().partition(|k| graph.nodes.get(k).is_some_and(|n| n.expr.as_ref().is_some_and(|e| uses_random(e))));
+    let (host_side, parallel): (Vec<Key>, Vec<Key>) = level.iter().copied().partition(|k| held_back_on_host(graph, *k));
     if !parallel.is_empty() {
         let pending: HashSet<Key> = parallel.iter().copied().collect();
         if let Some(out) =
@@ -85,7 +93,8 @@ fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usi
             }
         }
     }
-    for k in random {
+    flush_direct(host);
+    for k in host_side {
         host.calculate(k);
     }
 }
@@ -1147,6 +1156,53 @@ pub(crate) mod tests {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
         assert!(calc.last_formula_thread.values().all(|id| *id == caller));
+    }
+
+    #[test]
+    fn indirect_to_rand_and_later_level_match_serial_recalc() {
+        let caller = std::thread::current().id();
+        fn build(wb: &mut Workbook) {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::parse("Z1").unwrap(), Cell::value(Value::Number(10.0)));
+            for r in 0..520 {
+                sh.cells.set(CellRef::new(r, 1), Cell::formula(Formula::new(&format!("=$Z$1+{r}"))));
+            }
+            sh.cells.set(CellRef::parse("H1").unwrap(), Cell::formula(Formula::new("=RAND()")));
+            sh.cells.set(CellRef::parse("I1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"H1\")")));
+            sh.cells.set(CellRef::parse("F1").unwrap(), Cell::formula(Formula::new("=$Z$1+1")));
+            sh.cells.set(CellRef::parse("F2").unwrap(), Cell::formula(Formula::new("=F1*2")));
+            sh.cells.set(CellRef::parse("G1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"F2\")")));
+            sh.cells.set(CellRef::parse("J1").unwrap(), Cell::formula(Formula::new("=OFFSET(F1,1,0)")));
+        }
+        let mut serial_wb = Workbook::new();
+        build(&mut serial_wb);
+        serial_wb.calc.multi_threaded = false;
+        let mut serial_calc = Calc::new();
+        serial_calc.recalc_all(&mut serial_wb);
+
+        let mut parallel_wb = Workbook::new();
+        build(&mut parallel_wb);
+        parallel_wb.calc.multi_threaded = true;
+        parallel_wb.calc.threads = 0;
+        let mut parallel_calc = Calc::new();
+        parallel_calc.recalc_all(&mut parallel_wb);
+
+        assert_eq!(snapshot(&serial_wb), snapshot(&parallel_wb));
+        let sh = parallel_wb.sheet(0).unwrap();
+        let h1 = sh.value(CellRef::parse("H1").unwrap());
+        let i1 = sh.value(CellRef::parse("I1").unwrap());
+        let f2 = sh.value(CellRef::parse("F2").unwrap());
+        let g1 = sh.value(CellRef::parse("G1").unwrap());
+        assert_eq!(i1, h1);
+        assert_ne!(i1, Value::Number(0.0));
+        assert_eq!(g1, f2);
+        assert_eq!(sh.value(CellRef::parse("J1").unwrap()), f2);
+        let i1_key = (0, CellRef::parse("I1").unwrap());
+        let g1_key = (0, CellRef::parse("G1").unwrap());
+        let j1_key = (0, CellRef::parse("J1").unwrap());
+        assert_eq!(parallel_calc.last_formula_thread.get(&i1_key), Some(&caller));
+        assert_eq!(parallel_calc.last_formula_thread.get(&g1_key), Some(&caller));
+        assert_eq!(parallel_calc.last_formula_thread.get(&j1_key), Some(&caller));
     }
 
     #[test]
