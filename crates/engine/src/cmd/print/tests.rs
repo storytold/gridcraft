@@ -631,12 +631,14 @@ fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
 fn the_fallback_text_is_clipped_to_the_equation_frame() {
     // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
     // 75 pt): the lines are drawn inside a clip of the frame, nested in the block's, so they
-    // cannot run over neighbours.
+    // cannot run over neighbours, and the clip is lifted again before the next object (a text
+    // box below the equation in the same block) is drawn.
     let mut s = s();
     s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    s.execute("insert.textBox", json!({"at": "B12", "text": "later box"})).unwrap();
     let mut wb = (*s.doc().unwrap().wb).clone();
     if let Some(sh) = wb.sheet_mut(0) {
-        for x in sh.shapes.iter_mut() {
+        for x in sh.shapes.iter_mut().filter(|x| x.kind == gridcraft_model::ShapeKind::Equation) {
             x.text = format!("frac{{{}", "l".repeat(200));
             x.anchor.width = 40.0;
             x.anchor.height = 100.0;
@@ -648,9 +650,12 @@ fn the_fallback_text_is_clipped_to_the_equation_frame() {
     let text = String::from_utf8_lossy(&pdf);
     let clip = text.find("30 75 re W n").expect("a clip the size of the frame");
     let run = text.find("(frac{llll").expect("the source line");
-    assert!(clip < run, "the clip comes before the text");
-    assert_eq!(text[clip..run].matches("\nq\n").count() + text[..clip].matches("\nq\n").count(), text[..run].matches("\nq\n").count());
-    assert!(text[run..].contains("\nQ\n"), "the state is restored after the text");
+    let later = text.find("(later box) Tj").expect("the text box after the equation");
+    assert!(clip < run && run < later, "clip, then the text, then the later object");
+    // The net number of saved graphics states (`q` less `Q`) before an operator.
+    let depth = |at: usize| text[..at].lines().filter(|l| *l == "q").count() as i64 - text[..at].lines().filter(|l| *l == "Q").count() as i64;
+    assert_eq!(depth(run), depth(clip), "the text is drawn under the frame's clip");
+    assert_eq!(depth(later), depth(clip) - 1, "the later object is drawn with the frame's state restored");
 }
 
 #[test]
