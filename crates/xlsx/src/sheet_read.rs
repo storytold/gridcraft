@@ -93,6 +93,20 @@ fn forget_dynamic(st: &mut RowState, pos: CellRef) {
     }
 }
 
+/// Records the spill range of the Python cell read at `pos`, its anchor, when the file declares
+/// one that a result can fill: the spill then exists even when the file holds no records for its
+/// blank cells. Charged like [`dynamic_range`]'s scans.
+fn record_python_spill(st: &mut RowState, sheet: &mut Sheet, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    let Some(r) = st.dynamic.iter().rev().find(|r| r.start == pos).copied() else { return };
+    if r.count() > 1 && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 {
+        sheet.spill_ranges.insert(pos, r);
+    }
+}
+
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
@@ -557,18 +571,25 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             (None, None)
         }
     };
+    if py.is_some() {
+        record_python_spill(st, sheet, pos);
+    }
     let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
+    let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
     let value = match spilled_from {
-        // A Python cell's spilled values are kept: they are its result until it runs again. A
-        // range larger than a result may be is a crafted file's: its values are dropped, like a
-        // formula's spilled values, and no spill is recorded.
-        Some(r) if r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 && sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()) => {
+        // A Python cell's spilled values are kept: they are its result until it runs again.
+        Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
             if !value.is_empty() {
                 sheet.spill.insert(pos, value);
             }
             sheet.spill_ranges.insert(r.start, r);
             Value::Empty
         }
+        // A Python cell's range larger than a result may be is a crafted file's: it is no spill,
+        // and its cells keep the values the file shows as plain values, as when the cell keeps
+        // only its own value.
+        Some(_) if python_anchor => value,
+        // A formula's spilled values are dropped: recalculation fills them again.
         Some(_) => Value::Empty,
         None => value,
     };

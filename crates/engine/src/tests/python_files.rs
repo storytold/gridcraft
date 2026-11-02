@@ -318,6 +318,42 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
 }
 
 #[test]
+fn a_python_spill_whose_blank_cells_have_no_records_is_still_a_spill() {
+    // A1's result spills over A1:A3, and the file holds no records for the blank A2 and A3.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let mut s = s();
+    open(&mut s, "sparse.xlsx", &excel_shaped(data, Some(&["[1, None, None]"])));
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let a1 = CellRef::new(0, 0);
+    assert_eq!(sh.spill_ranges.get(&a1), Some(&RangeRef::parse("A1:A3").unwrap()), "the range is recorded at its anchor");
+    assert_eq!(sh.spill_anchor(CellRef::parse("A3").unwrap()), Some(a1));
+    let kept = sh.cell(a1).and_then(|c| c.py.as_ref()).and_then(|p| p.output.as_ref()).map(|o| o.value.clone());
+    assert_eq!(kept, Some(array(3, 1, vec![1.0.into(), Value::Empty, Value::Empty])), "the result is rebuilt over the whole range");
+    // A formula entered in the spill takes the area, as with any spill.
+    s.execute("cell.set", json!({"cell": "A3", "input": "7"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(CellError::Spill));
+}
+
+#[test]
+fn a_python_spill_range_larger_than_a_result_keeps_its_values_as_plain_values() {
+    // C1:D600000 is 1,200,000 cells, more than a result may have but within what the reader
+    // tracks; its cached values are kept as the file shows them, and nothing spills.
+    let (mut s, _) = build();
+    let bytes = save(&mut s, "xlsx");
+    let crafted = with_sheet_xml(&bytes, |xml| xml.replace("ref=\"C1:D2\"", "ref=\"C1:D600000\""));
+    assert_ne!(crafted, bytes);
+    open(&mut s, "crafted.xlsx", &crafted);
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.spill_ranges.contains_key(&CellRef::new(0, 2)), "{:?}", sh.spill_ranges);
+    assert_eq!(
+        (v(&s, "C1"), v(&s, "D1"), v(&s, "C2"), v(&s, "D2")),
+        (Value::Number(1.0), Value::text("two"), Value::Number(3.0), Value::text("four"))
+    );
+    let d2 = sh.cell(CellRef::parse("D2").unwrap()).expect("D2 is stored");
+    assert!(d2.py.is_none() && d2.formula.is_none(), "a plain value");
+}
+
+#[test]
 fn a_script_is_measured_after_its_escapes_are_decoded() {
     let max = gridcraft_model::python::MAX_FORMULA_CHARS;
     // 2,000 tabs written as `_x0009_`: 14,000 characters in the file, 2,004 as code, which fits.
