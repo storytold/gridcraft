@@ -92,6 +92,30 @@ pub fn item_letter(prefix: &str, target: &str) -> Option<&'static str> {
     sequences_for(target).into_iter().find(|seq| seq.len() == prefix.len() + 1 && seq.starts_with(prefix))
 }
 
+/// True when `prefix` is the group level of a menu control: some of `target`'s sequences finish
+/// one key below it (Borders' "HB" before HBA..HBW). The menu opens there, as Excel's does, so its
+/// item letters show.
+pub fn opens_menu(prefix: &str, target: &str) -> bool {
+    !prefix.is_empty() && is_group_level(prefix) && sequences_for(target).iter().any(|seq| seq.len() == prefix.len() + 1 && seq.starts_with(prefix))
+}
+
+/// The badge for a menu item that runs `target` with `params`: its finish sequence one key below
+/// the prefix. Items sharing one command (the Borders presets) are told apart by their params,
+/// compared as JSON values, so key order and spacing don't matter.
+pub fn item_letter_with(prefix: &str, target: &str, params: &serde_json::Value) -> Option<&'static str> {
+    SEQUENCES.iter().find_map(|(seq, entry)| match entry {
+        Entry::Finish(Action::CommandWith(id, p))
+            if *id == target
+                && seq.len() == prefix.len() + 1
+                && seq.starts_with(prefix)
+                && serde_json::from_str::<serde_json::Value>(p).is_ok_and(|p| p == *params) =>
+        {
+            Some(*seq)
+        }
+        _ => None,
+    })
+}
+
 /// Badge sequences for a command control: every sequence for `target` that continues from the
 /// current prefix (the painter strips the prefix, so the remaining letters show).
 pub fn control_badges(prefix: &str, target: &str) -> Vec<&'static str> {
@@ -195,6 +219,50 @@ mod tests {
         assert_eq!(group_extension("H", &["dialog:pasteSpecial"]), vec!["HV"]);
         assert!(group_extension("", &["dialog:pasteSpecial"]).is_empty(), "tab letters paint on tabs, not buttons");
         assert!(group_extension("E", &["dialog:pasteSpecial"]).is_empty(), "the finish letter paints on the menu item");
+    }
+
+    #[test]
+    fn menu_levels_and_item_letters_with_params() {
+        use serde_json::json;
+        assert!(opens_menu("HB", "home.borders"));
+        // Prefixes that are not the Borders menu level don't open it.
+        assert!(!opens_menu("H", "home.borders"), "the tab level shows the HB badge, not the menu");
+        assert!(!opens_menu("", "home.borders"));
+        assert!(!opens_menu("HBA", "home.borders"), "a finished sequence is not a menu level");
+        assert!(!opens_menu("HI", "home.borders"), "another group's level");
+        assert!(!opens_menu("HB", "home.fillColor"), "the Borders level is not another control's menu");
+        // Presets sharing home.borders are told apart by their params.
+        assert_eq!(item_letter_with("HB", "home.borders", &json!({"preset": "all"})), Some("HBA"));
+        assert_eq!(item_letter_with("HB", "home.borders", &json!({"preset": "bottom"})), Some("HBO"));
+        assert_eq!(item_letter_with("HB", "home.borders", &json!({"preset": "nope"})), None);
+        assert_eq!(item_letter_with("H", "home.borders", &json!({"preset": "all"})), None);
+        // Params compare as JSON values: key order and spacing don't matter.
+        let parsed: serde_json::Value = serde_json::from_str("{ \"preset\" : \"all\" }").unwrap();
+        assert_eq!(item_letter_with("HB", "home.borders", &parsed), Some("HBA"));
+        assert_eq!(
+            json!({"b": 1, "a": 2}),
+            serde_json::from_str::<serde_json::Value>("{\"a\":2,\"b\":1}").unwrap(),
+            "maps compare regardless of order"
+        );
+        // Every preset in the Borders menu has its letter (Inside Borders is GridCraft's own, J).
+        for preset in [
+            "bottom",
+            "top",
+            "left",
+            "right",
+            "none",
+            "all",
+            "outside",
+            "thickOutside",
+            "doubleBottom",
+            "thickBottom",
+            "topBottom",
+            "topThickBottom",
+            "topDoubleBottom",
+            "inside",
+        ] {
+            assert!(item_letter_with("HB", "home.borders", &json!({"preset": preset})).is_some(), "{preset} has no letter");
+        }
     }
 
     #[test]

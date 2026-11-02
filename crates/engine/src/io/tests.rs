@@ -19,6 +19,7 @@ fn copied(wb: &Workbook, range: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 #[test]
 fn save_fails_upfront_when_the_temp_name_is_taken() {
     // Another local user who can write the directory must not be able to point the
@@ -290,6 +291,20 @@ fn csv_named_history_does_not_get_the_reserved_sheet_name() {
     assert_eq!(wb.sheets[0].name, "Sales");
 }
 
+#[test]
+fn csv_and_text_open_read_day_first_dates_and_report_a_guessed_order() {
+    let may = gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, 2026, 5, 31).unwrap();
+    let april = gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, 2026, 4, 3).unwrap();
+    for file in ["dates.csv", "dates.txt"] {
+        let (wb, warnings) = open_bytes(file, b"When\n31/05/2026\n03/04/2026\n").unwrap();
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 0)), gridcraft_core::Value::Number(may), "{file}");
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(2, 0)), gridcraft_core::Value::Number(april), "{file}");
+        assert!(warnings.is_empty(), "{file}: {warnings:?}");
+    }
+    let (_, warnings) = open_bytes("ambiguous.csv", b"When\n03/04/2026\n12/01/2026\n").unwrap();
+    assert!(warnings.iter().any(|w| w.contains("column A") && w.contains("ambiguous")), "{warnings:?}");
+}
+
 /// A save that can't be put in place (here a folder already has the workbook's name, as
 /// with a file another app holds locked) fails without leaving `<name>.sctmp` behind.
 #[cfg(not(target_arch = "wasm32"))]
@@ -559,4 +574,33 @@ fn content_wins_over_a_mismatched_extension() {
         let (opened, _) = open_bytes(name, b"a,b\n1,2\n").unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::text("b"), "{name}");
     }
+}
+
+/// #2871: opening an XLSX reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)`
+/// wrapper as the formula inside when GridCraft calculates every function it calls (including
+/// the evaluator's own, such as ROW), and keeps the wrapper, and so the cached value, for a
+/// Google-only function.
+#[test]
+fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
+    use gridcraft_core::{CellRef, Value};
+    let mut wb = Workbook::new();
+    let sh = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+    let wrapped = [
+        ("A1", "IFERROR(__xludf.DUMMYFUNCTION(\"SUM(ROW(B1:B3))\"),6)", Value::Number(6.0)),
+        ("A2", "IFERROR(__xludf.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")", Value::text("salut")),
+    ];
+    for (at, text, value) in &wrapped {
+        let cell = gridcraft_model::Cell {
+            value: value.clone(),
+            formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(text))),
+            ..Default::default()
+        };
+        sh.cells.set(CellRef::parse(at).unwrap(), cell);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (opened, _) = open_bytes("google.xlsx", &bytes).unwrap();
+    let text = |at: &str| opened.sheets[0].cells.get(CellRef::parse(at).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    assert_eq!(text("A1").as_deref(), Some("SUM(ROW(B1:B3))"));
+    assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
+    assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }

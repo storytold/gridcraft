@@ -336,6 +336,10 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
     if sig < 1.0 || s.is_empty() {
         return Err(CellError::Num);
     }
+    // Excel: 10^significance overflows from 309 up.
+    if sig >= 309.0 {
+        return Err(CellError::Div0);
+    }
     let (first, last) = (s.first().copied().unwrap_or(0.0), s.last().copied().unwrap_or(0.0));
     if x < first || x > last {
         return Err(CellError::NA);
@@ -359,6 +363,10 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
         let (rl, rh) = (rank_of(lo), rank_of(hi));
         rl + (x - lo) / (hi - lo) * (rh - rl)
     };
+    // From significance 15 up Excel returns 15 significant digits, rounded.
+    if sig >= 15.0 {
+        return num_val(format!("{r:.14e}").parse().unwrap_or(r));
+    }
     num_val(trunc_digits(r, sig))
 }
 
@@ -420,7 +428,10 @@ pub(super) fn geomean(v: &[f64]) -> R<f64> {
 }
 
 pub(super) fn harmean(v: &[f64]) -> R<f64> {
-    if v.is_empty() || v.iter().any(|&x| x <= 0.0) {
+    if v.is_empty() {
+        return Err(CellError::NA);
+    }
+    if v.iter().any(|&x| x <= 0.0) {
         return Err(CellError::Num);
     }
     Ok(v.len() as f64 / v.iter().map(|x| 1.0 / x).sum::<f64>())

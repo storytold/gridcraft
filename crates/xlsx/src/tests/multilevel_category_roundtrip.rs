@@ -41,6 +41,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
