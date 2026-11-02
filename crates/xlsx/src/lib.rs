@@ -80,25 +80,66 @@ impl ReadReport {
     }
 }
 
-/// Reads an `.xlsx` / `.xlsm` / `.xltx` / `.xltm` package (the workbook part is found through the
-/// package relationships, so every main-part content type is accepted).
-pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes, None)
+/// What reading and writing formulas needs to know about worksheet functions. The function
+/// library sits beside this crate (format crates depend only on core, formula and model), so the
+/// caller supplies its answers; the engine passes the library's.
+///
+/// It decides how legacy formulas (saved without dynamic-array metadata) are read with Excel's
+/// implicit `@`, and which formulas are saved with dynamic-array metadata.
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionInfo {
+    /// Whether `name` (upper case, without `_xlfn.`) is a built-in worksheet function rather than
+    /// an add-in, VBA or LAMBDA function.
+    pub is_builtin: fn(&str) -> bool,
+    /// Whether parameter `i` of the built-in function `name` takes a single value, as opposed to
+    /// a reference or array taken as a whole.
+    pub is_scalar_arg: fn(&str, usize) -> bool,
 }
 
-/// [`read_xlsx`], and opens formulas from Google Sheets' XLSX export as the formulas written in
-/// Google Sheets (#2871).
-///
-/// Google writes a formula that uses a function it thinks Excel lacks as
-/// `IFERROR(__xludf.DUMMYFUNCTION("<formula, quotes doubled>"),<cached value>)`; Excel shows the
-/// cached value. A cell formula holding that wrapper, whole or inside a larger formula, is read
-/// as the formula inside when it parses and `known` says GridCraft calculates every function it
-/// calls. Otherwise (a Google-only function such as `GOOGLETRANSLATE`, inner text that doesn't
-/// parse, or nesting past the parser's limit) the wrapper stays, so the cell keeps showing the
-/// cached value as in Excel. `known` is passed in because this crate doesn't depend on the
-/// function library.
-pub fn read_xlsx_with(bytes: &[u8], known: &dyn Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes, Some(known))
+impl Default for FunctionInfo {
+    /// Without the function library: every name counts as built in, and this crate's table of
+    /// reference- and array-taking parameters alone decides parameter types.
+    fn default() -> Self {
+        FunctionInfo { is_builtin: |_| true, is_scalar_arg: |_, _| true }
+    }
+}
+
+/// Reads an `.xlsx` / `.xlsm` / `.xltx` / `.xltm` package (the workbook part is found through the
+/// package relationships, so every main-part content type is accepted), with the default
+/// [`FunctionInfo`].
+pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, ReadOptions::default())
+}
+
+/// Caller-supplied function facts for [`read_xlsx_with`]: both legacy-formula [`FunctionInfo`]
+/// and Google Sheets export unwrap predicate (`#2871`).
+#[derive(Clone, Copy, Default)]
+pub struct ReadOptions<'a> {
+    pub functions: FunctionInfo,
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+}
+
+impl<'a> From<FunctionInfo> for ReadOptions<'a> {
+    fn from(functions: FunctionInfo) -> Self {
+        Self { functions, known_function: None }
+    }
+}
+
+impl<'a> From<(FunctionInfo, &'a dyn Fn(&str) -> bool)> for ReadOptions<'a> {
+    fn from((functions, known): (FunctionInfo, &'a dyn Fn(&str) -> bool)) -> Self {
+        Self { functions, known_function: Some(known) }
+    }
+}
+
+impl<'a, F: Fn(&str) -> bool> From<&'a F> for ReadOptions<'a> {
+    fn from(known: &'a F) -> Self {
+        Self { functions: FunctionInfo::default(), known_function: Some(known) }
+    }
+}
+
+/// [`read_xlsx`] with caller-supplied function facts and/or Google Sheets export unwrap predicate (#2871).
+pub fn read_xlsx_with<'a>(bytes: &[u8], opts: impl Into<ReadOptions<'a>>) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, opts.into())
 }
 
 /// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
@@ -150,20 +191,32 @@ impl XlsxKind {
     }
 }
 
-/// Writes a workbook as an `.xlsx` package, or as an `.xlsm` one when it holds a VBA project.
+/// Writes a workbook as an `.xlsx` package, or as an `.xlsm` one when it holds a VBA project,
+/// with the default [`FunctionInfo`].
 pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx(wb, if wb.vba_project.is_some() { XlsxKind::MacroWorkbook } else { XlsxKind::Workbook })
+    let kind = if wb.vba_project.is_some() { XlsxKind::MacroWorkbook } else { XlsxKind::Workbook };
+    write::write_xlsx(wb, kind, FunctionInfo::default())
 }
 
-/// Writes a workbook as the given member of the `.xlsx` family.
+/// Writes a workbook as the given member of the `.xlsx` family, with the default [`FunctionInfo`].
 pub fn write_xlsx_as(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx(wb, kind)
+    write::write_xlsx(wb, kind, FunctionInfo::default())
+}
+
+/// [`write_xlsx_as`] with the function library's facts.
+pub fn write_xlsx_with(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx(wb, kind, functions)
 }
 
 /// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
 /// file name, used for the workbook in a PivotChart's link to its PivotTable).
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
     write::write_xlsx_named(wb, kind, Some(book_name))
+}
+
+/// Writes a workbook with caller-supplied function facts and file name.
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: &str, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named_with(wb, kind, Some(book_name), functions)
 }
 
 /// CSV import options.

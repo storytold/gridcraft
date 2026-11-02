@@ -302,11 +302,15 @@ impl Parser {
                 {
                     return Ok(Expr::Unary(UnOp::Spill, Box::new(r)));
                 }
-                // Files write `@x` as `_xlfn.SINGLE(x)`.
+                // Files write `@x` as `_xlfn.SINGLE(x)`; `SINGLE(A1:A3*2)` is `@(A1:A3*2)`.
                 if name == "SINGLE"
                     && args.len() == 1
                     && let Some(x) = args.pop()
                 {
+                    let x = match x {
+                        Expr::Binary(..) | Expr::Unary(UnOp::Neg | UnOp::Plus | UnOp::Percent, _) => Expr::Paren(Box::new(x)),
+                        x => x,
+                    };
                     return Ok(Expr::Unary(UnOp::At, Box::new(x)));
                 }
                 // Files may spell a trim reference as a function call (`_xlfn._TRO_ALL(A1:E10)`).
