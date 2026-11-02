@@ -28,9 +28,9 @@ pub use font_fallback::symbol_face_installed;
 use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};
 use font_setup::pick;
 pub use font_setup::{
-    CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MONO, SERIF, UI, UI_BOLD, available_text, cell_family, cell_text_width,
-    chinese_font_loaded, craft_font_scripts, craft_fonts_cover, craft_fonts_loaded, craft_fonts_required, font_definitions,
-    font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
+    CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
+    cell_family, cell_text_width, chinese_font_loaded, craft_font_scripts, craft_fonts_cover, craft_fonts_loaded, craft_fonts_required,
+    font_definitions, font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
 #[cfg(test)]
 use font_setup::{candidates, craft_font_faces, try_load};
@@ -114,6 +114,10 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
+    /// between cells showing an error. Sheet colours.
+    pub sheet_trace_arrow: Color32,
+    pub sheet_trace_error: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -146,6 +150,9 @@ const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
 const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
 const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
 const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+/// Trace arrows on the sheet, the same in both themes.
+const SHEET_TRACE_ARROW: Color32 = rgb(0x1F5FC9);
+const SHEET_TRACE_ERROR: Color32 = rgb(0xD13438);
 
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,6 +251,8 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            sheet_trace_arrow: SHEET_TRACE_ARROW,
+            sheet_trace_error: SHEET_TRACE_ERROR,
         }
     }
 
@@ -395,6 +404,8 @@ mod contrast_tests {
         ] {
             add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
         }
+        add("trace arrow on sheet", t.sheet_trace_arrow, t.grid_bg, GLYPH);
+        add("trace error arrow on sheet", t.sheet_trace_error, t.grid_bg, GLYPH);
         // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
         add("breakpoint on window", t.breakpoint, t.window, GLYPH);
         add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
@@ -439,6 +450,7 @@ mod contrast_tests {
             (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),
             (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
         );
+        assert_eq!((l.sheet_trace_arrow, l.sheet_trace_error), (d.sheet_trace_arrow, d.sheet_trace_error));
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
         }
