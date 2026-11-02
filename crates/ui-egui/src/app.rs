@@ -255,10 +255,10 @@ impl SheetApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
             // This block runs in every window's pass; a fetch belongs to the window that
-            // started it, so only that window polls or discards it \u{2014} another window drawing
+            // started it, so only that window polls or discards it: another window drawing
             // first must not consume a result the owning window's dialog still expects. The
             // owning window gone (closed while its fetch ran), the result has nowhere to
-            // land: join the worker to free it, then drop it.
+            // land: the reaper frees it when the worker ends.
             let fetch_window = self.fetch.as_ref().map(|f| f.window);
             let owner_alive = fetch_window.is_some_and(|w| self.session.window(w.unwrap_or_default()).is_some());
             let mine = fetch_window.is_none_or(|w| w == self.ui_window());

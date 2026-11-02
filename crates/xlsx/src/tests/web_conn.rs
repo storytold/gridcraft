@@ -299,3 +299,31 @@ fn a_root_declared_prefix_survives_removing_the_last_web_query() {
     // The part parses: the prefix is bound.
     assert!(crate::xml::parse(&part).is_ok(), "the merged part is well-formed XML");
 }
+
+#[test]
+/// An attribute-less `<connection/>` (valid XML) is scanned, not skipped: a name-terminator
+/// set of only whitespace would drop it from the merge.
+fn an_attribute_less_connection_is_scanned() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection/><xel:connection/><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.matches("<connection/>").count() == 1, "the attribute-less connection is kept verbatim");
+    assert!(text.contains("<xel:connection/>"), "the attribute-less prefixed connection is kept verbatim");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+    assert_eq!(text.matches("<connection").count(), 3, "three connection elements total (the two foreign plus ours)");
+}

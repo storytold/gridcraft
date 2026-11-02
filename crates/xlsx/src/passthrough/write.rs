@@ -385,8 +385,11 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
         // and its name may be followed by any XML whitespace, not only a space. `<connection`
         // also prefixes `<connections` (the root), so every occurrence is checked until one
         // is an element of its own.
+        // The name ends at whitespace, a `/` (an attribute-less `<connection/>`), or a
+        // closing quote of an attribute-less element; `<connections` (the root) is still
+        // rejected because `s` is not any of those.
         let unprefixed = rest.match_indices("<connection").map(|(s, _)| s).find(|&s| {
-            rest.as_bytes().get(s + "<connection".len()).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            rest.as_bytes().get(s + "<connection".len()).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'/'))
         });
         // A prefixed element (`<xel:connection`, Power Query's style) is found by its
         // `:connection` tail: each occurrence walks back to its `<`, and the text between
@@ -395,8 +398,9 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
             let Some(lt) = rest[..s].rfind('<') else { return false };
             let prefix = &rest[lt + 1..s];
             !prefix.is_empty() && prefix.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
-                // `s` is the colon's index, so the element name ends one past it plus its length.
-                && matches!(rest.as_bytes().get(s + 1 + "connection".len()), Some(b' ' | b'\t' | b'\r' | b'\n'))
+                // `s` is the colon's index, so the element name ends one past it plus its
+                // length: whitespace, or a `/` for an attribute-less element.
+                && matches!(rest.as_bytes().get(s + 1 + "connection".len()), Some(b' ' | b'\t' | b'\r' | b'\n' | b'/'))
         });
         // The block starts at the `<` before the prefix (`<xel:connection`), not at the name.
         // Whichever element comes first in the part, prefixed or not: scanning by one form

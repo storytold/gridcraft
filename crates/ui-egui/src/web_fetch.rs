@@ -100,11 +100,14 @@ impl SheetApp {
     pub fn discard_fetch(&mut self) {
         if let Some(fetch) = self.fetch.take() {
             // Not detached into the void and not joined here: the handle goes to the reaper,
-            // which joins finished workers on later passes (freeing their results) and drops
-            // the oldest when the list grows past its bound (a capped list cannot grow with
-            // repeated cancellations; a dropped handle detaches, same as std's own bounds).
+            // which joins finished workers on later passes (freeing their results). The cap
+            // drops the OLDEST reaped handles (the front of the queue) when it grows past its
+            // bound: the earliest have had every chance to be joined, and the newest are the
+            // ones still running; a dropped handle detaches, same as std's own bounds.
             self.reaped.push_back(fetch.handle);
-            self.reaped.truncate(8);
+            while self.reaped.len() > 8 {
+                self.reaped.pop_front();
+            }
         }
     }
 
