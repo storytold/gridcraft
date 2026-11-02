@@ -505,6 +505,19 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     }
 }
 
+/// Makes `key`'s box the one that takes grid references once it has the keyboard, and tracks
+/// its caret while it is.
+pub(super) fn track_pick_box(d: &mut Dialog, key: &'static str, r: &egui::Response) {
+    let Some(pick) = d.pick.as_mut() else { return };
+    if r.has_focus() && pick.key != key && !pick.refocus {
+        pick.key = key;
+        pick.point = None;
+    }
+    if pick.key == key {
+        track_pick(pick, r, r.changed());
+    }
+}
+
 /// Draws a dialog's `fields`, editing its values.
 pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.

@@ -49,6 +49,7 @@ mod formula_popup;
 mod freeze_handles;
 mod function_library;
 mod go_to_dialog;
+mod goal_seek_pick;
 mod header_autofit;
 mod header_column_drag;
 mod host_chrome;
