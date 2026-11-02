@@ -445,7 +445,7 @@ fn prn_save_lays_out_the_sheet_like_excel() {
     let date = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("dd.mm.yyyy"));
     let percent = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("0.00%"));
     if let Some(sh) = wb.sheet_mut(0) {
-        let mut put = |r: u32, c: u32, value: Value, style: StyleId| sh.set_cell(CellRef::new(r, c), Cell { value, formula: None, style });
+        let mut put = |r: u32, c: u32, value: Value, style: StyleId| sh.set_cell(CellRef::new(r, c), Cell { value, formula: None, style, py: None });
         put(0, 0, Value::text("left"), StyleId::DEFAULT);
         put(0, 1, Value::Number(5.0), StyleId::DEFAULT);
         put(0, 2, Value::Number(-5.5), StyleId::DEFAULT);
