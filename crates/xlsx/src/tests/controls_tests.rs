@@ -279,6 +279,55 @@ fn an_unsupported_control_beside_a_modelled_one_in_one_alternate_content_is_kept
     assert!(kept.contains("List 1") && !kept.contains("Scroll 1"), "{kept}");
 }
 
+/// A producer that prefixes the main namespace (`<x:controls>`): the kept element is still the
+/// sheet's one `<controls>` element, so a modelled control is written into it rather than into a
+/// second one, which the worksheet schema does not allow.
+#[test]
+fn a_modelled_control_joins_a_kept_controls_element_with_a_namespace_prefix() {
+    use gridcraft_model::{Anchor, ControlKind, FormControl};
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rIdB" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/b.xml"/></Relationships>"#;
+    let prop_b = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="List" fmlaRange="$D$1:$D$3" sel="2"/>"#;
+    let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1026" type="#_x0000_t201"><x:ClientData ObjectType="List"><x:Anchor>2, 0, 6, 0, 5, 0, 9, 0</x:Anchor><x:FmlaRange>$D$1:$D$3</x:FmlaRange><x:Sel>2</x:Sel></x:ClientData></v:shape></xml>"##;
+    let controls = r#"<x:controls xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><x:control shapeId="1026" r:id="rIdB" name="List 1"><x:controlPr><x:anchor><x:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>0</xdr:rowOff></x:from><x:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></x:to></x:anchor></x:controlPr></x:control></x:controls>"#;
+    let bytes = minimal(
+        &format!(r#"<sheetData/><legacyDrawing r:id="rId9"/>{controls}"#),
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/ctrlProps/b.xml", prop_b), ("xl/drawings/vmlDrawing1.vml", vml)],
+        "",
+        "",
+    );
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.sheet(0).unwrap().controls.is_empty(), "the list box stays with pass-through");
+    let kept = wb
+        .sheet(0)
+        .unwrap()
+        .preserved
+        .as_ref()
+        .and_then(|k| k.elements.iter().find(|e| e.slot == "controls"))
+        .map(|e| e.xml.clone())
+        .unwrap_or_default();
+    assert!(kept.contains("</x:controls>"), "kept with its prefix: {kept}");
+    let anchor = Anchor { cell: gridcraft_core::CellRef::new(2, 1), width: 120.0, height: 20.0, ..Default::default() };
+    wb.sheet_mut(0).unwrap().controls.push(FormControl {
+        id: 900,
+        kind: ControlKind::Slider,
+        anchor,
+        link: Some("$B$1".into()),
+        value: 40,
+        ..Default::default()
+    });
+    let out = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&out).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    let opened = sheet.matches("<controls").count() + sheet.matches("<x:controls").count();
+    assert_eq!(opened, 1, "one controls element: {sheet}");
+    let start = sheet.find("<x:controls").or_else(|| sheet.find("<controls")).unwrap();
+    let end = sheet.rfind("controls>").unwrap();
+    let inner = &sheet[start..end];
+    assert!(inner.contains("name=\"List 1\"") && inner.contains("<mc:Fallback>"), "both controls inside the one element: {sheet}");
+    let (back, _) = read_xlsx(&out).unwrap();
+    assert_eq!(back.sheet(0).unwrap().controls.len(), 1, "the slider reads back; the list box stays kept");
+}
+
 /// Shapes with a named `id` and their number in `o:spid`, as some producers write them.
 const VML_SPID: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
 <v:shape id="Button 1" o:spid="_x0000_s1025" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>

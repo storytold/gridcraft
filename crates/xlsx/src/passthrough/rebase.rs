@@ -69,7 +69,7 @@ impl<'a> SheetKept<'a> {
                     if let Some(mut x) = remap(&e.xml, &self.ids) {
                         if *slot == "controls"
                             && !placed
-                            && let Some(i) = x.rfind("</controls>")
+                            && let Some(i) = last_close_tag(&x, "controls")
                         {
                             x.insert_str(i, controls);
                             placed = true;
@@ -85,6 +85,16 @@ impl<'a> SheetKept<'a> {
         }
         s
     }
+}
+
+/// The byte offset of the last close tag of `local` in `x`, whatever namespace prefix the file
+/// gives it (`</controls>`, `</x:controls>`).
+fn last_close_tag(x: &str, local: &str) -> Option<usize> {
+    x.rmatch_indices("</").find_map(|(i, _)| {
+        let rest = x.get(i + 2..)?;
+        let name = rest.get(..rest.find('>')?)?.trim_end();
+        (name.rsplit(':').next().unwrap_or(name) == local).then_some(i)
+    })
 }
 
 // ---------------------------------------------------------------- linked workbooks
