@@ -732,6 +732,22 @@ fn border_keytip_no_border_clears_a_bordered_cell() {
 }
 
 #[test]
+fn border_keytip_line_color_after_no_border_remembers_it_without_reapplying_none() {
+    let mut h = harness(selected("A1"));
+    h.state_mut().grid.last_border = "none".to_string();
+    sequence(&mut h, &[Key::H, Key::B, Key::I], false);
+    h.run_steps(3);
+    h.get_by_label("Automatic").click();
+    h.run_steps(3);
+    assert_eq!(h.state().grid.last_border_color, "auto", "the chosen colour is remembered without clearing the border preset");
+    assert_eq!(h.state().grid.last_border, "none", "No Border remains the current preset face");
+    assert!(
+        h.state().session.journal.iter().all(|(id, _)| id != "home.borders"),
+        "line colour selection must not re-run the none preset when No Border is active"
+    );
+}
+
+#[test]
 fn border_keytip_all_borders_covers_every_side_of_a_block() {
     use gridcraft_engine::model::BorderStyle::Thin;
     let mut h = harness(selected("A1:B2"));

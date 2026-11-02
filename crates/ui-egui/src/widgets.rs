@@ -259,7 +259,10 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
+    let enabled = ui.is_enabled();
+    let m = m.on_hover_text(tip_text(ui, tip));
+    m.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
+    (m.clicked(), a)
 }
 
 /// A small ribbon split button with a label (Error Checking): the icon and label run the default
