@@ -247,6 +247,8 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
         wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
+        wb.calc.multi_threaded = c.flag("concurrentCalc", true);
+        wb.calc.threads = c.attr_u32("concurrentManualCount").unwrap_or(0).min(1024);
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);

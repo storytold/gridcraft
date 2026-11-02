@@ -87,6 +87,8 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
+    /// Thread that evaluated each formula finished in this pass (merged into [`Calc::last_formula_thread`]).
+    pub(super) thread_log: Vec<(Key, std::thread::ThreadId)>,
 }
 
 impl<'a> PassHost<'a> {
@@ -126,6 +128,7 @@ impl<'a> PassHost<'a> {
             out_of_stack: false,
             sums: HashMap::default(),
             python: HashMap::default(),
+            thread_log: Vec::new(),
         }
     }
 
@@ -135,6 +138,14 @@ impl<'a> PassHost<'a> {
         self.pending.extend(python.keys().copied());
         self.python = python;
         self
+    }
+
+    pub(super) fn wb(&self) -> &Workbook {
+        self.wb
+    }
+
+    pub(super) fn now_value(&self) -> f64 {
+        self.now
     }
 }
 
@@ -570,6 +581,7 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        self.thread_log.push((k, std::thread::current().id()));
         v
     }
 

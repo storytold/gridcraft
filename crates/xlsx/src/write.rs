@@ -355,6 +355,12 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     if wb.calc.r1c1 {
         w.push_str(" refMode=\"R1C1\"");
     }
+    if !calc.multi_threaded {
+        w.push_str(" concurrentCalc=\"0\"");
+    }
+    if calc.threads > 0 {
+        let _ = write!(w, " concurrentManualCount=\"{}\"", calc.threads);
+    }
     if out.needs_calc {
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
