@@ -398,3 +398,21 @@ fn ctrl_down_to_the_last_row_shows_it_in_a_small_window() {
         assert!(visible(&h, "XFD1048576"), "the last cell is on screen in a {size:?} window");
     }
 }
+
+#[test]
+fn ctrl_down_and_right_with_frozen_panes_show_the_last_cell_in_a_small_window() {
+    // The frozen rows and columns take room from what scrolls: the scroll limit leaves it to them,
+    // or the last row and column would end behind the grid's edges.
+    for size in [egui::vec2(1200.0, 300.0), egui::vec2(500.0, 800.0)] {
+        let mut h = harness_sized(size);
+        h.state_mut().session.execute("view.freezePanes", json!({"cell": "C4"})).unwrap();
+        key(&mut h, Key::ArrowDown, CTRL);
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A1048576").unwrap());
+        assert!(visible(&h, "A1048576"), "the last row is on screen with frozen panes in a {size:?} window");
+        key(&mut h, Key::ArrowRight, CTRL);
+        key(&mut h, Key::ArrowRight, CTRL);
+        assert_eq!(active(&h), CellRef::parse("XFD1048576").unwrap());
+        assert!(visible(&h, "XFD1048576"), "the last cell is on screen with frozen panes in a {size:?} window");
+    }
+}
