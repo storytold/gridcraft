@@ -435,22 +435,35 @@ pub(super) fn f_test(a: &[Arg], _: C) -> R<Value> {
 }
 
 pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
-    let k = num(a, 0)?.trunc();
-    let n = num(a, 1)?.trunc();
+    let k_raw = num(a, 0)?;
+    let n_raw = num(a, 1)?;
+    let k = k_raw.trunc();
+    let n = n_raw.trunc();
     let p = num(a, 2)?;
     let cum = boolean(a, 3)?;
-    if k < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
+    if k_raw < 0.0 || n_raw < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
 }
 
 pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+    let n_raw = num(a, 0)?;
+    let n = n_raw.trunc();
     let p = num(a, 1)?;
-    let s1 = num(a, 2)?.trunc();
-    let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if !(0.0..=MAX_BINOM_TRIALS).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+    let s1_raw = num(a, 2)?;
+    let s1 = s1_raw.trunc();
+    let s2_raw = if has(a, 3) { num(a, 3)? } else { s1_raw };
+    let s2 = s2_raw.trunc();
+    if n_raw < 0.0
+        || s1_raw < 0.0
+        || s2_raw < 0.0
+        || !(0.0..=MAX_BINOM_TRIALS).contains(&n)
+        || !(0.0..=1.0).contains(&p)
+        || s1 > n
+        || s2 < s1
+        || s2 > n
+    {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {
@@ -493,10 +506,11 @@ pub(super) fn binom_inv(a: &[Arg], _: C) -> R<Value> {
 }
 
 pub(super) fn poisson_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?.trunc();
+    let x_raw = num(a, 0)?;
+    let x = x_raw.trunc();
     let m = num(a, 1)?;
     let cum = boolean(a, 2)?;
-    if x < 0.0 || m < 0.0 {
+    if x_raw < 0.0 || m < 0.0 {
         return Err(CellError::Num);
     }
     num_val(if cum { poisson_cdf(x, m) } else { poisson_pmf(x, m) })
