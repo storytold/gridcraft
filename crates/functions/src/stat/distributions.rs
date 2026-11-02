@@ -624,7 +624,7 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     let nn_raw = num(a, 3)?;
     let (k, n, kk, nn) = (k_raw.trunc(), n_raw.trunc(), kk_raw.trunc(), nn_raw.trunc());
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
-    if k_raw < 0.0 || n_raw < 0.0 || kk_raw < 0.0 || nn_raw <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
+    if k_raw < 0.0 || n_raw < 0.0 || kk_raw < 0.0 || nn < 1.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
         return Err(CellError::Num);
     }
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();

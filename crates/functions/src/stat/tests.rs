@@ -451,6 +451,7 @@ fn discrete() {
     is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(-0.1), n(2.0), n(4.0), b(false)]), CellError::Num);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(false)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(true)]), 1.0);
+    is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(0.0), n(0.5), b(false)]), CellError::Num);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(false)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(true)]), 1.0);
     is_err(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(-0.1), n(4.0), b(false)]), CellError::Num);
