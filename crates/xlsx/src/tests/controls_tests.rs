@@ -577,15 +577,16 @@ fn controls_naming_one_properties_part_read_it_once() {
 
 /// A legacy VML drawing with a button (`1025`, modelled), a check box (`1026`) and an option
 /// button (`1027`, with a picture through the drawing's own relationship) that only the drawing
-/// lists, plus `note` (a note shape for A1, with its comments part) when set. `listed`: the sheet's
+/// lists, plus `note` (a note shape for A1 whose client data carries that `ObjectType` attribute,
+/// with its comments part) when given. `listed`: the sheet's
 /// `<controls>` lists the button.
-fn vml_only_others(listed: bool, button: bool, note: bool) -> Vec<u8> {
+fn vml_only_others(listed: bool, button: bool, note: Option<&str>) -> Vec<u8> {
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     let mut rels = format!(r#"<Relationship Id="rId9" Type="{REL}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>"#);
     if listed {
         rels.push_str(&format!(r#"<Relationship Id="rIdA" Type="{REL}/ctrlProp" Target="../ctrlProps/a.xml"/>"#));
     }
-    if note {
+    if note.is_some() {
         rels.push_str(&format!(r#"<Relationship Id="rIdN" Type="{REL}/comments" Target="../comments1.xml"/>"#));
     }
     let rels =
@@ -595,8 +596,8 @@ fn vml_only_others(listed: bool, button: bool, note: bool) -> Vec<u8> {
     );
     let prop_a = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Button" lockText="1"/>"#;
     let mut shapes = String::new();
-    if note {
-        shapes.push_str(r##"<v:shape id="_x0000_s1028" type="#_x0000_t202"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 0, 2, 3, 15, 4, 4</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>"##);
+    if let Some(attr) = note {
+        shapes.push_str(&format!(r##"<v:shape id="_x0000_s1028" type="#_x0000_t202"><x:ClientData {attr}><x:Anchor>1, 15, 0, 2, 3, 15, 4, 4</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>"##));
     }
     if button {
         shapes.push_str(r##"<v:shape id="_x0000_s1025" type="#_x0000_t201"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>2, 0, 3, 0, 4, 0, 5, 0</x:Anchor><x:FmlaMacro>[0]!Go</x:FmlaMacro></x:ClientData></v:shape>"##);
@@ -621,7 +622,7 @@ fn vml_only_others(listed: bool, button: bool, note: bool) -> Vec<u8> {
     if listed {
         parts.push(("xl/ctrlProps/a.xml", prop_a));
     }
-    if note {
+    if note.is_some() {
         parts.push(("xl/comments1.xml", notes));
     }
     // As `minimal` builds it, with content types for the picture and the drawing.
@@ -670,7 +671,7 @@ fn kept_vml_only_others(out: &[u8]) -> String {
 /// kept: the save writes them beside the regenerated button, and they survive a second round trip.
 #[test]
 fn vml_only_controls_survive_when_the_last_listed_control_is_modelled() {
-    let bytes = vml_only_others(true, true, false);
+    let bytes = vml_only_others(true, true, None);
     let (wb, report) = read_xlsx(&bytes).unwrap();
     let sh = wb.sheet(0).unwrap();
     assert_eq!(sh.controls.len(), 1, "the button is modelled");
@@ -694,7 +695,7 @@ fn vml_only_controls_survive_when_the_last_listed_control_is_modelled() {
 /// lists (no `<controls>`, no notes, nothing modelled): the drawing is kept on its own.
 #[test]
 fn a_sheet_whose_only_controls_are_vml_only_and_unmodelled_keeps_them() {
-    let bytes = vml_only_others(false, false, false);
+    let bytes = vml_only_others(false, false, None);
     let (wb, report) = read_xlsx(&bytes).unwrap();
     assert!(wb.sheet(0).unwrap().controls.is_empty());
     let out = write_xlsx(&wb).unwrap();
@@ -711,7 +712,7 @@ fn a_sheet_whose_only_controls_are_vml_only_and_unmodelled_keeps_them() {
 /// option button stay, all in the one drawing.
 #[test]
 fn vml_only_controls_beside_a_note_are_kept() {
-    let bytes = vml_only_others(false, true, true);
+    let bytes = vml_only_others(false, true, Some(r#"ObjectType="Note""#));
     let (wb, report) = read_xlsx(&bytes).unwrap();
     let sh = wb.sheet(0).unwrap();
     assert_eq!((sh.controls.len(), sh.comments.len()), (1, 1), "{:?}", report.warnings);
@@ -724,4 +725,19 @@ fn vml_only_controls_beside_a_note_are_kept() {
     assert_eq!((sh.controls.len(), sh.comments.len()), (1, 1));
     let vml = kept_vml_only_others(&write_xlsx(&back).unwrap());
     assert_eq!(vml.matches("ObjectType=\"Note\"").count(), 1, "{vml}");
+}
+
+#[test]
+fn a_note_spelled_in_another_case_or_quote_is_not_kept_beside_the_written_one() {
+    // The note's client data reads ObjectType='note': still a note, so the kept drawing drops it
+    // and the note GridCraft writes for the comment is the only one.
+    for attr in ["ObjectType='note'", "ObjectType = \"NOTE\"", "ObjectType=\" Note \""] {
+        let (wb, report) = read_xlsx(&vml_only_others(false, true, Some(attr))).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().comments.len(), 1, "{attr}: {:?}", report.warnings);
+        let out = write_xlsx(&wb).unwrap();
+        let vml = kept_vml_only_others(&out).to_ascii_lowercase().replace(['\'', ' '], "\"");
+        assert_eq!(vml.matches("objecttype=\"note\"").count() + vml.matches("objecttype=\"\"note\"\"").count(), 1, "{attr}: {vml}");
+        let (back, _) = read_xlsx(&out).unwrap();
+        assert_eq!(back.sheet(0).unwrap().comments.len(), 1, "{attr}");
+    }
 }
