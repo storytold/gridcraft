@@ -5,7 +5,7 @@
 //! Input comes from cells, so nesting and node counts are capped and every access is checked.
 
 /// Values one document may hold.
-const MAX_NODES: usize = 100_000;
+pub(crate) const MAX_NODES: usize = 100_000;
 /// Arrays and objects one document may nest.
 const MAX_DEPTH: usize = 256;
 
@@ -364,7 +364,7 @@ mod tests {
             *s
         }
         fn gen_json(s: &mut u64, depth: usize) -> String {
-            if depth == 0 || rng(s) % 5 == 0 {
+            if depth == 0 || rng(s).is_multiple_of(5) {
                 match rng(s) % 7 {
                     0 => "null".to_string(),
                     1 => "true".to_string(),
@@ -392,7 +392,7 @@ mod tests {
                         }
                     }
                 }
-            } else if rng(s) % 2 == 0 {
+            } else if rng(s).is_multiple_of(2) {
                 let n = (rng(s) % 5) as usize;
                 let mut v = Vec::with_capacity(n);
                 for _ in 0..n {

@@ -349,12 +349,12 @@ fn filterjson(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let src = text(a, 0)?;
     let path = text(a, 1)?;
     // A cell holds at most 32,767 characters, so anything longer did not come from one.
-    if src.len() > MAX_TEXT || path.len() > MAX_TEXT {
+    if src.chars().count() > MAX_TEXT || path.chars().count() > MAX_TEXT {
         return Err(CellError::Value);
     }
     let doc = crate::json::parse(&src).ok_or(CellError::Value)?;
     let segs = crate::jsonpath::parse(&path).ok_or(CellError::Value)?;
-    let hits = crate::jsonpath::select(&doc, &segs);
+    let hits = crate::jsonpath::select(&doc, &segs, crate::json::MAX_NODES).ok_or(CellError::Value)?;
     match hits.len() {
         0 => Err(CellError::Value),
         1 => json_cell(hits.first().ok_or(CellError::Value)?),
