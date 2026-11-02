@@ -213,7 +213,7 @@ impl Trial {
         for (si, c, v) in sets {
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
@@ -329,7 +329,8 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     if !has_formula(ssi, set) {
         return Err(EngineError::Other("Cell must contain a formula.".into()));
     }
-    if has_formula(csi, chg) {
+    // A Python cell is a formula to Excel (`=PY(…)`): writing a number over it would lose its code.
+    if has_formula(csi, chg) || d.wb.sheet(csi).and_then(|sh| sh.cell(chg)).is_some_and(|c| c.py.is_some()) {
         return Err(EngineError::Other("Cell must contain a value.".into()));
     }
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -342,7 +343,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style });
+        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
@@ -422,7 +423,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
         for (c, v) in out {
             let sh = cx.sheet_mut(si)?;
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             cx.touch(si, c);
         }
         Ok(())
