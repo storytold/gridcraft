@@ -1,7 +1,7 @@
 //! Insert tab: tables, charts, sparklines, pictures, shapes, hyperlinks, comments and notes,
 //! conditional formatting (Home › Styles) and symbols.
 
-use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -234,14 +234,30 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
 }
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
-    if p.get("range").is_some() {
-        return target_ranges(s, p);
+    let mut areas = if p.get("range").is_some() {
+        target_ranges(s, p)?
+    } else if s.doc()?.selection.ranges.len() > 1 {
+        s.doc()?.selection.ranges.clone()
+    } else {
+        vec![block(s, p)?]
+    };
+    // Whole columns/rows span a million cells: clip their far edges to the cells in use, so only
+    // a block that really is too large gets refused. Bounded areas keep their extent as given.
+    let sheet = target_sheet(s, p)?;
+    if let Some(used) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
+        // Areas that start outside the used range keep their extent as given.
+        for r in &mut areas {
+            let whole_cols = r.start.row == 0 && r.end.row >= MAX_ROWS - 1;
+            let whole_rows = r.start.col == 0 && r.end.col >= MAX_COLS - 1;
+            if whole_cols && r.start.row <= used.end.row {
+                r.end.row = r.end.row.min(used.end.row);
+            }
+            if whole_rows && r.start.col <= used.end.col {
+                r.end.col = r.end.col.min(used.end.col);
+            }
+        }
     }
-    let d = s.doc()?;
-    if d.selection.ranges.len() > 1 {
-        return Ok(d.selection.ranges.clone());
-    }
-    Ok(vec![block(s, p)?])
+    Ok(areas)
 }
 
 // ---------------------------------------------------------------- tables
@@ -820,6 +836,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
         x_title: None,
@@ -867,7 +884,11 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            if !c.supports_data_table() {
+                c.data_table = None;
+            }
         }
+        update_data_table(c, p, bool_param(p, "dataTable"))?;
         if let Some(method) = quartiles {
             for series in &mut c.series {
                 series.quartiles = method;
@@ -917,6 +938,32 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(Json::Null)
     })
+}
+
+/// Shared by Chart Properties and Add Chart Element; no separate UI state.
+pub(super) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Result<()> {
+    if p.get("dataTable").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("chart", "`dataTable` must be a boolean"));
+    }
+    if on == Some(false) {
+        c.data_table = None;
+        return Ok(());
+    }
+    let fields = ["dataTableKeys", "dataTableHorizontalBorder", "dataTableVerticalBorder", "dataTableOutline"];
+    if on == Some(true) || fields.iter().any(|k| p.get(k).is_some()) {
+        if !c.supports_data_table() {
+            return Err(bad("chart", "data tables need a column, bar, line, area or compatible combo chart"));
+        }
+        let table = c.data_table.get_or_insert_with(Default::default);
+        for (key, value) in
+            fields.into_iter().zip([&mut table.show_keys, &mut table.horizontal_border, &mut table.vertical_border, &mut table.outline])
+        {
+            if let Some(v) = p.get(key) {
+                *value = v.as_bool().ok_or_else(|| bad("chart", format!("`{key}` must be a boolean")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1747,6 +1794,86 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_from_whole_columns_uses_the_rows_in_use() {
+        // #3114: selecting two whole columns of data refused the chart as "range too large".
+        let mut s = Session::new();
+        s.new_workbook();
+        let values: Vec<Vec<String>> = (1..=5).map(|i| vec![i.to_string(), (i * 10).to_string()]).collect();
+        s.execute("range.setValues", json!({"range": "A1:B5", "values": values})).unwrap();
+        s.execute("selection.set", json!({"range": "A:B"})).unwrap();
+        s.execute("insert.chart", json!({"type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$5", "Sheet1!$B$1:$B$5"]);
+        // A block that really is too large still is.
+        s.execute("cell.set", json!({"cell": "B600000", "input": "1"})).unwrap();
+        assert!(s.execute("insert.chart", json!({"range": "A:B", "type": "line"})).is_err());
+        // A bounded block keeps its extent, even where it runs past the data.
+        s.execute("insert.chart", json!({"range": "A1:A20", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$20"]);
+        // A bounded block entirely below the data keeps its extent.
+        s.execute("insert.chart", json!({"range": "C700000:C700010", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$C$700000:$C$700010"]);
+    }
+
+    #[test]
+    fn chart_data_table_commands_undo_and_follow_live_values() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+        s.execute("chart.addElement", json!({"element": "dataTable", "dataTableKeys": false})).unwrap();
+        let get = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let table = get(&s).data_table.unwrap();
+        assert!(!table.show_keys && table.horizontal_border && table.vertical_border && table.outline);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, Some(table));
+        s.execute("chart.set", json!({"dataTableKeys": true, "dataTableHorizontalBorder": false})).unwrap();
+        assert!(get(&s).data_table.as_ref().unwrap().show_keys);
+        assert!(!get(&s).data_table.as_ref().unwrap().horizontal_border);
+        s.execute("cell.set", json!({"cell": "B2", "input": "=12*3"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(gridcraft_chart::resolve(&d.wb, 0, &get(&s)).series[0].values[0], Some(36.0));
+        s.execute("chart.addElement", json!({"element": "dataTable", "on": false})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        // Old JSON documents have no table field.
+        let mut json = serde_json::to_value(get(&s)).unwrap();
+        json.as_object_mut().unwrap().remove("data_table");
+        assert_eq!(serde_json::from_value::<Chart>(json).unwrap().data_table, None);
+    }
+
+    #[test]
+    fn chart_data_table_refuses_unsupported_types_without_changing_history() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "pie"})).unwrap();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        for params in [json!({"dataTable": true}), json!({"dataTableKeys": true}), json!({"dataTable": "yes"})] {
+            assert!(s.execute("chart.set", params).is_err());
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        assert!(s.execute("chart.addElement", json!({"element": "dataTable"})).is_err());
+        s.execute("chart.set", json!({"type": "line", "dataTable": true})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+        s.execute("chart.set", json!({"type": "scatter"})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_none());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+    }
 
     #[test]
     fn manage_rules_delete_then_move() {
