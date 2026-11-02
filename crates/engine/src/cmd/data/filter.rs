@@ -128,12 +128,8 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
         // A numeric ordering comparison only matches numbers; blanks and text never do.
         (None, Some(_)) if matches!(op, "<" | "<=" | ">" | ">=") => None,
         _ => {
-            if matches!(op, "=" | "<>") && text.trim().is_empty() && crit.trim().is_empty() && filter_blank(v) != crit.is_empty() {
-                Some(if filter_blank(v) { Ordering::Less } else { Ordering::Greater })
-            } else {
-                let (lhs, rhs) = if matches!(op, "=" | "<>") { (text.trim(), crit.trim()) } else { (text, crit) };
-                Some(gridcraft_core::compare_text(lhs, rhs))
-            }
+            let (lhs, rhs) = if matches!(op, "=" | "<>") { (text.trim(), crit.trim()) } else { (text, crit) };
+            Some(gridcraft_core::compare_text(lhs, rhs))
         }
     };
     let wild = || crate::cmd::edit::wildcard(&text.trim().to_lowercase(), &crit.trim().to_lowercase());
@@ -172,6 +168,12 @@ fn filter_value_eq(a: &str, b: &str) -> bool {
 /// The filter's "(Blanks)" group: truly empty cells and zero-length text such as a `=""` result.
 fn filter_blank(v: &Value) -> bool {
     v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
+}
+
+/// Excel AutoFilter's (Blanks) selection also matches whitespace-only text.
+/// Do not use this for detecting genuinely empty cells elsewhere.
+fn filter_dropdown_blank(v: &Value) -> bool {
+    filter_blank(v) || matches!(v, Value::Text(t) if t.trim().is_empty())
 }
 
 /// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
@@ -225,7 +227,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
                 FilterCriterion::Values { values, blanks } => {
-                    if filter_blank(&v) {
+                    if filter_dropdown_blank(&v) {
                         *blanks
                     } else {
                         values.iter().any(|x| filter_value_eq(x, &text) || filter_value_eq(x, &v.display()))
@@ -312,7 +314,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
-        let blank = filter_blank(&v);
+        let blank = filter_dropdown_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks }) => {

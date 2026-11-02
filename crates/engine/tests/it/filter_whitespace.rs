@@ -105,13 +105,12 @@ fn filter_whitespace_custom_blank_distinction_2911() {
     s.execute("data.filter", json!({"range":"A1:A6"})).unwrap();
 
     let r = s.execute("data.filterBy", json!({"column":"A", "custom":{"op":"=", "value":" "}})).unwrap();
-    assert_eq!(r["hiddenRows"], json!(4));
+    assert_eq!(r["hiddenRows"], json!(1));
 
     let sh = s.doc().unwrap().wb.active().unwrap();
-    assert!(sh.is_row_hidden(1));
-    assert!(sh.is_row_hidden(2));
-    assert!(!sh.is_row_hidden(3));
-    assert!(!sh.is_row_hidden(4));
+    for row in 1..=4 {
+        assert!(!sh.is_row_hidden(row), "row {row} should be visible");
+    }
     assert!(sh.is_row_hidden(5));
 }
 
@@ -134,4 +133,95 @@ fn filter_whitespace_custom_not_equal_2911() {
     assert!(sh.is_row_hidden(1));
     assert!(sh.is_row_hidden(2));
     assert!(!sh.is_row_hidden(3));
+}
+
+#[test]
+fn filter_whitespace_empty_criteria_regression_2911() {
+    let mut s = Session::new();
+    s.new_workbook();
+
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Name"],
+                [null],
+                [""],
+                [" "],
+                ["   "],
+                ["Card"]
+            ]
+        }),
+    )
+    .unwrap();
+
+    s.execute("data.filter", json!({"range": "A1:A6"})).unwrap();
+
+    for (op, criterion, expected_visible) in [("=", "", vec![1, 2, 3, 4]), ("=", " ", vec![1, 2, 3, 4]), ("<>", "", vec![5]), ("<>", " ", vec![5])] {
+        s.execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "custom": {
+                    "op": op,
+                    "value": criterion
+                }
+            }),
+        )
+        .unwrap();
+
+        let sh = s.doc().unwrap().wb.active().unwrap();
+
+        let visible: Vec<_> = (1..=5).filter(|&row| !sh.is_row_hidden(row)).collect();
+
+        assert_eq!(visible, expected_visible, "op={op:?}, criterion={criterion:?}");
+    }
+}
+
+#[test]
+fn filter_whitespace_dropdown_blanks_excel_2943() {
+    let mut s = Session::new();
+    s.new_workbook();
+
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Name"],
+                [null],
+                [""],
+                [" "],
+                ["   "],
+                ["Card"]
+            ]
+        }),
+    )
+    .unwrap();
+
+    s.execute("data.filter", json!({"range":"A1:A6"})).unwrap();
+
+    let result = s
+        .execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "values": [],
+                "blanks": true
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(result["hiddenRows"], json!(1));
+
+    let sh = s.doc().unwrap().wb.active().unwrap();
+
+    for row in 1..=4 {
+        assert!(!sh.is_row_hidden(row), "Excel (Blanks) should include row {row}");
+    }
+
+    assert!(sh.is_row_hidden(5));
 }

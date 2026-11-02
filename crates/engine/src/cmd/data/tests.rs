@@ -7,7 +7,7 @@ fn filter_blanks_include_empty_text_and_formula_results() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["id", "f"], ["e", null], ["ef", "=\"\""], ["sp", " "], ["z", 0]]})).unwrap();
     s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
     let r = s.execute("data.filterBy", json!({"column": "B", "values": [], "blanks": true})).unwrap();
-    assert_eq!(r["hiddenRows"], json!(2));
+    assert_eq!(r["hiddenRows"], json!(1));
     let vals = filter_values(&s.doc().unwrap().wb, 0, 1);
     // The `=""` result joins (Blanks) instead of showing as its own empty entry.
     assert!(!vals.iter().any(|(t, _)| t.is_empty()), "{vals:?}");
