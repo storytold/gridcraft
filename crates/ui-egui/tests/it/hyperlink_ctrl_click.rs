@@ -33,6 +33,10 @@ fn harness() -> Harness {
     session.execute("insert.link", json!({"cell": "B2", "target": "https://example.org/a"})).unwrap();
     session.execute("cell.set", json!({"cell": "B4", "input": "jump"})).unwrap();
     session.execute("insert.link", json!({"cell": "B4", "target": "Sheet1!F9"})).unwrap();
+    show(session)
+}
+
+fn show(session: Session) -> Harness {
     let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
@@ -150,4 +154,33 @@ fn confirming_a_folder_share_link_hands_the_whole_url_to_the_system() {
     h.get_by_label("   OK   ").click();
     h.run_steps(4);
     assert_eq!(*opened.borrow(), [SHARE]);
+}
+
+#[test]
+fn a_formula_link_to_a_sibling_file_opens_the_resolved_path_of_a_saved_workbook() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-ui-sibling-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("target.txt"), "x").unwrap();
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "B8", "input": "=HYPERLINK(\"target.txt\",\"open\")"})).unwrap();
+    session.execute("file.saveAs", json!({"path": dir.join("Book.xlsx").to_str().unwrap()})).unwrap();
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let mut h = show(session);
+    let sink = opened.clone();
+    h.state_mut().services.open_url = Some(Box::new(move |u: &str| sink.borrow_mut().push(u.to_string())));
+    click(&mut h, "B8", Modifiers::NONE);
+    let d = h.state().dialog.as_ref().expect("a bare file name in =HYPERLINK() is a file link in a saved workbook");
+    assert_eq!(d.name, "openLink");
+    assert_eq!(d.values.get("local").and_then(serde_json::Value::as_bool), Some(true));
+    // The host gets the resolved path (a temp dir may sit under a symlink, as on macOS).
+    let real = std::fs::canonicalize(dir.join("target.txt")).unwrap().to_string_lossy().into_owned();
+    let expected = real.strip_prefix("\\\\?\\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map_or_else(|| real.clone(), str::to_owned);
+    assert_eq!(d.values.get("url").and_then(serde_json::Value::as_str), Some(expected.as_str()));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert_eq!(*opened.borrow(), [expected]);
+    std::fs::remove_dir_all(dir).unwrap();
 }
