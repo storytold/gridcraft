@@ -930,6 +930,8 @@ fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let mut wb = (*d.wb).clone();
     d.calc.recalc_all(&mut wb);
     d.wb = std::sync::Arc::new(wb);
+    // Values changed without an undo step; front ends key their caches (status-bar statistics) on the revision.
+    d.revision += 1;
     Ok(json!({"cells": d.calc.last_recalc_cells}))
 }
 

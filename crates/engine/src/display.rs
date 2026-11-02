@@ -186,11 +186,21 @@ pub struct Stats {
     pub average: Option<f64>,
 }
 
+/// Whether a cell can be visited twice: two selected ranges overlap, or a spill sits in a selected range.
+fn may_visit_twice(sheet: &Sheet, ranges: &[RangeRef]) -> bool {
+    // Pairwise checks are quadratic; a selection of this many ranges just tracks.
+    if ranges.len() > 64 {
+        return true;
+    }
+    let overlap = ranges.iter().enumerate().any(|(i, a)| ranges.iter().skip(i + 1).any(|b| a.intersection(b).is_some()));
+    overlap || (!sheet.spill.is_empty() && ranges.iter().any(|r| sheet.spill.range(r.start..=r.end).any(|(c, _)| r.contains(*c))))
+}
+
 pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
     let mut s = Stats { min: f64::INFINITY, max: f64::NEG_INFINITY, ..Default::default() };
     // Cells are only visited twice when ranges overlap or a spill sits on a cell, so a single plain range
     // skips the per-cell set (it costs time and memory on selections of millions of cells).
-    let track = ranges.len() > 1 || !sheet.spill.is_empty();
+    let track = may_visit_twice(sheet, ranges);
     let mut seen = std::collections::HashSet::new();
     for r in ranges {
         let r = match sheet.used_range().and_then(|u| r.intersection(&u)) {
@@ -245,5 +255,15 @@ mod stats_tests {
         // A2:A3 lies inside A1:A4 and must not be counted again.
         let two = stats(&sh, &[RangeRef::parse("A1:A4").unwrap(), RangeRef::parse("A2:A3").unwrap()]);
         assert_eq!((two.count, two.numeric, two.sum, two.min, two.max), (4, 4, 14.0, -1.0, 9.0));
+    }
+
+    #[test]
+    fn duplicates_are_only_tracked_for_overlapping_ranges_or_spills_in_range() {
+        let mut sh = Sheet::new("S");
+        sh.spill.insert(CellRef::new(0, 5), Value::Number(1.0));
+        let r = |a: &str| RangeRef::parse(a).unwrap();
+        assert!(!may_visit_twice(&sh, &[r("A1:A4"), r("C1:C4")]), "disjoint ranges, spill elsewhere");
+        assert!(may_visit_twice(&sh, &[r("A1:A4"), r("A4:B4")]));
+        assert!(may_visit_twice(&sh, &[r("F1:F2"), r("A1:A4")]), "a spill cell inside a range");
     }
 }

@@ -600,6 +600,23 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_statistics_follow_a_manual_recalculation() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+        app.run("cell.set", json!({"cell": "B1", "input": "=A1"})).unwrap();
+        app.run("cell.set", json!({"cell": "B2", "input": "=A2"})).unwrap();
+        app.run("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        app.run("selection.set", json!({"range": "B1:B2"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 1.5", "Count: 2", "Sum: 3"]);
+        app.run("cell.set", json!({"cell": "A1", "input": "11"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 1.5", "Count: 2", "Sum: 3"], "stale until recalculated");
+        app.run("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 6.5", "Count: 2", "Sum: 13"]);
+    }
+
+    #[test]
     fn copy_drop_modifier_is_ctrl_or_cmd_or_option_on_mac() {
         // egui reports Ctrl as `command` too off macOS, and Cmd as `mac_cmd` and `command` on macOS.
         assert!(drop_copies_sheet(Modifiers::CTRL | Modifiers::COMMAND, false));
