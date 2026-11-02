@@ -166,12 +166,17 @@ fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui:
 
 /// Whether the focused form control takes `ev`: arrows, Page Up and Down, Home, End, Space and
 /// Enter without Ctrl, Cmd or Alt, and the space a Space press types (it presses a focused button
-/// and doesn't start typing in a cell).
+/// and doesn't start typing in a cell). A key press the control doesn't take goes to the grid,
+/// and a focused button gives the keyboard back with it.
 fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool {
     match ev {
         egui::Event::Text(text) => text == " " && app.grid.focused_control.is_some() && app.selected_object.is_none(),
         egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
-            !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key, *repeat)
+            if !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key, *repeat) {
+                return true;
+            }
+            crate::form_controls::key_to_grid(app, sh);
+            false
         }
         _ => false,
     }

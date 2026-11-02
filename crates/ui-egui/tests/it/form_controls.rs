@@ -90,9 +90,27 @@ fn click(h: &mut Harness, p: Pos2) {
 }
 
 fn key(h: &mut Harness, key: Key) {
-    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    key_with(h, key, Modifiers::NONE);
+}
+
+fn key_with(h: &mut Harness, key: Key, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
+}
+
+/// A Space press as the system sends it: the key and the space it types.
+fn space(h: &mut Harness) {
+    h.input_mut().events.push(Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::Text(" ".into()));
+    h.input_mut().events.push(Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+fn active(h: &Harness) -> String {
+    h.state().session.doc().unwrap().selection.active.a1()
 }
 
 fn thumb(h: &Harness, id: u32) -> Rect {
@@ -267,6 +285,61 @@ fn holding_enter_or_space_presses_a_focused_button_once() {
         assert_eq!(cell(&h, "H1"), Value::text("pressed"));
         assert_eq!(cell(&h, "A20"), Value::Empty, "{k:?} typed nothing into the cell");
     }
+}
+
+/// A button holds the keyboard only until the grid takes a key: after an arrow (or Cmd+arrow)
+/// moves the cursor, Enter moves it again instead of pressing the button a second time, and
+/// Space starts a cell edit.
+#[test]
+fn a_button_gives_the_keyboard_back_when_the_grid_takes_a_key() {
+    let (mut h, ids) = fixture();
+    let r = rect(&h, ids.button);
+    click(&mut h, r.center());
+    assert_eq!(cell(&h, "H1"), Value::text("pressed"));
+    let runs = undo_len(&h);
+    assert_eq!(active(&h), "A20");
+    key(&mut h, Key::ArrowDown);
+    assert_eq!(active(&h), "A21", "the arrow moved the cursor");
+    assert_eq!(h.state().grid.focused_control, None, "and took the keyboard from the button");
+    key(&mut h, Key::Enter);
+    assert_eq!(undo_len(&h), runs, "Enter did not press the button again");
+    assert_eq!(active(&h), "A22", "it moved the cursor");
+    // Space after an arrow starts a cell edit.
+    click(&mut h, r.center());
+    assert_eq!(undo_len(&h), runs + 1, "the click pressed it");
+    key(&mut h, Key::ArrowDown);
+    space(&mut h);
+    assert!(h.state().editor.is_some(), "Space starts editing the cell");
+    assert_eq!(undo_len(&h), runs + 1, "Space did not press the button");
+    key(&mut h, Key::Escape);
+    assert!(h.state().editor.is_none());
+    // A key with a modifier the grid takes (Cmd+arrow jumps to the edge) takes the keyboard too.
+    click(&mut h, r.center());
+    assert_eq!(h.state().grid.focused_control, Some(ids.button));
+    key_with(&mut h, Key::ArrowUp, Modifiers::COMMAND);
+    assert_eq!(h.state().grid.focused_control, None);
+    assert_eq!(active(&h), "A1");
+}
+
+/// A right-click on a cell takes the keyboard from a button, like any other click on the grid:
+/// the Enter that follows does not press it again.
+#[test]
+fn a_right_click_on_a_cell_takes_the_keyboard_from_a_button() {
+    let (mut h, ids) = fixture();
+    let r = rect(&h, ids.button);
+    click(&mut h, r.center());
+    let runs = undo_len(&h);
+    assert_eq!(h.state().grid.focused_control, Some(ids.button));
+    let on_a_cell = Pos2::new(r.right() + 300.0, r.bottom() + 100.0);
+    h.run_steps(30);
+    button(&mut h, on_a_cell, true, PointerButton::Secondary, Modifiers::NONE);
+    button(&mut h, on_a_cell, false, PointerButton::Secondary, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(h.state().selected_object, None, "a cell, not an object");
+    assert_eq!(h.state().grid.focused_control, None, "the right-click took the keyboard");
+    key(&mut h, Key::Enter);
+    assert_eq!(undo_len(&h), runs, "Enter did not press the button again");
+    assert_eq!(cell(&h, "H1"), Value::text("pressed"));
 }
 
 #[test]

@@ -306,8 +306,9 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
         return true;
     }
     if !pointer.primary_pressed() || !resp.contains_pointer() {
-        // Any other press on the grid moves the focus off the control.
-        if pointer.any_pressed() && app.grid.focused_control.is_some() && !resp.contains_pointer() {
+        // Any other press, on the grid (a right-click on a cell) or off it, moves the focus off
+        // the control, so a later Enter or Space doesn't work it.
+        if pointer.any_pressed() && app.grid.focused_control.is_some() {
             app.grid.focused_control = None;
         }
         return false;
@@ -354,6 +355,15 @@ fn step_part(app: &mut SheetApp, c: &FormControl, part: Part) {
         Part::TrackAfter => app.control_nudge(c.id, 1, true),
         Part::Button | Part::Thumb => false,
     };
+}
+
+/// The grid takes a key while a control is focused: a button gives the keyboard back, so a later
+/// Enter or Space doesn't press it again and Space starts a cell edit; a slider or spin button
+/// keeps it, as the control last worked, which the arrows still step.
+pub fn key_to_grid(app: &mut SheetApp, sh: &Sheet) {
+    if app.grid.focused_control.and_then(|id| find(sh, id)).is_some_and(|c| c.kind == ControlKind::Button) {
+        app.grid.focused_control = None;
+    }
 }
 
 /// Keys for the focused control: arrows move by a step, Page Up and Page Down by a page, Home and
