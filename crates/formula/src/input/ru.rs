@@ -247,6 +247,14 @@ mod tests {
             let input = format!("{local}()");
             let expr = crate::parse_input(&input, FormulaLocale::Ru, |_| false).unwrap();
             assert_eq!(crate::print(&expr), format!("{en}()"));
+            assert_eq!(crate::print_input(&expr, FormulaLocale::Ru, |_| false).unwrap(), input);
+            // This is a syntax check, independent of a function's argument-count rules.
+            let canonical_input = format!("{en}(1.5,2.25)");
+            let canonical_expr = crate::parse(&canonical_input).unwrap();
+            let displayed = crate::print_input(&canonical_expr, FormulaLocale::Ru, |_| false).unwrap();
+            assert_eq!(displayed, format!("{local}(1,5;2,25)"));
+            let reparsed = crate::parse_input(&displayed, FormulaLocale::Ru, |_| false).unwrap();
+            assert_eq!(crate::print(&reparsed), canonical_input);
         }
     }
 }

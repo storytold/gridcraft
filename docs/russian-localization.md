@@ -21,6 +21,31 @@ restoring their older parser/editor/help implementations.
 
 See [Adding another language](formula-input.md#adding-another-language) for extension points.
 
+## Formula words and interface strings
+
+`craft-i18n` formats interface messages. It is not used to replace words inside formulas.
+Formula words and separators come from the formula crate's `LocaleData`; the shared lexer,
+parser and printer use that descriptor at the editor boundary. For example,
+`=СУММ(1,5;2,25)` becomes the canonical expression `SUM(1.5,2.25)` and displays in Russian
+again through the same descriptor. Defined names, LET/LAMBDA bindings and quoted text retain
+their identity. Files and programmatic calls continue to use English syntax.
+
+`input/ru.rs::tests::every_russian_alias_is_unique_and_round_trips` checks all 199 aliases:
+uniqueness, case and е/ё lookup, local-to-canonical parsing, canonical-to-local display and
+reparsing of every displayed call with decimal-comma arguments. These are syntax tests, not
+argument-count validation for every function. `tests/it/russian_input.rs` additionally checks
+the literal spellings СУММ, ЕСЛИ, ВПР, #ДЕЛ/0! and #ЗНАЧ!, arrays, names and error round trips.
+The UI tests exercise actual entry, XLSX round trips and language changes during editing.
+
+The common names are documented in Microsoft's public references for
+[СУММ](https://support.microsoft.com/ru-ru/excel/functions/sum-function),
+[ВПР](https://support.microsoft.com/ru-ru/excel/functions/vlookup-function) and
+[formula errors](https://support.microsoft.com/ru-ru/excel/detect-formula-errors-in-excel).
+The table is adapted from the credited source PRs; automated round trips do not establish
+that every spelling matches every Excel language version. Native-speaker review of the
+complete table remains welcome. The choice of a common representation across the related
+open formula-language PRs belongs to the maintainers; this PR does not merge those branches.
+
 ## Adaptation details
 
 The Russian interface catalog incorporates #676, newer main-only entries and the previously

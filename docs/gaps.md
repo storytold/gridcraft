@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** minor (§4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -44,6 +44,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
 - **Missing:** axis scaling, label options, error bars, per-point formatting.
+- **Added:** data tables beneath column, bar, line, area and compatible combo charts, with legend keys, border controls, live source values, native XLSX round-trip and print/PDF.
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
   (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn and written back.
   (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
@@ -72,14 +73,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
-  formats, merges, sizes, names); fonts, fills, borders, charts, pictures, comments, conditional
+  formats, merges, sizes, names, and cell formatting: fonts, fills, borders, alignment); exact theme colours (XFExt), charts, pictures, comments, conditional
   formats, validation and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
   `.xlsx` workbooks (Agile and Standard encryption) open with their password since #11, but are
   saved without it: GridCraft can't write an encrypted file yet. Encrypted `.xls` (FILEPASS) and
   RC4-encrypted files are still refused with a message.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
-- **Estimate:** 14–21 h (`.xls` styles and objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
+- **Estimate:** 14–21 h (`.xls` objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
@@ -122,8 +123,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - Solver (`data.solver`, #327) has Simplex LP with integer/binary branch and bound, a local
   nonlinear method (augmented Lagrangian, not GRG), the Evolutionary method, and Answer and
   Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
-  successful solve and its reports share one Undo step (#1050). AllDifferent constraints,
-  the Solver Options dialog, the Sensitivity and Population reports and Load/Save Model remain.
+  successful solve and its reports share one Undo step (#1050). Load/Save Model writes the
+  model on cells of its sheet and reads it back; Reset All removes it. Solver Options sets the
+  evaluation limit, Integer Optimality and the Evolutionary options, which are saved with the
+  model. AllDifferent constraints and the Sensitivity and Population reports remain.
   The Analysis ToolPak
   (`data.analysisToolPak`) has 13 of 19 tools. Forecast Sheet (`data.forecastSheet`) and the
   FORECAST.ETS family are in; the sheet has no Forecast Start (hindcast) option yet. **Estimate:** 12–20 h.
@@ -183,6 +186,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
+| 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
+| 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

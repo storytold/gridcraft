@@ -17,6 +17,23 @@ fn formula(app: &SheetApp) -> String {
     app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.to_string()
 }
 
+/// The current function-library dialog searches Russian aliases, their е/ё variants and English names.
+#[test]
+fn russian_insert_function_search_preserves_locale_matching() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut application = app();
+    application.ui.language = Language::Ru;
+    application.open_dialog("insertFunction", json!({}));
+    let mut h = crate::common::harness_with(crate::common::builder(), application, 3);
+    let label = format!("СЧЁТ ({})", Language::Ru.tr("Statistical"));
+    for query in ["счет", "СЧЁТ", "count"] {
+        h.state_mut().dialog.as_mut().unwrap().search = query.into();
+        h.run_steps(2);
+        assert!(h.query_by_label(&label).is_some(), "{query}");
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("category"), Some(&json!("All")));
+    }
+}
+
 /// Localized error literals do not hide reference spans used by colouring, F4 and point mode.
 #[test]
 fn localized_errors_preserve_reference_spans_in_the_draft_language() {

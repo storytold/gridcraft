@@ -123,6 +123,8 @@ fn russian_bound_names_keep_unicode_case_identity() {
 #[test]
 fn russian_errors_parse_print_and_preserve_canonical_file_syntax() {
     use gridcraft_core::CellError;
+    assert_eq!(FormulaLocale::Ru.error_name(CellError::Div0), "#ДЕЛ/0!");
+    assert_eq!(FormulaLocale::Ru.error_name(CellError::Value), "#ЗНАЧ!");
     for error in CellError::ALL {
         let local = FormulaLocale::Ru.error_name(error);
         let expr = parse_input(&format!("IFERROR({local};0)"), FormulaLocale::Ru, |_| false).unwrap();
