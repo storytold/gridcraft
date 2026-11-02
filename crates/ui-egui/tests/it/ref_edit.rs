@@ -1174,6 +1174,27 @@ fn a_sheet_deleted_and_recreated_under_its_own_name_is_not_the_dialogs_sheet() {
 }
 
 #[test]
+fn a_scripted_cancel_says_when_the_dialogs_sheet_was_deleted_even_if_its_name_was_reused() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    let s = &mut h.state_mut().session;
+    s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Sheet1", "before": 0})).unwrap();
+    h.run_steps(3);
+    // A sheet called Sheet1 is shown, but it is not the dialog's: cancel says so, so a script
+    // does not go on to run data.goalSeek against it.
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(r["result"], json!({"sheetDeleted": true}), "{r}");
+    assert!(h.state().dialog.is_none());
+    // A dialog whose sheet is still there replies null, as before.
+    open_goal_seek(&mut h);
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["result"], json!(null), "{r}");
+}
+
+#[test]
 fn a_sheet_recreated_under_its_own_name_at_its_old_index_is_not_the_dialogs_sheet() {
     let mut h = harness(two_sheets());
     open_goal_seek(&mut h);

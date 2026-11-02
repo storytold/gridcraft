@@ -180,6 +180,34 @@ fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
     json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
 }
 
+/// `ui.dialog.cancel`: closes the open dialog as its Cancel button does, going back to the sheet
+/// and selection from before a reference box picked.
+fn dialog_cancel(app: &mut SheetApp) -> Outcome {
+    // The macro step editor's draft, overlays and debug run go with its own close.
+    if app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
+        return match crate::macro_editor::close_now(app) {
+            Ok(()) => ok(Json::Null),
+            Err(e) => err(e),
+        };
+    }
+    // Back to the sheet and selection from before a reference box picked, as Cancel does.
+    // When the dialog's sheet can't be shown again (a text-box draft on the picked sheet
+    // could not be saved), the dialog stays and the script gets the reason; the window's
+    // Cancel closes it and shows the reason, since a person can see the message.
+    // A dialog whose own sheet was deleted (found by identity, so a new sheet given its
+    // name does not count) replies `{"sheetDeleted": true}`: the sheet shown is not the
+    // dialog's, and a script stops before running the dialog's command itself.
+    let mut deleted = false;
+    if let Some(mut d) = app.dialog.take() {
+        deleted = d.home_sheet_deleted(app);
+        if let Err(e) = d.end_pick(app) {
+            app.dialog = Some(d);
+            return err(e);
+        }
+    }
+    ok(if deleted { json!({"sheetDeleted": true}) } else { Json::Null })
+}
+
 /// `ui.object.select {id?, kind?}`: selects the object with that id on the active sheet (its kind
 /// is found from the id when left out, and must match when given); no `id` clears the selection.
 /// Replies with the object and its rect in window points, for `ui.click` and `ui.drag`.
@@ -339,26 +367,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             },
             None => err("no dialog is open"),
         },
-        "ui.dialog.cancel" => {
-            // The macro step editor's draft, overlays and debug run go with its own close.
-            if app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
-                return match crate::macro_editor::close_now(app) {
-                    Ok(()) => ok(Json::Null),
-                    Err(e) => err(e),
-                };
-            }
-            // Back to the sheet and selection from before a reference box picked, as Cancel does.
-            // When the dialog's sheet can't be shown again (a text-box draft on the picked sheet
-            // could not be saved), the dialog stays and the script gets the reason; the window's
-            // Cancel closes it and shows the reason, since a person can see the message.
-            if let Some(mut d) = app.dialog.take()
-                && let Err(e) = d.end_pick(app)
-            {
-                app.dialog = Some(d);
-                return err(e);
-            }
-            ok(Json::Null)
-        }
+        "ui.dialog.cancel" => dialog_cancel(app),
         "ui.object.select" => select_object(app, p),
         "ui.message.dismiss" => {
             app.message = None;
