@@ -46,8 +46,20 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // The macro editor's unsaved draft is part of its workbook: closing the workbook asks
+        // about it first, and goes on once the editor has closed. A close asked while it is
+        // asking waits for the answer, or is refused when it asks for a different close.
+        if matches!(id, "file.close" | "window.close")
+            && let Some(r) = crate::macro_editor::ask_before_closing(self, id, &params)
+        {
+            return r;
+        }
         let before = self.session.active_window();
+        let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        if let Some(from) = zoom_from {
+            crate::grid::Trace::keep_through_zoom(self, from);
+        }
         if id.starts_with("file.") && self.session.active_window() != before {
             // File › New or Open from the Backstage view: the window it was in goes back to its sheet.
             self.backstage = None;
