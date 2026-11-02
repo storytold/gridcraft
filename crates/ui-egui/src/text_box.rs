@@ -50,7 +50,7 @@ impl SheetApp {
             request_focus: true,
             rect: None,
         });
-        self.selected_chart = Some(id);
+        self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Shape, id));
         self.grid.drag = crate::grid::Drag::None;
         self.grid.drag_select = false;
         self.session.mode = Mode::Edit;

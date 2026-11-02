@@ -18,7 +18,7 @@ fn open_chart_type(t: &str, sub: &str) -> (Harness, u32) {
     let chart = session.execute("insert.chart", json!({"type": t, "subtype": sub, "at": "E3"})).unwrap();
     let id = chart["chart"].as_u64().unwrap() as u32;
     let mut h = crate::support::harness(session, 4);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Type").click();

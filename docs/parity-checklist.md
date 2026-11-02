@@ -158,7 +158,7 @@ Implemented:
 - `review.newComment` Comment (Comments)
 - `insert.textBox` Text Box (Text)
 - `pageLayout.headerFooter` Header & Footer (Text)
-- `insert.wordArt` WordArt (Text)
+- `insert.equation` Equation (Symbols)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
 
@@ -168,9 +168,9 @@ Missing:
 - `insert.screenshot` Screenshot (Illustrations)
 - `insert.map` Maps (Charts)
 - `insert.timeline` Timeline (Filters)
+- `insert.wordArt` WordArt (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
-- `insert.equation` Equation (Symbols)
 
 ## Draw (4 / 4, 100%)
 
