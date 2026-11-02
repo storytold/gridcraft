@@ -63,6 +63,16 @@ fn group_kind(g: &El) -> Option<ChartKind> {
     })
 }
 
+/// The chart-space `ext` that marks a GridCraft Sankey. Excel has no Sankey, so the chart is
+/// written as clustered bars (one per flow, labelled source then target) that Excel shows, and
+/// this marker, which Excel ignores, turns it back into a Sankey when GridCraft opens it.
+const SANKEY_EXT_URI: &str = "{5A9C3E21-7B4D-4F6A-9E2C-61D8B0F4A3C7}";
+const SANKEY_NS: &str = "https://getartcraft.com/apps/gridcraft/2026/chart";
+
+fn is_sankey(root: &El) -> bool {
+    root.child("extLst").is_some_and(|l| l.kids("ext").any(|e| e.attr("uri") == Some(SANKEY_EXT_URI)))
+}
+
 /// Excel's file notation for "this workbook" in front of a workbook-scoped defined name.
 const THIS_BOOK: &str = "[0]!";
 
@@ -238,7 +248,13 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             series.push(ser);
         }
     }
-    let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
+    let kind = if is_sankey(root) {
+        ChartKind::Sankey
+    } else if groups.len() > 1 {
+        ChartKind::Combo
+    } else {
+        first_kind
+    };
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
@@ -303,7 +319,7 @@ fn group_for(k: ChartKind) -> G {
     match k {
         ChartKind::ColumnStacked => G::Bar { bar: false, grouping: "stacked" },
         ChartKind::ColumnStacked100 => G::Bar { bar: false, grouping: "percentStacked" },
-        ChartKind::BarClustered => G::Bar { bar: true, grouping: "clustered" },
+        ChartKind::BarClustered | ChartKind::Sankey => G::Bar { bar: true, grouping: "clustered" },
         ChartKind::BarStacked => G::Bar { bar: true, grouping: "stacked" },
         ChartKind::BarStacked100 => G::Bar { bar: true, grouping: "percentStacked" },
         ChartKind::Line => G::Line { stacked: false, markers: false },
@@ -893,6 +909,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if let Some(p) = pos {
         let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart>");
+    if ch.kind == ChartKind::Sankey {
+        let _ = write!(s, "<c:extLst><c:ext uri=\"{SANKEY_EXT_URI}\" xmlns:gc=\"{SANKEY_NS}\"><gc:sankey/></c:ext></c:extLst>");
+    }
+    s.push_str("</c:chartSpace>");
     s
 }

@@ -429,6 +429,9 @@ pub enum ChartKind {
     BoxWhisker,
     Stock,
     Combo,
+    /// Flows between named nodes: Source | Target | Value rows. Excel has no Sankey; xlsx keeps
+    /// it as a clustered bar chart with a GridCraft marker.
+    Sankey,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

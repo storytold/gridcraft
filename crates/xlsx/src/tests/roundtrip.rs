@@ -439,6 +439,7 @@ fn sample() -> Workbook {
         ChartKind::ScatterLines,
         ChartKind::Bubble,
         ChartKind::Radar,
+        ChartKind::Sankey,
     ] {
         s.charts.push(Chart { kind, ..base_chart.clone() });
     }

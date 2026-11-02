@@ -14,6 +14,7 @@ mod frame;
 mod kinds;
 mod legend;
 mod lines;
+mod sankey;
 mod table;
 mod trend;
 
@@ -22,6 +23,7 @@ use frame::{Bx, axis_titles, chart_title};
 use kinds::{box_whisker, funnel, histogram, pie, radar, stock, treemap, waterfall};
 use legend::draw_legend;
 pub use legend::{Swatch, legend_entries};
+use sankey::sankey;
 pub use trend::supports_trendline;
 
 pub(crate) const TEXT: Rgba = [0x59, 0x59, 0x59, 0xFF];
@@ -48,6 +50,19 @@ const MAX_LABELS: usize = 200;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// Data points to emphasise; the others are drawn faded. Empty: none.
+    focus: &'a [usize],
+    /// A point in chart coordinates to hit-test.
+    probe: Option<[f32; 2]>,
+    hit: Option<Hit>,
+}
+
+/// What lies under a probed point: the data points (indices into the series values) it
+/// stands for, and a line describing it. Only Sankey charts report hits.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hit {
+    pub points: Vec<usize>,
+    pub label: String,
 }
 
 impl Ctx<'_> {
@@ -123,11 +138,25 @@ fn sanitize(d: &ChartData) -> ChartData {
 
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
+    render_interactive(chart, data, w, h, m, &[], None).0
+}
+
+/// [`render`] with the data points in `focus` emphasised, and what lies at `probe` (chart
+/// coordinates).
+pub fn render_interactive(
+    chart: &Chart,
+    data: &ChartData,
+    w: f32,
+    h: f32,
+    m: &dyn Measure,
+    focus: &[usize],
+    probe: Option<[f32; 2]>,
+) -> (Vec<Prim>, Option<Hit>) {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
-        return vec![];
+        return (vec![], None);
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, focus, probe, hit: None };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
@@ -146,7 +175,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
     }
-    finalize(ctx.out, w, h)
+    (finalize(ctx.out, w, h), ctx.hit)
 }
 
 fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
@@ -157,6 +186,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
         Funnel => funnel(ctx, chart, data, area),
+        Sankey => sankey(ctx, chart, data, area),
         Radar => radar(ctx, chart, data, area),
         _ => {
             let area = axis_titles(ctx, chart, area);

@@ -3142,6 +3142,7 @@ fn every_chart_kind_survives_xlsx() {
         ("column", ChartKind::ColumnClustered),
         ("line", ChartKind::Line),
         ("scatter", ChartKind::Scatter),
+        ("sankey", ChartKind::Sankey),
     ];
     for (t, kind) in kinds {
         let mut s = s();
@@ -3163,6 +3164,25 @@ fn every_chart_kind_survives_xlsx() {
             }
         }
     }
+}
+
+#[test]
+fn sankey_reads_source_target_value_columns() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["From", "To", "Flow"], ["Solar", "Grid", 40], ["Wind", "Grid", 60], ["Grid", "Homes", 100]]}),
+    )
+    .unwrap();
+    s.execute("insert.chart", json!({"type": "sankey", "range": "A1:C4"})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!(c.series.len(), 1);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sheet1!$C$1"));
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$A$2:$B$4"));
+    assert_eq!(c.series[0].values, "Sheet1!$C$2:$C$4");
+    assert_eq!(c.legend, gridcraft_model::LegendPos::None);
+    s.execute("range.setValues", json!({"range": "E1", "values": [["a", 1]]})).unwrap();
+    assert!(s.execute("insert.chart", json!({"type": "sankey", "range": "E1:F1"})).is_err(), "two columns are not enough");
 }
 
 #[test]
