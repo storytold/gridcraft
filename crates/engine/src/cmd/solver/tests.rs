@@ -1005,6 +1005,52 @@ fn nonlinear_sensitivity_keeps_a_small_reduced_gradient_beside_a_large_gradient(
 }
 
 #[test]
+fn nonlinear_sensitivity_refuses_a_point_that_is_not_optimal_in_a_small_variable() {
+    // max 1E9·x + y with x ≤ 1 and y ≤ 1 as rows, at (1, 0.5): the second row doesn't bind, y
+    // is free and its reduced gradient is its own gradient, about 1 (0.954 with the rounding
+    // in `nonlinear_sensitivity_keeps_a_small_multiplier_beside_a_large_gradient`), so raising
+    // y to 1 gains 0.5 and the point is not optimal: the report is refused and the workbook
+    // left as it was. A stationarity tolerance taken from the largest gradient component
+    // (1E-3 · 1E9 = 1E6) accepted the point and wrote the report. The optimum (1, 1) is
+    // reported.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=1000000000*A1+A2"), ("C1", "=A1"), ("C2", "=A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 1", "C2 <= 1"]});
+    let report = |values: serde_json::Value| json!({"reports": ["sensitivity"], "model": model, "values": values});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", report(json!({"A1": 1, "A2": 0.5}))).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    let r = s.execute("data.solverReport", report(json!({"A1": 1, "A2": 1}))).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
+fn nonlinear_sensitivity_refuses_a_point_that_breaks_a_small_row_beside_a_large_one() {
+    // max y − (x − 2)² with x ≤ 1E9 and y ≤ 1 as rows: (2, 1). At (2, 1.0001) the second row
+    // is over by 1E-4, more than ten times the constraint precision of its own right side
+    // (1E-5 · (1 + 1) = 2E-5), so the point is infeasible and the report is refused; it is
+    // stationary (x's gradient is 0 and the row, within the binding tolerance, explains y's),
+    // so feasibility alone decides. A feasibility tolerance relative to the largest constant
+    // right side (1E-5 · 1E9 = 1E4) accepted the point. The optimum (2, 1) is reported.
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=A2-(A1-2)^2"), ("C1", "=A1"), ("C2", "=A2")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["C1 <= 1000000000", "C2 <= 1"]});
+    let report = |values: serde_json::Value| json!({"reports": ["sensitivity"], "model": model, "values": values});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", report(json!({"A1": 2, "A2": 1.0001}))).unwrap_err();
+    assert!(err.to_string().contains("not optimal"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    let r = s.execute("data.solverReport", report(json!({"A1": 2, "A2": 1}))).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+    assert!(close(&report_row(&s, "Sensitivity Report 1", "$C$2", &["D", "E"]), &[1.0, 1.0], 1e-3), "{r}");
+}
+
+#[test]
 fn simplex_sensitivity_of_a_variable_at_its_upper_bound() {
     // max 3x + 2y with x + y ≤ 4 (a row), x ≤ 3 and y ≤ 5 (bounds on the variable cells, which
     // have no row in the Constraints table): x = 3, y = 1, objective 11. The row's shadow price

@@ -466,15 +466,19 @@ fn multipliers(
 
 /// Whether the solution is a Karush-Kuhn-Tucker point of the model, from the gradients the
 /// report computed: every row and bound holds, and each reduced gradient (the objective's
-/// gradient less what the binding rows' multipliers explain) is near zero, or, for a variable at
-/// a bound, points only out of that bound in the objective's direction. A binding row whose
-/// multiplier had the wrong sign was dropped by [`multipliers`], so the part of the gradient it
-/// would have explained remains in the reduced gradients and the point is refused here.
-fn kkt_point(at: &At, rows: &[Row], df: &[f64], reduced: &[f64]) -> bool {
+/// gradient less what the binding rows' multipliers explain) is near zero relative to `terms`,
+/// the sizes of the terms it is made of, or, for a variable at a bound, points only out of that
+/// bound in the objective's direction. A binding row whose multiplier had the wrong sign was
+/// dropped by [`multipliers`], so the part of the gradient it would have explained remains in
+/// the reduced gradients and the point is refused here. Every tolerance is local to the row or
+/// variable it tests: a large right side or gradient component elsewhere in the model excuses
+/// nothing here.
+fn kkt_point(at: &At, rows: &[Row], terms: &[f64], reduced: &[f64]) -> bool {
     let (inp, x) = (at.inp, &at.inp.solution);
-    // Feasibility with the tolerance the nonlinear method accepts a solution within (ten times
-    // the constraint precision, relative to the largest constant right side).
-    let rhs_scale = rows.iter().map(|r| r.rhs_const.abs()).fold(1.0, f64::max);
+    // Feasibility: each row within ten times the constraint precision of its own right side.
+    // The nonlinear method accepts a solution within that of the model's largest constant right
+    // side, which lets a small row go by its own size; a row over by more than its own
+    // precision isn't satisfied, whatever the other rows' sizes, so the report refuses it.
     let rows_hold = rows.iter().enumerate().all(|(i, r)| {
         let (g, b) = (at.point.g.get(i).copied().unwrap_or(f64::NAN), at.finals.get(i).map_or(f64::NAN, |f| f.1));
         let over = match r.sense {
@@ -482,17 +486,19 @@ fn kkt_point(at: &At, rows: &[Row], df: &[f64], reduced: &[f64]) -> bool {
             Sense::Ge => -g,
             Sense::Eq => g.abs(),
         };
-        over <= 10.0 * super::PRECISION * rhs_scale.max(1.0 + b.abs())
+        over <= 10.0 * super::PRECISION * (1.0 + b.abs())
     });
     if !rows_hold || !at.point.f.is_finite() {
         return false;
     }
-    // Stationarity, relative to the size of the objective's gradient (at least 1). At optima the
-    // nonlinear method solves, the reduced gradients are below about 1E-6 of that size; 1E-3
-    // leaves a wide margin for the method's stopping test and for rounding in the difference
-    // gradients of badly scaled models, and still refuses a point whose objective improves
-    // visibly along a direction the constraints allow.
-    let tol = 1e-3 * df.iter().map(|v| v.abs()).fold(1.0, f64::max);
+    // Stationarity: each reduced gradient relative to the terms it is made of (the objective's
+    // component and the multipliers' parts, at least 1). At optima the nonlinear method solves,
+    // a reduced gradient is below about 1E-6 of those terms; 1E-3 leaves a wide margin for the
+    // method's stopping test and for rounding in the difference gradients of badly scaled
+    // models, and still refuses a point whose objective improves visibly along a direction the
+    // constraints allow. The bound is the variable's own: with a bound from the gradient's
+    // largest component, max 1E9·x + y at (1, 0.5) passed, although raising y gains 1 per unit
+    // against a tolerance of 1E6.
     // Moving up a variable improves a maximum by +r and a minimum by −r per unit.
     let sign = if inp.model.goal == Goal::Max { 1.0 } else { -1.0 };
     x.iter().enumerate().all(|(j, &v)| {
@@ -505,6 +511,7 @@ fn kkt_point(at: &At, rows: &[Row], df: &[f64], reduced: &[f64]) -> bool {
         let edge = 1e-6 * v.abs().max(1.0);
         let (at_lo, at_hi) = (v <= l + edge, v >= h - edge);
         let gain = reduced.get(j).map_or(f64::NAN, |r| sign * r);
+        let tol = 1e-3 * terms.get(j).copied().unwrap_or(0.0).max(1.0);
         gain.is_finite() && (at_hi || gain <= tol) && (at_lo || gain >= -tol)
     })
 }
@@ -537,19 +544,23 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
     let reduced: Vec<f64> =
         (0..x.len()).map(|j| df.get(j).copied().unwrap_or(0.0) - lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum::<f64>()).collect();
+    // A reduced gradient dfⱼ − Σᵢ λᵢ·gᵢⱼ is a sum of the gradient's own component and the
+    // multipliers' terms; the sizes of those terms bound its rounding error and scale the test
+    // of whether it is zero.
+    let terms: Vec<f64> = (0..x.len())
+        .map(|j| df.get(j).copied().unwrap_or(0.0).abs() + lambda.iter().enumerate().map(|(i, l)| (l * grad(i, j)).abs()).sum::<f64>())
+        .collect();
     // The report describes the optimum, so the values it shows must be one.
-    if !kkt_point(at, &ev.rows, &df, &reduced) {
+    if !kkt_point(at, &ev.rows, &terms, &reduced) {
         return Err(not_optimal());
     }
-    // A reduced gradient dfⱼ − Σᵢ λᵢ·gᵢⱼ is a sum of the gradient's own component and the
-    // multipliers' terms: difference gradients are good to about 1E-6 of each component, so
-    // its noise is 1E-6 of those terms' sizes, plus each multiplier's own noise
+    // Difference gradients are good to about 1E-6 of each component, so a reduced gradient's
+    // noise is 1E-6 of its terms' sizes, plus each multiplier's own noise
     // ([`multiplier_noise`]) times |gᵢⱼ|. The bound is the variable's own: a small gradient
     // keeps its value beside a large component of another variable.
     let reduced_noise = |j: usize| {
-        let terms: f64 = lambda.iter().enumerate().map(|(i, l)| (l * grad(i, j)).abs()).sum();
         let carried: f64 = lambda_noise.iter().enumerate().map(|(i, n)| if grad(i, j) == 0.0 { 0.0 } else { n * grad(i, j).abs() }).sum();
-        1e-6 * (df.get(j).copied().unwrap_or(0.0).abs() + terms) + carried
+        1e-6 * terms.get(j).copied().unwrap_or(0.0) + carried
     };
     let var_rows = m
         .vars
