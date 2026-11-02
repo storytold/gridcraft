@@ -663,6 +663,39 @@ pub(crate) mod tests {
         assert!(!host.visit_range(0, inside, &mut |_| true), "an overlapping read leaves the block to range_values");
     }
 
+    /// A Python array laid out in this pass is seen by the indexed readers, whether the sheet
+    /// has no spill from before or an older, smaller one.
+    #[test]
+    fn a_python_spill_found_in_the_pass_is_read_through_the_index() {
+        for stale in [false, true] {
+            let mut wb = Workbook::new();
+            let sh = wb.sheet_mut(0).unwrap();
+            let anchor = CellRef::new(0, 0);
+            let py = gridcraft_model::PyCode::new("grid");
+            sh.set_cell(anchor, Cell { value: Value::Number(0.0), py: Some(std::sync::Arc::new(py)), ..Cell::default() });
+            if stale {
+                // The last calculation spilled a 2 x 2 block of 100s.
+                sh.spill_ranges.insert(anchor, RangeRef::new(anchor, CellRef::new(1, 1)));
+                for c in RangeRef::new(anchor, CellRef::new(1, 1)).iter().skip(1) {
+                    sh.spill.insert(c, Value::Number(100.0));
+                }
+            }
+            let data: Vec<Value> = (1..=9).map(|i| Value::Number(f64::from(i))).collect();
+            let array = gridcraft_core::Array::new(3, 3, data).unwrap();
+            let mut python = HashMap::default();
+            python.insert((0, anchor), Value::Array(std::sync::Arc::new(array)));
+            let exprs = HashMap::default();
+            let mut rng = 1u64;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+            assert_eq!(host.cell_value(0, anchor), Value::Number(1.0));
+            let all = RangeRef::parse("A1:C3").unwrap();
+            let sum: f64 = host.range_values(0, all).iter().map(|v| if let Value::Number(n) = v { *n } else { 0.0 }).sum();
+            assert_eq!(sum, 45.0, "stale={stale}: a SUM over the new 3 x 3 spill reads all of it");
+            assert_eq!(host.cell_value(0, CellRef::new(2, 2)), Value::Number(9.0), "stale={stale}");
+            assert!(!host.visit_range(0, all, &mut |_| true), "stale={stale}: the new spill leaves the block to range_values");
+        }
+    }
+
     #[test]
     fn intervals_match_a_linear_scan() {
         let mut iv: Intervals<u32> = Intervals::default();
