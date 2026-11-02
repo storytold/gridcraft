@@ -441,3 +441,30 @@ fn a_text_edit_to_an_equation_without_office_math_reads_back_as_the_edit() {
     let s = shapes(&back);
     assert_eq!((s.len(), s[0].kind, s[0].text.as_str()), (1, ShapeKind::Equation, "x^2"), "the fallback alone still reads as the equation");
 }
+
+#[test]
+fn a_paragraph_split_in_an_equation_without_office_math_reads_back_as_the_edit() {
+    // The marker joins run text across paragraphs, so splitting the one paragraph of a plain-text
+    // equation box into two without changing a character leaves it equal to the description's.
+    // The box's text, paragraphs included, is compared with what the writer wrote as well, so
+    // the split reads back as a text box with two paragraphs instead of the stale source.
+    let cd = "\\begin{CD} A @>f>> B \\end{CD}";
+    let wb = book(vec![equation(1, "B2", cd, Color::Auto)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    let (p0, p1) = (d.find("<a:p>").unwrap(), d.find("</a:p>").unwrap() + "</a:p>".len());
+    let para = d[p0..p1].to_string();
+    let (t0, t1) = (para.find("<a:t>").unwrap() + "<a:t>".len(), para.find("</a:t>").unwrap());
+    let cut = t0 + para[t0..t1].find(' ').unwrap() + 1;
+    let split = format!("{}{}{}{}", &para[..cut], &para[t1..], &para[..t0], &para[cut..]);
+    assert_eq!(split.matches("<a:p>").count(), 2);
+    d.replace_range(p0..p1, &split);
+    parts.insert(name, d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::TextBox, "the split is an edit: {}", s[0].text);
+    assert_eq!(s[0].text.lines().count(), 2, "{}", s[0].text);
+    assert_eq!(s[0].text.replace([' ', '\n'], ""), cd.replace(' ', ""), "the characters are the edit's");
+}

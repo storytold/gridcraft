@@ -235,12 +235,15 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     // body (another application that edits the Office Math, or the text of a box without Office
     // Math, leaves the description alone, as Excel does), else the Office Math converted back to
     // LaTeX. A box without Office Math whose text was edited is a text box with the edited text,
-    // not the stale source, which the next save would write over the edit.
+    // not the stale source, which the next save would write over the edit; as the marker joins
+    // run text across paragraphs, such a box must also hold the paragraphs the writer wrote.
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
     let tb = obj.child("txBody");
     let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
     let source = match (has_math, described_source(descr)) {
-        (_, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker) => Some(src.to_string()),
+        (_, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker && (has_math || holds_written_text(tb, src))) => {
+            Some(src.to_string())
+        }
         (true, _) => tb.and_then(crate::omml::equation_source),
         (false, _) => None,
     };
@@ -259,12 +262,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     }
     let fill = sp.child("solidFill").and_then(dml_color).unwrap_or_default();
     let line = ln.and_then(|l| l.child("solidFill")).and_then(dml_color).unwrap_or_default();
-    let text = obj
-        .child("txBody")
-        .map(|tb| {
-            tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
-        })
-        .unwrap_or_default();
+    let text = obj.child("txBody").map(body_text).unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
     Some(Shape { id: 0, kind, anchor, fill, line, text, format, math: Default::default() })
@@ -368,11 +366,7 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
             xfrm(&sh.anchor, "a:xfrm")
         )
     };
-    let plain: String = sh
-        .text
-        .split('\n')
-        .map(|line| format!("<a:p><a:pPr algn=\"ctr\"/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr><a:t>{}</a:t></a:r></a:p>", esc(line)))
-        .collect();
+    let plain = plain_paragraphs(&sh.text, &format!("<a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr>"));
     match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
             let math = format!(
@@ -387,6 +381,25 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
         }
         Err(_) => s.push_str(&sp(&tx(&plain), &marker(&tx(&plain)))),
     }
+}
+
+/// The paragraphs of an equation's plain text, one per line of `text`, each a run with `rpr` as
+/// its properties: the fallback body, and the body of an equation outside the Office Math subset.
+fn plain_paragraphs(text: &str, rpr: &str) -> String {
+    text.split('\n').map(|line| format!("<a:p><a:pPr algn=\"ctr\"/><a:r>{rpr}<a:t>{}</a:t></a:r></a:p>", esc(line))).collect()
+}
+
+/// The text of a text body: the runs of each paragraph, paragraphs joined with newlines.
+fn body_text(tb: &El) -> String {
+    tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
+}
+
+/// Whether a body without Office Math still holds the text the writer wrote for `src`: the same
+/// paragraphs, read back through the same parser. The marker joins run text across paragraphs,
+/// so a paragraph split that changes no character passes it; the text does not.
+fn holds_written_text(tb: &El, src: &str) -> bool {
+    let written = format!("<xdr:txBody xmlns:xdr=\"x\" xmlns:a=\"a\">{}</xdr:txBody>", plain_paragraphs(src, ""));
+    crate::xml::parse(written.as_bytes()).is_ok_and(|w| body_text(&w) == body_text(tb))
 }
 
 /// The opening `<xdr:twoCellAnchor>` for a model anchor, carrying Excel's `editAs` when the mode
