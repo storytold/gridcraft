@@ -260,6 +260,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
         x_title: None,

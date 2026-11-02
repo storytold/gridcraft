@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (undo steps share the parts of a sheet an edit leaves alone; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (undo steps share the parts of a sheet an edit leaves alone; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-11-02 | Memory: undo steps share a sheet's row and column sizes, spilled values, notes, links, conditional formats and validations, and the workbook's names and styles, until an edit changes them: 50 cell edits beside a 100,000-cell spill keep 18 MB instead of 343 MB, beside 10,000 notes 58 MB instead of 170 MB |
+| 2026-11-01 | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
 | 2026-11-01 | XLSX keeps the first visible workbook window's active sheet and display settings together, falling back to the first view when all are hidden. Tab ratios are normalized to 0–1000 on import and export; invalid numeric text uses 600. Synthetic round trips cover isolated attributes, missing views, and active tabs after sheet deletion/reordering; firstSheet remains separate #2264 work (#3057). |
 | 2026-10-31 | Esc in File › Info, Print or Options first leaves the text field; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
@@ -252,6 +253,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-02 | minor | Progress log: undo steps share the parts of a sheet an edit leaves alone |
+| 2026-11-01 | minor | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
 | 2026-11-01 | trivial | Workbook views: selected window settings stay together, tab ratios are bounded, and regressions cover isolated settings and sheet edits; readiness estimates unchanged (#3057) |
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |

@@ -180,6 +180,14 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
                 app.open_dialog("errorChecking", json!({}));
             }
+            // A cell without an error, or one its error starts in without references, has no
+            // arrows: the ones shown stay.
+            if ui.button(lang.tr("Trace Error")).clicked()
+                && let Ok(r) = app.run("formulas.traceError", json!({}))
+                && r["arrows"].as_array().is_some_and(|a| !a.is_empty())
+            {
+                app.grid.trace = crate::grid::Trace::new(app, r);
+            }
             let circular = circular_references(app);
             ui.add_enabled_ui(!circular.is_empty(), |ui| {
                 ui.menu_button(lang.tr("Circular References"), |ui| {
