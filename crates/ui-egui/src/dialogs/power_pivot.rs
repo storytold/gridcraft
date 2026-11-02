@@ -276,6 +276,68 @@ fn power_pivot_functions_panel(ctx: &egui::Context, d: &mut Dialog) {
     }
 }
 
+/// Opens the Power Pivot window: its defaults come from the session's model (`dataModel.status`),
+/// and the Data View starts on the first table's rows and first column.
+pub(super) fn open(app: &mut SheetApp, params: &Json) -> Dialog {
+    let status = app.session.run("dataModel.status", json!({})).unwrap_or(Json::Null);
+    let mut dialog = Dialog::custom(
+        "powerPivot",
+        "Power Pivot",
+        json!({
+            "tab": "Home",
+            "view": "Data",
+            "overlay": "",
+            "path": params.get("path").and_then(Json::as_str).unwrap_or_default(),
+            "formula": "",
+            "column": "",
+            "columnIndex": 0,
+            "measureIndex": -1,
+            "filterColumn": "",
+            "filterValue": "",
+            "calcArea": true,
+            "calcMode": "Automatic",
+            "showHidden": false,
+            "showImplicit": false,
+            "resultKind": "",
+            "resultText": "",
+            "error": "",
+            "model": status,
+            "diagramZoom": 1.0,
+            "diagramFit": false,
+            "tableIndex": 0,
+            "showFunctions": false,
+            "fnCategory": "All",
+            "fnSearch": "",
+            "measureDialogMode": "Add",
+            "newMeasureName": "",
+            "newMeasureTable": "",
+            "newMeasureFormula": "",
+            "newMeasureFormat": "",
+            "relIndex": -1,
+            "relFromTable": "",
+            "relFromColumn": "",
+            "relToTable": "",
+            "relToColumn": "",
+            "relBidirectional": false,
+        }),
+    );
+    // Excel's Data View shows the selected table's rows; status only carries counts, so fetch the
+    // first table as a table expression and select its first column.
+    let Some(table) = status.get("tables").and_then(Json::as_array).and_then(|tables| tables.first()) else { return dialog };
+    if let Some(column) =
+        table.get("columns").and_then(Json::as_array).and_then(|columns| columns.first()).and_then(|column| column.get("name")).and_then(Json::as_str)
+    {
+        dialog.values.insert("column".into(), json!(column));
+    }
+    if let Some(table_name) = table.get("name").and_then(Json::as_str) {
+        dialog.values.insert("newMeasureTable".into(), json!(table_name));
+        if let Ok(data) = app.session.run("dataModel.evaluate", json!({"formula": table_name, "table": true})) {
+            dialog.values.insert("tableData".into(), data);
+        }
+    }
+    dialog
+}
+
 /// The Power Pivot window, following Excel's Power Pivot layout: the File/Home/Design/Advanced
 /// tab strip, the ribbon, and either the Data View grid or the Diagram View canvas. Model
 /// commands run through the `dataModel.*` engine commands, so agents and the control channel see
