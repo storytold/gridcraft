@@ -156,7 +156,7 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
         };
         return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
-    let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
+    let at = RangeRef::top_left(&dv.ranges).unwrap_or_default();
     match gridcraft_calc::evaluate(wb, sheet, at, f) {
         Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
         v if !v.is_empty() && !v.is_error() => vec![v.display()],
@@ -175,9 +175,9 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         return None;
     }
     let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
-    // The formulas are written for the first cell of the range and see the value being entered,
+    // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
-    let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
     let entered;
     let wb = if sh.value(at) == v {
         wb

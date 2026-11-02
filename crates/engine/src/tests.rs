@@ -2744,6 +2744,30 @@ fn validation_formulas_are_relative_and_see_the_new_value() {
 }
 
 #[test]
+fn multi_area_rule_formulas_are_relative_to_the_top_left_cell_of_all_areas() {
+    // Issue #3152: Excel writes the formula for the top-left cell of all the areas (H26), whatever
+    // order they are listed in, not for the first area listed (H62).
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "F26:F27", "values": [[4], [5]]})).unwrap();
+    s.execute("data.validation", json!({"range": "H62:H68,H26:H27,H93:H95", "type": "custom", "formula1": "=MOD($H26,$F26)=0"})).unwrap();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut s, "H26", "4"));
+    assert!(ok(&mut s, "H26", "8"));
+    assert!(!ok(&mut s, "H26", "3"));
+    assert!(ok(&mut s, "H27", "10"));
+    assert!(!ok(&mut s, "H27", "4"));
+
+    // Conditional formats anchor on the same cell: `=D2>0` on D5:D6,D2:D3 checks D2 at D2.
+    s.execute("range.setValues", json!({"range": "D2:D6", "values": [[1], [0], [0], [1], [0]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D5:D6,D2:D3", "rule": {"type": "expression", "formula": "=D2>0", "preset": "greenFill"}}))
+        .unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let mut cache = crate::cf::CfCache::new();
+    let mut styled = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).is_some();
+    assert_eq!([styled("D2"), styled("D3"), styled("D5"), styled("D6")], [true, false, true, false]);
+}
+
+#[test]
 fn samples_build() {
     for (name, _) in crate::sample::SAMPLES {
         let wb = crate::sample::build(name).unwrap_or_else(|| panic!("sample {name}"));

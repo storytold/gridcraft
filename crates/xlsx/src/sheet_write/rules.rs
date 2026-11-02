@@ -53,7 +53,7 @@ pub(super) fn x14_cfvo(v: &CfValueKind) -> String {
 }
 
 pub(super) fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
-    let tl = cf.ranges.first().map(|r| r.start.a1()).unwrap_or_else(|| "A1".into());
+    let tl = RangeRef::top_left(&cf.ranges).map(|c| c.a1()).unwrap_or_else(|| "A1".into());
     let stop = if cf.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
     let mut dxf = |st: &Style| dxf_id(&mut out.dxfs, st);
     let f = |x: &str| format!("<formula>{}</formula>", esc(&text_to_file(x)));
