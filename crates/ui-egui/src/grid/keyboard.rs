@@ -165,13 +165,20 @@ fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui:
 }
 
 /// Whether the focused form control takes `ev`: arrows, Page Up and Down, Home, End, Space and
-/// Enter without Ctrl, Cmd or Alt, and, for a button, the space a Space press types (Space
-/// presses the button and doesn't start typing in a cell; a slider or spin button doesn't take
-/// Space, so its space starts a cell edit like any other character). A key press the control
-/// doesn't take goes to the grid, and a focused button gives the keyboard back with it.
+/// Enter without Ctrl, Cmd or Alt, and the space a Space press types when it must not start a
+/// cell edit: for a button, which Space presses, and on a checkbox cell, which the Space key
+/// toggles (a slider or spin button doesn't take Space, so Space on a cell does what it does with
+/// no control focused: it toggles a checkbox cell, or its space starts a cell edit like any other
+/// character). A key press the control doesn't take goes to the grid, and a focused button gives
+/// the keyboard back with it.
 fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool {
     match ev {
-        egui::Event::Text(text) => text == " " && app.selected_object.is_none() && crate::form_controls::focused_button(app, sh),
+        egui::Event::Text(text) => {
+            text == " "
+                && app.selected_object.is_none()
+                && app.grid.focused_control.is_some()
+                && (crate::form_controls::focused_button(app, sh) || is_checkbox(sh, app))
+        }
         egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
             if !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key, *repeat) {
                 return true;

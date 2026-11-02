@@ -347,6 +347,29 @@ fn space_starts_a_cell_edit_while_a_slider_or_spin_button_is_focused() {
     }
 }
 
+/// With a slider or spin button focused, Space on a cell does what it does with no control
+/// focused and nothing more: a checkbox cell toggles once and no edit starts (the typed space is
+/// dropped, as the toggle is what Space does there), and the control's value is unchanged.
+#[test]
+fn space_on_a_checkbox_cell_toggles_it_once_while_a_slider_is_focused() {
+    let (mut h, ids) = fixture();
+    h.state_mut().run("insert.checkbox", json!({"range": "A20"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(cell(&h, "A20"), Value::Bool(false));
+    let at = thumb(&h, ids.slider).center();
+    click(&mut h, at);
+    assert_eq!(h.state().grid.focused_control, Some(ids.slider));
+    let value = control(&h, ids.slider).value;
+    space(&mut h);
+    assert_eq!(cell(&h, "A20"), Value::Bool(true), "Space toggled the box once");
+    assert!(h.state().editor.is_none(), "and started no edit");
+    assert_eq!(control(&h, ids.slider).value, value, "the slider is unchanged");
+    assert_eq!(h.state().grid.focused_control, Some(ids.slider), "and keeps the keyboard");
+    space(&mut h);
+    assert_eq!(cell(&h, "A20"), Value::Bool(false), "a second Space toggles it back");
+    assert!(h.state().editor.is_none());
+}
+
 /// A right-click on a cell takes the keyboard from a button, like any other click on the grid:
 /// the Enter that follows does not press it again.
 #[test]
