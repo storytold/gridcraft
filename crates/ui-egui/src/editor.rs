@@ -47,6 +47,10 @@ pub struct EditState {
     /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
     /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
     pub original: Option<String>,
+    /// The edit began on a Python cell's existing content (F2, a double click or the formula
+    /// bar), so the text is the cell's code: a change goes in as new code through `python.set`.
+    /// `false` for an edit started by typing, which replaces the cell as it does a formula.
+    pub code_edit: bool,
 }
 
 impl EditState {
@@ -75,6 +79,7 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             original,
+            code_edit: false,
         }
     }
 
