@@ -75,6 +75,7 @@ mod open_encrypted;
 mod outline;
 mod page_layout_view;
 mod page_setup_margins;
+mod page_setup_page_order;
 mod paste_names;
 mod paste_special_dialog;
 mod pivot_pane;
