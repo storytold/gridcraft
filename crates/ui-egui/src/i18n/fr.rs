@@ -179,6 +179,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Supprimer les flèches",
         "Show Formulas" => "Afficher les formules",
         "Error Checking" => "Vérification des erreurs",
+        "Trace Error" => "Repérer une erreur",
         "Circular References" => "Références circulaires",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
@@ -212,6 +213,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Solver" => "Solveur",
         "What-If\nAnalysis" => "Analyse\nde scénarios",
         "Data Table…" => "Table de données…",
+        "Data Table" => "Table de données",
+        "Show Data Table" => "Afficher la table de données",
+        "Show Legend Keys" => "Afficher les symboles de légende",
+        "Horizontal Borders" => "Bordures horizontales",
+        "Vertical Borders" => "Bordures verticales",
+        "Available for column, bar, line, area and compatible combo charts." => {
+            "Disponible pour les histogrammes, les barres, les courbes, les aires et les graphiques combinés compatibles."
+        }
         "Scenario Manager…" => "Gestionnaire de scénarios…",
         "Goal Seek…" => "Valeur cible…",
         "Forecast\nSheet" => "Feuille de\nprévision",
@@ -812,6 +821,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Last month" => "Le mois dernier",
         "Last week" => "La semaine dernière",
         "Left Border" => "Bordure gauche",
+        "Page order" => "Ordre des pages",
+        "Down, then over" => "Vers le bas, puis à droite",
+        "Over, then down" => "À droite, puis vers le bas",
         "Left margin (in):" => "Marge gauche (po) :",
         "Legend Entries (Series)" => "Entrées de légende (série)",
         "Less Than…" => "Inférieur à…",

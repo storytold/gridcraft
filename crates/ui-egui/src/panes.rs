@@ -243,6 +243,28 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    ui.collapsing(lang.tr("Data Table"), |ui| {
+        let supported = chart.supports_data_table();
+        let mut on = chart.data_table.is_some();
+        if ui.add_enabled(supported, egui::Checkbox::new(&mut on, lang.tr("Show Data Table"))).changed() {
+            app.run_or_alert("chart.set", json!({"chart": id, "dataTable": on}));
+        }
+        if !supported {
+            ui.label(lang.tr("Available for column, bar, line, area and compatible combo charts."));
+        }
+        if let Some(table) = &chart.data_table {
+            for (label, key, mut value) in [
+                ("Show Legend Keys", "dataTableKeys", table.show_keys),
+                ("Horizontal Borders", "dataTableHorizontalBorder", table.horizontal_border),
+                ("Vertical Borders", "dataTableVerticalBorder", table.vertical_border),
+                ("Outline", "dataTableOutline", table.outline),
+            ] {
+                if ui.checkbox(&mut value, lang.tr(label)).changed() {
+                    app.run_or_alert("chart.set", json!({"chart": id, key: value}));
+                }
+            }
+        }
+    });
     ui.collapsing(lang.tr("Series"), |ui| {
         let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &chart));
         for (i, s) in chart.series.iter().enumerate() {
