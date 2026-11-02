@@ -628,6 +628,32 @@ fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
 }
 
 #[test]
+fn the_fallback_text_is_clipped_to_the_equation_frame() {
+    // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
+    // 75 pt): the lines are drawn inside a clip of the frame, nested in the block's, so they
+    // cannot run over neighbours.
+    let mut s = s();
+    s.execute("insert.equation", json!({"latex": "x", "cell": "B2"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for x in sh.shapes.iter_mut() {
+            x.text = format!("frac{{{}", "l".repeat(200));
+            x.anchor.width = 40.0;
+            x.anchor.height = 100.0;
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let (pdf, _) = pdf_of(&mut t, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    let clip = text.find("30 75 re W n").expect("a clip the size of the frame");
+    let run = text.find("(frac{llll").expect("the source line");
+    assert!(clip < run, "the clip comes before the text");
+    assert_eq!(text[clip..run].matches("\nq\n").count() + text[..clip].matches("\nq\n").count(), text[..run].matches("\nq\n").count());
+    assert!(text[run..].contains("\nQ\n"), "the state is restored after the text");
+}
+
+#[test]
 #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
 fn an_equation_source_of_a_megabyte_prints_a_bounded_excerpt() {
     // A file can carry a source far past `MAX_SOURCE_BYTES` (the drawing part may be 512 MiB). It

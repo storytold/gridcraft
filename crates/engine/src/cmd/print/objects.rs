@@ -107,9 +107,13 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
                     // No layout (the source does not parse, or the file was past the layout
                     // budget): the source, one text run per line, as many as the frame holds.
                     let line_h = 12.0 * b.scale;
+                    // A long line stays inside the frame; this clip nests in the block's.
+                    pg.save();
+                    pg.clip_rect(x, y, w, h);
                     for (i, line) in fallback_lines(&shp.text, h, line_h).enumerate() {
                         pg.text(x + 2.0 * b.k, y + line_h * (i + 1) as f32, 10.0 * b.scale, Font::Courier, ink, line);
                     }
+                    pg.restore();
                 }
             }
             continue;
