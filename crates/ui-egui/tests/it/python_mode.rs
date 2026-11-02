@@ -126,6 +126,25 @@ fn typing_py_then_tab_enters_python_mode_as_in_excel() {
     assert_eq!(mode(&h), None);
 }
 
+/// A cell inside a spill: typing there is an ordinary entry, as on any spill child, and neither
+/// `=PY` then Tab nor the shortcut turns that draft into code for the cell, as Python mode starts
+/// on no cell inside a spill.
+#[test]
+fn a_draft_typed_inside_a_spill_does_not_enter_python_mode() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A2"})).unwrap();
+    let mut h = harness(s);
+    type_text(&mut h, "=PY");
+    assert_eq!(mode(&h), Some(false), "typing starts an ordinary entry");
+    send(&mut h, press(Key::Tab, Modifiers::NONE));
+    assert_eq!(mode(&h), Some(false), "=PY then Tab");
+    shortcut(&mut h);
+    assert_eq!(mode(&h), Some(false), "the shortcut");
+    ctrl_enter(&mut h);
+    assert_eq!(code(&h, "A2"), None, "no code is written into the spill");
+}
+
 #[test]
 fn enter_and_tab_edit_the_code_and_ctrl_enter_commits_through_python_set() {
     let mut h = harness(blank());

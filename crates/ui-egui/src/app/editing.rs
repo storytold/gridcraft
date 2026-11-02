@@ -321,12 +321,23 @@ impl SheetApp {
     /// Ctrl+Alt+Shift+P (and the PY badge): Python mode on or off. An edit in progress keeps its
     /// text; with no edit, Python mode starts on the active cell.
     pub fn toggle_python_mode(&mut self) {
+        if self.editor.as_ref().is_some_and(|ed| !ed.python && self.draft_in_spill(ed)) {
+            return;
+        }
         match self.editor.as_mut() {
             Some(ed) if ed.python => ed.leave_python(),
             Some(ed) => ed.enter_python(),
             None => return self.begin_python_edit(),
         }
         self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Whether a draft's cell lies inside another cell's spill. A draft typed there stays an
+    /// ordinary entry: Python mode starts on no cell inside a spill, as the formula bar's entry
+    /// paths don't.
+    pub(crate) fn draft_in_spill(&self, ed: &editor::EditState) -> bool {
+        let doc = self.session.documents().iter().find(|d| d.uid == ed.doc);
+        doc.and_then(|d| d.wb.sheet(ed.sheet)).is_some_and(|sh| sh.spill_anchor(ed.cell).is_some())
     }
 
     /// Commits a Python mode edit through `python.set`, on the sheet the edit started on; with no

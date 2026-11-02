@@ -518,7 +518,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     show_editor_suggestions(ui, EditorSuggestion { app, id, resp: &resp, ed: &mut ed, galley: &output.galley, tokens: &t, mine });
     let lines = output.galley.rows.len().max(1);
     let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
-    if to_python {
+    if to_python && !app.draft_in_spill(&ed) {
         ed.enter_python();
         app.editor = Some(ed);
         app.session.mode = gridcraft_engine::Mode::Edit;

@@ -1233,3 +1233,21 @@ fn a_draft_typed_over_a_hidden_python_cell_stays_open_through_commands() {
     assert_eq!(b2.map(|c| (c.input_text(), c.py.is_some())), Some(("7".to_string(), false)), "the typed entry replaces the Python cell");
 }
 
+#[test]
+fn python_mode_does_not_start_on_a_draft_typed_inside_a_spill() {
+    // Typing on a spill child is an ordinary entry; switching that draft to Python mode would let
+    // Ctrl+Enter write code into a cell another cell's result spills over, which every other way
+    // into Python mode refuses.
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    session.execute("selection.set", json!({"cell": "A2"})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    call(&mut app, &ctx, "ui.edit.begin", json!({"text": "5"}));
+    execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+    assert!(app.editor.as_ref().is_some_and(|e| !e.python && e.text == "5"), "the draft stays an ordinary entry");
+    call(&mut app, &ctx, "ui.edit.commit", json!({"move": "none"}));
+    let a2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 0)).cloned());
+    assert_eq!(a2.map(|c| (c.input_text(), c.py.is_some())), Some(("5".to_string(), false)));
+}
