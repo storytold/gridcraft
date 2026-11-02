@@ -16,6 +16,7 @@ pub struct CraftFont {
 }
 
 impl CraftFont {
+    /// CJK fallback faces share the primary baseline; symbols keep their centered metrics.
     fn font_data(&self) -> FontData {
         let mut data = FontData::from_static(self.bytes);
         data.tweak.set_baseline_fallback(
@@ -567,6 +568,7 @@ fn append_craft_faces(fonts: &mut FontDefinitions) {
 mod font_binding_tests {
     use super::*;
 
+    /// Synthetic bytes make this metadata check independent of the host's installed fonts.
     #[test]
     fn craft_cjk_scripts_opt_into_the_shared_baseline() {
         use egui::epaint::text::FallbackAlign;

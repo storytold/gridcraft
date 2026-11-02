@@ -11,6 +11,7 @@ fn activate(ctx: &Context, definitions: egui::FontDefinitions) {
     out.textures_delta.clear();
 }
 
+/// Allow deferred font binding and editor layout to settle before inspecting painted shapes.
 fn frames(ctx: &Context, app: &mut SheetApp) -> egui::FullOutput {
     let mut out = egui::FullOutput::default();
     for _ in 0..4 {
@@ -26,6 +27,7 @@ fn frames(ctx: &Context, app: &mut SheetApp) -> egui::FullOutput {
     out
 }
 
+/// Check layout baselines rather than bitmap bounds, which differ between scripts.
 fn assert_shared_baselines(galley: &egui::Galley) {
     for row in &galley.rows {
         if let Some(first) = row.glyphs.first() {
@@ -36,6 +38,7 @@ fn assert_shared_baselines(galley: &egui::Galley) {
     }
 }
 
+/// Exercise fallback alignment across cell styles, title fonts, zoom, and automatic wrapping.
 #[test]
 fn cjk_and_latin_share_a_baseline_in_cells_and_window_titles() {
     let ctx = Context::default();
@@ -56,6 +59,7 @@ fn cjk_and_latin_share_a_baseline_in_cells_and_window_titles() {
     }
 }
 
+/// Baseline alignment must not override workbook row heights, clipping, or editor sizing.
 #[test]
 fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
     const TEXT: &str = "中文ABC2026\n文字xyz123";
