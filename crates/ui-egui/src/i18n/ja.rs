@@ -1022,6 +1022,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Blue-White-Red Scale", "青-白-赤のスケール"),
     ("White-Green Scale", "白-緑のスケール"),
     ("Duplicate Values", "重複する値"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
