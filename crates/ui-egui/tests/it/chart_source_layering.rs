@@ -28,7 +28,7 @@ fn fixture(rtl: bool, frozen: bool) -> (Harness, u32) {
         session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
     }
     let mut h = crate::support::harness(session, 4);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     if frozen {
         h.state_mut().view_mut().unwrap().scroll.y = 20.0;
     }
@@ -143,7 +143,7 @@ fn unselected_hidden_and_offscreen_charts_do_not_highlight_sources() {
         let (mut h, id) = fixture(false, false);
         assert!(!source_strokes(&h).is_empty(), "selected visible chart highlights its source");
         match state {
-            "unselected" => h.state_mut().selected_chart = None,
+            "unselected" => h.state_mut().selected_object = None,
             "hidden" => {
                 h.state_mut().run("view.showObjects", json!({"on": false})).unwrap();
             }
