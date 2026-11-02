@@ -525,6 +525,10 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// The screen's physical pixels per point, where [`Session::text_width`] measures. egui starts
+    /// each glyph on a whole physical pixel, so where wrapped text breaks depends on it. Without
+    /// it (CLI, MCP) widths are taken as they are.
+    pub text_pixels_per_point: Option<f32>,
 }
 
 impl Session {
@@ -1085,6 +1089,24 @@ impl Session {
         self.groups.extend(later.filter(|o| o.doc != g.doc));
         self.group_epoch = self.group_epoch.wrapping_add(1);
         Ok(g)
+    }
+
+    /// Refits the automatic rows of wrapped text in every open workbook with [`Session::text_width`],
+    /// for when the fonts it measures with changed (the front end bound a workbook's fonts): rows
+    /// sized with the fallback face would otherwise keep that size. Rows only grow, as when a file
+    /// opens. Not an edit: no undo step, and a workbook without unsaved changes stays without them.
+    /// Undo and redo restore the heights they saved, as Excel does.
+    pub fn refit_wrapped_rows(&mut self) {
+        let Some(measure) = self.text_width.clone() else { return };
+        for d in &mut self.docs {
+            let Some(wb) = cmd::refit_wrapped_rows(&d.wb, measure.clone(), self.text_pixels_per_point) else { continue };
+            let clean = !d.is_dirty();
+            d.wb = Arc::new(wb);
+            if clean {
+                d.saved = d.wb.clone();
+            }
+            d.revision += 1;
+        }
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

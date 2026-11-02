@@ -32,8 +32,9 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": idx, "name": name}))
 }
 
+// Adding or removing a sheet changes no cell's text, so no row needs the front end's measure.
 fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    crate::cmd::commit(d, f)
+    crate::cmd::commit(d, None, f)
 }
 
 pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
