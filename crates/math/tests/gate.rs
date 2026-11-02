@@ -304,6 +304,22 @@ fn nesting_is_refused_before_the_stack_runs_out() {
 }
 
 #[test]
+fn nesting_built_by_macros_is_refused_by_the_parser() {
+    // `check_caps` in the wrapper counts the braces, `\left`s and `\begin`s of the source text,
+    // so nesting that macro expansion builds reaches the parser; its own recursion guard refuses
+    // it, well within the 1,000-expansion limit (64 levels take 128 expansions).
+    let built = |d: usize| format!("\\def\\o{{\\left(}}\\def\\c{{\\right)}}{}x{}", "\\o ".repeat(d), "\\c".repeat(d));
+    assert!(matches!(run(&built(32)), Outcome::Laid(_)), "32 macro-built levels lay out");
+    assert_eq!(run(&built(64)), Outcome::Rejected("Recursion limit exceeded".into()), "64 macro-built levels");
+    let frac = |d: usize| format!("\\def\\o#1{{\\frac{{#1}}{{1}}}}{}x{}", "\\o{".repeat(d), "}".repeat(d));
+    assert!(matches!(run(&frac(32)), Outcome::Laid(_)), "32 macro-built fractions lay out");
+    assert_eq!(run(&frac(64)), Outcome::Rejected("Recursion limit exceeded".into()), "64 macro-built fractions");
+    // The wrapper's text count sees no nesting in the first source, so the parser's guard is the
+    // one that holds there too.
+    assert!(gridcraft_math::layout(&built(64)).is_err());
+}
+
+#[test]
 fn macro_bombs_and_huge_dimensions_stop() {
     for bomb in [
         "\\def\\a{\\a\\a}\\a",
