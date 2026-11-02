@@ -392,12 +392,12 @@ fn delete_key_removes_the_selected_chart() {
 
     click_cell(&mut h, "C10");
     click_chart(&mut h, id);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
     assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty());
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_chart(), None);
     assert_eq!(value(&h, "A1"), Value::Number(1.0));
 }
 
@@ -412,7 +412,7 @@ fn inserted_chart_is_selected_so_delete_removes_it() {
 
     let id = h.state_mut().run("insert.chart", json!({"type": "column"})).unwrap()["chart"].as_u64().unwrap() as u32;
     h.run_steps(2);
-    assert_eq!(h.state().selected_chart, Some(id), "the new chart is selected");
+    assert_eq!(h.state().selected_chart(), Some(id), "the new chart is selected");
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
@@ -621,7 +621,7 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
     assert!(h.state().dialog.is_none());
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::Pie]);
-    assert!(h.state().selected_chart.is_some(), "the new chart is selected");
+    assert!(h.state().selected_chart().is_some(), "the new chart is selected");
 
     // Without numbers there is nothing to recommend: a message, no dialog.
     h.state_mut().session.run("selection.set", json!({"range": "A1:A4"})).unwrap();
@@ -680,7 +680,7 @@ fn select_data_dialog_sets_the_category_axis_labels() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Year", "Sales"], [2020, 5], [2021, 7], [2022, 9]]})).unwrap();
     let id = s.execute("insert.chart", json!({"range": "A1:B4", "type": "line"})).unwrap()["chart"].as_u64().unwrap();
     let mut h = harness(s);
-    h.state_mut().selected_chart = Some(id as u32);
+    h.state_mut().select_object_id(Some(id as u32));
     h.state_mut().open_dialog("selectData", json!({"chart": id}));
     h.run_steps(2);
     let d = h.state_mut().dialog.as_mut().unwrap();
@@ -761,6 +761,117 @@ fn data_analysis_dialog_runs_a_tool_and_asks_before_overwriting() {
     let d = h.state().dialog.as_ref().expect("the dialog stays open to ask");
     assert_eq!(d.values.get("askOverwrite"), Some(&json!(true)));
     assert!(h.state().message.is_none());
+}
+
+#[test]
+fn data_analysis_dialog_opens_every_tool_form() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [2, 4], [3, 6]]})).unwrap();
+    let mut h = harness(s);
+    for (id, label) in gridcraft_engine::cmd::analysis::TOOLS {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": id}));
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some(*label), "{id}");
+        h.state_mut().dialog = None;
+    }
+    // The z-Test form runs with the known variances typed in.
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "zTest"}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [("range1", "A1:A3"), ("range2", "B1:B3"), ("variance1", "1"), ("variance2", "4"), ("outputTo", "range"), ("output", "D1")] {
+            d.values.insert(k.into(), json!(v));
+        }
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "OK runs the tool and closes the dialog");
+    assert_eq!(value(&h, "D1"), Value::from("z-Test: Two Sample for Means"));
+    // Random Number Generation draws from the chosen distribution with the typed seed.
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [("count", "3"), ("distribution", "bernoulli"), ("seed", "1"), ("outputTo", "range"), ("output", "H1")] {
+            d.values.insert(k.into(), json!(v));
+        }
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(matches!(value(&h, "H3"), Value::Number(x) if x == 0.0 || x == 1.0));
+}
+
+#[test]
+fn two_factor_anova_without_replication_labels_caption_names_the_first_column() {
+    // Ticked, Labels makes the tool take the first cell of every data row as the row's name, so
+    // the caption must not say the labels are only in the first row.
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "anovaTwoFactorWithout"}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Labels in first row and first column").is_some());
+    assert!(h.query_by_label("Labels in first row").is_none());
+}
+
+#[test]
+fn random_number_generation_form_hides_the_count_for_a_patterned_sequence() {
+    // A patterned sequence ignores the count (its from, to, step and repeats set the length), so
+    // the form offers the count only for the random distributions.
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Number of Random Numbers:").is_some());
+    h.state_mut().dialog.as_mut().unwrap().values.insert("distribution".into(), json!("patterned"));
+    h.run_steps(2);
+    assert!(h.query_by_label("Number of Random Numbers:").is_none());
+    assert!(h.query_by_label("Repeating each sequence (times):").is_some());
+}
+
+#[test]
+fn random_seed_caption_says_blank_draws_a_new_sequence() {
+    // A blank seed doesn't mean "no seed": the engine picks a new one, so the numbers differ on
+    // each run. The caption says so for both tools that draw random numbers.
+    let mut h = harness(blank());
+    for tool in ["randomNumberGeneration", "sampling"] {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": tool}));
+        h.state_mut().dialog.as_mut().unwrap().values.insert("method".into(), json!("random"));
+        h.run_steps(2);
+        assert!(h.query_by_label("Random Seed (blank for a new sequence):").is_some(), "{tool}");
+        assert!(h.query_by_label("Random Seed (blank for none):").is_none(), "{tool}");
+        h.state_mut().dialog = None;
+    }
+}
+
+#[test]
+fn data_analysis_form_keeps_ok_on_screen_in_a_short_window() {
+    // The patterned Random Number Generation form is the tallest; in a 600-point-high window the
+    // tool's options scroll and the output options and OK stay reachable.
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(1280.0, 600.0)), crate::common::app(blank()), 4);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("distribution".into(), json!("patterned"));
+    h.run_steps(4);
+    // OK's label is padded; a button clipped off the window has no node at all.
+    let ok = h.query_by_label("   OK   ").map(|n| n.rect());
+    assert!(ok.is_some_and(|r| r.bottom() <= 600.0), "OK at {ok:?} in a 600-point window");
+    let output = h.query_by_label("New Worksheet Ply:").map(|n| n.rect());
+    assert!(output.is_some_and(|r| r.bottom() <= 600.0), "the output options at {output:?}");
+}
+
+#[test]
+fn random_seed_shows_only_where_numbers_are_drawn() {
+    // Patterned generation and periodic sampling draw nothing, so their forms have no seed.
+    let seed = "Random Seed (blank for a new sequence):";
+    let mut h = harness(blank());
+    for (tool, key, value, shown) in [
+        ("randomNumberGeneration", "distribution", "uniform", true),
+        ("randomNumberGeneration", "distribution", "patterned", false),
+        ("sampling", "method", "random", true),
+        ("sampling", "method", "periodic", false),
+    ] {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": tool}));
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(value));
+        h.run_steps(2);
+        assert_eq!(h.query_by_label(seed).is_some(), shown, "{tool} {value}");
+        h.state_mut().dialog = None;
+    }
 }
 
 #[test]
