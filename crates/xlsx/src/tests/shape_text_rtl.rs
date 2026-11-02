@@ -45,6 +45,8 @@ fn text_box(text: &str, format: ShapeFormat) -> Workbook {
         line: Color::Auto,
         text: text.into(),
         format,
+        flip_h: false,
+        flip_v: false,
     });
     Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() }
 }

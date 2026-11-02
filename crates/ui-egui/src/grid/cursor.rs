@@ -21,8 +21,8 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     {
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
-    // Draw tools own the cursor over cells, including while recording a stroke.
-    if !app.session.draw_tool.is_empty() && in_cells {
+    // Draw tools and an armed shape own the cursor over cells, including while recording a stroke.
+    if (!app.session.draw_tool.is_empty() || app.grid.shape_tool.is_some()) && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }

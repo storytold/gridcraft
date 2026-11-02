@@ -26,8 +26,10 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     let shapes = big_button(ui, Icon::Shapes, "Shapes", "Shapes", true);
-    anchor_keytip(app, ui, &shapes, &["insert.shape"]);
-    egui::Popup::menu(&shapes).show(|ui| {
+    control_keytip(app, ui, &shapes, "ui.shapeTool");
+    // Alt, N, S, H opens the gallery (a key tip can't pick a drag), as clicking the button does.
+    let forced = invoke(app, "ui.shapeTool");
+    egui::Popup::menu(&shapes).open_memory(popup_command(forced, shapes.clicked())).show(|ui| {
         for (label, kind) in [
             ("Rectangle", "rectangle"),
             ("Rounded Rectangle", "roundedRectangle"),
@@ -37,8 +39,17 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
-            if ui.button(label).clicked() {
-                act(app, "insert.shape", json!({"kind": kind}));
+            // As in Excel the pick arms the pointer: the shape is drawn by dragging on the sheet.
+            let item = ui.button(label);
+            // Opened by its key tip, the gallery takes the keyboard (the grid would keep the
+            // arrows and Tab): the first shape has focus, the arrows move it, Enter picks.
+            if forced && kind == "rectangle" {
+                item.request_focus();
+            }
+            if item.clicked() {
+                act(app, "ui.shapeTool", json!({"kind": kind}));
+                // Enter on a focused item makes no pointer click, so the menu wouldn't close itself.
+                ui.close();
             }
         }
     });

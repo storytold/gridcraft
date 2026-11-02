@@ -62,6 +62,8 @@ fn exported_ink_has_a_visible_unfilled_path_and_correct_stroke() {
             line: Color::Rgb(0xA12BCD),
             text: "-10.0,5.0;50.0,40.0;90.0,10.0".into(),
             format: Default::default(),
+            flip_h: false,
+            flip_v: false,
         });
     }
     let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };

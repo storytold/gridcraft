@@ -179,7 +179,17 @@ pub(super) fn read(obj: &El, anchor: Anchor) -> Option<Shape> {
     let (path, w, h) = validate_cust_geom(sp)?;
     let (width, line) = validate_line(sp)?;
     let text = parse_points(path, &anchor, w, h)?;
-    Some(Shape { id: 0, kind: ShapeKind::Ink, anchor, fill: Color::Rgb((width as u32) << 16), line, text, format: Default::default() })
+    Some(Shape {
+        id: 0,
+        kind: ShapeKind::Ink,
+        anchor,
+        fill: Color::Rgb((width as u32) << 16),
+        line,
+        text,
+        format: Default::default(),
+        flip_h: false,
+        flip_v: false,
+    })
 }
 
 /// Invalid/native out-of-range data uses the existing rectangle fallback. A successful
