@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (sheet colours follow dark mode) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (dark worksheet rendering reconciled with the shared module layout and current UI changes) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -65,13 +65,19 @@ drawing its own:
   neighbours checked when finding an overflowing source.
   `theme::contrast_tests` holds foreground/background pairs to WCAG 2 (4.5:1 for text, 3:1 for
   glyphs) in both themes. Icons (`icons.rs`, drawn in code) take their paper and category colours
-  (`theme::Cat`) from the tokens.
+  (`theme::Cat`) from the tokens. Icons also support category accents through `icons::paint_accent`.
 - **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
-  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
-  `i18n` in one place. Split buttons return the main and arrow responses separately, with
-  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
-  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  `small_button`, `small_button_accent`, `split_button`, `big_split_button`, `toggle_button`),
+  translated through `i18n` in one place. Split buttons return the main and arrow responses
+  separately, with accessible names (`AutoSum`, `AutoSum options`); big and small buttons
+  report their label (an icon-only one its tooltip) as their accessible name. The ribbon card
+  scrolls a tab wider than the window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
   and a test keeps every tab within the card's three rows.
+- **Function Library**: `function_library.rs` holds the function categories (engine id and
+  label, in the Insert Function dialog's order), the function list built once from
+  `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
+  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
+  Recently Used category list what `formulas.recentlyUsed` returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
@@ -104,12 +110,23 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   every group it opened, as `group_rollback` does. `Session::abort_groups(doc)`, and the command
   `automate.stopAction` on the active workbook, roll back the groups left open on a document (a
   debugger the person abandons, a caller that dropped its token), so Undo works there again. The
+  command runs on its own: a step of a script or macro may not stop the action it is part of, and
+  a recording leaves it out, so playing the recording back never stops the run. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
+- **Recently used functions** (`recent.rs`). `Prefs::recent_functions` holds the ten functions
+  most recently entered in a formula, newest first. `Session::execute` updates it for every
+  `cell.*` and `range.*` command it journals, from any source (interface, control channel, MCP,
+  script). It reads at most 2,000 of the formulas a command enters, starting from the last one
+  (the most recent), so a large paste costs no more than that; `formulas.recentlyUsed` returns
+  it. It is kept with the other preferences (`prefs.json`, the browser's storage on the
+  web) and read leniently, so a malformed value loses only this list. It does not read the
+  journal back, so the journal's trimming does not affect it.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
-  dialog (the dialog's confirming call is the step), and the buffer is independent of the journal
+  dialog (the dialog's confirming call is the step; a run that changed the workbook before a step
+  of it opened a dialog is recorded), and the buffer is independent of the journal
   (Automate › Record Actions still records through the journal).
 - **Document trust.** `DocState::trust` is `Local` for workbooks made in the session and
   `FromFile` for workbooks opened from a file. `Trust` has no default: `DocState::new` takes it,
@@ -126,10 +143,16 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   other than tab, line feed and carriage return, U+FFFE, U+FFFF) are stored as the noncharacter
   U+FDD0 and four hex digits, as is U+FDD0 itself, and read back as they were. `stash::items`
   and `stash::keys` list the items under a key prefix in one pass over the names, at most
-  10,000 of them (`stash::MAX_ITEMS`). The older single-name `_sc_<key>` items are read as well.
+  10,000 of them (`stash::MAX_ITEMS`) with a count of the rest, so a caller can say what it did
+  not list. The older single-name `_sc_<key>` items are read as well.
   `formulas.defineName` and `formulas.deleteName` refuse a name the workbook holds such an item
   under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
   `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
+
+The macro engine (`engine/src/macros/`, commands in `cmd/macros.rs`, described in
+[`macros.md`](macros.md)) is built on these: a run is an undo group, the recorder reads the
+recording buffer, the policy asks before a macro in a `FromFile` workbook runs, and xlsx keeps
+macros as chunked hidden names (`_gc_macro_<n>_<k>`: macro `n`, chunk `k`).
 
 ## Agent control
 
@@ -156,11 +179,16 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Reconciled worksheet dark-mode rendering and regression tests with the shared module layout and current UI changes; Page Layout header/footer text and Page Break Preview labels follow worksheet ink |
+| 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
+| 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-26 | minor | Text overflow and Center Across Selection stop at empty neighbours with resolved explicit, table, conditional or patterned fills; offscreen source discovery respects the same blockers in both themes |
 | 2026-10-26 | minor | Editor text preserves its resolved font colour while the caret independently chooses contrasting black or white, including when explicit text matches its fill; documented the affected rendering and regression-test contracts |
 | 2026-10-26 | minor | In-cell editing uses the grid's shared resolved style and active conditional-format cache, preserving table, conditional, scale and patterned fills plus explicit font colours for text and caret |
 | 2026-10-26 | minor | Automatic cell ink and in-cell editor text/caret compare WCAG contrast for black and white against the resolved fill, keeping saturated bright green readable |
 | 2026-10-26 | minor | Dark mode uses black default cells with white text, including merged cells and editing; gridlines, formula references and sheet controls follow the theme. Explicit workbook colours stay intact, with contrasting automatic text on filled cells |
+| 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
+| 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

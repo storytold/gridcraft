@@ -339,6 +339,13 @@ fn keytip_hbi_() {
 }
 
 #[test]
+fn keytip_hbj_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "HBJ", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.borders"), "HBJ must journal home.borders");
+}
+
+#[test]
 fn keytip_hbl_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBL", false);
@@ -1765,6 +1772,14 @@ fn keytip_mq_() {
 }
 
 #[test]
+fn keytip_mr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MR", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "MR must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
 fn keytip_ms_() {
     let mut h = harness(blank());
     sequence(&mut h, "MS", false);
@@ -2539,14 +2554,14 @@ fn keytip_wm_() {
 fn keytip_wmr_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMR", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMR must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMR must open the recordMacro dialog");
 }
 
 #[test]
 fn keytip_wmv_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMV", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMV must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMV must open the macros dialog");
 }
 
 #[test]
@@ -2647,7 +2662,8 @@ fn keytip_wvr_() {
 fn keytip_ww_() {
     let mut h = harness(blank());
     sequence(&mut h, "WW", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must run view.switchWindows cleanly");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -2753,7 +2769,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 365;
+    const EXPECTED: usize = 367;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

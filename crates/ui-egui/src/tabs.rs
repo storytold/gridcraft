@@ -115,7 +115,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
             all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
             let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
-            let active = app.session.active().map(|d| d.wb.active_sheet.to_string()).unwrap_or_default();
+            let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
             let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
             if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
                 && let Ok(i) = i.parse::<usize>()
@@ -135,7 +135,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     .iter()
                     .enumerate()
                     .filter(|(_, s)| s.visibility == Visibility::Visible)
-                    .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet))
+                    .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet()))
                     .collect();
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
             // tabs get up to 60% of the bar and the grid's horizontal scrollbar the rest; a strip
@@ -148,7 +148,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             };
             // Reveal the selected sheet after navigation or layout changes, but
             // allow browsing other tabs without snapping back on every frame.
-            let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet, &sheets, tabs_width.to_bits()));
+            let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
             let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
             let reveal_active = ui.ctx().data_mut(|data| {
                 let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
@@ -340,6 +340,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                crate::macro_ui::status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
@@ -352,7 +353,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     if !d.calc.circular.is_empty() {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
-                        let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet) {
+                        let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
                             Some((_, c)) => format!("Circular References: {}", c.a1()),
                             None => "Circular References".to_owned(),
                         };
@@ -412,8 +413,20 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
+                    // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        text(ui, egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));
+                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        let resp = ui.add(
+                            egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
+                                .selectable(false)
+                                .sense(Sense::click()),
+                        );
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(app.ui.language.tr("Click to copy"));
+                        if resp.clicked() {
+                            ui.ctx().copy_text(value);
+                        }
+                        // The label senses clicks, so it also has to open the statistics menu on right-click.
+                        resp.context_menu(|ui| status_bar_menu(app, ui));
                         ui.add_space(10.0);
                     }
                 });
@@ -586,11 +599,11 @@ mod tests {
         let mut app = crate::SheetApp::new(session, Default::default());
         app.begin_edit(Some("99".into()), false);
         activate_sheet(&mut app, 1);
-        assert_eq!(app.session.active().unwrap().wb.active_sheet, 0, "a value the validation stops must not leave its sheet");
+        assert_eq!(app.session.active().unwrap().wb.active_sheet(), 0, "a value the validation stops must not leave its sheet");
         assert!(app.editor.is_some(), "the edit stays open to be corrected");
         app.editor.as_mut().unwrap().text = "7".into();
         activate_sheet(&mut app, 1);
-        assert_eq!(app.session.active().unwrap().wb.active_sheet, 1, "the corrected value commits and the sheet changes");
+        assert_eq!(app.session.active().unwrap().wb.active_sheet(), 1, "the corrected value commits and the sheet changes");
         let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
         assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
     }

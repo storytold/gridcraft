@@ -274,6 +274,16 @@
    "note": "pending: Line Color submenu"
   },
   {
+   "seq": "HBJ",
+   "kind": "command",
+   "target": "home.borders",
+   "params": {
+    "preset": "inside"
+   },
+   "excel": "(none)",
+   "note": "Borders menu item GridCraft adds (Excel's menu has no Inside Borders); J is free under HB"
+  },
+  {
    "seq": "HBL",
    "kind": "command",
    "target": "home.borders",
@@ -1659,6 +1669,13 @@
    "target": "formulas.moreFunctions"
   },
   {
+   "seq": "MR",
+   "kind": "control",
+   "excel": "Recently Used Menu",
+   "note": "opens the Recently Used menu",
+   "target": "formulas.recentlyUsed"
+  },
+  {
    "seq": "MS",
    "kind": "continue",
    "excel": "Use in Formula Menu",
@@ -2370,17 +2387,17 @@
   },
   {
    "seq": "WMR",
-   "kind": "command",
-   "target": "view.macros",
+   "kind": "dialog",
+   "target": "recordMacro",
    "excel": "Record Macro",
-   "note": "Record Macro (macros menu)"
+   "note": "Record Macro dialog (stops recording while recording)"
   },
   {
    "seq": "WMV",
-   "kind": "command",
-   "target": "view.macros",
+   "kind": "dialog",
+   "target": "macros",
    "excel": "View Macros",
-   "note": "containment(Macros)"
+   "note": "containment(Macros): the Macros dialog"
   },
   {
    "seq": "WN",
@@ -2471,7 +2488,7 @@
   },
   {
    "seq": "WW",
-   "kind": "command",
+   "kind": "control",
    "target": "view.switchWindows",
    "excel": "Switch Windows",
    "note": ""

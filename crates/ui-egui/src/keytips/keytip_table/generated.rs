@@ -46,12 +46,13 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HBG", Entry::Finish(Action::Command("home.drawBorder"))),  // Excel: Draw Border Grid; containment(Draw Border)
     ("HBH", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"thickBottom\"}"))), // Excel: Thick Bottom Border; Borders menu item
     ("HBI", Entry::Finish(Action::Pending("home.borderLineColor"))), // pending; Excel: Line Color; pending: Line Color submenu
-    ("HBL", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"left\"}"))), // Excel: Left Border; Borders menu item
-    ("HBM", Entry::Finish(Action::DialogWith("formatCells", "{\"tab\":\"Border\"}"))), // Excel: More Borders; Format Cells on its Border tab
-    ("HBN", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"none\"}"))), // Excel: No Border; Borders menu item
+    ("HBJ", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"inside\"}"))), // Excel: (none); Borders menu item GridCraft adds (Excel's menu has no Inside Borders); J is free under HB
+    ("HBL", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"left\"}"))),   // Excel: Left Border; Borders menu item
+    ("HBM", Entry::Finish(Action::DialogWith("formatCells", "{\"tab\":\"Border\"}"))),      // Excel: More Borders; Format Cells on its Border tab
+    ("HBN", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"none\"}"))),   // Excel: No Border; Borders menu item
     ("HBO", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"bottom\"}"))), // Excel: Bottom Border; Borders menu item
-    ("HBP", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"top\"}"))), // Excel: Top Border; Borders menu item
-    ("HBR", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"right\"}"))), // Excel: Right Border; Borders menu item
+    ("HBP", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"top\"}"))),    // Excel: Top Border; Borders menu item
+    ("HBR", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"right\"}"))),  // Excel: Right Border; Borders menu item
     ("HBS", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"outside\"}"))), // Excel: Outside Borders; Borders menu item
     ("HBT", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"thickOutside\"}"))), // Excel: Thick Outside Borders; Borders menu item
     ("HBU", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"topDoubleBottom\"}"))), // Excel: Top and Double Bottom Border; Borders menu item
@@ -242,6 +243,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MO", Entry::Finish(Action::Control("formulas.lookup"))), // Excel: Lookup & Reference Menu; group level: containment(Lookup & Reference)
     ("MP", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Trace Precedents
     ("MQ", Entry::Finish(Action::Control("formulas.moreFunctions"))), // Excel: More Functions Menu; group level: containment(More Functions)
+    ("MR", Entry::Finish(Action::Control("formulas.recentlyUsed"))), // Excel: Recently Used Menu; opens the Recently Used menu
     ("MS", Entry::Continue),                                   // Excel: Use in Formula Menu; group level: containment(Use in Formula)
     ("MSP", Entry::Finish(Action::Dialog("pasteName"))),       // Excel: Paste Names
     ("MT", Entry::Finish(Action::Control("formulas.text"))),   // Excel: Text Menu; group level: containment(Text)
@@ -342,8 +344,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WJ", Entry::Finish(Action::Control("view.zoom"))),            // Excel: Zoom To 100%; runs the 100% zoom handler (percent param)
     ("WL", Entry::Finish(Action::Command("view.normal"))),          // Excel: Normal View; containment(Normal)
     ("WM", Entry::Continue),                                        // Excel: Macros Menu; group level: containment(Macros)
-    ("WMR", Entry::Finish(Action::Command("view.macros"))),         // Excel: Record Macro; Record Macro (macros menu)
-    ("WMV", Entry::Finish(Action::Command("view.macros"))),         // Excel: View Macros; containment(Macros)
+    ("WMR", Entry::Finish(Action::Dialog("recordMacro"))),          // Excel: Record Macro; Record Macro dialog (stops recording while recording)
+    ("WMV", Entry::Finish(Action::Dialog("macros"))),               // Excel: View Macros; containment(Macros): the Macros dialog
     ("WN", Entry::Finish(Action::Command("view.newWindow"))),       // Excel: New Window
     ("WP", Entry::Finish(Action::Command("view.pageLayout"))),      // Excel: Page Layout View
     ("WQ", Entry::Finish(Action::Dialog("zoom"))),                  // Excel: Zoom; opens the Zoom dialog
@@ -356,7 +358,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WVH", Entry::Finish(Action::Command("view.headings"))),       // Excel: Toggle Headings; containment(Headings)
     ("WVN", Entry::Finish(Action::Pending("view.navigation"))),     // pending; Excel: Navigation; Navigation pane; reserved until the command lands
     ("WVR", Entry::Finish(Action::Command("view.ruler"))),          // Excel: Ruler
-    ("WW", Entry::Finish(Action::Command("view.switchWindows"))),   // Excel: Switch Windows
+    ("WW", Entry::Finish(Action::Control("view.switchWindows"))),   // Excel: Switch Windows
     ("JAM", Entry::Finish(Action::Command("chart.formatSelection"))), // Excel: Chart format: Format Selection pane; containment(Format Selection)
     ("JCA", Entry::Finish(Action::Command("chart.addElement"))),    // Excel: Chart: Add Chart Element; containment(Add Chart Element)
     ("JCC", Entry::Finish(Action::Command("chart.changeType"))),    // Excel: Chart: Change Chart Type; containment(Change Chart Type)

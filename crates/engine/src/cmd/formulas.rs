@@ -4,7 +4,10 @@ use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, stash, str_param,
+    target_range, target_ranges, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -197,7 +200,7 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
     };
     if !sel.is_single() {
         let Some(writes) = selection_totals(sh, sel, &func)? else { return ok() };
-        let sheet = d.wb.active_sheet;
+        let sheet = d.wb.active_sheet();
         edit(s, |cx| {
             for (c, f) in &writes {
                 let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
@@ -498,7 +501,7 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .iter()
         .filter(|n| !n.hidden)
         .map(|n| {
-            let sheet = n.scope.unwrap_or(d.wb.active_sheet);
+            let sheet = n.scope.unwrap_or(d.wb.active_sheet());
             // parse_name, not evaluate's parse: a name's top-level commas are unions.
             let v = gridcraft_formula::parse_name(&n.formula)
                 .map_or(Value::Error(CellError::Name), |e| gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, CellRef::default(), &e));
@@ -580,7 +583,7 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
 /// active sheet's own, without hidden names, in alphabetical order. A sheet's name hides the
 /// workbook name it shares.
 pub fn pasteable_names(wb: &Workbook) -> Vec<(String, String)> {
-    let sheet = wb.active_sheet;
+    let sheet = wb.active_sheet();
     let shown = |local: bool| wb.names.iter().filter(move |n| !n.hidden && n.scope.is_some() == local && n.scope.is_none_or(|i| i == sheet));
     let local: std::collections::HashSet<String> = shown(true).map(|n| gridcraft_formula::fold_name(&n.name)).collect();
     let mut out: Vec<(String, String)> = shown(true).map(|n| (n.name.clone(), format!("={}", n.formula))).collect();
@@ -614,7 +617,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
     if at.row.saturating_add(rows) > gridcraft_core::MAX_ROWS || at.col.saturating_add(2) > gridcraft_core::MAX_COLS {
         return Err(EngineError::Other("There isn't room on the sheet for the list of names.".into()));
     }
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let range = RangeRef::new(at, CellRef::new(at.row + rows - 1, at.col + 1));
     edit(s, |cx| {
         for (row, (name, refers)) in (at.row..).zip(&names) {
@@ -634,7 +637,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
 fn trace_precedents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let areas = d.calc.graph.precedents_of((d.wb.active_sheet, at));
+    let areas = d.calc.graph.precedents_of((d.wb.active_sheet(), at));
     let v: Vec<Json> = areas.iter().map(|a| json!({"sheet": d.wb.sheet(a.sheet).map(|s| s.name.clone()), "range": a.range.a1()})).collect();
     Ok(Json::Array(v))
 }
@@ -643,7 +646,7 @@ fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let mut deps = Vec::new();
-    d.calc.graph.dependents(d.wb.active_sheet, at, &mut deps);
+    d.calc.graph.dependents(d.wb.active_sheet(), at, &mut deps);
     deps.sort();
     deps.dedup();
     let v: Vec<Json> = deps.iter().map(|(si, c)| json!({"sheet": d.wb.sheet(*si).map(|s| s.name.clone()), "cell": c.a1()})).collect();
@@ -656,7 +659,7 @@ fn select_trace_cells(s: &mut Session, p: &Json, precedents: bool) -> Result<Jso
     use std::collections::BTreeSet;
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let all = bool_param(p, "all").unwrap_or(false);
     // (sheet, a1) pairs to select; direct level keeps whole precedent ranges, transitive cells.
     let mut found: BTreeSet<(usize, String)> = BTreeSet::new();
@@ -727,7 +730,7 @@ fn select_dependents(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let cur = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.show_formulas);
     let on = bool_param(p, "on").unwrap_or(!cur);
     edit(s, |cx| {
@@ -797,7 +800,7 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
 fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let text = match str_param(p, "formula") {
         Some(f) => f.trim_start_matches('=').to_string(),
         None => {
@@ -836,7 +839,7 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let expr = crate::cmd::edit::parse_typed_formula(f.strip_prefix('=').unwrap_or(f))?;
     crate::cmd::edit::check_arg_counts(&expr)?;
-    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet, at, &expr);
+    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet(), at, &expr);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 

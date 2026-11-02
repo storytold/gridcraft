@@ -1,10 +1,13 @@
 //! View tab (sheet view state that's saved with the file) and Page Layout settings.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::RangeRef;
 use gridcraft_model::Orientation;
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param,
+    target_range, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -149,7 +152,7 @@ fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let at = match cell_param_on(s, p, "cell", si)? {
         Some(c) => c,
-        None if si == d.wb.active_sheet => d.selection.active,
+        None if si == d.wb.active_sheet() => d.selection.active,
         // The selection belongs to the active sheet.
         None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
     };
@@ -225,7 +228,7 @@ fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let dirty = d.is_dirty();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     if let Some(sh) = wb.sheet_mut(si) {
         sh.zoom = z;
     }
@@ -492,9 +495,6 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(Json::Null)
     })
 }
-
-#[allow(dead_code)]
-fn unused(_: CellRef) {}
 
 #[cfg(test)]
 mod tests {

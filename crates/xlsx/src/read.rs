@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -32,6 +34,9 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
+    /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
 }
 
 impl Ctx<'_> {
@@ -96,87 +101,10 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
-pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    let pkg = Package::open(bytes)?;
-    let mut cx = Ctx {
-        pkg,
-        report: ReadReport::default(),
-        sst: vec![],
-        phonetics: vec![],
-        xf_map: vec![],
-        dxfs: vec![],
-        palette: crate::tables::INDEXED.to_vec(),
-        date_system: DateSystem::D1900,
-        styles: StyleTable::default(),
-        persons: Default::default(),
-        next_id: 1,
-        num_fmts: Default::default(),
-        cell_pictures: vec![],
-        cf_ext_ids: vec![],
-    };
-    let root_rels = cx.pkg.rels("")?;
-    let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
-    let wb_xml = match cx.pkg.read_xml(&wb_part)? {
-        Some(x) => x,
-        None => {
-            if cx.pkg.has("xl/workbook.xml") && wb_part != "xl/workbook.xml" {
-                cx.pkg.read_xml("xl/workbook.xml")?.ok_or_else(|| IoError::Format("no workbook part".into()))?
-            } else if cx.pkg.has("content.xml") {
-                return Err(IoError::Format("this is an OpenDocument file, not XLSX".into()));
-            } else {
-                return Err(IoError::Format("no workbook part".into()));
-            }
-        }
-    };
-    if wb_xml.name != "workbook" {
-        return Err(IoError::Format(format!("unexpected root element <{}> in workbook part", wb_xml.name)));
-    }
-    let wb_rels = cx.pkg.rels(&wb_part)?;
-    let mut kept = crate::passthrough::KeptReader::new(&mut cx);
-    cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
-        Ok(pictures) => pictures,
-        Err(error) => {
-            cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));
-            vec![]
-        }
-    };
-    let mut wb = Workbook::new();
-    wb.sheets.clear();
-
-    // Theme, then styles: a font's link to the theme's body font is read against it.
-    if let Some(r) = find_rel(&wb_rels, "theme").cloned()
-        && let Some(x) = cx.optional_xml(&r.target)?
-    {
-        wb.theme = crate::theme::read_theme(&x);
-    }
-    // Cell checkboxes live in the feature property bags, which styles refer to.
-    let mut checkboxes = Vec::new();
-    if let Some(r) = find_rel(&wb_rels, "FeaturePropertyBag").cloned()
-        && let Some(x) = cx.optional_xml(&r.target)?
-    {
-        checkboxes = crate::feature_bags::checkbox_complements(&x);
-    }
-    if let Some(r) = find_rel(&wb_rels, "styles").cloned() {
-        if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
-            cx.num_fmts = num_fmts;
-            // Cell format 0 is the Normal cell format: everything on it (font, number format,
-            // fill, borders, alignment, protection) is what a cell without its own format shows
-            // (#1013).
-            if let Some(normal) = xfs.first() {
-                cx.styles = StyleTable::with_default(normal.clone());
-            }
-            cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
-            cx.dxfs = dxfs;
-            cx.palette = palette;
-            wb.cell_styles = named;
-        }
-    } else {
-        cx.warn("no styles part");
-    }
+fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError> {
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
     // they annotate, so an open + save does not delete them.
-    if let Some(r) = find_rel(&wb_rels, "sharedStrings").cloned() {
+    if let Some(r) = find_rel(wb_rels, "sharedStrings").cloned() {
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
@@ -206,18 +134,67 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     }
 
-    if let Some(r) = find_rel(&wb_rels, "person").cloned()
-        && let Ok(Some(x)) = cx.pkg.read_xml(&r.target)
+    Ok(())
+}
+
+fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) -> Result<(), IoError> {
+    // Theme, then styles: a font's link to the theme's body font is read against it.
+    if let Some(r) = find_rel(wb_rels, "theme").cloned()
+        && let Some(x) = cx.optional_xml(&r.target)?
     {
-        for p in x.kids("person") {
-            if let (Some(id), Some(n)) = (p.attr("id"), p.attr("displayName")) {
-                cx.persons.insert(id.to_string(), n.to_string());
+        wb.theme = crate::theme::read_theme(&x);
+    }
+    // Cell checkboxes live in the feature property bags, which styles refer to.
+    let mut checkboxes = Vec::new();
+    if let Some(r) = find_rel(wb_rels, "FeaturePropertyBag").cloned()
+        && let Some(x) = cx.optional_xml(&r.target)?
+    {
+        checkboxes = crate::feature_bags::checkbox_complements(&x);
+    }
+    if let Some(r) = find_rel(wb_rels, "styles").cloned() {
+        if let Some(x) = cx.optional_xml(&r.target)? {
+            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            cx.num_fmts = num_fmts;
+            // Cell format 0 is the Normal cell format: everything on it (font, number format,
+            // fill, borders, alignment, protection) is what a cell without its own format shows
+            // (#1013).
+            if let Some(normal) = xfs.first() {
+                cx.styles = StyleTable::with_default(normal.clone());
+            }
+            cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
+            cx.dxfs = dxfs;
+            cx.palette = palette;
+            wb.cell_styles = named;
+        }
+    } else {
+        cx.warn("no styles part");
+    }
+    Ok(())
+}
+
+/// Read the workbook XML selected by the package's root relationships.
+fn workbook_xml(pkg: &mut Package<'_>, part: &str) -> Result<El, IoError> {
+    let xml = match pkg.read_xml(part)? {
+        Some(xml) => xml,
+        None => {
+            if pkg.has("xl/workbook.xml") && part != "xl/workbook.xml" {
+                pkg.read_xml("xl/workbook.xml")?.ok_or_else(|| IoError::Format("no workbook part".into()))?
+            } else if pkg.has("content.xml") {
+                return Err(IoError::Format("this is an OpenDocument file, not XLSX".into()));
+            } else {
+                return Err(IoError::Format("no workbook part".into()));
             }
         }
+    };
+    if xml.name != "workbook" {
+        return Err(IoError::Format(format!("unexpected root element <{}> in workbook part", xml.name)));
     }
+    Ok(xml)
+}
 
-    // Workbook properties.
-    if let Some(p) = wb_xml.child("workbookPr") {
+/// Read workbook-level settings before processing the individual sheets.
+fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
+    if let Some(p) = xml.child("workbookPr") {
         if p.flag("date1904", false) {
             cx.date_system = DateSystem::D1904;
         }
@@ -228,7 +205,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         };
     }
     wb.date_system = cx.date_system;
-    if let Some(c) = wb_xml.child("calcPr") {
+    if let Some(c) = xml.child("calcPr") {
         wb.calc.mode = match c.attr("calcMode") {
             Some("manual") => CalcMode::Manual,
             Some("autoNoTable") => CalcMode::AutomaticExceptTables,
@@ -243,11 +220,80 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
     }
-    if let Some(p) = wb_xml.child("workbookProtection") {
+    if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
         wb.structure_password = if wb.protected_structure { crate::sheet_read::read_password(p, "workbook") } else { None };
     }
-    let active_tab = wb_xml.path(&["bookViews", "workbookView"]).and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+}
+
+/// The single window modelled by GridCraft: prefer the first visible window,
+/// including the format's default visibility, and otherwise retain the first one.
+fn selected_workbook_view(workbook: &El) -> Option<&El> {
+    let views = workbook.child("bookViews")?;
+    views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
+}
+
+pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
+    let pkg = Package::open(bytes)?;
+    let mut cx = Ctx {
+        pkg,
+        report: ReadReport::default(),
+        sst: vec![],
+        phonetics: vec![],
+        xf_map: vec![],
+        dxfs: vec![],
+        palette: crate::tables::INDEXED.to_vec(),
+        date_system: DateSystem::D1900,
+        styles: StyleTable::default(),
+        persons: Default::default(),
+        next_id: 1,
+        num_fmts: Default::default(),
+        cell_pictures: vec![],
+        cf_ext_ids: vec![],
+        known_function,
+    };
+    let root_rels = cx.pkg.rels("")?;
+    let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
+    let wb_xml = workbook_xml(&mut cx.pkg, &wb_part)?;
+    let wb_rels = cx.pkg.rels(&wb_part)?;
+    let mut kept = crate::passthrough::KeptReader::new(&mut cx);
+    cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
+        Ok(pictures) => pictures,
+        Err(error) => {
+            cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));
+            vec![]
+        }
+    };
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+
+    read_workbook_styles(&mut cx, &mut wb, &wb_rels)?;
+    read_shared_strings(&mut cx, &wb_rels)?;
+
+    if let Some(r) = find_rel(&wb_rels, "person").cloned()
+        && let Ok(Some(x)) = cx.pkg.read_xml(&r.target)
+    {
+        for p in x.kids("person") {
+            if let (Some(id), Some(n)) = (p.attr("id"), p.attr("displayName")) {
+                cx.persons.insert(id.to_string(), n.to_string());
+            }
+        }
+    }
+
+    read_workbook_properties(&mut cx, &mut wb, &wb_xml);
+    let view_el = selected_workbook_view(&wb_xml);
+    let active_tab = view_el.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    if let Some(v) = view_el {
+        // The window's display settings (Excel's "Display options for this workbook").
+        // Absent attributes take the format's defaults, which is also what a workbook
+        // without a <workbookView> gets.
+        wb.view = WorkbookView {
+            show_sheet_tabs: v.flag("showSheetTabs", true),
+            show_horizontal_scroll: v.flag("showHorizontalScroll", true),
+            show_vertical_scroll: v.flag("showVerticalScroll", true),
+            tab_ratio: v.attr_u32("tabRatio").unwrap_or(600).min(WorkbookView::MAX_TAB_RATIO),
+        };
+    }
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
@@ -299,7 +345,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
-    wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
+    wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];
@@ -426,7 +472,10 @@ pub fn parse_print_area(text: &str) -> Option<RangeRef> {
     RangeRef::parse(&r)
 }
 
-pub fn parse_print_titles(text: &str) -> (Option<(u32, u32)>, Option<(u32, u32)>) {
+/// A print-titles span: the first and last row (or column) repeated on each page.
+type TitleSpan = Option<(u32, u32)>;
+
+pub fn parse_print_titles(text: &str) -> (TitleSpan, TitleSpan) {
     let mut rows = None;
     let mut cols = None;
     for part in text.split(',') {

@@ -23,7 +23,8 @@ The control port is reachable by every program on the machine, and by a web page
   `{"id":0,"ok":true,"result":{"authenticated":true}}`. Any other first line (a wrong or missing
   token, another method, text that isn't JSON such as an HTTP request, no line within 10 s, or
   one longer than 4 KiB) gets `{"ok":false,"error":"authentication required"}` and the
-  connection is closed. After that, a line that isn't JSON also closes the connection.
+  connection is closed. At most 16 connections may be waiting to send their token at once; past that a new
+  connection is closed before anything is read. After that, a line that isn't JSON also closes the connection.
 - `gridcraft-cli send`/`mcp --connect` and `gridcraft_mcp::Remote` do this themselves: they use
   `GRIDCRAFT_CONTROL_TOKEN` if set, else the token file of that port (so they work for the same
   user on the same machine without setup). Your own client reads the file or the variable.
@@ -50,13 +51,14 @@ connection; nothing sent after it runs. Blank lines are skipped.
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`). `edit.goTo`, `edit.goToSpecial`, `selection.set` and `selection.move` scroll the active cell into view, as Go To does in the window |
+| `engine.execute` | `{command, params, window?, doc?}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) in the active window, or in the window named by `window` (a window id) or `doc` (a workbook id: its most recent window). The active window stays in front afterwards unless the command itself switches windows. `edit.goTo`, `edit.goToSpecial`, `selection.set` and `selection.move` scroll the active cell into view, as Go To does in the window |
+| `window.list` | | The open windows: `[{window, doc, index, title, dirty, active, hidden}]`. `title` is the workbook name, or "Book1:1", "Book1:2"… when a workbook has several windows; `index` is the workbook's position among the open workbooks |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable). Passwords (`password`, `…Password` params) are left out, so a replayed Protect Sheet has no password. Capped at 10,000 entries and 64 MB (serialized); past either cap the oldest entries go |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
-| `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf |
+| `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
 | `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
 | `ui.key` / `ui.text` | `{key, shift?, cmd?, alt?, ctrl?}` / `{text}` | Keyboard input (typing in the grid starts editing); same shared queue limits, and one `ui.text` string may be at most 1 MiB |
@@ -83,7 +85,20 @@ fits. `path` writes the PNG to a file instead of returning base64 text and so av
 base64 costs, but it does not bypass the per-image, aggregate, encoding-working-set or peak
 limits.
 
-Any other method name that is a command id (e.g. `home.bold`) runs that command.
+Any other method name that is a command id (e.g. `home.bold`) runs that command. Its params may
+include `window` or `doc` to run it in that window, as with `engine.execute`; the window commands
+(`window.*`, `view.newWindow`, `view.hideWindow`, `view.unhideWindow`, `view.switchWindows`) read
+them as their own parameters.
+
+### Windows
+
+Every open workbook has one or more windows; View › New Window (`view.newWindow`) adds another
+on the same workbook, and saving from any of them saves that workbook. Each window has its own
+selection, active sheet and scroll position; switching windows never marks the workbook as
+changed. `window.activate {window}`, `view.switchWindows {window}` and `view.unhideWindow
+{window}` bring a window forward; `window.close {window?, force?}` closes one (the workbook
+closes with its last window, asking about unsaved changes unless `force`); `file.close` closes
+the active window, or with `{document: true}` the workbook and all its windows.
 
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
