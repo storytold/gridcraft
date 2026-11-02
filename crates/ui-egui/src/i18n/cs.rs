@@ -567,6 +567,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Zastavit",
         "New Macro" => "Nové makro",
         "Show" => "Zobrazit",
+        "Collapse dialog" => "Sbalit dialogové okno",
+        "Expand dialog" => "Rozbalit dialogové okno",
         _ => return None,
     })
 }

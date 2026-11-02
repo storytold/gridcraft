@@ -987,6 +987,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Καταγραφή",
         "New Macro" => "Νέα μακροεντολή",
         "Show" => "Εμφάνιση",
+        "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
+        "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
         _ => return None,
     })
 }

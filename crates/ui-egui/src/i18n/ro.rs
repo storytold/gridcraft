@@ -1043,6 +1043,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Înregistrare",
         "New Macro" => "Macrocomandă nouă",
         "Show" => "Afișare",
+        "Collapse dialog" => "Restrângere casetă de dialog",
+        "Expand dialog" => "Extindere casetă de dialog",
         _ => return None,
     })
 }

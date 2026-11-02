@@ -347,7 +347,16 @@ impl SheetApp {
                     "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
                 ));
             }
-            other => self.dialog = dialogs::Dialog::open(self, other, params),
+            other => {
+                // A dialog replaced while one of its reference boxes picks (a ribbon command
+                // opening another dialog) first puts the sheet and selection from before picking
+                // back, as closing it does.
+                if let Some(mut old) = self.dialog.take() {
+                    // The draft was committed above, so the sheet can be shown again.
+                    let _ = old.end_pick(self);
+                }
+                self.dialog = dialogs::Dialog::open(self, other, params);
+            }
         }
     }
 

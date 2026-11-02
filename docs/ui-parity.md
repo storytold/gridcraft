@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -171,7 +171,38 @@ the references entered before; a double-click goes to one. Its Reference box tak
 or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) and selects them all.
 New Formatting Rule's formula box points like the formula bar: a click on the grid writes the
 cell's absolute reference at the caret (`=$B$2`) and a drag a range, leaving the selection the rule
-applies to as it is (#2348). Other dialogs' reference fields don't take clicks yet.
+applies to as it is (#2348).
+
+Reference boxes (RefEdit) take a range by selection on the grid: while a box is the one being
+picked into, clicking or dragging on the sheet writes the absolute reference into it (with the
+sheet name, quoted when it needs quotes, when the selection is on another sheet:
+`'Rates Table'!$A$2:$A$4`), and typing still edits it. The box's collapse button shrinks the
+dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
+there does not press OK, which is not shown while collapsed). Cancel, Escape, a ribbon command
+that opens another dialog over it, and a scripted `ui.dialog.cancel` put the sheet and selection
+from before picking back; OK (and `ui.dialog.confirm`, for a dialog whose OK runs a command;
+Goal Seek presses its own OK and is scripted with `data.goalSeek`) puts them back before its
+command runs and then stays where the command leaves things, so a Data Analysis report written
+to a new sheet stays in view. A text-box draft left open on the sheet picked on is saved before
+the sheet changes, as any sheet switch saves it; when it cannot be saved (a script showed
+another sheet meanwhile), OK does not run its command and the dialog stays open with the
+reason, while Cancel still closes the dialog, shows the reason and leaves the draft and the
+selection where they are (a scripted `ui.dialog.cancel` fails and keeps the dialog instead, so
+the script can act). While collapsed, the arrow keys move the selection on the grid,
+Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, and the box
+follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
+reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
+elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
+keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. The dialog remembers the sheet it was opened on by name and follows a rename of it through
+the engine's recorded undo steps (a step that keeps the sheet count and changes one name, at
+that sheet's index, on a sheet that keeps its cells); a sheet deleted and another inserted in
+its place, even in one script batch, is not taken for it, so OK is refused and Cancel leaves
+the selection where it is. The collapse button is reachable from the keyboard and named for
+screen readers. Goal Seek, Solver
+(objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
+Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
+dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
+Filter) still take typed references.
 
 ## Accessibility
 
@@ -196,6 +227,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |

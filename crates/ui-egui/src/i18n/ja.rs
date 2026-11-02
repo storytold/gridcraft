@@ -995,6 +995,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

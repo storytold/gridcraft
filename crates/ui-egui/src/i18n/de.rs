@@ -473,6 +473,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Beenden",
         "New Macro" => "Neues Makro",
         "Show" => "Anzeigen",
+        "Collapse dialog" => "Dialogfeld reduzieren",
+        "Expand dialog" => "Dialogfeld erweitern",
         _ => return None,
     })
 }

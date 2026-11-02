@@ -1,0 +1,550 @@
+//! Reference boxes (Excel's RefEdit): text fields that take a range by selection on the grid, with
+//! a button that collapses the dialog to the box while the person selects.
+
+use std::sync::Arc;
+
+use gridcraft_engine::model::Workbook;
+use gridcraft_engine::{DocState, HistoryEntry};
+
+use super::data::abs;
+use super::{Dialog, Icon, Json, SheetApp, json, theme, vec2};
+
+/// What a dialog's reference boxes are doing: which one grid selections fill, and whether the
+/// dialog is collapsed to one of them.
+#[derive(Clone, Debug, Default)]
+pub(super) struct RefBoxes {
+    /// The reference box that grid selections are written into.
+    pub(super) target: Option<String>,
+    /// The selection last written into the target (or present when picking began); only a
+    /// different selection replaces what the box holds.
+    seen: String,
+    /// The sheet shown when `seen` was taken: changing sheets only refreshes `seen`, since the
+    /// other sheet's own selection is not a pick.
+    seen_sheet: String,
+    /// The dialog's own sheet, from the first pick until the dialog closes, and the selection to
+    /// put back when it runs its command or closes.
+    home: Option<Home>,
+    /// The target took a selection from the grid and takes the keyboard back once the pointer
+    /// is released, so typing still edits the box.
+    refocus: bool,
+    /// The reference box the dialog is collapsed to.
+    pub(super) collapsed: Option<String>,
+    /// Where the expanded dialog was last drawn: the collapsed dialog keeps its top-left corner,
+    /// and the expanded one comes back where it was.
+    rect: Option<egui::Rect>,
+    /// The dialog was drawn collapsed last frame.
+    was_collapsed: bool,
+}
+
+/// Where picking began: the dialog's own sheet, kept for as long as the dialog is open (a failed
+/// OK leaves it open, and a later OK still needs to know whether that sheet is there), and the
+/// selection to put back once.
+#[derive(Clone, Debug)]
+struct Home {
+    /// The sheet's name, or `None` once the sheet is deleted. Followed by name when other sheets
+    /// are inserted, moved or deleted (indexes change), and through the engine's recorded steps
+    /// when the sheet itself is renamed (see [`follow_home`]).
+    sheet: Option<String>,
+    /// The workbook's sheet names, in order, when last seen.
+    names: Vec<String>,
+    /// The undo history when last seen: its length, and the workbooks its top entries hold, so
+    /// the steps recorded since can be told apart from entries undone or trimmed.
+    undo_len: usize,
+    undo_top: Option<Arc<Workbook>>,
+    redo_top: Option<Arc<Workbook>>,
+    /// The ranges and active cell from before picking began on the dialog's sheet, put back once
+    /// when the dialog runs its command or closes.
+    selection: Option<(String, String)>,
+}
+
+impl Home {
+    /// The home sheet `sheet` on `doc`, with the selection to put back and the history as it is.
+    fn new(doc: &DocState, sheet: String, selection: Option<(String, String)>) -> Home {
+        let mut home = Home { sheet: Some(sheet), names: Vec::new(), undo_len: 0, undo_top: None, redo_top: None, selection };
+        home.remember(doc);
+        home
+    }
+
+    /// Notes the sheet names and the history as they are now.
+    fn remember(&mut self, doc: &DocState) {
+        self.names = doc.wb.sheets.iter().map(|s| s.name.clone()).collect();
+        self.undo_len = doc.undo.len();
+        self.undo_top = doc.undo.last().map(|e| e.wb.clone());
+        self.redo_top = doc.redo.last().map(|e| e.wb.clone());
+    }
+}
+
+/// The message OK shows once the dialog's own sheet is gone.
+pub(crate) const SHEET_DELETED: &str =
+    "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";
+
+/// Keeps the dialog's own sheet across changes made while it is open. When its name is still
+/// there, it is still the sheet (others were inserted, moved or deleted). When it is gone, the
+/// sheet was renamed only if the engine's recorded steps since the dialog last looked say so:
+/// every undo entry holds the workbook before its step, so the workbook's states are walked one
+/// recorded step at a time ([`recorded_states`]), and a step counts as a rename only when the
+/// sheet count is unchanged, exactly one name differs, at the home sheet's index, and the sheet
+/// there keeps its cells ([`renamed_in_step`]). A deletion followed by an insertion is two steps,
+/// the first of which changes the count, however the two are batched between frames; a rename
+/// is one step. Anything the steps don't account for means the sheet was deleted, for good: a
+/// sheet inserted later is never taken for it.
+fn follow_home(app: &SheetApp, refs: &mut RefBoxes) {
+    let Some(home) = refs.home.as_mut() else { return };
+    let Some(doc) = app.session.active() else { return };
+    if let Some(own) = home.sheet.clone()
+        && !doc.wb.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&own))
+    {
+        home.sheet = renamed_through_history(doc, home, &own);
+    }
+    home.remember(doc);
+}
+
+/// The name the home sheet `own` carries now, when the recorded steps since the dialog last
+/// looked rename it (possibly several times) and nothing else.
+fn renamed_through_history(doc: &DocState, home: &Home, own: &str) -> Option<String> {
+    let states = recorded_states(doc, home)?;
+    let mut name = own.to_string();
+    let mut prev: Option<&Workbook> = None;
+    for state in states.iter().map(|wb| &**wb).chain(std::iter::once(&*doc.wb)) {
+        match prev {
+            Some(before) => name = renamed_in_step(before, state, &name)?,
+            // The first recorded state must be the one the dialog last saw.
+            None if !state.sheets.iter().map(|s| &s.name).eq(home.names.iter()) => return None,
+            None => {}
+        }
+        prev = Some(state);
+    }
+    Some(name)
+}
+
+/// The workbooks before each step recorded since `home` last looked, in order; the current
+/// workbook follows the last. Commands and redos push an entry holding the workbook before
+/// them, so when the remembered top undo entry is still there, the entries above it are the
+/// steps now applied (whatever was undone after them is gone). When it is not (steps were
+/// undone), each undo pushed a redo entry holding the workbook before it, so the new redo
+/// entries are the steps, provided every undone step moved one entry across. Anything else
+/// (undone, then new commands; history trimmed meanwhile) is `None`: not accounted for.
+fn recorded_states(doc: &DocState, home: &Home) -> Option<Vec<Arc<Workbook>>> {
+    let above = |stack: &[HistoryEntry], top: &Option<Arc<Workbook>>| -> Option<Vec<Arc<Workbook>>> {
+        let from = match top {
+            // Everything above the remembered top entry was pushed since.
+            Some(top) => stack.iter().position(|e| Arc::ptr_eq(&e.wb, top))?.saturating_add(1),
+            // The stack was empty then: every entry was pushed since.
+            None => 0,
+        };
+        Some(stack.iter().skip(from).map(|e| e.wb.clone()).collect())
+    };
+    match (above(&doc.undo, &home.undo_top), above(&doc.redo, &home.redo_top)) {
+        (Some(commands), _) => Some(commands),
+        (None, Some(undos)) if !undos.is_empty() && doc.undo.len().saturating_add(undos.len()) == home.undo_len => Some(undos),
+        _ => None,
+    }
+}
+
+/// The name of the sheet called `name` in `before` after the step that made `after` of it, when
+/// that step kept the sheet: same sheet count, the same names everywhere else, and the sheet at
+/// its index keeping its cells (a sheet inserted in its place has none). `None` when the step
+/// could have deleted it.
+fn renamed_in_step(before: &Workbook, after: &Workbook, name: &str) -> Option<String> {
+    if before.sheets.len() != after.sheets.len() {
+        return None;
+    }
+    let idx = before.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
+    let (was, now) = (before.sheets.get(idx)?, after.sheets.get(idx)?);
+    if now.name.eq_ignore_ascii_case(name) {
+        return Some(name.to_string());
+    }
+    let others_same = before.sheets.iter().zip(&after.sheets).enumerate().all(|(i, (a, b))| i == idx || a.name == b.name);
+    (others_same && was.cells.len() == now.cells.len()).then(|| now.name.clone())
+}
+
+/// Whether the sheet the dialog was opened on has been deleted while it picked: its references
+/// without a sheet name have nothing to refer to, so OK is refused with [`SHEET_DELETED`].
+pub(super) fn home_sheet_deleted(app: &SheetApp, d: &mut Dialog) -> bool {
+    follow_home(app, &mut d.refs);
+    d.refs.home.as_ref().is_some_and(|h| h.sheet.is_none())
+}
+
+/// How a reference box is named for screen readers.
+#[derive(Clone, Copy)]
+pub(super) enum RefLabel<'a> {
+    /// By the label drawn beside it.
+    By(egui::Id),
+    /// By an English name, translated (a box without a label of its own).
+    Named(&'a str),
+}
+
+/// The egui id of the reference box `key`, the same wherever the box is drawn.
+fn ref_edit_id(key: &str) -> egui::Id {
+    egui::Id::unique("gridcraft.ref_edit").with(key)
+}
+
+/// Whether the reference box `key` of dialog `dialog` takes several areas joined by commas.
+/// Solver's variable cells do; every other box takes one cell or range, which its command parses
+/// as a single reference.
+fn takes_several_areas(dialog: &str, key: &str) -> bool {
+    dialog == "solver" && key == "variables"
+}
+
+/// The grid selection as a reference, with the sheet name when the selection is on another sheet
+/// than the one the dialog was opened on: every area joined by commas when `several`, otherwise
+/// only the area being selected (the last one).
+fn selection_ref(app: &SheetApp, home: Option<&Home>, several: bool) -> String {
+    let Some(doc) = app.session.active() else { return String::new() };
+    let current = [doc.selection.current()];
+    let areas = if several { doc.selection.ranges.as_slice() } else { &current[..] }.iter().map(abs);
+    match doc.wb.active() {
+        // Once the dialog's own sheet is deleted, every reference carries its sheet's name.
+        Some(sh) if home.is_some_and(|h| h.sheet.as_ref().is_none_or(|own| !own.eq_ignore_ascii_case(&sh.name))) => {
+            let sheet = gridcraft_engine::formula::quote_sheet(&sh.name);
+            areas.map(|a| format!("{sheet}!{a}")).collect::<Vec<_>>().join(",")
+        }
+        _ => areas.collect::<Vec<_>>().join(","),
+    }
+}
+
+/// Places the dialog's window before it is drawn, and returns the reference box the dialog is
+/// collapsed to. Escape or Enter expands a collapsed dialog again, rather than closing it or
+/// pressing OK, and the arrow keys select on the grid. Collapsed, the dialog shrinks to the box
+/// where its top-left corner was, leaving the sheet free for selecting; expanded again, it comes
+/// back where it was.
+pub(super) fn place_window<'a>(
+    app: &mut SheetApp,
+    ctx: &egui::Context,
+    d: &mut Dialog,
+    window: egui::Window<'a>,
+    window_id: egui::Id,
+) -> (egui::Window<'a>, Option<String>) {
+    follow_home(app, &mut d.refs);
+    if d.refs.collapsed.is_some() {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            d.refs.collapsed = None;
+        } else {
+            arrows_move_selection(app, ctx);
+        }
+    }
+    let collapsed = d.refs.collapsed.clone();
+    if collapsed.is_none()
+        && d.refs.was_collapsed
+        && let Some(rect) = d.refs.rect
+        && let Some(mut state) = egui::AreaState::load(ctx, window_id)
+    {
+        // The window's stored position wins over `current_pos` for a window moved by its title
+        // bar, so the expanded position is written into its state.
+        state.pivot = egui::Align2::CENTER_CENTER;
+        state.pivot_pos = Some(rect.center());
+        ctx.memory_mut(|m| m.areas_mut().set_state(egui::LayerId::new(egui::Order::Middle, window_id), state));
+    }
+    let window = match (&collapsed, d.refs.rect) {
+        (Some(_), Some(rect)) => window.pivot(egui::Align2::LEFT_TOP).fixed_pos(rect.min),
+        _ => window,
+    };
+    (window, collapsed)
+}
+
+/// While the dialog is collapsed, the arrow keys move the selection on the grid, Shift+arrow
+/// extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, as they do with no
+/// dialog open: the box follows the selection as it does for the mouse. The keys are taken out
+/// of the frame's input before the box's text field reads them, so they don't move its caret
+/// instead; expanded, they edit the box.
+fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
+    use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
+    let mut moves = Vec::new();
+    ctx.input_mut(|i| {
+        i.events.retain(|e| match e {
+            egui::Event::Key { key: key @ (ArrowUp | ArrowDown | ArrowLeft | ArrowRight), pressed: true, modifiers, .. } => {
+                moves.push((*key, *modifiers));
+                false
+            }
+            _ => true,
+        });
+    });
+    if moves.is_empty() {
+        return;
+    }
+    // Arrows follow the screen: on a right-to-left sheet Left goes to the next column.
+    let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.right_to_left);
+    for (key, m) in moves {
+        let (dr, dc) = match key {
+            ArrowUp => (-1, 0),
+            ArrowDown => (1, 0),
+            ArrowLeft => (0, if rtl { 1 } else { -1 }),
+            _ => (0, if rtl { -1 } else { 1 }),
+        };
+        let from = app.session.active().map(|d| if m.shift { d.selection.moving_end() } else { d.selection.active });
+        let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": m.shift, "jump": m.command}));
+        app.grid.ensure_visible = true;
+        app.grid.reveal_moving_end = m.shift;
+        app.grid.reveal_from = from;
+    }
+}
+
+/// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
+/// into a reference box when another text field of the dialog takes the keyboard. A collapsed
+/// dialog shows no other field, so its box keeps picking whatever else is clicked (the Name Box,
+/// the formula bar, the ribbon): only Escape, Enter or the expand button end that state.
+pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
+    if !collapsed {
+        d.refs.rect = rect;
+    }
+    d.refs.was_collapsed = collapsed;
+    if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
+        d.refs.target = None;
+    }
+}
+
+/// Makes the reference box `key` the one grid selections fill. The first pick remembers the
+/// sheet and selection, which are put back when the dialog runs its command or closes.
+pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
+    if let Some(doc) = app.session.active()
+        && let Some(sheet) = doc.wb.active()
+    {
+        let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+        let selection = Some((ranges.join(","), doc.selection.active.a1()));
+        match d.refs.home.as_mut() {
+            None => d.refs.home = Some(Home::new(doc, sheet.name.clone(), selection)),
+            // Picking again after a failed OK: the selection to put back is the one now on the
+            // dialog's sheet.
+            Some(home) if home.selection.is_none() && home.sheet.as_deref().is_some_and(|own| own.eq_ignore_ascii_case(&sheet.name)) => {
+                home.selection = selection;
+            }
+            Some(_) => {}
+        }
+    }
+    d.refs.target = Some(key.to_string());
+    d.refs.refocus = false;
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
+    d.refs.seen_sheet = active_sheet_name(app);
+}
+
+/// The name of the sheet shown in the active workbook.
+fn active_sheet_name(app: &SheetApp) -> String {
+    app.session.active().and_then(|doc| doc.wb.active()).map(|sh| sh.name.clone()).unwrap_or_default()
+}
+
+/// Stops picking and goes back to the dialog's own sheet, putting back the selection from before
+/// picking began (once), unless that sheet was deleted: the selection is then left where it is.
+/// The sheet itself is kept until the dialog closes.
+///
+/// The commands go through [`SheetApp::run`], as the ribbon's do: showing the sheet first saves
+/// a text-box draft left open on the sheet picked on, and the UI's after-command pass runs.
+///
+/// Fails when the sheet could not be shown again (the draft could not be saved): the person
+/// stays with their text, the selection waits for the next time the dialog lets go, and a
+/// dialog about to run its command must not, since references without a sheet name would be
+/// read against the sheet still shown.
+pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String> {
+    d.refs.target = None;
+    d.refs.collapsed = None;
+    follow_home(app, &mut d.refs);
+    let Some(home) = d.refs.home.as_mut() else { return Ok(()) };
+    let Some(sheet) = home.sheet.clone() else { return Ok(()) };
+    // After an OK that failed, the selection is already back and only the sheet is shown again,
+    // so references without a sheet name mean it.
+    if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
+        app.run("sheet.activate", json!({"sheet": sheet}))?;
+    }
+    if let Some((range, active)) = home.selection.take() {
+        let _ = app.run("selection.set", json!({"range": range, "active": active}));
+    }
+    Ok(())
+}
+
+/// A reference box (RefEdit): a text field that the grid selection fills while it is the box
+/// being picked into, and a button that collapses the dialog to the box or expands it again.
+pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: RefLabel<'_>, width: f32) {
+    let lang = crate::i18n::current(ui.ctx());
+    let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+    let collapsed = d.refs.collapsed.as_deref() == Some(key);
+    ui.horizontal(|ui| {
+        let id = ref_edit_id(key);
+        let r = ui.add(egui::TextEdit::singleline(&mut s).id(id).desired_width(width - 30.0));
+        let r = match label {
+            RefLabel::By(label) => r.labelled_by(label),
+            RefLabel::Named(name) => r.accessible_name(lang.tr(name)),
+        };
+        // F4 cycles the anchors of the reference in the box, as in Excel's reference boxes.
+        if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F4)) {
+            s = cycle_anchors(&s);
+        }
+        if r.gained_focus() {
+            begin_pick(app, d, key);
+        } else if d.refs.target.as_deref() == Some(key) {
+            let sel = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
+            let sheet = active_sheet_name(app);
+            if sheet != d.refs.seen_sheet {
+                // Another sheet was shown: its selection is where that sheet was left, not a pick.
+                d.refs.seen = sel;
+                d.refs.seen_sheet = sheet;
+            } else if sel != d.refs.seen {
+                // The person selected on the grid: the selection becomes the reference.
+                s = sel.clone();
+                d.refs.seen = sel;
+                d.refs.refocus = true;
+            }
+            if d.refs.refocus && !ui.input(|i| i.pointer.any_down()) {
+                d.refs.refocus = false;
+                r.request_focus();
+            }
+        }
+        let t = theme::Tokens::get(ui.ctx());
+        let (icon, tip) = if collapsed { (Icon::Expand, "Expand dialog") } else { (Icon::Collapse, "Collapse dialog") };
+        let b = crate::widgets::icon_button(ui, icon, t.text_dim, tip, vec2(22.0, 20.0));
+        let name = lang.tr(tip).to_string();
+        b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+        if b.clicked() {
+            if collapsed {
+                d.refs.collapsed = None;
+            } else {
+                d.collapse_to(app, key);
+            }
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+    });
+    d.values.insert(key.into(), json!(s));
+}
+
+/// The anchors of one part of a reference (`$A$1`, `A`, `$3`): its column letters and row digits,
+/// and whether each carries a `$`.
+struct Anchors {
+    letters: String,
+    digits: String,
+    col_abs: bool,
+    row_abs: bool,
+}
+
+/// Reads `part` as a cell (`A1`), a column (`A`) or a row (`3`) with its anchors: at most three
+/// letters and seven digits, nothing else. A `$` alone before the digits of a row anchors the row.
+fn anchors(part: &str) -> Option<Anchors> {
+    let (col_abs, rest) = match part.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, part),
+    };
+    let letters: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+    let rest = rest.get(letters.len()..)?;
+    let (row_abs, rest) = match rest.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, rest),
+    };
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if !rest.get(digits.len()..)?.is_empty() || letters.len() > 3 || digits.len() > 7 || (letters.is_empty() && digits.is_empty()) {
+        return None;
+    }
+    if letters.is_empty() {
+        // `$3`: the one `$` belongs to the row; `$$3` is not a reference.
+        if col_abs && row_abs {
+            return None;
+        }
+        return Some(Anchors { letters, digits, col_abs: false, row_abs: col_abs || row_abs });
+    }
+    Some(Anchors { letters, digits, col_abs, row_abs })
+}
+
+/// The areas of a reference list, split at the commas between them. A comma inside a quoted
+/// sheet name (`'Sales, West'!A1`) is part of the name, and a doubled quote inside the quotes
+/// (`'O''Brien, Jr'!A1`) is an escaped quote, not the end of the name: a quote toggles the
+/// quoted state, so a doubled one toggles it twice.
+fn split_areas(reference: &str) -> Vec<&str> {
+    let mut areas = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in reference.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                areas.push(reference.get(start..i).unwrap_or_default());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    areas.push(reference.get(start..).unwrap_or_default());
+    areas
+}
+
+/// Excel's F4 in a reference box: `A1` → `$A$1` → `A$1` → `$A1` → `A1`, every part of every
+/// area moving together from the first part's anchors (`A1:B2,D4` → `$A$1:$B$2,$D$4`), sheet
+/// names kept; whole columns and rows have one anchor each (`A:A` → `$A:$A` → `A:A`). Text that
+/// isn't a reference comes back as it is.
+pub(crate) fn cycle_anchors(reference: &str) -> String {
+    let mut areas: Vec<(&str, Vec<Anchors>)> = Vec::new();
+    for area in split_areas(reference) {
+        let area = area.trim();
+        let (prefix, body) = match area.rsplit_once('!') {
+            Some((sheet, body)) => (area.get(..sheet.len() + 1).unwrap_or_default(), body),
+            None => ("", area),
+        };
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() > 2 {
+            return reference.to_string();
+        }
+        let Some(parts) = parts.iter().map(|p| anchors(p)).collect::<Option<Vec<_>>>() else { return reference.to_string() };
+        areas.push((prefix, parts));
+    }
+    let Some(first) = areas.first().and_then(|(_, parts)| parts.first()) else { return reference.to_string() };
+    let (col_abs, row_abs) = if first.letters.is_empty() {
+        (!first.row_abs, !first.row_abs)
+    } else if first.digits.is_empty() {
+        (!first.col_abs, !first.col_abs)
+    } else {
+        match (first.col_abs, first.row_abs) {
+            (false, false) => (true, true),
+            (true, true) => (false, true),
+            (false, true) => (true, false),
+            (true, false) => (false, false),
+        }
+    };
+    let anchor = |on: bool, text: &str| if on && !text.is_empty() { format!("${text}") } else { text.to_string() };
+    areas
+        .iter()
+        .map(|(prefix, parts)| {
+            let body: Vec<String> = parts.iter().map(|a| format!("{}{}", anchor(col_abs, &a.letters), anchor(row_abs, &a.digits))).collect();
+            format!("{prefix}{}", body.join(":"))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cycle_anchors, split_areas};
+
+    #[test]
+    fn areas_split_only_at_commas_outside_quoted_sheet_names() {
+        assert_eq!(split_areas("B2:B4,D1"), ["B2:B4", "D1"]);
+        assert_eq!(split_areas("'Sales, West'!$A$1"), ["'Sales, West'!$A$1"]);
+        assert_eq!(split_areas("'O''Brien, Jr'!A1:B2,D4"), ["'O''Brien, Jr'!A1:B2", "D4"]);
+        assert_eq!(split_areas("'Q1, Q2'!A1,'Q3, Q4'!B2"), ["'Q1, Q2'!A1", "'Q3, Q4'!B2"]);
+        assert_eq!(split_areas(""), [""]);
+    }
+
+    #[test]
+    fn f4_keeps_a_comma_inside_a_quoted_sheet_name() {
+        assert_eq!(cycle_anchors("'Sales, West'!$A$1"), "'Sales, West'!A$1");
+        assert_eq!(cycle_anchors("'O''Brien, Jr'!A1:B2,D4"), "'O''Brien, Jr'!$A$1:$B$2,$D$4");
+        assert_eq!(cycle_anchors("B2:B4,D1"), "$B$2:$B$4,$D$1");
+    }
+
+    #[test]
+    fn f4_cycles_cells_ranges_columns_and_rows() {
+        assert_eq!(cycle_anchors("A1"), "$A$1");
+        assert_eq!(cycle_anchors("$A$1"), "A$1");
+        assert_eq!(cycle_anchors("A$1"), "$A1");
+        assert_eq!(cycle_anchors("$A1"), "A1");
+        assert_eq!(cycle_anchors("A1:B2"), "$A$1:$B$2");
+        assert_eq!(cycle_anchors("$A$1:$B$2"), "A$1:B$2");
+        // Every area follows the first part, and sheet names stay as typed.
+        assert_eq!(cycle_anchors("'O''Brien Rates'!A2:A4, D4"), "'O''Brien Rates'!$A$2:$A$4,$D$4");
+        assert_eq!(cycle_anchors("Sheet1!$A$1:B2"), "Sheet1!A$1:B$2");
+        assert_eq!(cycle_anchors("A:A"), "$A:$A");
+        assert_eq!(cycle_anchors("$A:$A"), "A:A");
+        assert_eq!(cycle_anchors("1:3"), "$1:$3");
+        assert_eq!(cycle_anchors("$1:$3"), "1:3");
+    }
+
+    #[test]
+    fn f4_leaves_text_that_is_not_a_reference() {
+        for text in ["", "hello", "A1:hello", "ABCD1", "A12345678", "$$1", "$$A1", "A1:B2:C3", "Sheet1!", "A1,", "=A1"] {
+            assert_eq!(cycle_anchors(text), text);
+        }
+    }
+}

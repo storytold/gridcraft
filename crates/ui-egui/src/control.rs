@@ -264,8 +264,21 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
+            Some(mut d) => match d.command {
                 Some(cmd) => {
+                    // References without a sheet name mean the sheet the dialog was opened on,
+                    // as OK in the window has it: refused once that sheet is deleted, else shown
+                    // again before the command runs.
+                    if d.home_sheet_deleted(app) {
+                        app.dialog = Some(d);
+                        return err(crate::dialogs::SHEET_DELETED);
+                    }
+                    if let Err(e) = d.end_pick(app) {
+                        // The dialog's sheet can't be shown again (a text-box draft on the picked
+                        // sheet could not be saved): the command stays unrun, the dialog open.
+                        app.dialog = Some(d);
+                        return err(e);
+                    }
                     let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run(cmd, params);
@@ -289,7 +302,16 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     Err(e) => err(e),
                 };
             }
-            app.dialog = None;
+            // Back to the sheet and selection from before a reference box picked, as Cancel does.
+            // When the dialog's sheet can't be shown again (a text-box draft on the picked sheet
+            // could not be saved), the dialog stays and the script gets the reason; the window's
+            // Cancel closes it and shows the reason, since a person can see the message.
+            if let Some(mut d) = app.dialog.take()
+                && let Err(e) = d.end_pick(app)
+            {
+                app.dialog = Some(d);
+                return err(e);
+            }
             ok(Json::Null)
         }
         "ui.message.dismiss" => {

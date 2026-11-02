@@ -536,6 +536,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Stoppen",
         "New Macro" => "Nieuwe macro",
         "Show" => "Weergeven",
+        "Collapse dialog" => "Dialoogvenster samenvouwen",
+        "Expand dialog" => "Dialoogvenster uitvouwen",
         _ => return None,
     })
 }

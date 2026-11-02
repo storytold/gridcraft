@@ -428,6 +428,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Dừng",
         "New Macro" => "Macro Mới",
         "Show" => "Hiện",
+        "Collapse dialog" => "Thu gọn hộp thoại",
+        "Expand dialog" => "Mở rộng hộp thoại",
         _ => return None,
     })
 }
