@@ -185,13 +185,6 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
             .all(|(i, c)| c == anchor || (!sheet.cells.has(c) && sheet.spill.get(&c) == Some(arr.data.get(i).unwrap_or(&Value::Empty))))
 }
 
-/// The area an array anchored at `anchor` covers.
-fn array_area(anchor: CellRef, a: &Array) -> RangeRef {
-    let end =
-        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
-    RangeRef::new(anchor, end)
-}
-
 /// The spilled values `sheet` stores inside `range`, passed to `f` until it returns false. Values
 /// outside the range are not walked: with fewer rows in the range than spilled values, each row
 /// is looked up on its own; otherwise one ordered scan visits each spilled value at most once.
