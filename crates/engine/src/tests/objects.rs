@@ -402,3 +402,24 @@ fn arrange_and_align_match_a_shape_id_to_its_kind() {
     assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
     assert!(s.execute("arrange.align", json!({"kind": "widget", "ids": [shape.id, equation.id], "align": "left"})).is_err());
 }
+
+#[test]
+fn arrange_refuses_a_kind_that_is_present_but_not_a_name() {
+    // `kind` is `shape` only when the parameter is absent: `null`, a number or another non-name
+    // is refused, so a shape's id is not reordered or aligned under it. The `object.*` commands
+    // refuse the same values, their kind being required.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let order = |s: &Session| -> Vec<u32> { sheet(s, 0).shapes.iter().map(|c| c.id).collect() };
+    let before = (order(&s), anchor_of(&s, shape));
+    for kind in [json!(null), json!(7), json!(["shape"]), json!({"kind": "shape"}), json!(true)] {
+        assert!(s.execute("arrange.bringForward", json!({"kind": kind, "id": shape.id, "toFront": true})).is_err(), "{kind}");
+        assert!(s.execute("arrange.align", json!({"kind": kind, "ids": [shape.id, equation.id], "align": "left"})).is_err(), "{kind}");
+        assert!(s.execute("object.move", json!({"kind": kind, "id": shape.id, "at": "A1"})).is_err(), "{kind}");
+    }
+    assert_eq!((order(&s), anchor_of(&s, shape)), before, "nothing moved");
+    // Absent, the kind is `shape`, as before.
+    s.execute("arrange.bringForward", json!({"id": shape.id, "toFront": true})).unwrap();
+    assert_eq!(order(&s).last(), Some(&shape.id));
+}

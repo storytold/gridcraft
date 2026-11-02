@@ -6,10 +6,16 @@ use super::{
     u32_param,
 };
 
-/// The kind of object a `kind` parameter names, `shape` when absent; an unknown kind is an
-/// error, as for the `object.*` commands.
+/// The kind of object a `kind` parameter names: `shape` when the parameter is absent; one that
+/// is present but not one of the names (`null`, a number, an unknown word) is an error, as for
+/// the `object.*` commands, where the kind is required.
 fn kind_param(p: &Json, cmd: &str) -> Result<ObjKind> {
-    ObjKind::parse(str_param(p, "kind").unwrap_or("shape")).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer or equation"))
+    let err = || bad(cmd, "kind must be chart, image, shape, slicer or equation");
+    match p.get("kind") {
+        None => Ok(ObjKind::Shape),
+        Some(Json::String(k)) => ObjKind::parse(k).ok_or_else(err),
+        Some(_) => Err(err()),
+    }
 }
 
 /// Whether `kind` names the shape `sh`: an equation is a shape too, and a plain shape is not an
