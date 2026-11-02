@@ -75,8 +75,10 @@ pub(super) fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
         (Some(w), _) => {
-            if !(0.0..=1800.0).contains(&w) {
-                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            // 255 characters of the Normal font, and never less than the 1800 px allowed so far.
+            let most = f64::from(gridcraft_model::widest_col_width(s.doc()?.wb.digit_width())).max(1800.0);
+            if !(0.0..=most).contains(&w) {
+                return Err(EngineError::Other(format!("Column width must be between 0 and {most} pixels.")));
             }
             w
         }
@@ -84,7 +86,7 @@ pub(super) fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
             if !(0.0..=255.0).contains(&c) {
                 return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
             }
-            chars_to_points(c)
+            chars_to_points(c, s.doc()?.wb.digit_width())
         }
         _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
@@ -102,16 +104,7 @@ pub(super) fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
-pub fn chars_to_points(c: f64) -> f64 {
-    if c <= 0.0 {
-        0.0
-    } else if c < 1.0 {
-        (c * 12.0).round()
-    } else {
-        (c * 7.0 + 5.0).round()
-    }
-}
+pub use gridcraft_model::chars_to_points;
 
 /// Approximate text width in points for autofit (no font metrics in the engine: average glyph
 /// widths for the default font; a front end with fonts measures instead, see `Session::text_width`).
@@ -140,6 +133,8 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let measure = s.text_width.clone();
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
+        // At most 255 characters of the Normal font, the widest a file can store.
+        let widest = gridcraft_model::widest_col_width(cx.wb.digit_width());
         let mut widths = Vec::new();
         let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
@@ -176,7 +171,7 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                 }
                 if max > 0.0 {
-                    widths.push((c, max.clamp(8.0, 1785.0)));
+                    widths.push((c, max.clamp(8.0, widest)));
                 }
             }
         }
