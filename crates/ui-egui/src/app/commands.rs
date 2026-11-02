@@ -161,7 +161,8 @@ impl SheetApp {
                 Ok(json!({"on": self.ui.dark}))
             }
             "view.worksheetDarkMode" => {
-                let current = self.ui.worksheet_dark.unwrap_or(self.effective_dark);
+                let interface_dark = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
+                let current = self.ui.worksheet_dark.unwrap_or(interface_dark);
                 let on = p.get("on").and_then(Json::as_bool).unwrap_or(!current);
                 self.ui.worksheet_dark = Some(on);
                 Ok(json!({"on": on}))

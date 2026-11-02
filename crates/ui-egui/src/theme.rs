@@ -246,11 +246,12 @@ impl Tokens {
         }
     }
 
+    /// Resolve interface tokens and the independently selected worksheet appearance.
     pub fn get(ctx: &egui::Context) -> Tokens {
         let mut t = if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() };
         let sheet_dark = ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("gridcraft.worksheet_dark"))).unwrap_or(t.dark);
         if sheet_dark {
-            t.grid_bg = rgb(0x1C1C1C);
+            t.grid_bg = Color32::BLACK;
             t.gridline = rgb(0x414141);
             t.cell_text = rgb(0xEEEEEE);
             t.sel_border = rgb(0x5CC587);

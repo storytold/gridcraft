@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (independent worksheet light/dark display preference; earlier: checkbox cells print as boxes; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (black worksheet, automatic borders and data-bar text contrast; earlier: checkbox cells print as boxes; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -273,3 +273,5 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | major | Sequential Alt keytips: full-tab table (364 sequences), badges on every control, dropdowns open for typing/arrow editing, colour-palette arrows, real-Excel corrections (issues #33, #49) |
 | 2026-10-10 | minor | Chart resize bug (#190) |
 | 2026-10-10 | major | Created: chrome, grid, keyboard, dialogs, accessibility; key tips, Page Layout view and accessibility tree flagged |
+
+Worksheet appearance review follow-up (2026-11-02): dark worksheets use black default cells. Automatic borders contrast with the resolved fill, and automatic text over conditional data bars follows the solid or gradient background under each portion of the text. Explicit font, number-format and border colors remain authored. Consecutive interface and worksheet commands use the current fixed preference without waiting for a repaint.

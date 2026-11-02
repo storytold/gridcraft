@@ -39,11 +39,41 @@ fn heading_labels_scale_with_the_zoom_without_a_cap() {
 }
 use super::*;
 
+/// Automatic cell, border and data-bar ink follows WCAG; authored colors remain unchanged.
 #[test]
 fn automatic_worksheet_ink_meets_wcag_on_bright_and_dark_fills() {
-    for fill in [Color32::WHITE, Color32::BLACK, Color32::from_rgb(0, 255, 0), Color32::from_rgb(31, 56, 100), Color32::from_gray(128)] {
-        assert!(theme::contrast(super::cell_paint::ink_on(fill), fill) >= 4.5, "unreadable automatic ink on {fill:?}");
+    // Expected WCAG ink, including mid-grey and saturated fills where the old luma rule differs.
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let wb = &session.active().unwrap().wb;
+    for (fill, expected) in [
+        (Color32::WHITE, Color32::BLACK),
+        (Color32::BLACK, Color32::WHITE),
+        (Color32::from_rgb(0, 255, 0), Color32::BLACK),
+        (Color32::from_rgb(255, 0, 0), Color32::BLACK),
+        (Color32::from_rgb(31, 56, 100), Color32::WHITE),
+        (Color32::from_gray(128), Color32::BLACK),
+        (Color32::from_gray(100), Color32::WHITE),
+    ] {
+        let ink = super::cell_paint::ink_on(fill);
+        assert_eq!(ink, expected, "automatic ink on {fill:?}");
+        assert!(theme::contrast(ink, fill) >= 4.5);
+        // Automatic borders share the displayed-fill fallback; authored black remains black.
+        assert_eq!(super::cell_paint::col32(Color::Auto, wb, ink), expected);
+        assert_eq!(super::cell_paint::col32(Color::Rgb(0), wb, ink), Color32::BLACK);
     }
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 20.0));
+    assert!(super::quadrant::data_bar_ink_regions(rect, (0.0, [255; 3], false), false).is_empty());
+    let solid = super::quadrant::data_bar_ink_regions(rect, (0.5, [255; 3], false), false);
+    assert_eq!(solid.len(), 1);
+    assert_eq!(solid[0].1, Color32::BLACK);
+    assert_eq!(solid[0].0.right(), 50.0, "partial bars must leave the remaining cell ink alone");
+    let gradient = super::quadrant::data_bar_ink_regions(rect, (1.0, [0, 0, 128], true), false);
+    assert_eq!(gradient.len(), 2);
+    assert_eq!((gradient[0].1, gradient[1].1), (Color32::WHITE, Color32::BLACK));
+    assert_eq!(gradient[0].0.right(), gradient[1].0.left());
+    let rtl = super::quadrant::data_bar_ink_regions(rect, (1.0, [0, 0, 128], true), true);
+    assert_eq!((rtl[0].1, rtl[1].1), (Color32::BLACK, Color32::WHITE));
 }
 
 #[test]

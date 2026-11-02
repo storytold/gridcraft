@@ -27,8 +27,18 @@ fn preferences(h: &egui_kittest::Harness<'static, SheetApp>) -> Value {
     serde_json::to_value(&h.state().ui).unwrap()
 }
 
+/// Worksheet appearance persists independently and uses current commands before the next frame.
 #[test]
 fn worksheet_modes_are_independent_persist_and_leave_workbooks_unchanged() {
+    // Commands can arrive consecutively before a frame updates effective_dark.
+    for mode in ["dark", "light"] {
+        let mut h = harness(UiState { dark: mode == "light", ..UiState::default() });
+        h.state_mut().run("view.theme", json!({"mode": mode})).unwrap();
+        let response = h.state_mut().run("view.worksheetDarkMode", json!({})).unwrap();
+        assert_eq!(response["on"], mode != "dark");
+        h.run_steps(2);
+        assert_eq!(preferences(&h)["worksheetDark"], mode != "dark");
+    }
     for chrome_dark in [false, true] {
         let mut h = harness(UiState { dark: chrome_dark, ..UiState::default() });
         let initial = Tokens::get(&h.ctx);
@@ -38,7 +48,7 @@ fn worksheet_modes_are_independent_persist_and_leave_workbooks_unchanged() {
             h.state_mut().run("view.worksheetDarkMode", json!({"on": sheet_dark})).unwrap();
             h.run_steps(2);
             let t = Tokens::get(&h.ctx);
-            assert_eq!(t.grid_bg == egui::Color32::WHITE, !sheet_dark);
+            assert_eq!(t.grid_bg, if sheet_dark { egui::Color32::BLACK } else { egui::Color32::WHITE });
             assert!(gridcraft_ui_egui::theme::contrast(t.cell_text, t.grid_bg) >= 4.5);
             assert_appearance(&h, chrome_dark);
             assert!(std::sync::Arc::ptr_eq(&workbook, &h.state().session.active().unwrap().wb), "display changes must not edit workbook styles");

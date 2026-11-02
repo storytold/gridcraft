@@ -278,8 +278,9 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     false
 }
 
+/// Paint the conditional bar with the geometry and gradient used for text contrast.
 fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool) {
-    let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
+    let bar = data_bar_rect(rect, frac);
     let col = theme::color32(rgb);
     if gradient {
         let mut mesh = egui::Mesh::default();
@@ -295,6 +296,89 @@ fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradie
         p.rect_stroke(bar, 0.0, Stroke::new(1.0, col), StrokeKind::Inside);
     } else {
         p.rect_filled(bar, 0.0, col);
+    }
+}
+
+/// The bar geometry shared by painting and automatic text contrast.
+fn data_bar_rect(rect: Rect, frac: f32) -> Rect {
+    Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0))
+}
+
+/// Partition a solid or gradient bar where the higher-contrast ink changes, including RTL.
+pub(super) fn data_bar_ink_regions(rect: Rect, bar: (f32, [u8; 3], bool), rtl: bool) -> Vec<(Rect, Color32)> {
+    let (frac, rgb, gradient) = bar;
+    let rect = data_bar_rect(rect, frac);
+    if !rect.is_positive() {
+        return Vec::new();
+    }
+    let color_at = |t: f32| {
+        // RTL mirrors clips but preserves the mesh ramp when translating its box.
+        let t = if rtl { 1.0 - t } else { t };
+        let channel = |c: u8| {
+            let light = ((u16::from(c) + 255 * 3) / 4) as u8;
+            (f32::from(c) + (f32::from(light) - f32::from(c)) * t).round() as u8
+        };
+        Color32::from_rgb(channel(rgb[0]), channel(rgb[1]), channel(rgb[2]))
+    };
+    let first = if gradient { ink_on(color_at(0.0)) } else { ink_on(theme::color32(rgb)) };
+    let last = if gradient { ink_on(color_at(1.0)) } else { first };
+    if first == last {
+        return vec![(rect, first)];
+    }
+    // Every channel changes monotonically, so there is at most one ink transition.
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..16 {
+        let mid = (lo + hi) / 2.0;
+        if ink_on(color_at(mid)) == first {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let x = rect.left() + rect.width() * (lo + hi) / 2.0;
+    vec![(Rect::from_min_max(rect.min, pos2(x, rect.bottom())), first), (Rect::from_min_max(pos2(x, rect.top()), rect.max), last)]
+}
+
+/// Clip automatic text into the cell background and bar regions, preserving authored ink.
+/// The same layout is reused for wrapped, rotated and ordinary text; no text is painted twice.
+fn paint_worksheet_text(p: &Painter, shape: egui::epaint::TextShape, cell: Rect, bar: Option<(f32, [u8; 3], bool)>, rtl: bool) {
+    paint_with_bar_ink(p, cell, bar, rtl, |p, ink| {
+        let mut shape = shape.clone();
+        if let Some(ink) = ink {
+            shape.override_text_color = Some(ink);
+        }
+        p.add(shape);
+    });
+}
+
+/// Paint glyphs or decoration strokes once per clipped background region.
+fn paint_with_bar_ink(p: &Painter, cell: Rect, bar: Option<(f32, [u8; 3], bool)>, rtl: bool, paint: impl Fn(&Painter, Option<Color32>)) {
+    let Some(bar) = bar else {
+        paint(p, None);
+        return;
+    };
+    let regions = data_bar_ink_regions(cell, bar, rtl);
+    let bar_rect = data_bar_rect(cell, bar.0).intersect(p.clip_rect());
+    if regions.is_empty() || !bar_rect.is_positive() {
+        paint(p, None);
+        return;
+    }
+    let clip = p.clip_rect();
+    for outside in [
+        Rect::from_min_max(clip.min, pos2(clip.right(), bar_rect.top())),
+        Rect::from_min_max(pos2(clip.left(), bar_rect.bottom()), clip.max),
+        Rect::from_min_max(pos2(clip.left(), bar_rect.top()), bar_rect.left_bottom()),
+        Rect::from_min_max(bar_rect.right_top(), pos2(clip.right(), bar_rect.bottom())),
+    ] {
+        if outside.is_positive() {
+            paint(&p.with_clip_rect(outside), None);
+        }
+    }
+    for (region, ink) in regions {
+        let clip = region.intersect(clip);
+        if clip.is_positive() {
+            paint(&p.with_clip_rect(clip), Some(ink));
+        }
     }
 }
 
@@ -371,6 +455,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let automatic = lk.style.font.color == gridcraft_engine::model::Color::Auto;
     let ink = if automatic { ink_on(lk.fill.unwrap_or(t.grid_bg)) } else { lk.text_color };
     let color = ncolor.unwrap_or(ink);
+    let bar = cfl.as_ref().filter(|_| automatic && ncolor.is_none()).and_then(|l| l.bar);
+    let cell_rect = *rect;
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
@@ -400,7 +486,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         };
         let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        paint_worksheet_text(&p.with_clip_rect(text_clip), egui::epaint::TextShape::new(pos2(x, y), galley, color), cell_rect, bar, geo.rtl);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -508,13 +594,17 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
         let mut shape = egui::epaint::TextShape::new(pos, galley, color);
         shape.angle = angle;
-        cp.add(shape);
+        paint_worksheet_text(&cp, shape, cell_rect, bar, geo.rtl);
     } else {
-        cp.galley(pos2(x, y), galley.clone(), color);
+        paint_worksheet_text(&cp, egui::epaint::TextShape::new(pos2(x, y), galley.clone(), color), cell_rect, bar, geo.rtl);
     }
-    paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+    let decoration = TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike };
+    paint_with_bar_ink(&cp, cell_rect, bar, geo.rtl, |p, ink| {
+        paint_text_decorations(p, TextDecoration { color: ink.unwrap_or(color), ..decoration });
+    });
 }
 
+#[derive(Clone, Copy)]
 struct TextDecoration {
     x: f32,
     y: f32,
@@ -543,6 +633,7 @@ fn paint_text_decorations(p: &Painter, decoration: TextDecoration) {
     }
 }
 
+/// Draw regular, merged and diagonal borders with automatic ink against the displayed fill.
 fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Option<CfLook>)], merges: &[RangeRef]) {
     let p = q.painter;
     let geo = q.geo;
@@ -574,14 +665,24 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             if line.is_none() {
                 continue;
             }
-            let col = col32(line.color, wb, Color32::BLACK);
+            let col = col32(line.color, wb, ink_on(lk.fill.unwrap_or(t.grid_bg)));
             paint_border(p, pts, line.style, col);
         }
         if !b.diag_down.is_none() {
-            paint_border(p, [rect.left_top(), rect.right_bottom()], b.diag_down.style, col32(b.diag_down.color, wb, Color32::BLACK));
+            paint_border(
+                p,
+                [rect.left_top(), rect.right_bottom()],
+                b.diag_down.style,
+                col32(b.diag_down.color, wb, ink_on(lk.fill.unwrap_or(t.grid_bg))),
+            );
         }
         if !b.diag_up.is_none() {
-            paint_border(p, [rect.left_bottom(), rect.right_top()], b.diag_up.style, col32(b.diag_up.color, wb, Color32::BLACK));
+            paint_border(
+                p,
+                [rect.left_bottom(), rect.right_top()],
+                b.diag_up.style,
+                col32(b.diag_up.color, wb, ink_on(lk.fill.unwrap_or(t.grid_bg))),
+            );
         }
         // Comment / note indicator.
         if let Some(cm) = sh.comments.get(c) {
