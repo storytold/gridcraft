@@ -1,5 +1,6 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Returns the Russian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",
@@ -151,6 +152,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Убрать стрелки",
         "Show Formulas" => "Показать формулы",
         "Error Checking" => "Проверка ошибок",
+        "Trace Error" => "Источник ошибки",
+        "Circular References" => "Циклические ссылки",
         "Evaluate Formula" => "Вычислить формулу",
         "Watch Window" => "Окно контрольных значений",
         "Calculation\nOptions" => "Параметры\nвычислений",
@@ -207,6 +210,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Предварительный просмотр\nразрывов страниц",
         "Page\nLayout" => "Разметка\nстраницы",
         "Formula Bar" => "Строка формул",
+        "Name Box" => "Поле имени",
+        "Cell Editor" => "Редактор ячейки",
+        "Font Size" => "Размер шрифта",
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
         "Zoom" => "Масштаб",
@@ -290,11 +296,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Long Date" => "Длинная дата",
         "More Number Formats…" => "Другие числовые форматы…",
         "Financial" => "Финансовые",
+        "Recently Used" => "Последние",
         "Logical" => "Логические",
-        "Date &\nTime" => "Дата и\nвремя",
-        "Lookup &\nReference" => "Поиск и\nссылки",
-        "Math &\nTrig" => "Математические и\nтригонометрические",
-        "More\nFunctions" => "Другие\nфункции",
+        "Date & Time" => "Дата и время",
+        "Lookup & Reference" => "Поиск и ссылки",
+        "Math & Trig" => "Математические и тригонометрические",
+        "More Functions" => "Другие функции",
         "Page Layout|Orientation" => "Ориентация",
         "Display theme" => "Тема оформления",
         "Animations" => "Анимация",
@@ -306,6 +313,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Тёмная",
         "Sheet Options|View" => "На экране",
         "Print" => "Печать",
+        "Print What" => "Что печатать",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Щелкните, чтобы добавить данные",
         "Add header" => "Добавить верхний колонтитул",
@@ -332,6 +340,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Перейти к верхнему колонтитулу",
         "Different First Page" => "Особый колонтитул для первой страницы",
         "Different Odd & Even Pages" => "Разные колонтитулы для четных и нечетных страниц",
+        "Scale with Document" => "Масштабировать вместе с документом",
+        "Align with Page Margins" => "Выровнять по полям страницы",
         "Go to Footer" => "Перейти к нижнему колонтитулу",
         "Ruler" => "Линейка",
         // File › Backstage view.
@@ -417,6 +427,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Автоматически сохранять книги .xlsx после каждого изменения",
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
+        "Maximum Iterations:" => "Предельное число итераций:",
+        "Maximum Change:" => "Максимальное изменение:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Предельное число итераций должно быть целым числом от 1 до 32767.",
+        "Maximum Change must be a number of 0 or more." => "Максимальное изменение должно быть числом не меньше 0.",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
@@ -435,6 +449,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Следующий лист",
         "All sheets" => "Все листы",
         "New sheet (⇧F11)" => "Новый лист (⇧F11)",
+        "Text Box" => "Надпись",
+        "Macros" => "Макросы",
+        "Record Macro" => "Запись макроса",
+        "Stop Recording" => "Остановить запись",
+        "Use Relative References" => "Относительные ссылки",
+        "Run\nMacro" => "Выполнить макрос",
+        "Macros…" => "Макросы…",
+        "Recording" => "Запись",
+        "Stop" => "Остановить",
+        "New Macro" => "Новый макрос",
+        "Show" => "Показать",
         _ => return None,
     })
 }

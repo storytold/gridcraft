@@ -40,7 +40,9 @@ fn group_kind(g: &El) -> Option<ChartKind> {
         "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
         "doughnutChart" => ChartKind::Doughnut,
         "areaChart" | "area3DChart" => {
-            if stacked || pct {
+            if pct {
+                ChartKind::AreaStacked100
+            } else if stacked {
                 ChartKind::AreaStacked
             } else {
                 ChartKind::Area
@@ -266,6 +268,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
+            show_keys: bool_val(t, "showKeys"),
+            horizontal_border: bool_val(t, "showHorzBorder"),
+            vertical_border: bool_val(t, "showVertBorder"),
+            outline: bool_val(t, "showOutline"),
+        }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -284,7 +292,7 @@ enum G {
     Line { stacked: bool, markers: bool },
     Pie,
     Doughnut,
-    Area { stacked: bool },
+    Area { grouping: &'static str },
     Scatter { lines: bool },
     Bubble,
     Radar,
@@ -303,8 +311,9 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::LineStacked => G::Line { stacked: true, markers: false },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
-        ChartKind::Area => G::Area { stacked: false },
-        ChartKind::AreaStacked => G::Area { stacked: true },
+        ChartKind::Area => G::Area { grouping: "standard" },
+        ChartKind::AreaStacked => G::Area { grouping: "stacked" },
+        ChartKind::AreaStacked100 => G::Area { grouping: "percentStacked" },
         ChartKind::Scatter => G::Scatter { lines: false },
         ChartKind::ScatterLines => G::Scatter { lines: true },
         ChartKind::Bubble => G::Bubble,
@@ -671,10 +680,7 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
-        G::Area { stacked } => format!(
-            "<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>",
-            if stacked { "stacked" } else { "standard" }
-        ),
+        G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
         G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
@@ -865,6 +871,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if secondary.is_some() {
         s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
         s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    }
+    if let Some(t) = &ch.data_table {
+        let _ = write!(
+            s,
+            "<c:dTable><c:showHorzBorder val=\"{}\"/><c:showVertBorder val=\"{}\"/><c:showOutline val=\"{}\"/><c:showKeys val=\"{}\"/></c:dTable>",
+            u8::from(t.horizontal_border),
+            u8::from(t.vertical_border),
+            u8::from(t.outline),
+            u8::from(t.show_keys)
+        );
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {

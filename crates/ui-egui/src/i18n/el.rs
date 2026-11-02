@@ -2,6 +2,7 @@
 //! Command ids, cell references and formula identifiers are not translated.
 //! Source labels are kept verbatim and unmatched labels fall back to English.
 
+/// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Επικόλληση",
@@ -141,6 +142,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Κατάργηση βελών",
         "Show Formulas" => "Εμφάνιση τύπων",
         "Error Checking" => "Έλεγχος σφαλμάτων",
+        "Trace Error" => "Εντοπισμός σφάλματος",
+        "Circular References" => "Κυκλικές αναφορές",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",
@@ -184,6 +187,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Προεπισκόπηση\nαλλαγών σελίδας",
         "Page\nLayout" => "Διάταξη\nσελίδας",
         "Formula Bar" => "Γραμμή τύπων",
+        "Name Box" => "Πλαίσιο ονόματος",
+        "Cell Editor" => "Επεξεργαστής κελιού",
+        "Font Size" => "Μέγεθος γραμματοσειράς",
         "Gridlines" => "Γραμμές πλέγματος",
         "Headings" => "Επικεφαλίδες",
         "Zoom" => "Μεγέθυνση",
@@ -202,6 +208,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Υποσέλιδο",
         "Different First Page" => "Διαφορετική πρώτη σελίδα",
         "Different Odd & Even Pages" => "Διαφορετικές μονές και ζυγές σελίδες",
+        "Scale with Document" => "Κλιμάκωση με το έγγραφο",
+        "Align with Page Margins" => "Στοίχιση με τα περιθώρια σελίδας",
         "Go to Footer" => "Μετάβαση στο υποσέλιδο",
         "Go to Header" => "Μετάβαση στην κεφαλίδα",
         "Go to\nFooter" => "Μετάβαση στο\nυποσέλιδο",
@@ -382,10 +390,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Περισσότερες μορφές αριθμών…",
         "Financial" => "Οικονομικές",
         "Logical" => "Λογικές",
-        "Date &\nTime" => "Ημερομηνία και\nώρα",
-        "Lookup &\nReference" => "Αναζήτηση και\nαναφορά",
-        "Math &\nTrig" => "Μαθηματικά και\nτριγωνομετρία",
-        "More\nFunctions" => "Περισσότερες\nσυναρτήσεις",
+        "More Functions" => "Περισσότερες συναρτήσεις",
         "Page Layout|Orientation" => "Προσανατολισμός σελίδας",
         "Display theme" => "Θέμα εμφάνισης",
         "System" => "Σύστημα",
@@ -393,6 +398,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Σκοτεινό",
         "Sheet Options|View" => "Προβολή",
         "Print" => "Εκτύπωση",
+        "Print What" => "Τι θα εκτυπωθεί",
         "PivotTable Fields" => "Πεδία συγκεντρωτικού πίνακα",
         "Choose fields to add to report:" => "Επιλέξτε πεδία για προσθήκη στην αναφορά:",
         "Use a field's menu to move it between areas:" => "Χρησιμοποιήστε το μενού ενός πεδίου για να το μετακινήσετε μεταξύ περιοχών:",
@@ -572,7 +578,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Επεξεργασία ονόματος",
         "New Name" => "Νέο όνομα",
         "Format Cells" => "Μορφοποίηση κελιών",
-        "Formula Builder" => "Δημιουργός τύπων",
         "Find and Replace" => "Εύρεση και αντικατάσταση",
         "Go To" => "Μετάβαση",
         "Insert Calculated Field" => "Εισαγωγή υπολογιζόμενου πεδίου",
@@ -671,6 +676,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom margin (in):" => "Κάτω περιθώριο (ίντσες):",
         "Header (in):" => "Κεφαλίδα (ίντσες):",
         "Footer (in):" => "Υποσέλιδο (ίντσες):",
+        "Page order" => "Σειρά σελίδων",
+        "Down, then over" => "Προς τα κάτω και μετά δεξιά",
+        "Over, then down" => "Δεξιά και μετά προς τα κάτω",
         "Tab" => "Στηλοθέτης",
         "Semicolon" => "Ερωτηματικό (;)",
         "Comma" => "Κόμμα",
@@ -877,6 +885,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut" => "Δακτύλιος",
         "Area" => "Περιοχή",
         "Stacked Area" => "Σωρευμένη περιοχή",
+        "100% Stacked Area" => "Σωρευμένη περιοχή 100%",
         "Scatter" => "Διασπορά",
         "Scatter with Lines" => "Διασπορά με γραμμές",
         "Radar" => "Ακτινωτό",
@@ -974,6 +983,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
             "Ένα αρχείο CSV, μια ιστοσελίδα ή ένα PDF είναι αντίγραφο: το βιβλίο εργασίας διατηρεί το δικό του αρχείο."
         }
+        "Record Macro" => "Καταγραφή μακροεντολής",
+        "Stop Recording" => "Διακοπή καταγραφής",
+        "Use Relative References" => "Χρήση σχετικών αναφορών",
+        "Run\nMacro" => "Εκτέλεση μακροεντολής",
+        "Macros…" => "Μακροεντολές…",
+        "Recording" => "Καταγραφή",
+        "New Macro" => "Νέα μακροεντολή",
+        "Show" => "Εμφάνιση",
         _ => return None,
     })
 }

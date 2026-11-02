@@ -1,5 +1,6 @@
 //! Dutch translations for the interface strings in i18n.rs.
 
+/// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Plakken",
@@ -150,6 +151,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pijlen verwijderen",
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
+        "Trace Error" => "Fout traceren",
+        "Circular References" => "Kringverwijzingen",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",
@@ -205,6 +208,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Pagina-einde-\nweergave",
         "Page\nLayout" => "Pagina-\nindeling",
         "Formula Bar" => "Formulebalk",
+        "Name Box" => "Naamvak",
+        "Cell Editor" => "Celeditor",
+        "Font Size" => "Tekengrootte",
         "Gridlines" => "Celrasterlijnen",
         "Headings" => "Kopteksten",
         "Zoom" => "Zoomen",
@@ -295,12 +301,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Meer getalnotaties…",
         "Financial" => "Financieel",
         "Logical" => "Logisch",
-        "Date &\nTime" => "Datum en\ntijd",
-        "Lookup &\nReference" => "Zoeken en\nverwijzen",
-        "Math &\nTrig" => "Wiskunde en\ntrigonometrie",
-        "More\nFunctions" => "Meer\nfuncties",
+        "Date & Time" => "Datum en tijd",
+        "Lookup & Reference" => "Zoeken en verwijzen",
+        "Math & Trig" => "Wiskunde en trigonometrie",
+        "More Functions" => "Meer functies",
         "Sheet Options|View" => "Weergeven",
         "Print" => "Afdrukken",
+        "Print What" => "Wat afdrukken",
         "Click to add data" => "Klik om gegevens toe te voegen",
         "Add header" => "Koptekst toevoegen",
         "Add footer" => "Voettekst toevoegen",
@@ -326,6 +333,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Naar koptekst",
         "Different First Page" => "Eerste pagina afwijkend",
         "Different Odd & Even Pages" => "Even en oneven pagina's afwijkend",
+        "Scale with Document" => "Meeschalen met document",
+        "Align with Page Margins" => "Uitlijnen op paginamarges",
         "Go to Footer" => "Naar voettekst",
         "Ruler" => "Liniaal",
         "File" => "Bestand",
@@ -519,6 +528,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom In" => "Inzoomen",
         "Zoom Out" => "Uitzoomen",
         "Dismiss" => "Negeren",
+        "Record Macro" => "Macro opnemen",
+        "Stop Recording" => "Opname stoppen",
+        "Use Relative References" => "Relatieve verwijzingen gebruiken",
+        "Run\nMacro" => "Macro uitvoeren",
+        "Macros…" => "Macro's…",
+        "Recording" => "Opnemen",
+        "Stop" => "Stoppen",
+        "New Macro" => "Nieuwe macro",
+        "Show" => "Weergeven",
         _ => return None,
     })
 }

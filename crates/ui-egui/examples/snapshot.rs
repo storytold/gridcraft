@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -59,7 +59,8 @@ fn main() {
                 i += 1;
                 pane = args.get(i).cloned();
             }
-            "--chart" => {
+            // Selects a floating object of any kind by id (`--chart` is the older spelling).
+            "--object" | "--chart" => {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
             }
@@ -79,6 +80,9 @@ fn main() {
         }
         i += 1;
     }
+    // Catalog the installed fonts first (the app scans in the background from its first frame), so
+    // the workbook's fonts are drawn in their own faces, not a substitute.
+    let _ = gridcraft_ui_egui::fonts::catalog();
     let mut session = Session::new();
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
@@ -112,14 +116,14 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.selected_chart = chart;
+                app.select_object_id(chart);
                 if let Some(d) = &dialog {
                     let (name, p) =
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));
                     app.open_dialog(name, p);
                 }
                 // Page Layout view: edit the first page's centre header (or footer) section.
-                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet, s)));
+                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet(), s)));
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
@@ -127,7 +131,9 @@ fn main() {
                 app
             },
         );
-    harness.run_steps(8);
+    // The workbook's installed fonts bind once the font scan is done; frames past the first few
+    // apply them, so the snapshot shows them as the app does.
+    harness.run_steps(14);
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());

@@ -7,7 +7,10 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
-use crate::features::*;
+use crate::features::{
+    Anchor, AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape, SheetProtection,
+    Slicer, Sparkline, Table, Validation,
+};
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
 
@@ -52,6 +55,10 @@ impl SheetViewMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// The `sheetId` the file gave the sheet, written back on save so that what refers to the
+    /// sheet by its id keeps finding it; 0 for a sheet the file did not have. Not in JSON.
+    #[serde(skip)]
+    pub file_id: u32,
     pub cells: CellStore,
     /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
@@ -76,6 +83,17 @@ pub struct Sheet {
     pub show_headings: bool,
     pub show_formulas: bool,
     pub show_zeros: bool,
+    /// The outline's level buttons and brackets (Excel's Show Outline Symbols, Ctrl+8); the
+    /// outline itself stays.
+    #[serde(default = "yes")]
+    pub show_outline_symbols: bool,
+    /// Outline summary rows sit below their detail, and summary columns right of it (Data ▸
+    /// Outline ▸ Settings; off puts them above / left). Saved as `outlinePr summaryBelow` and
+    /// `summaryRight`.
+    #[serde(default = "yes")]
+    pub summary_below: bool,
+    #[serde(default = "yes")]
+    pub summary_right: bool,
     pub right_to_left: bool,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
@@ -113,6 +131,10 @@ pub struct Sheet {
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
 }
 
+fn yes() -> bool {
+    true
+}
+
 /// Default width of a column and height of a row (pixels at 96 dpi) for the default font.
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
@@ -127,6 +149,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
             spill: BTreeMap::new(),
@@ -140,6 +163,9 @@ impl Sheet {
             tab_color: None,
             visibility: Visibility::Visible,
             show_gridlines: true,
+            show_outline_symbols: true,
+            summary_below: true,
+            summary_right: true,
             show_headings: true,
             show_formulas: false,
             show_zeros: true,
@@ -176,6 +202,81 @@ impl Sheet {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
     }
 
+    /// The floating object with workbook-unique id `id` on this sheet.
+    pub fn object_ref(&self, id: u32) -> Option<ObjRef> {
+        let kind = if self.charts.iter().any(|o| o.id == id) {
+            ObjKind::Chart
+        } else if self.images.iter().any(|o| o.id == id) {
+            ObjKind::Image
+        } else if self.shapes.iter().any(|o| o.id == id) {
+            ObjKind::Shape
+        } else if self.slicers.iter().any(|o| o.id == id) {
+            ObjKind::Slicer
+        } else {
+            return None;
+        };
+        Some(ObjRef::new(kind, id))
+    }
+
+    /// Whether the floating object `o` exists on this sheet.
+    pub fn has_object(&self, o: ObjRef) -> bool {
+        self.object_anchor(o).is_some()
+    }
+
+    /// The anchor of the floating object `o`.
+    pub fn object_anchor(&self, o: ObjRef) -> Option<Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+        }
+    }
+
+    pub fn object_anchor_mut(&mut self, o: ObjRef) -> Option<&mut Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+        }
+    }
+
+    /// Removes the floating object `o`; false when there is no such object.
+    pub fn remove_object(&mut self, o: ObjRef) -> bool {
+        fn take<T>(v: &mut Vec<T>, f: impl Fn(&T) -> bool) -> bool {
+            let n = v.len();
+            v.retain(|x| !f(x));
+            v.len() != n
+        }
+        match o.kind {
+            ObjKind::Chart => take(&mut self.charts, |c| c.id == o.id),
+            ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
+            ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
+            ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+        }
+    }
+
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
+    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
+    /// and write them back in step.
+    pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
+        self.charts
+            .iter()
+            .map(|o| &o.anchor)
+            .chain(self.images.iter().map(|o| &o.anchor))
+            .chain(self.shapes.iter().map(|o| &o.anchor))
+            .chain(self.slicers.iter().map(|o| &o.anchor))
+    }
+
+    pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
+        self.charts
+            .iter_mut()
+            .map(|o| &mut o.anchor)
+            .chain(self.images.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+    }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {
@@ -600,12 +701,103 @@ mod tests {
         assert_eq!(s.col_at(-5.0), 0);
         assert_eq!(s.col_left(2), 128.0);
     }
+
+    use crate::features::{ChartKind, LegendPos, ShapeFormat, ShapeKind};
+
+    /// Adds a floating object of `kind` with id `id` at `anchor`. The match is exhaustive on
+    /// purpose: a new kind of floating object does not compile here until this test covers it,
+    /// and the counts in `object_anchor_accessors_visit_the_same_objects_in_the_same_order`
+    /// then catch an accessor that was not taught about it.
+    fn push_object(s: &mut Sheet, kind: ObjKind, id: u32, anchor: Anchor) {
+        match kind {
+            ObjKind::Chart => s.charts.push(Chart {
+                id,
+                kind: ChartKind::default(),
+                anchor,
+                title: None,
+                series: vec![],
+                legend: LegendPos::default(),
+                data_labels: false,
+                data_table: None,
+                gridlines: false,
+                style: 0,
+                x_title: None,
+                y_title: None,
+                source: None,
+                by_rows: false,
+                pivot: None,
+            }),
+            ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
+            ObjKind::Shape => s.shapes.push(Shape {
+                id,
+                kind: ShapeKind::default(),
+                anchor,
+                fill: Color::default(),
+                line: Color::default(),
+                text: String::new(),
+                format: ShapeFormat::default(),
+            }),
+            ObjKind::Slicer => {
+                s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
+            }
+        }
+    }
+
+    /// Sorting, and inserting or deleting rows and columns, read every anchor through
+    /// `object_anchors`, compute the new ones and write them back through `object_anchors_mut`
+    /// in step. The two must visit the same objects in the same order, or an object receives
+    /// another object's anchor; a kind that reaches only one of them would break that silently.
+    #[test]
+    fn object_anchor_accessors_visit_the_same_objects_in_the_same_order() {
+        let mut s = Sheet::new("S");
+        // Two objects of every kind, inserted in a mixed order, with ids unrelated to the kind.
+        // Each anchor cell's row carries the id, so an anchor read back names its object.
+        let inserted = [
+            (ObjKind::Slicer, 7),
+            (ObjKind::Chart, 3),
+            (ObjKind::Image, 11),
+            (ObjKind::Shape, 2),
+            (ObjKind::Chart, 9),
+            (ObjKind::Slicer, 1),
+            (ObjKind::Image, 4),
+            (ObjKind::Shape, 12),
+        ];
+        for &(kind, id) in &inserted {
+            push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
+        }
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len();
+        assert_eq!(per_kind, inserted.len());
+        assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
+        assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
+        // Mark each anchor with its position through the mutable accessor; the shared accessor
+        // reads the marks back in the same sequence.
+        for (i, a) in s.object_anchors_mut().enumerate() {
+            a.dx = i as f32;
+        }
+        let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
+        assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
+        // The sequence is the documented one (charts, images, shapes, slicers, each in insertion
+        // order) and every object appears in it once.
+        let documented: Vec<u32> =
+            ObjKind::ALL.iter().flat_map(|&k| inserted.iter().filter(move |(kind, _)| *kind == k).map(|&(_, id)| id)).collect();
+        let visited: Vec<u32> = s.object_anchors().map(|a| a.cell.row).collect();
+        assert_eq!(visited, documented);
+        // The mark written through the bulk accessor landed on the object `object_anchor` finds
+        // by kind and id.
+        for &(kind, id) in &inserted {
+            let position = documented.iter().position(|&x| x == id).map(|p| p as f32);
+            assert_eq!(s.object_anchor(ObjRef::new(kind, id)).map(|a| a.dx), position, "{kind:?} {id}");
+        }
+    }
 }
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
 mod picture_map {
-    use super::*;
-    use serde::{Deserializer, Serializer};
+    use crate::cell::CellPicture;
+    use gridcraft_core::CellRef;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
     pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }
