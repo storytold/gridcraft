@@ -13,7 +13,7 @@ use gridcraft_model::{
 };
 
 use crate::IoError;
-use crate::fmla::from_file;
+use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
@@ -31,6 +31,7 @@ struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
     text: String,
+    unwrapped: bool,
 }
 
 #[derive(Default)]
@@ -526,33 +527,44 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
     // A formula without dynamic-array metadata is a legacy formula, unless entered as a
-    // Ctrl+Shift+Enter array.
-    if !dynamic && formula.as_ref().is_some_and(|f| f.array.is_none() && f.expr_arc().is_some()) {
+    // Ctrl+Shift+Enter array or unwrapped from Google Sheets' export (#2871).
+    if formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_none() && f.expr_arc().is_some()) {
         cx.legacy_formulas.push(pos);
     }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
-    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
+    // Keep the file's dynamic-array mark (and treat Google Sheets unwrapped formulas as dynamic),
+    // so saving never turns the formula into a legacy one.
+    let mut unwrapped = false;
+    let fm = read_formula_text(cx, st, f, pos, dynamic, &mut unwrapped)?;
+    let dynamic = dynamic || unwrapped;
+    Some(Formula { dynamic, ..fm })
 }
 
-fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    let model = from_file(f.text.trim());
+fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool, unwrapped: &mut bool) -> Option<Formula> {
+    let mut model = from_file(f.text.trim());
+    if let Some(known) = cx.known_function
+        && let Some(u) = unwrap_google_sheets(&model, known)
+    {
+        model = u;
+        *unwrapped = true;
+    }
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
+                *unwrapped |= sh.unwrapped;
                 Some(match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;

@@ -571,6 +571,8 @@ impl<'a> Legacy<'a> {
                 Some(Expr::Number(n)) if *n == 0.0 => Kind::Scalar,
                 _ => Kind::Array,
             },
+            // Google Sheets' export placeholder fails with #NAME? so an outer IFERROR keeps the cached scalar.
+            "__XLUDF.DUMMYFUNCTION" => Kind::Scalar,
             // A user-defined function may return a range or an array.
             n if user_function(n, self.functions) => Kind::Array,
             _ if lifted => Kind::Array,

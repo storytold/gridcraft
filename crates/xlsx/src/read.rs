@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -35,6 +37,9 @@ pub struct Ctx<'a> {
     /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
     /// formulas, evaluated with implicit intersection), collected per sheet.
     pub legacy_formulas: Vec<gridcraft_core::CellRef>,
+    /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
+    /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
 }
 
 impl Ctx<'_> {
@@ -224,7 +229,16 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
     }
 }
 
-pub fn read_xlsx(bytes: &[u8], functions: crate::FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
+/// The single window modelled by GridCraft: prefer the first visible window,
+/// including the format's default visibility, and otherwise retain the first one.
+fn selected_workbook_view(workbook: &El) -> Option<&El> {
+    let views = workbook.child("bookViews")?;
+    views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
+}
+
+pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
+    let functions = opts.functions;
+    let known_function = opts.known_function;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -242,6 +256,7 @@ pub fn read_xlsx(bytes: &[u8], functions: crate::FunctionInfo) -> Result<(Workbo
         cell_pictures: vec![],
         cf_ext_ids: vec![],
         legacy_formulas: vec![],
+        known_function,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -272,7 +287,19 @@ pub fn read_xlsx(bytes: &[u8], functions: crate::FunctionInfo) -> Result<(Workbo
     }
 
     read_workbook_properties(&mut cx, &mut wb, &wb_xml);
-    let active_tab = wb_xml.path(&["bookViews", "workbookView"]).and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    let view_el = selected_workbook_view(&wb_xml);
+    let active_tab = view_el.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    if let Some(v) = view_el {
+        // The window's display settings (Excel's "Display options for this workbook").
+        // Absent attributes take the format's defaults, which is also what a workbook
+        // without a <workbookView> gets.
+        wb.view = WorkbookView {
+            show_sheet_tabs: v.flag("showSheetTabs", true),
+            show_horizontal_scroll: v.flag("showHorizontalScroll", true),
+            show_vertical_scroll: v.flag("showVerticalScroll", true),
+            tab_ratio: v.attr_u32("tabRatio").unwrap_or(600).min(WorkbookView::MAX_TAB_RATIO),
+        };
+    }
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];

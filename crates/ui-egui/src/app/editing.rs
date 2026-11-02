@@ -15,6 +15,13 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        // A locked cell on a protected sheet can't be entered (Excel's warning, and the engine
+        // refuses `cell.set` anyway): refuse before a draft exists, rather than leaving one that
+        // can never be committed and blocks Save (#2945).
+        if let Some(m) = self.session.locked_cell_message(d.wb.active_sheet(), at) {
+            self.message = Some(("GridCraft".into(), m));
+            return;
+        }
         // A picture has no editable scalar text. Selecting it, F2, or clicking
         // the formula bar must not turn its fallback value into a text edit.
         // Typing still starts an intentional replacement.
@@ -100,6 +107,13 @@ impl SheetApp {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
             }
+            return true;
+        }
+        // A draft on a cell sheet protection now locks (the sheet was protected while it was
+        // open) can't be entered: drop it with the warning instead of keeping it, which would
+        // block Save with a draft that can never be committed (#2945).
+        if let Some(m) = self.session.locked_cell_message(ed.sheet, ed.cell) {
+            self.message = Some(("GridCraft".into(), m));
             return true;
         }
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
@@ -207,5 +221,79 @@ impl SheetApp {
             }
         }
         self.grid.ensure_visible = true;
+    }
+}
+
+#[cfg(test)]
+mod protected_cell_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+    use gridcraft_engine::core::{CellRef, Value};
+
+    /// A protected sheet whose C2 is unlocked; C2 holds "keep" as the last undo step.
+    fn protected_book() -> SheetApp {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("cell.set", json!({"cell": "C2", "input": "keep"})).unwrap();
+        app.run("home.formatCells", json!({"range": "C2", "style": {"protection": {"locked": false}}})).unwrap();
+        app.run("review.protectSheet", json!({})).unwrap();
+        app
+    }
+
+    fn value(app: &SheetApp, a1: &str) -> Value {
+        let at = CellRef::parse(a1).unwrap();
+        app.session.active().and_then(|d| d.wb.sheet(0)).map(|sh| sh.value(at)).unwrap_or_default()
+    }
+
+    fn protected_message(app: &SheetApp) -> Option<&str> {
+        app.message.as_ref().map(|(_, m)| m.as_str())
+    }
+
+    #[test]
+    fn typing_in_a_locked_cell_does_not_leave_a_draft_that_blocks_undo_and_save() {
+        let mut app = protected_book();
+        assert_eq!(app.session.active().unwrap().selection.active.a1(), "A1", "the locked A1 is the active cell");
+        let undo = app.session.active().unwrap().undo.len();
+        let dirty = app.session.active().unwrap().is_dirty();
+
+        app.begin_edit(Some("locked".into()), false);
+
+        assert!(app.editor.is_none(), "a locked cell must not open an editor");
+        assert!(protected_message(&app).is_some_and(|m| m.contains("protected sheet")), "the warning names the protected sheet");
+        assert_eq!(app.session.active().unwrap().undo.len(), undo, "a refused edit adds no undo step");
+        assert_eq!(app.session.active().unwrap().is_dirty(), dirty, "a refused edit leaves the workbook as it was");
+        assert!(app.run("file.saveBytes", json!({"format": "xlsx"})).is_ok(), "Save is not blocked by a draft that can never be entered");
+    }
+
+    #[test]
+    fn an_unlocked_cell_on_a_protected_sheet_still_edits_undoes_and_saves() {
+        let mut app = protected_book();
+        app.run("selection.set", json!({"cell": "C2"})).unwrap();
+        app.begin_edit(Some("typed".into()), false);
+        assert!(app.editor.is_some(), "an unlocked cell opens its editor");
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(value(&app, "C2"), Value::text("typed"));
+
+        assert!(app.run("edit.undo", json!({})).is_ok());
+        assert_eq!(value(&app, "C2"), Value::text("keep"), "Undo of the typed edit still works");
+        assert!(app.run("file.saveBytes", json!({"format": "xlsx"})).is_ok());
+    }
+
+    #[test]
+    fn a_draft_that_becomes_locked_is_cancelled_instead_of_staying_open() {
+        let mut app = protected_book();
+        app.run("selection.set", json!({"cell": "C2"})).unwrap();
+        app.begin_edit(Some("typed".into()), false);
+        // The sheet is unprotected, C2 locked, and the sheet protected again while the draft is open.
+        app.run("review.unprotectSheet", json!({})).unwrap();
+        app.run("home.formatCells", json!({"range": "C2", "style": {"protection": {"locked": true}}})).unwrap();
+        app.run("review.protectSheet", json!({})).unwrap();
+
+        assert!(app.commit_edit(0, 0, false, false), "the refused draft is handled, not left open");
+        assert!(app.editor.is_none());
+        assert!(protected_message(&app).is_some_and(|m| m.contains("protected sheet")));
+        assert_eq!(value(&app, "C2"), Value::text("keep"));
+        assert!(app.run("file.saveBytes", json!({"format": "xlsx"})).is_ok());
     }
 }
