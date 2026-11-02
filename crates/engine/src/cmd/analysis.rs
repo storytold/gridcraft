@@ -27,6 +27,14 @@ const MAX_MATRIX_VARS: usize = 256;
 const MAX_REGRESSORS: usize = 16;
 /// Most histogram bins.
 const MAX_BINS: usize = 100_000;
+/// Excel's limit on Fourier Analysis input values.
+const MAX_FOURIER: usize = 4096;
+/// Most numbers Random Number Generation or Sampling writes in one run.
+const MAX_RANDOM: usize = 1_000_000;
+/// Most trials of a binomial draw, and the farthest Poisson outcome considered.
+const MAX_OUTCOMES: f64 = 1_000_000.0;
+/// Largest seed: seeds are whole numbers that a JSON number holds exactly.
+const MAX_SEED: u64 = (1 << 53) - 1;
 
 /// Part of the error a programmatic call gets when the output range already holds data; the
 /// dialog recognises it and asks before running again with `overwrite: true`.
@@ -35,18 +43,24 @@ pub const OVERWRITE_ERROR: &str = "already holds data";
 /// (id, label) of every tool, in the order of Excel's Analysis Tools list.
 pub const TOOLS: &[(&str, &str)] = &[
     ("anovaSingle", "Anova: Single Factor"),
+    ("anovaTwoFactorWith", "Anova: Two-Factor With Replication"),
+    ("anovaTwoFactorWithout", "Anova: Two-Factor Without Replication"),
     ("correlation", "Correlation"),
     ("covariance", "Covariance"),
     ("descriptive", "Descriptive Statistics"),
     ("exponentialSmoothing", "Exponential Smoothing"),
     ("fTest", "F-Test Two-Sample for Variances"),
+    ("fourierAnalysis", "Fourier Analysis"),
     ("histogram", "Histogram"),
     ("movingAverage", "Moving Average"),
+    ("randomNumberGeneration", "Random Number Generation"),
     ("rankPercentile", "Rank and Percentile"),
     ("regression", "Regression"),
+    ("sampling", "Sampling"),
     ("tTestPaired", "t-Test: Paired Two Sample for Means"),
     ("tTestEqual", "t-Test: Two-Sample Assuming Equal Variances"),
     ("tTestUnequal", "t-Test: Two-Sample Assuming Unequal Variances"),
+    ("zTest", "z-Test: Two Sample for Means"),
 ];
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -55,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Data Analysis…",
         ["Data", "Analysis"],
         None,
-        "{tool: anovaSingle|correlation|covariance|descriptive|exponentialSmoothing|fTest|histogram|movingAverage|rankPercentile|regression|tTestPaired|tTestEqual|tTestUnequal (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
+        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|randomNumberGeneration|rankPercentile|regression|sampling|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels? (the first row holds column names and the first column row names), alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?; randomNumberGeneration: variables? (1), count (per variable; not for patterned), distribution: uniform{from, to} | normal{mean, standardDeviation} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{valueRange: two columns of value and probability}, seed? (whole number, not for patterned; the same seed repeats the numbers; the result reports the seed used), at most 1,000,000 numbers; sampling: range, method?: periodic|random, period (periodic), samples (random, with replacement), seed?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
         has_doc,
         run
     )]
@@ -107,7 +121,7 @@ fn confidence(p: &Json, key: &str) -> Result<Option<f64>> {
 }
 
 fn alpha(p: &Json) -> Result<f64> {
-    match num(p, "alpha") {
+    match opt_num(p, "alpha")? {
         None => Ok(0.05),
         Some(a) if a > 0.0 && a < 1.0 => Ok(a),
         Some(_) => Err(bad(CMD, "alpha must be between 0 and 1")),
@@ -1050,6 +1064,684 @@ fn anova_single(s: &Session, p: &Json) -> Result<Grid> {
     Ok(g)
 }
 
+// ---------------------------------------------------------------- two-factor anova and z-test
+
+/// Count, Sum, Average and Variance of a group, as the Anova summaries list them.
+fn group_summary(x: &[f64]) -> [Value; 4] {
+    [Value::number(x.len() as f64), Value::number(x.iter().sum()), n_or_div0(mean(x)), n_or_div0(var_s(x))]
+}
+
+const ANOVA_HEAD: [&str; 7] = ["Source of Variation", "SS", "df", "MS", "F", "P-value", "F crit"];
+
+/// One line of an Anova table. A factor line, tested against the error term `err` (its MS and
+/// df), adds F, the P-value and the critical F.
+fn anova_line(g: &mut Grid, row: u32, label: &str, ss: f64, df: f64, err: Option<(f64, f64)>, alpha: f64) {
+    g.txt(row, 0, label);
+    g.num(row, 1, ss);
+    g.num(row, 2, df);
+    g.put(row, 3, ratio(ss, df));
+    if let Some((mse, dfe)) = err {
+        let f = ss / df / mse;
+        g.put(row, 4, n_or_div0(f));
+        g.put(row, 5, if f.is_finite() && dfe > 0.0 { callf("F.DIST.RT", &[f, df, dfe]) } else { div0() });
+        g.put(row, 6, if df > 0.0 && dfe > 0.0 { callf("F.INV.RT", &[alpha, df, dfe]) } else { div0() });
+    }
+}
+
+/// The cells of a two-factor input range, row by row.
+fn input_rows(s: &Session, p: &Json) -> Result<Vec<Vec<Value>>> {
+    let (si, r) = input_range(s, p, &["range", "input"])?;
+    Ok(variables(s, si, r, true, false, &|_| String::new())?.into_iter().map(|v| v.vals).collect())
+}
+
+/// The values of column `j` of a table of numbers.
+fn column(data: &[Vec<f64>], j: usize) -> Vec<f64> {
+    data.iter().filter_map(|r| r.get(j).copied()).collect()
+}
+
+/// Anova: Two-Factor Without Replication: one observation for each pair of levels (rows ×
+/// columns), the error term being the residual after both main effects.
+fn anova_two_factor_without(s: &Session, p: &Json) -> Result<Grid> {
+    let alpha = alpha(p)?;
+    let labels = flag(p, "labels");
+    let mut rows = input_rows(s, p)?;
+    let head = if labels && !rows.is_empty() { Some(rows.remove(0)) } else { None };
+    let mut row_names = Vec::with_capacity(rows.len());
+    let mut data: Vec<Vec<f64>> = Vec::with_capacity(rows.len());
+    for (i, mut row) in rows.into_iter().enumerate() {
+        let name = if labels && !row.is_empty() { row.remove(0).display() } else { format!("Row {}", i + 1) };
+        row_names.push(name);
+        data.push(numbers(&row, false)?);
+    }
+    let (a, b) = (data.len(), data.first().map_or(0, Vec::len));
+    if a < 2 || b < 2 {
+        return Err(EngineError::Other("Anova needs at least two rows and two columns of numbers.".into()));
+    }
+    let col_names: Vec<String> = match head {
+        Some(h) => h.iter().skip(1).map(Value::display).collect(),
+        None => (1..=b).map(|j| format!("Column {j}")).collect(),
+    };
+    let cols: Vec<Vec<f64>> = (0..b).map(|j| column(&data, j)).collect();
+    let all: Vec<f64> = data.iter().flatten().copied().collect();
+    let grand = mean(&all);
+    let row_means: Vec<f64> = data.iter().map(|r| mean(r)).collect();
+    let col_means: Vec<f64> = cols.iter().map(|c| mean(c)).collect();
+    let ss_rows: f64 = row_means.iter().map(|m| b as f64 * (m - grand).powi(2)).sum();
+    let ss_cols: f64 = col_means.iter().map(|m| a as f64 * (m - grand).powi(2)).sum();
+    // The residual of each observation after removing both main effects.
+    let ss_err: f64 =
+        data.iter().zip(&row_means).flat_map(|(r, rm)| r.iter().zip(&col_means).map(move |(x, cm)| (x - rm - cm + grand).powi(2))).sum();
+    let (df_rows, df_cols) = ((a - 1) as f64, (b - 1) as f64);
+    let df_err = df_rows * df_cols;
+    let mut g = Grid::default();
+    g.txt(0, 0, "Anova: Two-Factor Without Replication");
+    g.labels(2, 0, &["SUMMARY", "Count", "Sum", "Average", "Variance"]);
+    let summary = |g: &mut Grid, row: u32, name: &str, x: &[f64]| {
+        g.txt(row, 0, name);
+        for (k, v) in group_summary(x).into_iter().enumerate() {
+            g.put(row, 1 + idx(k), v);
+        }
+    };
+    for (i, (name, x)) in row_names.iter().zip(&data).enumerate() {
+        summary(&mut g, 3 + idx(i), name, x);
+    }
+    let first_col = 3 + idx(a) + 1;
+    for (j, (name, x)) in col_names.iter().zip(&cols).enumerate() {
+        summary(&mut g, first_col + idx(j), name, x);
+    }
+    let row = first_col + idx(b) + 2;
+    g.txt(row, 0, "ANOVA");
+    g.labels(row + 1, 0, &ANOVA_HEAD);
+    let err = Some((ss_err / df_err, df_err));
+    anova_line(&mut g, row + 2, "Rows", ss_rows, df_rows, err, alpha);
+    anova_line(&mut g, row + 3, "Columns", ss_cols, df_cols, err, alpha);
+    anova_line(&mut g, row + 4, "Error", ss_err, df_err, None, alpha);
+    g.txt(row + 6, 0, "Total");
+    g.num(row + 6, 1, ss(&all));
+    g.num(row + 6, 2, (all.len() - 1) as f64);
+    Ok(g)
+}
+
+/// The number of rows in each sample of a two-factor Anova with replication.
+fn rows_per_sample(p: &Json, data_rows: usize) -> Result<usize> {
+    let per = num(p, "rowsPerSample").ok_or_else(|| bad(CMD, "missing `rowsPerSample` (the number of rows in each sample)"))?;
+    if per < 2.0 || per.fract() != 0.0 || per > data_rows as f64 || !data_rows.is_multiple_of(per as usize) {
+        return Err(EngineError::Other("Rows per sample must be a whole number of at least 2 that divides the number of data rows.".into()));
+    }
+    Ok(per as usize)
+}
+
+/// Anova: Two-Factor With Replication. The input range holds column labels in its first row and
+/// sample labels in its first column; each sample (a level of the row factor) spans
+/// `rowsPerSample` consecutive rows, so every cell of the design holds that many observations.
+fn anova_two_factor_with(s: &Session, p: &Json) -> Result<Grid> {
+    let alpha = alpha(p)?;
+    let mut rows = input_rows(s, p)?;
+    if rows.len() < 3 {
+        return Err(EngineError::Other("The input range must hold a row of labels and at least two samples.".into()));
+    }
+    let head = rows.remove(0);
+    let col_names: Vec<String> = head.iter().skip(1).map(Value::display).collect();
+    let per = rows_per_sample(p, rows.len())?;
+    let mut sample_names = Vec::new();
+    let mut data: Vec<Vec<f64>> = Vec::with_capacity(rows.len());
+    for (i, mut row) in rows.into_iter().enumerate() {
+        let name = if row.is_empty() { Value::Empty } else { row.remove(0) };
+        if i.is_multiple_of(per) {
+            sample_names.push(name.display());
+        }
+        data.push(numbers(&row, false)?);
+    }
+    let (a, b) = (sample_names.len(), col_names.len());
+    if a < 2 || b < 2 {
+        return Err(EngineError::Other("Anova needs at least two samples and two columns of numbers.".into()));
+    }
+    // cells[i][j]: the observations of sample i in column j.
+    let cells: Vec<Vec<Vec<f64>>> = data.chunks(per).map(|block| (0..b).map(|j| column(block, j)).collect()).collect();
+    let all: Vec<f64> = data.iter().flatten().copied().collect();
+    let grand = mean(&all);
+    let sample_all: Vec<Vec<f64>> = data.chunks(per).map(|block| block.iter().flatten().copied().collect()).collect();
+    let cols: Vec<Vec<f64>> = (0..b).map(|j| column(&data, j)).collect();
+    let (sm, cm): (Vec<f64>, Vec<f64>) = (sample_all.iter().map(|x| mean(x)).collect(), cols.iter().map(|x| mean(x)).collect());
+    let n = per as f64;
+    let ss_sample: f64 = sm.iter().map(|m| n * b as f64 * (m - grand).powi(2)).sum();
+    let ss_cols: f64 = cm.iter().map(|m| n * a as f64 * (m - grand).powi(2)).sum();
+    let mut ss_inter = 0.0;
+    let mut ss_within = 0.0;
+    for (i, row) in cells.iter().enumerate() {
+        for (j, cell) in row.iter().enumerate() {
+            let (si, cj) = (sm.get(i).copied().unwrap_or(f64::NAN), cm.get(j).copied().unwrap_or(f64::NAN));
+            ss_inter += n * (mean(cell) - si - cj + grand).powi(2);
+            ss_within += ss(cell);
+        }
+    }
+    let (df_sample, df_cols) = ((a - 1) as f64, (b - 1) as f64);
+    let df_within = (a * b * (per - 1)) as f64;
+    let mut g = Grid::default();
+    g.txt(0, 0, "Anova: Two-Factor With Replication");
+    g.txt(2, 0, "SUMMARY");
+    for (j, name) in col_names.iter().enumerate() {
+        g.txt(2, 1 + idx(j), name);
+    }
+    g.txt(2, 1 + idx(b), "Total");
+    let stats = ["Count", "Sum", "Average", "Variance"];
+    let mut row = 3u32;
+    let block = |g: &mut Grid, row: &mut u32, name: &str, groups: Vec<&[f64]>| {
+        g.txt(*row, 0, name);
+        let sums: Vec<[Value; 4]> = groups.iter().map(|x| group_summary(x)).collect();
+        for (k, label) in stats.iter().enumerate() {
+            let r = *row + 1 + idx(k);
+            g.txt(r, 0, label);
+            for (j, sm) in sums.iter().enumerate() {
+                g.put(r, 1 + idx(j), sm.get(k).cloned().unwrap_or(Value::Empty));
+            }
+        }
+        *row += 6;
+    };
+    for ((name, row_cells), whole) in sample_names.iter().zip(&cells).zip(&sample_all) {
+        let mut groups: Vec<&[f64]> = row_cells.iter().map(Vec::as_slice).collect();
+        groups.push(whole);
+        block(&mut g, &mut row, name, groups);
+    }
+    block(&mut g, &mut row, "Total", cols.iter().map(Vec::as_slice).collect());
+    row += 1;
+    g.txt(row, 0, "ANOVA");
+    g.labels(row + 1, 0, &ANOVA_HEAD);
+    let err = Some((ss_within / df_within, df_within));
+    anova_line(&mut g, row + 2, "Sample", ss_sample, df_sample, err, alpha);
+    anova_line(&mut g, row + 3, "Columns", ss_cols, df_cols, err, alpha);
+    anova_line(&mut g, row + 4, "Interaction", ss_inter, df_sample * df_cols, err, alpha);
+    anova_line(&mut g, row + 5, "Within", ss_within, df_within, None, alpha);
+    g.txt(row + 7, 0, "Total");
+    g.num(row + 7, 1, ss(&all));
+    g.num(row + 7, 2, (all.len() - 1) as f64);
+    Ok(g)
+}
+
+/// A known variance parameter: a positive number.
+fn known_variance(p: &Json, key: &str) -> Result<f64> {
+    match num(p, key) {
+        Some(v) if v > 0.0 => Ok(v),
+        _ => Err(EngineError::Other(format!("Enter the known variance `{key}` (a positive number)."))),
+    }
+}
+
+/// z-Test: Two Sample for Means, for two samples whose population variances are known.
+fn z_test(s: &Session, p: &Json) -> Result<Grid> {
+    let alpha = alpha(p)?;
+    let hmd = match opt_num(p, "hypothesizedDifference")? {
+        Some(d) => d,
+        None => num_or(p, "difference", 0.0)?,
+    };
+    let (v1, v2) = (known_variance(p, "variance1")?, known_variance(p, "variance2")?);
+    let a = single(s, p, "range1", "Variable 1")?;
+    let b = single(s, p, "range2", "Variable 2")?;
+    let (x, y) = (numbers(&a.vals, true)?, numbers(&b.vals, true)?);
+    if x.is_empty() || y.is_empty() {
+        return Err(EngineError::Other("Each input range needs at least one number.".into()));
+    }
+    let (n1, n2) = (x.len() as f64, y.len() as f64);
+    let (m1, m2) = (mean(&x), mean(&y));
+    let z = (m1 - m2 - hmd) / (v1 / n1 + v2 / n2).sqrt();
+    let mut g = Grid::default();
+    let row = test_head(&mut g, "z-Test: Two Sample for Means", &a.name, &b.name);
+    pair_row(&mut g, row, "Mean", Value::number(m1), Value::number(m2));
+    pair_row(&mut g, row + 1, "Known Variance", Value::number(v1), Value::number(v2));
+    pair_row(&mut g, row + 2, "Observations", Value::number(n1), Value::number(n2));
+    pair_row(&mut g, row + 3, "Hypothesized Mean Difference", Value::number(hmd), Value::Empty);
+    pair_row(&mut g, row + 4, "z", n_or_div0(z), Value::Empty);
+    // The tail beyond |z|: 1 − Φ(|z|).
+    let tail = call("NORM.S.DIST", &[Value::Number(z.abs()), Value::Bool(true)]).as_f64().map(|c| 1.0 - c);
+    let lines: [(&str, Value); 4] = [
+        ("P(Z<=z) one-tail", tail.map_or_else(div0, Value::number)),
+        ("z Critical one-tail", callf("NORM.S.INV", &[1.0 - alpha])),
+        ("P(Z<=z) two-tail", tail.map_or_else(div0, |t| Value::number(2.0 * t))),
+        ("z Critical two-tail", callf("NORM.S.INV", &[1.0 - alpha / 2.0])),
+    ];
+    for (k, (label, v)) in lines.into_iter().enumerate() {
+        pair_row(&mut g, row + 5 + idx(k), label, v, Value::Empty);
+    }
+    Ok(g)
+}
+
+// ---------------------------------------------------------------- fourier analysis
+
+/// Radix-2 fast Fourier transform (iterative Cooley–Tukey) in place, for a power-of-two number of
+/// complex values (re, im). The forward transform is unscaled, X[k] = Σ x[n]·e^(−2πikn/N); the
+/// inverse uses e^(+2πikn/N) and divides by N, so it returns the values the forward one took.
+fn fft(a: &mut [(f64, f64)], inverse: bool) {
+    let n = a.len();
+    if n < 2 || !n.is_power_of_two() {
+        return;
+    }
+    let bits = n.trailing_zeros();
+    for i in 0..n {
+        let j = i.reverse_bits() >> (usize::BITS - bits);
+        if i < j {
+            a.swap(i, j);
+        }
+    }
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let mut len = 2;
+    while len <= n {
+        let ang = sign * 2.0 * std::f64::consts::PI / len as f64;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                // Each twiddle factor is computed directly, not by repeated multiplication.
+                let (wr, wi) = ((ang * k as f64).cos(), (ang * k as f64).sin());
+                let (i, j) = (start + k, start + k + len / 2);
+                let (Some(&(ur, ui)), Some(&(xr, xi))) = (a.get(i), a.get(j)) else { continue };
+                let (vr, vi) = (xr * wr - xi * wi, xr * wi + xi * wr);
+                if let Some(u) = a.get_mut(i) {
+                    *u = (ur + vr, ui + vi);
+                }
+                if let Some(x) = a.get_mut(j) {
+                    *x = (ur - vr, ui - vi);
+                }
+            }
+        }
+        len <<= 1;
+    }
+    if inverse {
+        let nf = n as f64;
+        a.iter_mut().for_each(|v| *v = (v.0 / nf, v.1 / nf));
+    }
+}
+
+/// Fourier Analysis: the discrete Fourier transform (or with `inverse` its inverse) of one row or
+/// column of 2^k values, read and written as complex numbers the way IMREAL, IMAGINARY and
+/// COMPLEX read and write them.
+fn fourier_analysis(s: &Session, p: &Json) -> Result<Grid> {
+    let v = single(s, p, "range", "")?;
+    let n = v.vals.len();
+    if n == 0 || n > MAX_FOURIER || !n.is_power_of_two() {
+        return Err(EngineError::Other(format!("Fourier Analysis needs 1, 2, 4, 8 … {MAX_FOURIER} input values (a power of two).")));
+    }
+    let mut a = Vec::with_capacity(n);
+    for x in &v.vals {
+        let part = |f: &str| call(f, std::slice::from_ref(x)).as_f64();
+        match (x, part("IMREAL"), part("IMAGINARY")) {
+            (Value::Empty, ..) => return Err(non_numeric()),
+            (_, Some(re), Some(im)) => a.push((re, im)),
+            _ => return Err(EngineError::Other("Input range must hold numbers or complex numbers such as 3+4i.".into())),
+        }
+    }
+    let total: f64 = a.iter().map(|(re, im)| re.abs() + im.abs()).sum();
+    let inverse = flag(p, "inverse");
+    fft(&mut a, inverse);
+    // Parts that can only be rounding noise of the transform are written as 0. Each of the
+    // log2(N) butterfly stages adds at most a few units of f64::EPSILON times the magnitude of
+    // the values it combines, so the computed transform differs from the exact one by at most
+    // about log2(N) · ε · Σ|x_n| times a small constant (Higham, Accuracy and Stability of
+    // Numerical Algorithms, 2nd ed., chapter 24, The Fast Fourier Transform). The bound comes
+    // from the input and N, never from the largest output, so a small part beside a large one
+    // (an imaginary part of 1 beside a real part of 1e14, a harmonic of 4e-7 beside a DC term of
+    // 8e6) is kept. With N = 1 the transform is the identity and log2(N) = 0: nothing is zeroed.
+    // The inverse divides its outputs by N, so its noise is divided by N as well. An input sum
+    // that overflows gives no finite bound; then nothing is cleaned up.
+    let mut noise = 8.0 * f64::EPSILON * f64::from(n.trailing_zeros()) * total;
+    if inverse {
+        noise /= n as f64;
+    }
+    let noise = if noise.is_finite() { noise } else { 0.0 };
+    let clean = |x: f64| if x.abs() <= noise { 0.0 } else { x };
+    let mut g = Grid::default();
+    let first = u32::from(flag(p, "labels"));
+    if first == 1 {
+        g.txt(0, 0, &v.name);
+    }
+    for (i, (re, im)) in a.into_iter().enumerate() {
+        g.put(first + idx(i), 0, callf("COMPLEX", &[clean(re), clean(im)]));
+    }
+    Ok(g)
+}
+
+// ---------------------------------------------------------------- random numbers and sampling
+
+/// A seeded generator: xoshiro256** (Blackman and Vigna, a public-domain algorithm) with its
+/// state filled by SplitMix64. The same seed gives the same numbers in GridCraft; they are not
+/// Excel's numbers, whose generator is not documented.
+struct Rng([u64; 4]);
+
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        let mut x = seed;
+        let mut next = || {
+            x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        Rng([next(), next(), next(), next()])
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let [s0, s1, s2, s3] = self.0;
+        let out = s1.wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+        let (s2, s3) = (s2 ^ s0, s3 ^ s1);
+        self.0 = [s0 ^ s3, s1 ^ s2, s2 ^ (s1 << 17), s3.rotate_left(45)];
+        out
+    }
+
+    /// Uniform in [0, 1), with 53 random bits.
+    fn uniform(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Uniform whole number in [0, n), without modulo bias.
+    fn below(&mut self, n: u64) -> u64 {
+        if n <= 1 {
+            return 0;
+        }
+        let zone = u64::MAX - u64::MAX % n;
+        loop {
+            let v = self.next_u64();
+            if v < zone {
+                return v % n;
+            }
+        }
+    }
+
+    /// Standard normal by the Box–Muller transform.
+    fn normal(&mut self) -> f64 {
+        let (u1, u2) = (1.0 - self.uniform(), self.uniform());
+        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    }
+}
+
+/// The `seed` parameter, or a seed taken from the clock when there is none.
+fn seed_of(p: &Json) -> Result<u64> {
+    let given = p.get("seed").is_some_and(|v| match v {
+        Json::Null => false,
+        Json::String(t) => !t.trim().is_empty(),
+        _ => true,
+    });
+    if !given {
+        let ms = gridcraft_core::date::unix_now_ms().unwrap_or(0.0);
+        return Ok((ms * 1000.0) as u64 & MAX_SEED);
+    }
+    match num(p, "seed") {
+        Some(x) if x >= 0.0 && x.fract() == 0.0 && x <= MAX_SEED as f64 => Ok(x as u64),
+        _ => Err(EngineError::Other("The random seed must be a whole number from 0.".into())),
+    }
+}
+
+/// A number parameter: `None` when absent, null or blank; an error when present but not a
+/// finite number (a typed "0,3" or "abc" must not quietly become the default).
+fn opt_num(p: &Json, key: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(t)) if t.trim().is_empty() => Ok(None),
+        Some(_) => num(p, key).map(Some).ok_or_else(|| EngineError::Other(format!("`{key}` must be a number."))),
+    }
+}
+
+/// A number parameter, `default` when absent or blank.
+fn num_or(p: &Json, key: &str, default: f64) -> Result<f64> {
+    Ok(opt_num(p, key)?.unwrap_or(default))
+}
+
+/// A whole-number parameter of at least `min`, `default` when absent.
+fn whole(p: &Json, key: &str, default: Option<f64>, min: f64) -> Result<f64> {
+    match opt_num(p, key)?.or(default) {
+        Some(x) if x >= min && x.fract() == 0.0 => Ok(x),
+        Some(_) => Err(EngineError::Other(format!("`{key}` must be a whole number of at least {min}."))),
+        None => Err(bad(CMD, format!("missing `{key}`"))),
+    }
+}
+
+/// A probability parameter in [0, 1].
+fn probability(p: &Json) -> Result<f64> {
+    match num_or(p, "p", 0.5)? {
+        x if (0.0..=1.0).contains(&x) => Ok(x),
+        _ => Err(EngineError::Other("The p value must be between 0 and 1.".into())),
+    }
+}
+
+/// The probabilities of a distribution on 0, 1, 2 … `last`, as (first outcome, probabilities of
+/// first, first + 1, …), from its probability `at_mode` at `mode`, its most likely outcome, and
+/// `ratio`(k) = pmf(k + 1) / pmf(k). Each term is one multiplication of its neighbour towards the
+/// mode, so no worksheet function runs per outcome, and the terms only shrink away from the mode,
+/// so nothing underflows before the terms that matter. The left tail ends where its terms vanish,
+/// the right tail once the cumulative probability reaches 1 within f64 resolution (every later
+/// draw would map to the last outcome). The table is as wide as the distribution's effective
+/// support, not as `last`: Binomial(1,000,000, 0.5) takes about 23,000 entries, not 1,000,001.
+fn pmf_table(last: f64, mode: f64, at_mode: f64, ratio: impl Fn(f64) -> f64) -> Result<(f64, Vec<f64>)> {
+    if !at_mode.is_finite() || at_mode <= 0.0 || !(0.0..=last).contains(&mode) || mode.fract() != 0.0 {
+        return Err(EngineError::Other("The distribution could not be tabulated.".into()));
+    }
+    let mut left = Vec::new();
+    let (mut k, mut v) = (mode, at_mode);
+    while k > 0.0 {
+        v /= ratio(k - 1.0);
+        if v.is_nan() || v < f64::MIN_POSITIVE {
+            break;
+        }
+        left.push(v);
+        k -= 1.0;
+    }
+    let first = k;
+    let mut pmf: Vec<f64> = left.into_iter().rev().collect();
+    let mut acc = pmf.iter().sum::<f64>() + at_mode;
+    pmf.push(at_mode);
+    let (mut k, mut v) = (mode, at_mode);
+    while k < last && acc < 1.0 - 1e-15 {
+        v *= ratio(k);
+        if v.is_nan() || v < f64::MIN_POSITIVE {
+            break;
+        }
+        pmf.push(v);
+        acc += v;
+        k += 1.0;
+    }
+    Ok((first, pmf))
+}
+
+/// A distribution on whole numbers tabulated for inversion sampling: the cumulative
+/// probabilities of `first`, `first + 1`, … up to the last outcome that matters.
+struct Table {
+    first: f64,
+    cdf: Vec<f64>,
+}
+
+impl Table {
+    /// The distribution on 0, 1, 2 … `last` that `pmf_table` describes.
+    fn from_mode(last: f64, mode: f64, at_mode: f64, ratio: impl Fn(f64) -> f64) -> Result<Table> {
+        let (first, pmf) = pmf_table(last, mode, at_mode, ratio)?;
+        let mut acc = 0.0;
+        let cdf = pmf
+            .into_iter()
+            .map(|p| {
+                acc += p;
+                acc
+            })
+            .collect();
+        Ok(Table { first, cdf })
+    }
+
+    /// All the probability on one outcome.
+    fn point(value: f64) -> Table {
+        Table { first: value, cdf: vec![1.0] }
+    }
+
+    /// A draw: the first outcome whose cumulative probability exceeds a uniform number (inversion).
+    fn draw(&self, r: &mut Rng) -> f64 {
+        let u = r.uniform() * self.cdf.last().copied().unwrap_or(1.0);
+        self.first + self.cdf.partition_point(|c| *c <= u).min(self.cdf.len().saturating_sub(1)) as f64
+    }
+}
+
+/// The numbers of a patterned sequence: `from` to `to` in steps, each number repeated, the whole
+/// sequence repeated.
+fn pattern(p: &Json) -> Result<Vec<f64>> {
+    let (from, to, step) = (num_or(p, "from", 1.0)?, num_or(p, "to", 1.0)?, num_or(p, "step", 1.0)?);
+    let (each, times) = (whole(p, "repeatEach", Some(1.0), 1.0)?, whole(p, "repeatSequence", Some(1.0), 1.0)?);
+    if step <= 0.0 || to < from {
+        return Err(EngineError::Other("The pattern must run from a smaller number to a larger one in positive steps.".into()));
+    }
+    let steps = ((to - from) / step + 1e-9).floor() + 1.0;
+    if steps * each * times > MAX_RANDOM as f64 {
+        return Err(EngineError::Other(format!("Random Number Generation writes at most {MAX_RANDOM} numbers.")));
+    }
+    let base: Vec<f64> = (0..steps as usize).map(|k| from + step * k as f64).collect();
+    let one: Vec<f64> = base.iter().flat_map(|v| std::iter::repeat_n(*v, each as usize)).collect();
+    Ok(one.repeat(times as usize))
+}
+
+/// Random Number Generation: `count` numbers from a distribution in each of `variables`
+/// columns, drawn row by row.
+fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
+    let vars = whole(p, "variables", Some(1.0), 1.0)?;
+    let dist = text(p, &["distribution"]).map(norm).unwrap_or_else(|| "uniform".into());
+    let cells = |rows: f64| {
+        if rows * vars > MAX_RANDOM as f64 {
+            Err(EngineError::Other(format!("Random Number Generation writes at most {MAX_RANDOM} numbers.")))
+        } else {
+            Ok(rows as usize)
+        }
+    };
+    let mut g = Grid::default();
+    let cols = vars as usize;
+    if dist == "patterned" {
+        let seq = pattern(p)?;
+        cells(seq.len() as f64)?;
+        for (i, x) in seq.iter().enumerate() {
+            for c in 0..cols {
+                g.num(idx(i), idx(c), *x);
+            }
+        }
+        return Ok(g);
+    }
+    let count = cells(whole(p, "count", None, 1.0)?)?;
+    let mut draw: Box<dyn FnMut(&mut Rng) -> f64> = match dist.as_str() {
+        "uniform" => {
+            let (a, b) = (num_or(p, "from", 0.0)?, num_or(p, "to", 1.0)?);
+            Box::new(move |r| a + (b - a) * r.uniform())
+        }
+        "normal" => {
+            let (m, sd) = (num_or(p, "mean", 0.0)?, num_or(p, "standardDeviation", 1.0)?);
+            if sd < 0.0 {
+                return Err(EngineError::Other("The standard deviation must not be negative.".into()));
+            }
+            Box::new(move |r| m + sd * r.normal())
+        }
+        "bernoulli" => {
+            let pr = probability(p)?;
+            Box::new(move |r| if r.uniform() < pr { 1.0 } else { 0.0 })
+        }
+        "binomial" => {
+            let (pr, n) = (probability(p)?, whole(p, "trials", Some(1.0), 1.0)?);
+            if n > MAX_OUTCOMES {
+                return Err(EngineError::Other(format!("The number of trials must be at most {MAX_OUTCOMES}.")));
+            }
+            // p = 0 and p = 1 are exact: every draw is 0 or n. Otherwise one BINOM.DIST value at
+            // the mode ⌊(n + 1)p⌋ anchors pmf(k + 1) = pmf(k) · (n − k)/(k + 1) · p/(1 − p).
+            let table = if pr == 0.0 {
+                Table::point(0.0)
+            } else if pr == 1.0 {
+                Table::point(n)
+            } else {
+                let mode = ((n + 1.0) * pr).floor().min(n);
+                let at_mode = f64_of(&call("BINOM.DIST", &[Value::Number(mode), Value::Number(n), Value::Number(pr), Value::Bool(false)]));
+                let odds = pr / (1.0 - pr);
+                Table::from_mode(n, mode, at_mode, |k| (n - k) / (k + 1.0) * odds)?
+            };
+            Box::new(move |r| table.draw(r))
+        }
+        "poisson" => {
+            let lambda = num_or(p, "lambda", 1.0)?;
+            if lambda <= 0.0 || lambda > 100_000.0 {
+                return Err(EngineError::Other("Lambda must be greater than 0 and at most 100000.".into()));
+            }
+            // One POISSON.DIST value at the mode ⌊λ⌋ anchors pmf(k + 1) = pmf(k) · λ/(k + 1).
+            let last = (lambda + 40.0 * lambda.sqrt() + 100.0).min(MAX_OUTCOMES);
+            let mode = lambda.floor();
+            let at_mode = f64_of(&call("POISSON.DIST", &[Value::Number(mode), Value::Number(lambda), Value::Bool(false)]));
+            let table = Table::from_mode(last, mode, at_mode, |k| lambda / (k + 1.0))?;
+            Box::new(move |r| table.draw(r))
+        }
+        "discrete" => {
+            let (si, r) = input_range(s, p, &["valueRange", "values"])?;
+            if r.width() != 2 {
+                return Err(EngineError::Other("The value and probability input range must have two columns.".into()));
+            }
+            let v = variables(s, si, r, false, false, &|_| String::new())?;
+            let (values, probs) = match v.as_slice() {
+                [a, b] => (numbers(&a.vals, false)?, numbers(&b.vals, false)?),
+                _ => return Err(non_numeric()),
+            };
+            if probs.iter().any(|x| !(0.0..=1.0).contains(x)) || (probs.iter().sum::<f64>() - 1.0).abs() > 1e-9 {
+                return Err(EngineError::Other("The probabilities must be between 0 and 1 and add up to 1.".into()));
+            }
+            let cdf: Vec<f64> = probs
+                .iter()
+                .scan(0.0, |acc, x| {
+                    *acc += x;
+                    Some(*acc)
+                })
+                .collect();
+            let table = Table { first: 0.0, cdf };
+            Box::new(move |r| values.get(table.draw(r) as usize).copied().unwrap_or(f64::NAN))
+        }
+        other => return Err(bad(CMD, format!("unknown distribution `{other}`"))),
+    };
+    let mut rng = Rng::new(seed);
+    for i in 0..count {
+        for c in 0..cols {
+            g.num(idx(i), idx(c), draw(&mut rng));
+        }
+    }
+    Ok(g)
+}
+
+/// Whether Random Number Generation writes a patterned sequence (which uses no seed).
+fn patterned(p: &Json) -> bool {
+    text(p, &["distribution"]).map(norm).is_some_and(|d| d == "patterned")
+}
+
+fn random_sampling(p: &Json) -> bool {
+    text(p, &["method"]).is_some_and(|m| m.eq_ignore_ascii_case("random"))
+}
+
+/// Sampling: every `period`-th value of the input, or `samples` values drawn at random with
+/// replacement, down one column. The input is read column by column (row by row for a single
+/// row); blanks are skipped.
+fn sampling(s: &Session, p: &Json, seed: Option<u64>) -> Result<Grid> {
+    let (si, r) = input_range(s, p, &["range", "input"])?;
+    let by_rows = r.height() == 1 && r.width() > 1;
+    let vars = variables(s, si, r, by_rows, flag(p, "labels"), &|_| String::new())?;
+    let mut x = Vec::new();
+    for v in &vars {
+        x.extend(numbers(&v.vals, true)?);
+    }
+    if x.is_empty() {
+        return Err(EngineError::Other("The input range holds no numbers.".into()));
+    }
+    let picked: Vec<f64> = match seed {
+        Some(seed) => {
+            let k = whole(p, "samples", None, 1.0)?;
+            if k > MAX_RANDOM as f64 {
+                return Err(EngineError::Other(format!("Sampling takes at most {MAX_RANDOM} samples.")));
+            }
+            let mut rng = Rng::new(seed);
+            (0..k as usize).filter_map(|_| x.get(rng.below(x.len() as u64) as usize).copied()).collect()
+        }
+        None => {
+            let period = whole(p, "period", None, 1.0)?;
+            if period > x.len() as f64 {
+                return Err(EngineError::Other("The period must be at most the number of input values.".into()));
+            }
+            x.iter().skip(period as usize - 1).step_by(period as usize).copied().collect()
+        }
+    };
+    let mut g = Grid::default();
+    for (i, v) in picked.iter().enumerate() {
+        g.num(idx(i), 0, *v);
+    }
+    Ok(g)
+}
+
 // ---------------------------------------------------------------- output
 
 /// Writes the report at `output` (refusing to overwrite data unless `overwrite`) or on a new
@@ -1150,6 +1842,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(json!({"tools": TOOLS.iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>()}));
     };
     let tool = tool_id(t).ok_or_else(|| bad(CMD, format!("unknown tool `{t}`")))?;
+    let mut seed = None;
     let g = match tool {
         "descriptive" => descriptive(s, p)?,
         "histogram" => histogram(s, p)?,
@@ -1162,16 +1855,38 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         "tTestPaired" | "tTestEqual" | "tTestUnequal" => t_test(s, p, tool)?,
         "fTest" => f_test(s, p)?,
         "anovaSingle" => anova_single(s, p)?,
+        "anovaTwoFactorWithout" => anova_two_factor_without(s, p)?,
+        "anovaTwoFactorWith" => anova_two_factor_with(s, p)?,
+        "zTest" => z_test(s, p)?,
+        "fourierAnalysis" => fourier_analysis(s, p)?,
+        "randomNumberGeneration" => {
+            // A patterned sequence draws nothing: its seed is neither read nor reported.
+            if !patterned(p) {
+                seed = Some(seed_of(p)?);
+            }
+            random_numbers(s, p, seed.unwrap_or(0))?
+        }
+        "sampling" => {
+            if random_sampling(p) {
+                seed = Some(seed_of(p)?);
+            }
+            sampling(s, p, seed)?
+        }
         _ => return Err(bad(CMD, format!("unknown tool `{t}`"))),
     };
-    write_report(s, p, tool, g)
+    let mut out = write_report(s, p, tool, g)?;
+    if let Some(k) = seed {
+        out["seed"] = json!(k);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use gridcraft_core::{CellRef, Value};
-    use serde_json::json;
+    use serde_json::{Value as Json, json};
 
+    use super::{MAX_OUTCOMES, call, f64_of, pmf_table};
     use crate::Session;
 
     fn s() -> Session {
@@ -1376,6 +2091,462 @@ mod tests {
     }
 
     #[test]
+    fn two_factor_anova_without_replication_matches_a_textbook_example() {
+        // Hardness testing, a randomized complete block design (Montgomery, Design and Analysis
+        // of Experiments, Example 4.1): four tips (rows) by four coupons (columns). Published:
+        // SS tips 0.385, SS coupons 0.825, SS error 0.080, SS total 1.290, F tips 14.44.
+        let mut s = s();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [
+                ["", "Coupon 1", "Coupon 2", "Coupon 3", "Coupon 4"],
+                ["Tip 1", 9.3, 9.4, 9.6, 10.0],
+                ["Tip 2", 9.4, 9.3, 9.8, 9.9],
+                ["Tip 3", 9.2, 9.4, 9.5, 9.7],
+                ["Tip 4", 9.7, 9.6, 10.0, 10.2],
+            ]}),
+        )
+        .unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "Anova: Two-Factor Without Replication", "range": "A1:E5", "labels": true, "output": "H1"}))
+            .unwrap();
+        assert_eq!(v(&s, "H1"), Value::text("Anova: Two-Factor Without Replication"));
+        assert_eq!((v(&s, "H4"), n(&s, "I4")), (Value::text("Tip 1"), 4.0));
+        assert!(close(n(&s, "J4"), 38.3, 1e-12), "sum of tip 1");
+        assert_eq!(v(&s, "H9"), Value::text("Coupon 1"));
+        assert!(close(n(&s, "K12"), 9.95, 1e-12), "average of coupon 4");
+        assert_eq!(v(&s, "H17"), Value::text("Rows"));
+        assert!(close(n(&s, "I17"), 0.385, 1e-12));
+        assert!(close(n(&s, "I18"), 0.825, 1e-12));
+        assert!(close(n(&s, "I19"), 0.080, 1e-12));
+        assert!(close(n(&s, "I21"), 1.290, 1e-12));
+        assert_eq!((n(&s, "J17"), n(&s, "J19"), n(&s, "J21")), (3.0, 9.0, 15.0));
+        assert!(close(n(&s, "L17"), 14.4375, 1e-9), "F for tips");
+        assert!(close(n(&s, "M17"), eval(&mut s, "=F.DIST.RT(14.4375,3,9)"), 1e-9));
+        assert!(close(n(&s, "N17"), eval(&mut s, "=F.INV.RT(0.05,3,9)"), 1e-9));
+        assert!(v(&s, "L19").is_empty(), "the error line has no F");
+    }
+
+    #[test]
+    fn two_factor_anova_with_replication_matches_a_textbook_example() {
+        let mut s = s();
+        // Battery life (Montgomery, Example 5.1): three materials (samples of four rows) by three
+        // temperatures (columns). Published: SS material 10683.72, SS temperature 39118.72,
+        // SS interaction 9613.78, SS error 18230.75 on 27 df, SS total 77646.97.
+        s.execute(
+            "range.setValues",
+            json!({"range": "A20", "values": [
+                ["Material", "15 F", "70 F", "125 F"],
+                ["Type 1", 130, 34, 20], ["", 155, 40, 70], ["", 74, 80, 82], ["", 180, 75, 58],
+                ["Type 2", 150, 136, 25], ["", 188, 122, 70], ["", 159, 106, 58], ["", 126, 115, 45],
+                ["Type 3", 138, 174, 96], ["", 110, 120, 104], ["", 168, 150, 82], ["", 160, 139, 60],
+            ]}),
+        )
+        .unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "anovaTwoFactorWith", "range": "A20:D32", "rowsPerSample": 4, "newSheet": "Battery"}))
+            .unwrap();
+        assert_eq!(v(&s, "Battery!A3"), Value::text("SUMMARY"));
+        assert_eq!((v(&s, "Battery!B3"), v(&s, "Battery!E3")), (Value::text("15 F"), Value::text("Total")));
+        assert_eq!(v(&s, "Battery!A4"), Value::text("Type 1"));
+        assert_eq!((n(&s, "Battery!B5"), n(&s, "Battery!B6"), n(&s, "Battery!E5")), (4.0, 539.0, 12.0));
+        assert_eq!(v(&s, "Battery!A22"), Value::text("Total"));
+        assert_eq!(n(&s, "Battery!B24"), 1738.0, "sum of the 15 F column");
+        assert_eq!(v(&s, "Battery!A29"), Value::text("ANOVA"));
+        assert_eq!(
+            (v(&s, "Battery!A31"), v(&s, "Battery!A34"), v(&s, "Battery!A36")),
+            (Value::text("Sample"), Value::text("Within"), Value::text("Total"))
+        );
+        assert!(close(n(&s, "Battery!B31"), 10683.72, 0.01));
+        assert!(close(n(&s, "Battery!B32"), 39118.72, 0.01));
+        assert!(close(n(&s, "Battery!B33"), 9613.78, 0.01));
+        assert!(close(n(&s, "Battery!B34"), 18230.75, 0.01));
+        assert!(close(n(&s, "Battery!B36"), 77646.97, 0.01));
+        assert_eq!((n(&s, "Battery!C33"), n(&s, "Battery!C34"), n(&s, "Battery!C36")), (4.0, 27.0, 35.0));
+        assert!(close(n(&s, "Battery!E31"), 7.91, 0.005) && close(n(&s, "Battery!E32"), 28.97, 0.005) && close(n(&s, "Battery!E33"), 3.56, 0.005));
+        assert!(close(n(&s, "Battery!F33"), 0.0186, 0.00005), "interaction P-value");
+        // Rows per sample must divide the data rows.
+        let bad = json!({"tool": "anovaTwoFactorWith", "range": "Sheet1!A20:D32", "rowsPerSample": 5, "output": "F60"});
+        assert!(s.execute("data.analysisToolPak", bad).is_err());
+    }
+
+    #[test]
+    fn z_test_with_known_variances() {
+        // x̄ = 3 (n = 5, σ² = 2), ȳ = 4 (n = 3, σ² = 6): z = −1/√2.4. Critical values from the
+        // standard normal table: 1.644854 (one tail) and 1.959964 (two tails) at α = 0.05.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["x", "y"], [1, 2], [2, 4], [3, 6], [4, null], [5, null]]})).unwrap();
+        s.execute(
+            "data.analysisToolPak",
+            json!({"tool": "zTest", "range1": "A1:A6", "range2": "B1:B6", "labels": true, "variance1": 2, "variance2": 6, "output": "D1"}),
+        )
+        .unwrap();
+        assert_eq!(v(&s, "D1"), Value::text("z-Test: Two Sample for Means"));
+        assert_eq!((v(&s, "E3"), v(&s, "F3")), (Value::text("x"), Value::text("y")));
+        assert_eq!((n(&s, "E4"), n(&s, "F4"), n(&s, "E5"), n(&s, "F6")), (3.0, 4.0, 2.0, 3.0));
+        let z = -1.0 / 2.4f64.sqrt();
+        assert!(close(n(&s, "E8"), z, 1e-12));
+        let tail = 1.0 - eval(&mut s, &format!("=NORM.S.DIST({},TRUE)", -z));
+        assert!(close(n(&s, "E9"), tail, 1e-12) && close(n(&s, "E9"), 0.2593, 1e-4));
+        assert!(close(n(&s, "E10"), 1.644_853_6, 1e-6));
+        assert!(close(n(&s, "E11"), 2.0 * tail, 1e-12));
+        assert!(close(n(&s, "E12"), 1.959_964_0, 1e-6));
+        // Unknown or non-positive variances are refused.
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "zTest", "range1": "A2:A6", "range2": "B2:B4", "output": "H1"})).is_err());
+        let zero = json!({"tool": "zTest", "range1": "A2:A6", "range2": "B2:B4", "variance1": 0, "variance2": 1, "output": "H1"});
+        assert!(s.execute("data.analysisToolPak", zero).is_err());
+    }
+
+    #[test]
+    fn fourier_analysis_matches_known_transforms() {
+        let mut s = s();
+        // DFT of 1, 2, 3, 4: 10, −2+2i, −2, −2−2i.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Signal"], [1], [2], [3], [4]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "Fourier Analysis", "range": "A1:A5", "labels": true, "output": "C1"})).unwrap();
+        let col = |s: &Session, c: &str, rows: std::ops::RangeInclusive<u32>| rows.map(|r| v(s, &format!("{c}{r}"))).collect::<Vec<_>>();
+        assert_eq!(col(&s, "C", 1..=5), ["Signal", "10", "-2+2i", "-2", "-2-2i"].map(Value::text).to_vec());
+        // The inverse transform of that output returns the signal.
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C2:C5", "inverse": true, "output": "E1"})).unwrap();
+        assert_eq!(col(&s, "E", 1..=4), ["1", "2", "3", "4"].map(Value::text).to_vec());
+        // cos(2πn/8) over eight points: N/2 = 4 at the first and last frequencies, 0 elsewhere.
+        let wave: Vec<Json> = (0..8).map(|k| json!([(std::f64::consts::PI * k as f64 / 4.0).cos()])).collect();
+        s.execute("range.setValues", json!({"range": "G1", "values": wave})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "G1:G8", "output": "H1"})).unwrap();
+        assert_eq!(col(&s, "H", 1..=8), ["0", "4", "0", "0", "0", "0", "0", "4"].map(Value::text).to_vec());
+        // Complex text input; a single value is its own transform.
+        s.execute("range.setValues", json!({"range": "J1", "values": [["3+4i"], ["1-i"]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "J1:J2", "output": "K1"})).unwrap();
+        assert_eq!(col(&s, "K", 1..=2), ["4+3i", "2+5i"].map(Value::text).to_vec());
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "J1", "output": "L1"})).unwrap();
+        assert_eq!(v(&s, "L1"), Value::text("3+4i"));
+        // Three values are not a power of two; a word is not a number.
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A2:A4", "output": "N1"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A4", "output": "N1"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A8192", "output": "N1"})).is_err());
+    }
+
+    #[test]
+    fn fourier_analysis_keeps_a_small_imaginary_part_beside_a_large_real_one() {
+        let mut s = s();
+        // With one value the transform is the identity and performs no arithmetic, so no part of
+        // the output is rounding noise: 1e14 + 1i comes back as 1e14 + 1i, forward and inverse.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["100000000000000+1i"]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1", "output": "C1"})).unwrap();
+        assert_eq!(eval(&mut s, "=IMREAL(C1)"), 1e14);
+        assert_eq!(eval(&mut s, "=IMAGINARY(C1)"), 1.0);
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C1", "inverse": true, "output": "E1"})).unwrap();
+        assert_eq!(eval(&mut s, "=IMREAL(E1)"), 1e14);
+        assert_eq!(eval(&mut s, "=IMAGINARY(E1)"), 1.0);
+    }
+
+    #[test]
+    fn fourier_analysis_round_trip_recovers_small_components_beside_a_large_dc() {
+        let mut s = s();
+        // x_n = 1e6 + 1e-7·cos(2πn/8) for n = 0 … 7. The transform of a constant c over N points is
+        // N·c at k = 0 and 0 elsewhere; the transform of a·cos(2πn/N) is a·N/2 at k = 1 and
+        // k = N − 1. So X_0 = 8·1e6 = 8e6, X_1 = X_7 = 1e-7·8/2 = 4e-7 and X_2 … X_6 = 0. The inputs
+        // are stored to within ulp(1e6)/2 ≈ 6e-11 and the first butterfly stage subtracts nearby
+        // numbers exactly, so the harmonics carry at most about 5e-10 of noise. The cleanup bound
+        // 8·ε·log2(8)·Σ|x_n| ≈ 8 · 2.2e-16 · 3 · 8e6 ≈ 4.3e-8 zeroes noise of that size and keeps
+        // 4e-7; a cutoff relative to the largest output (8e6 · 1e-13 = 8e-7) would zero the
+        // harmonics.
+        let x = |k: usize| 1e6 + 1e-7 * (std::f64::consts::PI * k as f64 / 4.0).cos();
+        let wave: Vec<Json> = (0..8).map(|k| json!([x(k)])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": wave})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A8", "output": "C1"})).unwrap();
+        assert!(close(eval(&mut s, "=IMREAL(C1)"), 8e6, 1e-6));
+        assert_eq!(eval(&mut s, "=IMAGINARY(C1)"), 0.0);
+        for cell in ["C2", "C8"] {
+            assert!(close(eval(&mut s, &format!("=IMREAL({cell})")), 4e-7, 5e-9), "{cell}");
+            assert_eq!(eval(&mut s, &format!("=IMAGINARY({cell})")), 0.0, "{cell}");
+        }
+        for r in 3..=7 {
+            assert_eq!(v(&s, &format!("C{r}")), Value::text("0"), "C{r}");
+        }
+        // The inverse of that output returns each x_n to within 2e-9 (2e-15 relative); without the
+        // harmonics every value would come back as 1e6, off by up to 1e-7.
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C1:C8", "inverse": true, "output": "E1"})).unwrap();
+        for k in 0..8 {
+            let cell = format!("E{}", k + 1);
+            assert!(close(eval(&mut s, &format!("=IMREAL({cell})")), x(k), 2e-9), "{cell}");
+            assert_eq!(eval(&mut s, &format!("=IMAGINARY({cell})")), 0.0, "{cell}");
+        }
+    }
+
+    /// Column `col` of sheet `sheet`, rows 1 to `rows`, as numbers.
+    fn numbers_of(s: &Session, sheet: &str, col: &str, rows: u32) -> Vec<f64> {
+        (1..=rows).map(|r| n(s, &format!("{sheet}!{col}{r}"))).collect()
+    }
+    fn mean_var(x: &[f64]) -> (f64, f64) {
+        let m = x.iter().sum::<f64>() / x.len() as f64;
+        (m, x.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (x.len() - 1) as f64)
+    }
+
+    #[test]
+    fn random_numbers_are_seeded_and_follow_their_distributions() {
+        let mut s = s();
+        let rng = |s: &mut Session, sheet: &str, p: Json| {
+            let mut p = p;
+            p["tool"] = json!("randomNumberGeneration");
+            p["newSheet"] = json!(sheet);
+            s.execute("data.analysisToolPak", p).unwrap()
+        };
+        // The same seed repeats the numbers; the result reports the seed.
+        let r = rng(&mut s, "U1", json!({"variables": 2, "count": 2000, "distribution": "uniform", "from": 2, "to": 4, "seed": 42}));
+        assert_eq!((r["seed"].as_u64(), r["range"].as_str()), (Some(42), Some("A1:B2000")));
+        rng(&mut s, "U2", json!({"variables": 2, "count": 2000, "distribution": "uniform", "from": 2, "to": 4, "seed": 42}));
+        let (a, b) = (numbers_of(&s, "U1", "B", 2000), numbers_of(&s, "U2", "B", 2000));
+        assert_eq!(a, b);
+        assert!(a.iter().all(|x| (2.0..4.0).contains(x)));
+        // Uniform on [2, 4]: mean 3, variance 1/3.
+        let (m, var) = mean_var(&a);
+        assert!((m - 3.0).abs() < 0.05 && (var - 1.0 / 3.0).abs() < 0.03, "{m} {var}");
+        let unseeded = rng(&mut s, "U3", json!({"count": 1}));
+        assert!(unseeded["seed"].as_u64().is_some(), "a seed is chosen and reported");
+        // Normal(10, 2): mean 10, variance 4.
+        rng(&mut s, "N", json!({"count": 20000, "distribution": "normal", "mean": 10, "standardDeviation": 2, "seed": 7}));
+        let (m, var) = mean_var(&numbers_of(&s, "N", "A", 20000));
+        assert!((m - 10.0).abs() < 0.05 && (var - 4.0).abs() < 0.15, "{m} {var}");
+        // Binomial(20, 0.3): mean np = 6, variance np(1 − p) = 4.2.
+        rng(&mut s, "B", json!({"count": 20000, "distribution": "binomial", "p": 0.3, "trials": 20, "seed": 8}));
+        let x = numbers_of(&s, "B", "A", 20000);
+        assert!(x.iter().all(|v| v.fract() == 0.0 && (0.0..=20.0).contains(v)));
+        let (m, var) = mean_var(&x);
+        assert!((m - 6.0).abs() < 0.08 && (var - 4.2).abs() < 0.2, "{m} {var}");
+        // Poisson(3.5): mean and variance 3.5.
+        rng(&mut s, "P", json!({"count": 20000, "distribution": "poisson", "lambda": 3.5, "seed": 9}));
+        let (m, var) = mean_var(&numbers_of(&s, "P", "A", 20000));
+        assert!((m - 3.5).abs() < 0.08 && (var - 3.5).abs() < 0.2, "{m} {var}");
+        // Bernoulli(0.25) and a discrete distribution on {1, 2} with P(2) = 0.75.
+        rng(&mut s, "Ber", json!({"count": 4000, "distribution": "bernoulli", "p": 0.25, "seed": 10}));
+        let ones = numbers_of(&s, "Ber", "A", 4000).iter().filter(|v| **v == 1.0).count();
+        assert!((900..1100).contains(&ones), "{ones}");
+        s.execute("range.setValues", json!({"range": "Sheet1!A1", "values": [[1, 0.25], [2, 0.75]]})).unwrap();
+        rng(&mut s, "D", json!({"count": 4000, "distribution": "discrete", "valueRange": "Sheet1!A1:B2", "seed": 11}));
+        let x = numbers_of(&s, "D", "A", 4000);
+        assert!(x.iter().all(|v| *v == 1.0 || *v == 2.0));
+        let twos = x.iter().filter(|v| **v == 2.0).count();
+        assert!((2900..3100).contains(&twos), "{twos}");
+        // Patterned: 1 to 3, each number twice, the sequence twice.
+        rng(&mut s, "Pat", json!({"distribution": "patterned", "from": 1, "to": 3, "step": 1, "repeatEach": 2, "repeatSequence": 2}));
+        assert_eq!(numbers_of(&s, "Pat", "A", 12), [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
+        assert!(v(&s, "Pat!A13").is_empty());
+        // Output is bounded; parameters are checked.
+        for p in [
+            json!({"count": 2_000_000}),
+            json!({"count": 1000, "variables": 2000}),
+            json!({"count": 0}),
+            json!({"count": 1.5}),
+            json!({"distribution": "uniform"}),
+            json!({"count": 1, "distribution": "bernoulli", "p": 2}),
+            json!({"count": 1, "distribution": "binomial", "trials": 1e9}),
+            json!({"count": 1, "distribution": "poisson", "lambda": -1}),
+            json!({"count": 1, "distribution": "normal", "standardDeviation": -1}),
+            json!({"count": 1, "distribution": "discrete", "valueRange": "Sheet1!A1:A2"}),
+            json!({"count": 1, "distribution": "patterned", "from": 1, "to": 1e9, "step": 1}),
+            json!({"count": 1, "distribution": "patterned", "from": 3, "to": 1}),
+            json!({"count": 1, "distribution": "weird"}),
+            json!({"count": 1, "seed": -1}),
+            json!({"count": 1, "seed": "abc"}),
+        ] {
+            let mut q = p.clone();
+            q["tool"] = json!("randomNumberGeneration");
+            q["output"] = json!("Sheet1!H1");
+            assert!(s.execute("data.analysisToolPak", q).is_err(), "{p}");
+        }
+        s.execute("range.setValues", json!({"range": "Sheet1!A1", "values": [[1, 0.5], [2, 0.6]]})).unwrap();
+        let p =
+            json!({"tool": "randomNumberGeneration", "count": 1, "distribution": "discrete", "valueRange": "Sheet1!A1:B2", "output": "Sheet1!H1"});
+        assert!(s.execute("data.analysisToolPak", p).is_err(), "probabilities must add up to 1");
+    }
+
+    #[test]
+    fn binomial_and_poisson_tables_agree_with_the_worksheet_functions() {
+        // The recurrence outward from the mode reproduces BINOM.DIST and POISSON.DIST at every
+        // tabulated outcome, the table carries the whole distribution, and it is only as wide as
+        // the outcomes that matter. The worksheet functions themselves are accurate to about
+        // n · ε for n trials (their logarithms are of that size), hence the moderate n and λ.
+        let binom = |k: f64, n: f64, p: f64| f64_of(&call("BINOM.DIST", &[Value::Number(k), Value::Number(n), Value::Number(p), Value::Bool(false)]));
+        for (n, p) in [(20.0f64, 0.3f64), (100.0, 0.5), (50.0, 0.9), (30.0, 0.01), (7.0, 0.999), (1.0, 0.5)] {
+            let mode = ((n + 1.0) * p).floor().min(n);
+            let odds = p / (1.0 - p);
+            let (first, pmf) = pmf_table(n, mode, binom(mode, n, p), |k| (n - k) / (k + 1.0) * odds).unwrap();
+            assert!(first >= 0.0 && first + pmf.len() as f64 - 1.0 <= n, "n={n} p={p}: {first} + {}", pmf.len());
+            for (i, got) in pmf.iter().enumerate() {
+                let k = first + i as f64;
+                let want = binom(k, n, p);
+                assert!(((got - want) / want).abs() < 1e-12, "n={n} p={p} k={k}: {got} vs {want}");
+            }
+            assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-12, "n={n} p={p}");
+        }
+        let poisson = |k: f64, lambda: f64| f64_of(&call("POISSON.DIST", &[Value::Number(k), Value::Number(lambda), Value::Bool(false)]));
+        for lambda in [0.2f64, 3.5, 50.0] {
+            let mode = lambda.floor();
+            let (first, pmf) = pmf_table(MAX_OUTCOMES, mode, poisson(mode, lambda), |k| lambda / (k + 1.0)).unwrap();
+            assert_eq!(first, 0.0);
+            for (i, got) in pmf.iter().enumerate() {
+                let want = poisson(i as f64, lambda);
+                assert!(((got - want) / want).abs() < 1e-12, "lambda={lambda} k={i}: {got} vs {want}");
+            }
+            assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-12, "lambda={lambda}");
+        }
+        // Binomial(1e6, 0.5): standard deviation 500, so the terms vanish within about 38
+        // standard deviations below the mode and the sum reaches 1 within about 8 above it:
+        // roughly 23,000 entries starting near 481,000, not 1,000,001 starting at 0.
+        let (n, p) = (1_000_000.0, 0.5);
+        let (first, pmf) = pmf_table(n, 500_000.0, binom(500_000.0, n, p), |k| (n - k) / (k + 1.0)).unwrap();
+        assert!((470_000.0..=490_000.0).contains(&first) && pmf.len() < 40_000, "{first} + {}", pmf.len());
+        // The anchor BINOM.DIST(500000, 1e6, 0.5) carries that function's error of about n · ε
+        // (its logarithms are near 7e5), which scales the whole table; draws divide by the total.
+        assert!((pmf.iter().sum::<f64>() - 1.0).abs() < 1e-8);
+        // A bad anchor or mode is refused rather than tabulated.
+        assert!(pmf_table(10.0, 5.0, f64::NAN, |_| 1.0).is_err());
+        assert!(pmf_table(10.0, 5.0, 0.0, |_| 1.0).is_err());
+        assert!(pmf_table(10.0, 11.0, 0.5, |_| 1.0).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn binomial_and_poisson_draws_at_the_limits_are_tabulated_quickly() {
+        let mut s = s();
+        // The tables cover the outcomes around the mode, not every one of the 1,000,001 for a
+        // million trials, so the largest inputs cost milliseconds. Binomial(1e6, 0.5) has mean
+        // 500000 and standard deviation 500: 1000 draws put the sample mean within 500/√1000 ≈ 16
+        // of it, so 100 is six standard errors. Poisson(1e5) has mean 1e5 and standard deviation
+        // 316: 1000 draws put the mean within 10, so 60 is six standard errors. With p = 1 every
+        // draw is exactly 1e6, with p = 0 exactly 0.
+        let mut draw = |sheet: &str, dist: Json| {
+            let mut dist = dist;
+            dist["tool"] = json!("randomNumberGeneration");
+            dist["count"] = json!(1000);
+            dist["seed"] = json!(3);
+            dist["newSheet"] = json!(sheet);
+            s.execute("data.analysisToolPak", dist).unwrap();
+        };
+        let start = std::time::Instant::now();
+        draw("Half", json!({"distribution": "binomial", "p": 0.5, "trials": 1_000_000}));
+        draw("Sure", json!({"distribution": "binomial", "p": 1, "trials": 1_000_000}));
+        draw("Never", json!({"distribution": "binomial", "p": 0, "trials": 1_000_000}));
+        draw("Pois", json!({"distribution": "poisson", "lambda": 100_000}));
+        let elapsed = start.elapsed();
+        let (m, _) = mean_var(&numbers_of(&s, "Half", "A", 1000));
+        assert!((m - 500_000.0).abs() < 100.0, "{m}");
+        assert!(numbers_of(&s, "Sure", "A", 1000).iter().all(|v| *v == 1_000_000.0));
+        assert!(numbers_of(&s, "Never", "A", 1000).iter().all(|v| *v == 0.0));
+        let (m, _) = mean_var(&numbers_of(&s, "Pois", "A", 1000));
+        assert!((m - 100_000.0).abs() < 60.0, "{m}");
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+    }
+
+    #[test]
+    fn sampling_periodic_and_random() {
+        let mut s = s();
+        let values: Vec<Json> = (1..=10).map(|k| json!([k])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "Sampling", "range": "A1:A10", "period": 3, "output": "C1"})).unwrap();
+        assert_eq!(numbers_of(&s, "Sheet1", "C", 3), [3.0, 6.0, 9.0]);
+        assert!(v(&s, "C4").is_empty());
+        let r = s
+            .execute(
+                "data.analysisToolPak",
+                json!({"tool": "sampling", "range": "A1:A10", "method": "random", "samples": 20, "seed": 5, "output": "D1"}),
+            )
+            .unwrap();
+        assert_eq!(r["seed"], 5);
+        s.execute(
+            "data.analysisToolPak",
+            json!({"tool": "sampling", "range": "A1:A10", "method": "random", "samples": 20, "seed": 5, "output": "E1"}),
+        )
+        .unwrap();
+        let (a, b) = (numbers_of(&s, "Sheet1", "D", 20), numbers_of(&s, "Sheet1", "E", 20));
+        assert_eq!(a, b, "the same seed repeats the sample");
+        assert!(a.iter().all(|x| x.fract() == 0.0 && (1.0..=10.0).contains(x)));
+        for p in [
+            json!({"range": "A1:A10", "period": 11}),
+            json!({"range": "A1:A10", "period": 0}),
+            json!({"range": "A1:A10"}),
+            json!({"range": "A1:A10", "method": "random", "samples": 2_000_000}),
+            json!({"range": "B1:B10", "period": 1}),
+        ] {
+            let mut q = p.clone();
+            q["tool"] = json!("sampling");
+            q["output"] = json!("G1");
+            assert!(s.execute("data.analysisToolPak", q).is_err(), "{p}");
+        }
+    }
+
+    #[test]
+    fn options_typed_as_text_that_is_not_a_number_are_refused() {
+        // A form sends its options as text; one that doesn't read as a number (a decimal comma,
+        // a typo) is an error, not the default, while a blank option takes the default.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [2, 4], [3, 6]]})).unwrap();
+        let rng = |dist: &str| json!({"tool": "randomNumberGeneration", "count": 3, "distribution": dist, "seed": 1, "outputTo": "newSheet"});
+        let z = json!({"tool": "zTest", "range1": "Sheet1!A1:A3", "range2": "Sheet1!B1:B3", "variance1": 1, "variance2": 4, "outputTo": "newSheet"});
+        let with = |base: &Json, key: &str, val: &str| {
+            let mut p = base.clone();
+            p[key] = json!(val);
+            p
+        };
+        let cases = [
+            (rng("uniform"), "from"),
+            (rng("uniform"), "to"),
+            (rng("normal"), "mean"),
+            (rng("normal"), "standardDeviation"),
+            (rng("bernoulli"), "p"),
+            (rng("binomial"), "p"),
+            (rng("poisson"), "lambda"),
+            (rng("patterned"), "step"),
+            (rng("uniform"), "variables"),
+            (z.clone(), "hypothesizedDifference"),
+        ];
+        for (base, key) in cases {
+            let e = s.execute("data.analysisToolPak", with(&base, key, "0,3")).unwrap_err().to_string();
+            assert!(e.contains(key), "{key}: {e}");
+            s.execute("data.analysisToolPak", with(&base, key, " ")).unwrap_or_else(|e| panic!("{key} blank: {e}"));
+        }
+    }
+
+    #[test]
+    fn an_alpha_that_is_not_a_number_is_refused() {
+        // A decimal comma or a typo in Alpha must not run the test at 0.05 without a word.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["", "c1", "c2"], ["r1", 1, 2], ["r1", 2, 4], ["r2", 3, 6], ["r2", 5, 9]]}))
+            .unwrap();
+        for base in [
+            json!({"tool": "zTest", "range1": "Sheet1!B2:B5", "range2": "Sheet1!C2:C5", "variance1": 1, "variance2": 4}),
+            json!({"tool": "anovaTwoFactorWithout", "range": "Sheet1!B2:C5"}),
+            json!({"tool": "anovaTwoFactorWith", "range": "Sheet1!A1:C5", "rowsPerSample": 2}),
+            json!({"tool": "tTestEqual", "range1": "Sheet1!B2:B5", "range2": "Sheet1!C2:C5"}),
+        ] {
+            let mut p = base.clone();
+            p["alpha"] = json!("0,01");
+            let e = s.execute("data.analysisToolPak", p).unwrap_err().to_string();
+            assert!(e.contains("alpha"), "{base}: {e}");
+            let mut p = base.clone();
+            p["alpha"] = json!("");
+            s.execute("data.analysisToolPak", p).unwrap_or_else(|e| panic!("{base} blank alpha: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_patterned_sequence_ignores_the_seed() {
+        // Patterned generation draws nothing, so a seed left in the form (even one that isn't a
+        // number) neither blocks the run nor shows up in the result.
+        let mut s = s();
+        for seed in [json!("abc"), json!(7)] {
+            let r = s
+                .execute(
+                    "data.analysisToolPak",
+                    json!({"tool": "randomNumberGeneration", "distribution": "patterned", "from": 1, "to": 3, "seed": seed, "outputTo": "newSheet"}),
+                )
+                .unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            assert!(r.get("seed").is_none(), "seed {seed}: {r}");
+        }
+        // A random distribution still refuses the bad seed.
+        let bad = json!({"tool": "randomNumberGeneration", "distribution": "uniform", "count": 2, "seed": "abc", "outputTo": "newSheet"});
+        assert!(s.execute("data.analysisToolPak", bad).is_err());
+    }
+
+    #[test]
     fn hostile_inputs_are_refused_without_panicking() {
         let mut s = s();
         let r = s.execute("data.analysisToolPak", json!({})).unwrap();
@@ -1399,6 +2570,11 @@ mod tests {
             json!({"tool": "anovaSingle", "range": "A1:A2"}),
             json!({"tool": "correlation", "range": "A1:B2", "alpha": "x", "groupedBy": 5}),
             json!({"tool": "descriptive", "range": "A1:A2", "confidence": 250}),
+            json!({"tool": "anovaTwoFactorWithout", "range": "A1:B2"}),
+            json!({"tool": "anovaTwoFactorWithout", "range": "A1:A2"}),
+            json!({"tool": "anovaTwoFactorWith", "range": "A1:B2", "rowsPerSample": 2}),
+            json!({"tool": "anovaTwoFactorWith", "range": "A1:B2", "rowsPerSample": 1e300}),
+            json!({"tool": "zTest", "range1": "A1", "range2": "A2", "variance1": "x", "variance2": -1}),
         ] {
             assert!(s.execute("data.analysisToolPak", p.clone()).is_err(), "{p}");
         }
