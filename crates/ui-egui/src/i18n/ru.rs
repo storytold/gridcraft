@@ -156,6 +156,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Проверка ошибок",
         "Trace Error" => "Источник ошибки",
         "Circular References" => "Циклические ссылки",
+        "Python Mode" => "Режим Python",
         "Evaluate Formula" => "Вычислить формулу",
         "Watch Window" => "Окно контрольных значений",
         "Calculation\nOptions" => "Параметры\nвычислений",

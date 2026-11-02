@@ -7,6 +7,52 @@ use gridcraft_engine::{
 };
 
 #[test]
+fn preview_and_fill_preserve_python_code_and_its_cached_value() {
+    use gridcraft_engine::model::{Cell, PyCode};
+    use std::sync::Arc;
+
+    for (mode, fill_mode) in [
+        ("series", FillMode::Series),
+        ("alternate", FillMode::Alternate),
+        ("copy", FillMode::Copy),
+        ("values", FillMode::ValuesOnly),
+        ("formats", FillMode::Formats),
+        ("extend", FillMode::Extend),
+    ] {
+        for (source, target, at) in [("B1", "B1:B4", "B4"), ("B4", "B1:B4", "B1"), ("B2", "B2:E2", "E2"), ("E2", "B2:E2", "B2")] {
+            let mut s = Session::new();
+            s.new_workbook();
+            let src = RangeRef::parse(source).unwrap();
+            let target_range = RangeRef::parse(target).unwrap();
+            let at = CellRef::parse(at).unwrap();
+            let original = Cell { value: Value::Number(7.0), py: Some(Arc::new(PyCode::new("xl('A1') * 2"))), ..Default::default() };
+            let destination = Cell { value: Value::Number(99.0), py: Some(Arc::new(PyCode::new("destination = 99"))), ..Default::default() };
+            // A loaded Python cell can hold cached output without a Python runtime.
+            let doc = s.doc_mut().unwrap();
+            let mut wb = (*doc.wb).clone();
+            wb.sheet_mut(0).unwrap().set_cell(src.start, original.clone());
+            wb.sheet_mut(0).unwrap().set_cell(at, destination.clone());
+            doc.wb = Arc::new(wb);
+            let before = doc.wb.clone();
+            let (revision, undo) = (doc.revision, doc.undo.len());
+            let expected = if fill_mode == FillMode::Formats { &destination } else { &original };
+            let preview = preview_cell(&doc.wb, 0, src, target_range, at, fill_mode).unwrap();
+            assert_eq!(&preview, expected, "{source} -> {target} ({mode})");
+            let doc = s.doc().unwrap();
+            assert!(Arc::ptr_eq(&before, &doc.wb), "prediction is read-only");
+            assert_eq!((doc.revision, doc.undo.len()), (revision, undo));
+            s.execute("edit.autoFill", serde_json::json!({"source": source, "target": target, "mode": mode})).unwrap();
+            let doc = s.doc().unwrap();
+            assert_eq!(doc.wb.active().unwrap().cell(at), Some(expected), "{source} -> {target} ({mode})");
+            assert_eq!(doc.wb.active().unwrap().cell(src.start), Some(&original));
+            assert_eq!(doc.undo.len(), undo + 1, "release makes one undo step");
+            s.execute("edit.undo", serde_json::json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().cell(at), Some(&destination));
+        }
+    }
+}
+
+#[test]
 fn preview_matches_committed_fill_in_both_directions_and_modes() {
     for (values, source, target, at, mode, expected) in [
         (serde_json::json!([[1], [2], [3]]), "B1:B3", "B1:B6", "B6", "series", "6"),

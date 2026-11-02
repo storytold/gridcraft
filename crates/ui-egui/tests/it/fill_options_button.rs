@@ -457,6 +457,63 @@ fn fill_preview_follows_direction_format_and_copy_modifier() {
 }
 
 #[test]
+fn fill_preview_copies_a_python_result_without_showing_its_code() {
+    use std::sync::Arc;
+    const CODE: &str = "secret_python = 7\nsecret_python";
+    for (protected, command) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut h = harness(|s| {
+            s.execute("python.set", json!({"cell": "B1", "code": CODE})).unwrap();
+            s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"hidden": true}}})).unwrap();
+            s.execute("home.formatCells", json!({"range": "B2:B4", "style": {"protection": {"locked": false}}})).unwrap();
+            s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+            if protected {
+                s.execute("review.protectSheet", json!({})).unwrap();
+            }
+            // The loaded workbook has a kept Python result; this test executes no Python.
+            let doc = s.doc_mut().unwrap();
+            let mut wb = (*doc.wb).clone();
+            wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("B1").unwrap()).unwrap().value = n(7.0);
+            doc.wb = Arc::new(wb);
+        });
+        h.state_mut().ui.status_bar = false;
+        h.run_steps(2);
+        let code_labels = h.query_all_by_label(CODE).count();
+        let result_labels = h.query_all_by_label("7").count();
+        assert_eq!(code_labels, usize::from(!protected), "only the unprotected formula bar shows source before the drag");
+        let doc = h.state().session.doc().unwrap();
+        let (wb, revision, undo) = (doc.wb.clone(), doc.revision, doc.undo.len());
+        let (start, end) = (corner(&h, "B1"), center(&h, "B4"));
+        press(&mut h, start, PointerButton::Primary);
+        let modifiers = Modifiers { ctrl: command, command, ..Modifiers::NONE };
+        h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+        move_to(&mut h, start, end);
+        h.run_steps(3);
+        assert_eq!(
+            h.query_all_by_label("7").count(),
+            result_labels + 1,
+            "protected={protected}, command={command}: the tooltip adds the cached result"
+        );
+        assert_eq!(h.query_all_by_label(CODE).count(), code_labels, "the preview adds no source label");
+        let doc = h.state().session.doc().unwrap();
+        assert!(Arc::ptr_eq(&wb, &doc.wb));
+        assert_eq!((doc.revision, doc.undo.len()), (revision, undo));
+        assert_eq!(value(&h, "B4"), Value::Empty);
+        if protected
+            && command
+            && let Ok(path) = std::env::var("GRIDCRAFT_FILL_PYTHON_SCREENSHOT")
+        {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(3);
+        let doc = h.state().session.doc().unwrap();
+        assert_eq!(doc.wb.active().unwrap().cell(CellRef::parse("B4").unwrap()).unwrap().py.as_ref().unwrap().code, CODE);
+        assert_eq!(value(&h, "B4"), n(7.0));
+        assert_eq!(doc.undo.len(), undo + 1);
+    }
+}
+
+#[test]
 fn fill_preview_keeps_protected_formulas_hidden() {
     for (protected, hidden, target_unlocked) in [(true, true, true), (true, true, false), (false, true, true), (true, false, true)] {
         let mut h = harness(|s| {
