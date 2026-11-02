@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial,
+    number_to_text,
+};
 
 // ---------------------------------------------------------------- items
 
@@ -157,12 +160,12 @@ pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDate
     items.into_iter().take(limit).map(|i| i.label).collect()
 }
 
-// ---------------------------------------------------------------- aggregation
-
 /// [`Source::date_cells`] for an ungrouped field; a date-grouped field doesn't use them.
 pub(super) fn date_flags(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup) -> Vec<bool> {
     if group == PivotDateGroup::None { src.date_cells(wb, col) } else { Vec::new() }
 }
+
+// ---------------------------------------------------------------- aggregation
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Acc {
@@ -280,9 +283,11 @@ pub(super) struct Node {
 /// Sorting of an axis by value fields: per axis field, the value field it sorts by and the path
 /// on the other axis whose values it uses (empty = the total); and the value of an axis path at
 /// an other-axis path.
+pub(super) type ValueLookup<'a> = &'a dyn Fn(&[u32], &[u32], usize) -> Option<f64>;
+
 pub(super) struct ByValue<'a> {
     pub(super) fields: Vec<Option<(usize, Vec<u32>)>>,
-    pub(super) value: &'a dyn Fn(&[u32], &[u32], usize) -> Option<f64>,
+    pub(super) value: ValueLookup<'a>,
 }
 
 pub(super) fn build_tree(paths: &[&[u32]], depth: usize, fields: &[&PivotField], items: &[FieldItems], by_value: &ByValue) -> Vec<Node> {

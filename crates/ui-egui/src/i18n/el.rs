@@ -389,10 +389,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Περισσότερες μορφές αριθμών…",
         "Financial" => "Οικονομικές",
         "Logical" => "Λογικές",
-        "Date &\nTime" => "Ημερομηνία και\nώρα",
-        "Lookup &\nReference" => "Αναζήτηση και\nαναφορά",
-        "Math &\nTrig" => "Μαθηματικά και\nτριγωνομετρία",
-        "More\nFunctions" => "Περισσότερες\nσυναρτήσεις",
+        "More Functions" => "Περισσότερες συναρτήσεις",
         "Page Layout|Orientation" => "Προσανατολισμός σελίδας",
         "Display theme" => "Θέμα εμφάνισης",
         "System" => "Σύστημα",
@@ -580,7 +577,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Επεξεργασία ονόματος",
         "New Name" => "Νέο όνομα",
         "Format Cells" => "Μορφοποίηση κελιών",
-        "Formula Builder" => "Δημιουργός τύπων",
         "Find and Replace" => "Εύρεση και αντικατάσταση",
         "Go To" => "Μετάβαση",
         "Insert Calculated Field" => "Εισαγωγή υπολογιζόμενου πεδίου",
@@ -983,6 +979,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
             "Ένα αρχείο CSV, μια ιστοσελίδα ή ένα PDF είναι αντίγραφο: το βιβλίο εργασίας διατηρεί το δικό του αρχείο."
         }
+        "Record Macro" => "Καταγραφή μακροεντολής",
+        "Stop Recording" => "Διακοπή καταγραφής",
+        "Use Relative References" => "Χρήση σχετικών αναφορών",
+        "Run\nMacro" => "Εκτέλεση μακροεντολής",
+        "Macros…" => "Μακροεντολές…",
+        "Recording" => "Καταγραφή",
+        "New Macro" => "Νέα μακροεντολή",
+        "Show" => "Εμφάνιση",
         _ => return None,
     })
 }

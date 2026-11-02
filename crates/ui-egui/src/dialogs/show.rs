@@ -1,5 +1,5 @@
 use super::about::about;
-use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
+use super::analysis::{analysis_toolpak, cancel_solver_options, goal_seek, in_solver_options, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
@@ -7,18 +7,25 @@ use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
-use super::macros::macros;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
-use super::*;
+use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
+/// Unchanged hyperlink display text is omitted so its number or formula stays intact.
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "insertLink" => {
+            if d.original_link_text.as_deref().is_some_and(|text| d.values.get("text").and_then(Json::as_str) == Some(text))
+                && let Some(m) = v.as_object_mut()
+            {
+                m.remove("text");
+            }
+        }
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
                 m.remove("action");
@@ -107,6 +114,21 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let home = app.ui_window();
+    // The macro step editor is a large resizable window of its own.
+    if d.name == "macroEditor" {
+        let mut open = true;
+        crate::macro_editor::window(app, ctx, &mut d, &mut open);
+        if !open {
+            app.macros.editor = None;
+            app.grid.macro_overlay = None;
+        } else if app.ui_window() != home {
+            // Something run from the editor switched windows: the editor stays in its own.
+            app.return_dialog(home, d);
+        } else {
+            app.dialog = Some(d);
+        }
+        return;
+    }
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -116,7 +138,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -158,7 +181,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -176,7 +199,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
-                "macros" => macros(app, ui, &mut d),
+                "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -352,7 +376,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
-        open = false;
+        // In Solver Options, Escape (or closing the window) cancels the options only.
+        if in_solver_options(&d) {
+            cancel_solver_options(&mut d);
+        } else {
+            open = false;
+        }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
@@ -440,7 +469,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
 /// Enter sets the width, as in Excel.
 /// Keeps asking until the field really has focus: a new window's first frame is an invisible
 /// sizing pass where a focus request is ignored.
-fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
+pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     if !d.focus_first_field {
         return;
     }
@@ -537,7 +566,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
-                            egui::ComboBox::from_id_salt(("dataValidation", key))
+                            craft_ui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)
                                 .width(300.0)
                                 .show_ui(ui, |ui| {

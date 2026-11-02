@@ -30,6 +30,51 @@ pub enum ShowObjects {
     None,
 }
 
+/// The workbook window's display settings from `<workbookView>` (Excel: File › Options ›
+/// Advanced, "Display options for this workbook"): whether the window shows the sheet tabs
+/// and the two scroll bars, and how much of the horizontal bar the tabs take (`tabRatio`,
+/// thousandths of the bar; the format's default is 600). XLSX I/O normalizes this
+/// share to 0–1000, including values supplied directly through the model.
+///
+/// The values are modelled so an open + save keeps them — a workbook Excel saved with the
+/// tabs hidden must not come back with them shown and the settings gone. The app does not
+/// act on them yet and there is no Options control for them; that is the other half of
+/// storytold/gridcraft#3057.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkbookView {
+    #[serde(default = "yes")]
+    pub show_sheet_tabs: bool,
+    #[serde(default = "yes")]
+    pub show_horizontal_scroll: bool,
+    #[serde(default = "yes")]
+    pub show_vertical_scroll: bool,
+    #[serde(default = "default_tab_ratio")]
+    pub tab_ratio: u32,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_tab_ratio() -> u32 {
+    600
+}
+
+impl Default for WorkbookView {
+    fn default() -> Self {
+        WorkbookView { show_sheet_tabs: true, show_horizontal_scroll: true, show_vertical_scroll: true, tab_ratio: default_tab_ratio() }
+    }
+}
+
+impl WorkbookView {
+    /// The entire bar, in thousandths: the upper bound used by XLSX I/O.
+    pub const MAX_TAB_RATIO: u32 = 1000;
+
+    fn is_default(&self) -> bool {
+        *self == WorkbookView::default()
+    }
+}
+
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
@@ -150,6 +195,9 @@ pub struct Workbook {
     pub show_objects: ShowObjects,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
+    /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
+    #[serde(default, skip_serializing_if = "WorkbookView::is_default")]
+    pub view: WorkbookView,
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
@@ -181,6 +229,20 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
+    /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
+    #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
+    pub macros: crate::macros::Macros,
+    /// The `macros` entries of a JSON file as read, before the engine checks each one on its own
+    /// and moves it into `macros`, so one damaged or newer macro doesn't stop the file opening.
+    /// Never written.
+    #[serde(rename = "macros", default, skip_serializing, deserialize_with = "crate::macros::entries")]
+    pub macros_read: Vec<serde_json::Value>,
+    /// Macros in a newer format than this build reads, as the file held them. They are never read,
+    /// listed or run; a save writes them back unchanged, so the newer build gets them back whole.
+    /// Shared between snapshots, as nothing changes them.
+    #[serde(skip)]
+    pub macros_unread: Arc<Vec<serde_json::Value>>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -270,6 +332,7 @@ impl Workbook {
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
             active_sheet: ActiveSheet::default(),
+            view: WorkbookView::default(),
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
@@ -278,6 +341,9 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            macros: crate::macros::Macros::default(),
+            macros_read: vec![],
+            macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
             source_path: None,
@@ -439,7 +505,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phonetics_are_additive_in_json() {
+    fn phonetics_are_additive_in_json() -> Result<(), Box<dyn std::error::Error>> {
         let mut wb = Workbook::new();
         assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
         wb.phonetics.push(PhoneticString {
@@ -447,12 +513,13 @@ mod tests {
             runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
             props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
         });
-        let json = serde_json::to_string(&wb).expect("serialize");
-        assert_eq!(serde_json::from_str::<Workbook>(&json).expect("deserialize").phonetics, wb.phonetics);
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.phonetics, wb.phonetics);
         // JSON written before the field existed still loads.
-        let mut value: serde_json::Value = serde_json::from_str(&json).expect("value");
-        value.as_object_mut().expect("an object").remove("phonetics");
-        assert!(serde_json::from_value::<Workbook>(value).expect("older JSON").phonetics.is_empty());
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().ok_or("none")?.remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
     }
 
     #[test]

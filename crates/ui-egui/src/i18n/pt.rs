@@ -291,11 +291,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Long Date" => "Data Por Extenso",
         "More Number Formats…" => "Mais Formatos de Número…",
         "Financial" => "Financeira",
+        "Recently Used" => "Usadas Recentemente",
         "Logical" => "Lógica",
-        "Date &\nTime" => "Data e\nHora",
-        "Lookup &\nReference" => "Pesquisa e\nReferência",
-        "Math &\nTrig" => "Matemática e\nTrigonometria",
-        "More\nFunctions" => "Mais\nFunções",
+        "More Functions" => "Mais Funções",
         "Page Layout|Orientation" => "Orientação",
         "Display theme" => "Tema de exibição",
         "Animations" => "Animações",
@@ -471,7 +469,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Editar Nome",
         "New Name" => "Novo Nome",
         "Format Cells" => "Formatar Células",
-        "Formula Builder" => "Construtor de Fórmulas",
         "Find and Replace" => "Localizar e Substituir",
         "Go To" => "Ir para",
         "Insert Calculated Field" => "Inserir Campo Calculado",
@@ -982,6 +979,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "Record Macro" => "Gravar Macro",
+        "Stop Recording" => "Parar Gravação",
+        "Use Relative References" => "Usar Referências Relativas",
+        "Run\nMacro" => "Executar Macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Gravando",
+        "New Macro" => "Nova Macro",
+        "Show" => "Mostrar",
         _ => return None,
     })
 }

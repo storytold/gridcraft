@@ -104,6 +104,16 @@ pub struct Tokens {
     pub sheet_control_text: Color32,
     /// A placeholder fill on the sheet (a picture that has not loaded).
     pub sheet_track: Color32,
+    /// The macro recording dot (Record Macro, the status bar).
+    pub recording: Color32,
+    /// A breakpoint dot in the macro step editor's gutter.
+    pub breakpoint: Color32,
+    /// Macro overlays on the sheet (Check and debugging): the inputs, the cells the macro writes,
+    /// the cells it would write over, and the current step's target. Sheet colours.
+    pub sheet_macro_input: Color32,
+    pub sheet_macro_footprint: Color32,
+    pub sheet_macro_conflict: Color32,
+    pub sheet_macro_target: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -131,6 +141,12 @@ const fn rgb(hex: u32) -> Color32 {
 /// theme). The light theme's formula bar is white too, so it uses them as well.
 const SHEET_REF_COLORS: [Color32; 8] =
     [rgb(0x2E6FD8), rgb(0xD03C3C), rgb(0x7A4FC9), rgb(0x23803D), rgb(0xB5531A), rgb(0x16798A), rgb(0xB83B8E), rgb(0x77681A)];
+/// Macro overlays on the sheet, the same in both themes (the sheet stays white).
+const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
+const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
+const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
+const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Syntax {
@@ -222,6 +238,12 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            recording: pick(dark, rgb(0xC42B1C), rgb(0xF1705F)),
+            breakpoint: pick(dark, rgb(0xD13438), rgb(0xF1707A)),
+            sheet_macro_input: SHEET_MACRO_INPUT,
+            sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
+            sheet_macro_conflict: SHEET_MACRO_CONFLICT,
+            sheet_macro_target: SHEET_MACRO_TARGET,
         }
     }
 
@@ -363,6 +385,22 @@ mod contrast_tests {
         add("selection border on sheet", t.sel_border, t.grid_bg, GLYPH);
         add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
         add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
+        add("recording dot on ribbon", t.recording, t.ribbon, GLYPH);
+        add("recording dot on status bar", t.recording, t.status_bar, GLYPH);
+        for (name, c) in [
+            ("macro input", t.sheet_macro_input),
+            ("macro footprint", t.sheet_macro_footprint),
+            ("macro conflict", t.sheet_macro_conflict),
+            ("macro target", t.sheet_macro_target),
+        ] {
+            add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
+        }
+        // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
+        add("breakpoint on window", t.breakpoint, t.window, GLYPH);
+        add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
+        add("text on current step", t.text, t.accent_soft, TEXT);
+        add("current step arrow", t.accent, t.accent_soft, GLYPH);
+        add("error marker on window", t.danger, t.window, GLYPH);
         v
     }
 
@@ -396,6 +434,10 @@ mod contrast_tests {
         assert_eq!(
             (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track),
             (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track)
+        );
+        assert_eq!(
+            (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),
+            (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
         );
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
