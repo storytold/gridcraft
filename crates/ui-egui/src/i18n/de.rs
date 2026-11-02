@@ -976,7 +976,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Right Border" => "Rahmen rechts",
         "Rounded Rectangle" => "Abgerundetes Rechteck",
         "Row Height" => "Zeilenhöhe",
-        "Row height (pixels):" => "Zeilenhöhe (Pixel):",
+        "Row height (points):" => "Zeilenhöhe (Punkte):",
         "Rows" => "Zeilen",
         "Sample" => "Stichprobe",
         "Save (⌘S)" => "Speichern (⌘S)",
