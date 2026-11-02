@@ -110,7 +110,9 @@ fn python_mode_starts_no_edit_on_hidden_code() {
     h.get_by_label("Python Mode").click();
     h.run_steps(3);
     assert_eq!(editor(&h), None, "the PY badge");
-    assert_eq!(h.state_mut().run("ui.pythonMode", json!({"on": true})).unwrap()["on"], false, "ui.pythonMode");
+    let refused = h.state_mut().run("ui.pythonMode", json!({"on": true})).expect_err("ui.pythonMode");
+    assert!(refused.contains("hidden") && !refused.contains("secret"), "{refused}");
+    assert_eq!(editor(&h), None, "ui.pythonMode");
     assert!(!bar_shows_code(&h));
     // Ctrl+Enter with no edit open writes nothing over the code.
     press(&mut h, Key::Enter, Modifiers::COMMAND);

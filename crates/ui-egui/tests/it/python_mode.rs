@@ -295,6 +295,31 @@ fn ui_python_mode_switches_from_the_control_channel_without_a_dialog() {
     assert!(h.state().editor.is_none());
 }
 
+#[test]
+fn a_refused_ui_python_mode_start_is_an_error_with_the_reason() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("python.set", json!({"cell": "C1", "code": "secret = 1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "C1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let mut h = harness(s);
+    // A locked cell (B1), a cell inside a spill (A2), code hidden on a protected sheet (C1), and a
+    // draft typed inside a spill: each is refused with an error, by `on: true` and by a switch.
+    for (cell, typed, says) in [("B1", None, "protected"), ("A2", None, "spill"), ("C1", None, "hidden"), ("A2", Some("5"), "spill")] {
+        h.state_mut().cancel_edit();
+        h.state_mut().run("ui.message.dismiss", json!({})).unwrap();
+        h.state_mut().run("selection.set", json!({"cell": cell})).unwrap();
+        if let Some(text) = typed {
+            h.state_mut().begin_edit(Some(text.into()), false);
+        }
+        for params in [json!({"on": true}), json!({})] {
+            let e = h.state_mut().run("ui.pythonMode", params.clone()).expect_err(cell);
+            assert!(e.contains(says), "{cell} {params}: {e}");
+            assert_ne!(mode(&h), Some(true), "{cell}");
+        }
+    }
+}
+
 /// Clicks the middle of `a1` on screen.
 fn click_cell(h: &mut Harness, a1: &str) {
     let at = {

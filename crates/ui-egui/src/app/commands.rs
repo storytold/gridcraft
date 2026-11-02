@@ -248,10 +248,16 @@ impl SheetApp {
             }
             "ui.pythonMode" => {
                 // `{"on": true}` starts Python mode on the active cell (or switches the edit in
-                // progress to it), `{"on": false}` leaves it; without `on` it switches.
+                // progress to it), `{"on": false}` leaves it; without `on` it switches. A start
+                // that is refused (a locked cell, a cell inside a spill, hidden code) is an error
+                // with the reason, not `{"on": false}`.
                 let on = self.editor.as_ref().is_some_and(|e| e.python);
-                if p.get("on").and_then(Json::as_bool).unwrap_or(!on) != on {
+                let want = p.get("on").and_then(Json::as_bool).unwrap_or(!on);
+                if want != on {
                     self.toggle_python_mode();
+                    if want && !self.editor.as_ref().is_some_and(|e| e.python) {
+                        return Some(Err(self.python_mode_refused()));
+                    }
                 }
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }

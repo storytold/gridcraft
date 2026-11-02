@@ -340,6 +340,23 @@ impl SheetApp {
         doc.and_then(|d| d.wb.sheet(ed.sheet)).is_some_and(|sh| sh.spill_anchor(ed.cell).is_some())
     }
 
+    /// Why Python mode didn't start where a command asked for it: the cell lies inside another
+    /// cell's spill, it is locked on a protected sheet, or its code is hidden there.
+    pub(crate) fn python_mode_refused(&self) -> String {
+        let in_spill = match self.editor.as_ref() {
+            Some(ed) => self.draft_in_spill(ed),
+            None => formula_bar::active_spill_anchor(self).is_some(),
+        };
+        if in_spill {
+            return "Python mode doesn't start on a cell inside another cell's spill.".into();
+        }
+        let locked = self.session.active().and_then(|d| {
+            let at = d.wb.active().and_then(|sh| sh.merge_at(d.selection.active)).map(|m| m.start).unwrap_or(d.selection.active);
+            self.session.locked_cell_message(d.wb.active_sheet(), at)
+        });
+        locked.unwrap_or_else(|| "Python mode can't start on this cell: its code is hidden on a protected sheet.".into())
+    }
+
     /// Commits a Python mode edit through `python.set`, on the sheet the edit started on; with no
     /// code left, a Python cell is cleared through `cell.set`. When the command refuses (code
     /// longer than a cell holds), its message shows and the edit stays open with the code as

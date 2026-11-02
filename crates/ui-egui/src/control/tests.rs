@@ -987,7 +987,7 @@ fn python_ui_commands_are_listed() {
         panic!("command discovery must return immediately");
     };
     let commands = reply["result"].as_array().cloned().unwrap_or_default();
-    let listed = [("ui.pythonMode", "{on?: bool} (toggles without it) → {on}")];
+    let listed = [("ui.pythonMode", "{on?: bool} (toggles without it) → {on}; a refused start is an error")];
     for (id, docs) in listed {
         let command = commands.iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("engine.commands lists {id}"));
         assert_eq!(command["ui"], true, "{id}");
@@ -1245,7 +1245,10 @@ fn python_mode_does_not_start_on_a_draft_typed_inside_a_spill() {
     let mut app = SheetApp::new(session, crate::Services::default());
     let ctx = egui::Context::default();
     call(&mut app, &ctx, "ui.edit.begin", json!({"text": "5"}));
-    execute(&mut app, &ctx, "ui.pythonMode", json!({"on": true}));
+    let Outcome::Done(reply) = handle(&mut app, &ctx, "engine.execute", &json!({"command": "ui.pythonMode", "params": {"on": true}})) else {
+        panic!("ui.pythonMode answers at once");
+    };
+    assert_eq!(reply["ok"], false, "the start is refused: {reply}");
     assert!(app.editor.as_ref().is_some_and(|e| !e.python && e.text == "5"), "the draft stays an ordinary entry");
     call(&mut app, &ctx, "ui.edit.commit", json!({"move": "none"}));
     let a2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 0)).cloned());
