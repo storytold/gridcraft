@@ -232,6 +232,23 @@ fn is_program(path: &Path) -> bool {
     PROGRAMS.contains(&ext.as_str())
 }
 
+/// Whether `text` is a full path (rooted, or a drive path) rather than a link's text. The path a
+/// person confirmed in the Open Hyperlink dialog is one: it is already resolved, so a `#` in it is
+/// part of a file name, not the start of a fragment.
+pub fn is_full_path(text: &str) -> bool {
+    let b = text.as_bytes();
+    matches!(b.first(), Some(b'/' | b'\\')) || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\'))
+}
+
+/// Resolves the full path of a file or folder that was already confirmed, as it is: no link
+/// parsing, so a literal `#` stays in the name. The same checks as [`resolve_local`] apply.
+pub fn resolve_full_path(path: &str) -> Result<PathBuf, String> {
+    if !is_full_path(path) {
+        return Err("Only a full path can be opened this way.".into());
+    }
+    resolve_local(None, path)
+}
+
 /// The file or folder a [`LinkKind::Local`] names, ready for the system: relative paths are taken
 /// from the workbook's folder (`base`, the folder of the saved file), `~/` from the home folder.
 /// Refuses what doesn't exist, programs and scripts (by name, by what a link resolves to, and on

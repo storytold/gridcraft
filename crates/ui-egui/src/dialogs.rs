@@ -497,7 +497,7 @@ impl Dialog {
                 } else {
                     "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook."
                 };
-                Dialog::form("openLink", "Open Hyperlink", "link.open", vec![Note(format!("{ask}\n\n{url}"))], json!({"url": url}))
+                Dialog::form("openLink", "Open Hyperlink", "link.open", vec![Note(format!("{ask}\n\n{url}"))], json!({"url": url, "local": local}))
             }
             "insertLink" => {
                 let mut d = Dialog::form(

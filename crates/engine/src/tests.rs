@@ -4606,6 +4606,11 @@ fn link_open_opens_existing_local_files_and_folders_but_not_programs() {
     std::fs::write(dir.join("reports").join("q1.txt"), "x").unwrap();
     std::fs::write(dir.join("setup.exe"), "x").unwrap();
     let file = dir.join("reports").join("q1.txt");
+    // The host gets the resolved path (a temp dir may sit under a symlink, as on macOS), without a Windows `\\?\` drive prefix.
+    let expected = |p: &std::path::Path| {
+        let real = std::fs::canonicalize(p).unwrap().to_string_lossy().into_owned();
+        real.strip_prefix("\\\\?\\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map_or_else(|| real.clone(), str::to_owned)
+    };
     let mut s = s();
     // A hyperlink to a file, a `file:` address and a =HYPERLINK() formula all open it (#2596).
     s.execute("cell.set", json!({"cell": "A1", "input": "q1"})).unwrap();
@@ -4618,14 +4623,29 @@ fn link_open_opens_existing_local_files_and_folders_but_not_programs() {
     s.execute("cell.set", json!({"cell": "A3", "input": format!("=HYPERLINK(\"{}\")", "setup.exe")})).unwrap();
     s.take_ui_requests();
     s.execute("link.open", json!({"cell": "A1"})).unwrap();
-    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(file.to_string_lossy().into_owned())]);
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&file))]);
     s.execute("link.open", json!({"cell": "A2"})).unwrap();
-    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(dir.join("reports").to_string_lossy().into_owned())]);
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&dir.join("reports")))]);
     let url = format!("file://{}", file.to_str().unwrap());
     if cfg!(unix) {
         s.execute("link.open", json!({"url": url})).unwrap();
-        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(file.to_string_lossy().into_owned())]);
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&file))]);
     }
+    // A `#` in a file name (`%23` in a `file:` address) stays in the name: the path the dialog
+    // confirmed is opened as it is, not cut at the `#` like link text.
+    let hashed = dir.join("reports").join("q1#draft.txt");
+    std::fs::write(&hashed, "x").unwrap();
+    if cfg!(unix) {
+        let url = format!("file://{}", dir.join("reports").join("q1%23draft.txt").to_str().unwrap());
+        s.execute("link.open", json!({"url": url})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&hashed))]);
+    }
+    s.execute("link.open", json!({"url": hashed.to_str().unwrap(), "local": true})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&hashed))]);
+    assert!(s.execute("link.open", json!({"url": dir.join("reports").join("q1#missing.txt").to_str().unwrap(), "local": true})).is_err());
+    assert!(s.execute("link.open", json!({"url": "q1.txt", "local": true})).is_err(), "local takes a full path");
+    assert!(s.execute("link.open", json!({"url": dir.join("setup.exe").to_str().unwrap(), "local": true})).is_err());
+    assert!(s.take_ui_requests().is_empty());
     // Programs, missing files and network shares are still refused.
     assert!(s.execute("link.open", json!({"cell": "A3"})).is_err());
     assert!(s.execute("link.open", json!({"url": dir.join("setup.exe").to_str().unwrap()})).is_err());
@@ -4640,7 +4660,7 @@ fn link_open_opens_existing_local_files_and_folders_but_not_programs() {
     s.execute("file.saveAs", json!({"path": book.to_str().unwrap()})).unwrap();
     s.take_ui_requests();
     s.execute("link.open", json!({"cell": "B1"})).unwrap();
-    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(dir.join("reports/q1.txt").to_string_lossy().into_owned())]);
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(expected(&dir.join("reports/q1.txt")))]);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

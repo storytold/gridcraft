@@ -179,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\" | \"/full/path\", local?: bool, cell?} (default: the cell's link); http, https, mailto and existing local files and folders are opened, any other scheme is an error; `local: true` takes `url` as a full path, as the Open Hyperlink dialog confirmed it (a `#` is part of the name); the UI asks before opening",
             has_doc,
             open_link
         ),
@@ -1342,6 +1342,15 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
 /// `=HYPERLINK()` formula. Opens no dialog; the interactive click asks for confirmation first, in
 /// the UI.
 fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
+    // The path the Open Hyperlink dialog showed: opened as it is, not read as link text.
+    if p.get("local").and_then(Json::as_bool) == Some(true)
+        && let Some(path) = str_param(p, "url").or_else(|| str_param(p, "target"))
+    {
+        let full = crate::links::resolve_full_path(path).map_err(EngineError::Other)?;
+        let opened = full.to_string_lossy().into_owned();
+        s.ui_requests.push(crate::UiRequest::OpenUrl(opened.clone()));
+        return Ok(json!({"opened": opened}));
+    }
     let (target, external) = match str_param(p, "url").or_else(|| str_param(p, "target")) {
         Some(t) => (t.to_string(), false),
         None => {

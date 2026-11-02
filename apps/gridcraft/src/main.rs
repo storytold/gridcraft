@@ -207,9 +207,17 @@ fn services() -> Services {
 fn open_with_system(target: &str) {
     // Last line of defence behind `link.open` and the click prompt: the system only ever gets
     // http, https and mailto addresses and existing documents and folders (never programs).
-    let target = match gridcraft_engine::links::classify(target) {
+    // A full path is one `link.open` already resolved: it is not link text, so a `#` in it is kept.
+    let kind = if gridcraft_engine::links::is_full_path(target) {
+        gridcraft_engine::links::LinkKind::Local(target.to_string())
+    } else {
+        gridcraft_engine::links::classify(target)
+    };
+    let target = match kind {
         gridcraft_engine::links::LinkKind::External(url) => url,
-        gridcraft_engine::links::LinkKind::Local(path) if std::path::Path::new(&path).is_absolute() => {
+        gridcraft_engine::links::LinkKind::Local(path)
+            if std::path::Path::new(&path).is_absolute() || gridcraft_engine::links::is_full_path(&path) =>
+        {
             match gridcraft_engine::links::resolve_local(None, &path) {
                 Ok(full) => full.to_string_lossy().into_owned(),
                 Err(why) => {
