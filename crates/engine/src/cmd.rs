@@ -40,7 +40,10 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Ribbon/menu placement, e.g. `["Home", "Font"]`. Empty = not in menus.
     pub menu: &'static [&'static str],
+    /// Portable notation: `Cmd` is ⌘ on macOS and Ctrl elsewhere.
     pub shortcut: Option<&'static str>,
+    /// macOS override when its key differs. Equal to `shortcut` marks a Mac-only shortcut
+    /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
     pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
