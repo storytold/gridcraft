@@ -69,7 +69,7 @@ impl<'a> SheetKept<'a> {
                     if let Some(mut x) = remap(&e.xml, &self.ids) {
                         if *slot == "controls"
                             && !placed
-                            && let Some(i) = last_close_tag(&x, "controls")
+                            && let Some(i) = controls_insert_at(&x)
                         {
                             x.insert_str(i, controls);
                             placed = true;
@@ -87,13 +87,39 @@ impl<'a> SheetKept<'a> {
     }
 }
 
-/// The byte offset of the last close tag of `local` in `x`, whatever namespace prefix the file
-/// gives it (`</controls>`, `</x:controls>`).
-fn last_close_tag(x: &str, local: &str) -> Option<usize> {
-    x.rmatch_indices("</").find_map(|(i, _)| {
-        let rest = x.get(i + 2..)?;
+/// Where GridCraft's control entries go in a kept `<controls>` fragment: just before the close
+/// tag of the `<controls>` element the reader reads (`controls::controls_of`), whatever its
+/// namespace prefix. In an `mc:AlternateContent` with separate `<controls>` elements in its
+/// Choice and Fallback branches that is the Choice's, the one an application that knows the
+/// x14 extensions reads; the Fallback's is left as the file had it. With no Choice, or a Choice
+/// without a `<controls>` element, it is the first `<controls>` element (a plain fragment, or a
+/// Fallback alone).
+fn controls_insert_at(x: &str) -> Option<usize> {
+    let from = open_tag(x, "Choice").unwrap_or(0);
+    close_tag_from(x, from, "controls")
+}
+
+/// The local name of the tag whose text starts at `name` (`x:controls` → `controls`).
+fn local_name(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
+}
+
+/// The byte offset of the first open tag of `local` in `x`, with any namespace prefix.
+fn open_tag(x: &str, local: &str) -> Option<usize> {
+    x.match_indices('<').find_map(|(i, _)| {
+        let rest = x.get(i + 1..)?;
+        let end = rest.find(|c: char| c.is_whitespace() || c == '>' || c == '/')?;
+        (local_name(rest.get(..end)?) == local).then_some(i)
+    })
+}
+
+/// The byte offset of the first close tag of `local` at or after `from` in `x`, with any
+/// namespace prefix (`</controls>`, `</x:controls>`).
+fn close_tag_from(x: &str, from: usize, local: &str) -> Option<usize> {
+    x.get(from..)?.match_indices("</").find_map(|(i, _)| {
+        let rest = x.get(from + i + 2..)?;
         let name = rest.get(..rest.find('>')?)?.trim_end();
-        (name.rsplit(':').next().unwrap_or(name) == local).then_some(i)
+        (local_name(name) == local).then_some(from + i)
     })
 }
 

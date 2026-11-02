@@ -328,6 +328,59 @@ fn a_modelled_control_joins_a_kept_controls_element_with_a_namespace_prefix() {
     assert_eq!(back.sheet(0).unwrap().controls.len(), 1, "the slider reads back; the list box stays kept");
 }
 
+/// A kept `mc:AlternateContent` with separate `<controls>` elements in its Choice and Fallback:
+/// a modelled control is written into the Choice's element, the one the reader (and an
+/// application that knows x14) reads, so it comes back with its name and its properties part;
+/// the Fallback's element is left as the file had it.
+#[test]
+fn a_modelled_control_joins_the_choice_controls_element_of_a_kept_alternate_content() {
+    use gridcraft_model::{Anchor, ControlKind, FormControl};
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rIdB" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/b.xml"/></Relationships>"#;
+    let prop_b = r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="List" fmlaRange="$D$1:$D$3" sel="2"/>"#;
+    let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1026" type="#_x0000_t201"><x:ClientData ObjectType="List"><x:Anchor>2, 0, 6, 0, 5, 0, 9, 0</x:Anchor><x:FmlaRange>$D$1:$D$3</x:FmlaRange><x:Sel>2</x:Sel></x:ClientData></v:shape></xml>"##;
+    let list = r#"<control shapeId="1026" r:id="rIdB" name="List 1"><controlPr><anchor><from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></controlPr></control>"#;
+    let controls = format!(
+        r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><mc:Choice Requires="x14"><controls>{list}</controls></mc:Choice><mc:Fallback><controls><control shapeId="1026" r:id="rIdB" name="List 1"/></controls></mc:Fallback></mc:AlternateContent>"#
+    );
+    let bytes = minimal(
+        &format!(r#"<sheetData/><legacyDrawing r:id="rId9"/>{controls}"#),
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/ctrlProps/b.xml", prop_b), ("xl/drawings/vmlDrawing1.vml", vml)],
+        "",
+        "",
+    );
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.sheet(0).unwrap().controls.is_empty(), "the list box stays with pass-through");
+    let anchor = Anchor { cell: gridcraft_core::CellRef::new(2, 1), width: 120.0, height: 20.0, ..Default::default() };
+    wb.sheet_mut(0).unwrap().controls.push(FormControl {
+        id: 900,
+        kind: ControlKind::Slider,
+        anchor,
+        name: "Speed".into(),
+        link: Some("$B$1".into()),
+        value: 40,
+        ..Default::default()
+    });
+    let out = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&out).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    // The Choice's <controls> comes first in the sheet, the Fallback's last.
+    let (first, last) = (sheet.find("<controls").unwrap(), sheet.rfind("<controls").unwrap());
+    assert!(first < last, "two controls elements, the kept Choice's and Fallback's: {sheet}");
+    let choice = &sheet[first..last];
+    assert!(choice.contains("name=\"Speed\"") && choice.contains("name=\"List 1\""), "the Choice holds both: {sheet}");
+    assert!(!sheet[last..].contains("name=\"Speed\""), "the Fallback is as the file had it: {sheet}");
+    let (back, _) = read_xlsx(&out).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 1);
+    assert_eq!(
+        (sh.controls[0].name.as_str(), sh.controls[0].link.as_deref(), sh.controls[0].value),
+        ("Speed", Some("$B$1"), 40),
+        "read from its worksheet entry and properties part"
+    );
+    let kept = sh.preserved.as_ref().and_then(|k| k.elements.iter().find(|e| e.slot == "controls")).map(|e| e.xml.clone()).unwrap_or_default();
+    assert!(kept.contains("List 1") && !kept.contains("Speed"), "{kept}");
+}
+
 /// Shapes with a named `id` and their number in `o:spid`, as some producers write them.
 const VML_SPID: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
 <v:shape id="Button 1" o:spid="_x0000_s1025" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>
