@@ -49,10 +49,50 @@ pub struct PrintSettings {
     pub hf_scale_with_doc: bool,
     #[serde(default = "yes")]
     pub hf_align_with_margins: bool,
+    /// Page Setup › Sheet › Page order: the sequence pages are numbered and printed in when the
+    /// sheet is more than one page wide and tall.
+    #[serde(default)]
+    pub page_order: PageOrder,
 }
 
 fn yes() -> bool {
     true
+}
+
+/// The sequence of a sheet's pages (XLSX `pageSetup pageOrder`, ECMA-376 `ST_PageOrder`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageOrder {
+    /// Down the first column of pages, then down the next one (Excel's default).
+    #[default]
+    DownThenOver,
+    /// Across the first row of pages, then across the next one.
+    OverThenDown,
+}
+
+impl PageOrder {
+    /// The id `pageLayout.pageSetup` takes and XLSX writes.
+    pub fn id(self) -> &'static str {
+        match self {
+            PageOrder::DownThenOver => "downThenOver",
+            PageOrder::OverThenDown => "overThenDown",
+        }
+    }
+    pub fn parse(id: &str) -> Option<PageOrder> {
+        match id {
+            "downThenOver" => Some(PageOrder::DownThenOver),
+            "overThenDown" => Some(PageOrder::OverThenDown),
+            _ => None,
+        }
+    }
+    /// The 0-based place in the printed sequence of the page in page row `row` and page column
+    /// `col`, on a sheet `rows` pages tall and `cols` pages wide.
+    pub fn index(self, row: usize, col: usize, rows: usize, cols: usize) -> usize {
+        match self {
+            PageOrder::DownThenOver => col.saturating_mul(rows).saturating_add(row),
+            PageOrder::OverThenDown => row.saturating_mul(cols).saturating_add(col),
+        }
+    }
 }
 
 /// Which header/footer pair a printed page uses.
@@ -146,6 +186,7 @@ impl Default for PrintSettings {
             even_footer: String::new(),
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
+            page_order: PageOrder::DownThenOver,
         }
     }
 }
@@ -214,4 +255,30 @@ pub struct LineInfo {
     /// The size was set by the user (rows): automatic heights follow the content.
     #[serde(default)]
     pub custom: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_order_numbers_pages_and_old_settings_load_down_then_over() {
+        // Two pages tall, three wide: (row, col) → place in the printed sequence.
+        let place = |order: PageOrder| [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)].map(|(r, c)| order.index(r, c, 2, 3));
+        assert_eq!(place(PageOrder::DownThenOver), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(place(PageOrder::OverThenDown), [0, 3, 1, 4, 2, 5]);
+        assert_eq!(PageOrder::OverThenDown.index(usize::MAX, usize::MAX, usize::MAX, usize::MAX), usize::MAX);
+        for order in [PageOrder::DownThenOver, PageOrder::OverThenDown] {
+            assert_eq!(PageOrder::parse(order.id()), Some(order));
+        }
+        assert_eq!(PageOrder::parse("OverThenDown"), None);
+        // Saved under the same id the command takes; settings saved before the field existed load
+        // with Excel's default.
+        let mut p = PrintSettings { page_order: PageOrder::OverThenDown, ..Default::default() };
+        let mut saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["page_order"], "overThenDown");
+        assert!(saved.as_object_mut().unwrap().remove("page_order").is_some());
+        p = serde_json::from_value(saved).unwrap();
+        assert_eq!(p, PrintSettings::default());
+    }
 }

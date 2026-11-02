@@ -74,12 +74,14 @@ pub(super) enum CatAxis<'a> {
     /// Category labels and, for a multi-level axis, the outer levels (nearest the labels first;
     /// one entry per category, non-empty where a group starts).
     Labels(&'a [String], &'a [Vec<String>]),
+    /// A data table supplies the labels below a vertical chart. Its stub must clear the plot.
+    Table(&'a [String], f32),
     Numeric(Scale, &'a Fmt),
 }
 
 /// Groups of an outer category level: `(first, end)` index pairs, a group starting at every
 /// non-empty entry (and at the first category).
-fn level_groups(level: &[String], n: usize) -> Vec<(usize, usize)> {
+pub(super) fn level_groups(level: &[String], n: usize) -> Vec<(usize, usize)> {
     let mut starts: Vec<usize> = (0..n).filter(|&j| j == 0 || level.get(j).is_some_and(|t| !t.is_empty())).collect();
     starts.push(n);
     starts.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect()
@@ -101,9 +103,13 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
     let ls = LABEL_SIZE;
     let lh = ls * 1.4;
     let ylabels = y.labels();
+    let stub = match &cat {
+        CatAxis::Table(_, width) => *width,
+        _ => 0.0,
+    };
     let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
     if !horizontal {
-        let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
+        let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4).max(stub);
         let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
@@ -112,7 +118,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         };
         let levels = match &cat {
             CatAxis::Labels(_, o) => o.len() as f32,
-            CatAxis::Numeric(..) => 0.0,
+            CatAxis::Numeric(..) | CatAxis::Table(..) => 0.0,
         };
         let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
         if !plot.ok() {
@@ -135,6 +141,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
         match cat {
+            CatAxis::Table(..) => {}
             CatAxis::Labels(l, outer) => {
                 let n = l.len().max(1);
                 let cw = plot.w / n as f32;
@@ -181,6 +188,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
     } else {
         let (labels, outer): (Vec<String>, &[Vec<String>]) = match cat {
             CatAxis::Labels(l, o) => (l.to_vec(), o),
+            CatAxis::Table(l, _) => (l.to_vec(), &[]),
             CatAxis::Numeric(..) => (vec![], &[]),
         };
         let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
@@ -189,7 +197,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
         let levels_w: f32 = level_w.iter().sum();
         let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
-        let plot = Bx { x: area.x + lw + levels_w, y: area.y + 2.0, w: area.w - lw - levels_w - right, h: area.h - lh - 6.0 };
+        let left = (lw + levels_w).max(stub);
+        let plot = Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 };
         if !plot.ok() {
             return plot;
         }
