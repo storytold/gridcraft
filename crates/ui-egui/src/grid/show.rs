@@ -115,10 +115,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
-    let (max_x, max_y) = scroll_limits(sh, &make_geo(app, view.scroll));
-    view.scroll.x = view.scroll.x.min(max_x);
-    view.scroll.y = view.scroll.y.min(max_y);
     let mut geo = make_geo(app, view.scroll);
+    let (max_x, max_y) = scroll_limits(sh, &geo);
+    let limited = view.scroll.min(vec2(max_x, max_y));
+    if limited != view.scroll {
+        view.scroll = limited;
+        geo = make_geo(app, view.scroll);
+    }
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
     ActiveCellVisibility { app, wb: &wb, si, sh, selection: &sel, paper, make_geo: &make_geo }.update(&mut view, &mut geo);
     // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
