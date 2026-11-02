@@ -794,6 +794,12 @@ fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     assert_eq!(value(&h, "B1"), Value::Number(0.0));
 }
 
+/// Clicks the Solver dialog's Save: the lowest on screen, since the title bar's Quick Access
+/// Toolbar has a Save too.
+fn click_save(h: &egui_kittest::Harness<'static, SheetApp>) {
+    h.get_all_by_label("Save").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
+}
+
 #[test]
 fn solver_dialog_saves_loads_and_resets_the_model() {
     let mut s = blank();
@@ -815,7 +821,7 @@ fn solver_dialog_saves_loads_and_resets_the_model() {
         }
     }
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(2);
     let note = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.get("modelNote").cloned();
     assert_eq!(note(&h), Some(json!("The model was saved to H1:H5.")));
@@ -844,7 +850,7 @@ fn solver_dialog_asks_before_save_model_replaces_data() {
     h.run_steps(2);
     let values = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.clone();
     // Save over data asks first and writes nothing; Don't Replace keeps the data.
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(2);
     assert_eq!(values(&h).get("askModelOverwrite"), Some(&json!("H1")));
     assert_eq!(value(&h, "H2"), Value::text("kept"));
@@ -852,7 +858,7 @@ fn solver_dialog_asks_before_save_model_replaces_data() {
     h.run_steps(2);
     assert_eq!((values(&h).get("askModelOverwrite"), value(&h, "H2")), (None, Value::text("kept")));
     // Editing the range drops the question, so Replace never writes somewhere else.
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(2);
     h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("J1"));
     h.run_steps(2);
@@ -861,7 +867,7 @@ fn solver_dialog_asks_before_save_model_replaces_data() {
     // Replace writes the model in one undo step.
     h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(2);
     h.get_by_label("Replace").click();
     h.run_steps(2);

@@ -126,8 +126,9 @@ impl SheetApp {
         }
     }
 
-    /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    /// Shows a command error: a toast for an unavailable command, else a message box. The Quick
+    /// Access Toolbar's trace buttons report through it too (`customize`).
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
@@ -154,6 +155,8 @@ impl SheetApp {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
             }
+            "ui.customizeRibbon" => crate::customize::customize_command(self, p),
+            "ui.quickAccessToolbar" => crate::customize::quick_access_command(self, p),
             "view.expandFormulaBar" => {
                 self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
                 Ok(json!({"on": self.ui.formula_bar_expanded}))

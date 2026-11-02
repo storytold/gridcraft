@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** minor (Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Customize the Ribbon and the Quick Access Toolbar; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -17,10 +17,8 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | 2026-10-14 | minor | Dialogs (Find and Replace, Go To, Format Cells, Sort and the rest) move by their title bar instead of staying pinned to the centre (#1250) |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
-| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
+| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | yes (2026-10-16): Customize Ribbon and Toolbar dialog (Ribbon and Quick Access Toolbar pages): show, hide and reorder tabs; tabs and groups of the user's own holding any command a button can run; rename; Reset. The toolbar's … menu ticks common commands on and off; right-click any ribbon button to add it to the toolbar (or remove it), and the ribbon or a tab to customize either; saved in `ui.json`; `ui.customizeRibbon` and `ui.quickAccessToolbar` for agents | no simplified ribbon; the toolbar can't go below the ribbon; no import/export of a customization file; no KeyTips on the toolbar, on the user's own tabs or in their groups |
 | Formulas › Function Library | Insert Function, AutoSum, Recently Used and a menu per function category | yes (10-24): a big Insert Function button and three columns of labelled small buttons, the layout Excel uses when the window is not wide enough for a big button per category; each category's book icon has its own colour; a category menu shows each function's description on hover and ends with Insert Function…, which opens the dialog on that category; More Functions cascades into Statistical, Engineering, Cube, Information, Compatibility and Web; AutoSum is a split button whose menu (Sum, Average, Count Numbers, Max, Min, More Functions…) Home › Editing shares; Recently Used has the MR key tip | the wide layout with a big button per category is not offered; a function counts as recently used once its formula is entered, not when Insert Function's OK is pressed |
-| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
-| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
 | Formula bar with Name Box, expand, function hints | yes | yes; grows with its content from one to five lines (Alt+Enter, wrapped text, or viewing a multi-line cell), then scrolls with the caret in view, the Name Box and buttons staying on the first line; the chevron pins it at five; the in-cell editor shows every line | done; no drag-to-resize handle |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | Ctrl-drag (Cmd or Option on macOS) drops a copy (#971); active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
@@ -89,7 +87,7 @@ this logic, with one undo step.
 | Ctrl+1, Ctrl+; and Ctrl+Shift+; , Ctrl+D/R, Ctrl+E, Ctrl+T/L, Ctrl+K, Ctrl+Shift+L, Ctrl+Shift+~!@#$%^&_ | yes | done |
 | F2, F3, F4, F5, F7, F9 family, Shift+F2/F3/F10/F11, F12 | yes | done; F11 chart sheet, F8 extend mode, F4 Repeat missing |
 | Mac-specific (Cmd variants, Control variants, Fn keys) | yes | done where a feature exists (`keymap.rs` picks the Mac variant) |
-| Sequential Alt access keys (Alt, H, N, …) on every ribbon tab | yes | 364-sequence keytip table for all tabs: per-control badges, prefix waiting, dropdowns open for editing (type/arrows/Enter), pending bindings for not-yet-built commands; letters also work with left Alt held (Alt+H, O, A), as in Excel; each Borders letter (H, B, …) draws its own preset, H, B, M opens Format Cells on the Border tab, and Erase Border, Line Color and Line Style are reserved; QAT/Backstage excluded |
+| Sequential Alt access keys (Alt, H, N, …) on every ribbon tab | yes | 364-sequence keytip table for all tabs: per-control badges, prefix waiting, dropdowns open for editing (type/arrows/Enter), pending bindings for not-yet-built commands; letters also work with left Alt held (Alt+H, O, A), as in Excel; each Borders letter (H, B, …) draws its own preset, H, B, M opens Format Cells on the Border tab, and Erase Border, Line Color and Line Style are reserved; QAT, Backstage and the user's own tabs and groups excluded |
 | Requests | — | #110 (more shortcuts and hot keys), #33 (sequential Alt; initial support landed in #43) |
 
 ### Shortcut audit (#110)
@@ -189,13 +187,14 @@ by rule and will never match Office's, by design.
 ## Work (50–80 h)
 
 Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus and Quick Analysis 5–8 · Page Layout view
-8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
+8–12 · Options dialog 4–6 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Customize the Ribbon and the Quick Access Toolbar: dialog, right-click menus, the toolbar's … menu, agents' commands |
 | 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
 | 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |
 | 2026-11-01 | minor | Formulas › Error Checking › Trace Error (`formulas.traceError`): red arrows from the cell an error starts in to the selected cell, through the first reference showing the same error at each step, and blue arrows from that cell's own references, as measured in Excel; the command returns the source and the arrows |

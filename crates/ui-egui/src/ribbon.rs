@@ -66,14 +66,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     if app.chrome.file_tab {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
+                    let mut tabs: Vec<String> = app.ui.ribbon.visible_tabs();
+                    tabs.extend(ctx_tabs.iter().map(|t| t.to_string()));
                     for tab in tabs {
+                        let tab = tab.as_str();
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
+                        let label = if app.ui.ribbon.is_custom(tab) { app.ui.ribbon.tab_label(tab) } else { app.ui.language.tr(tab) };
                         let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
                         if resp.hovered() && !active {
@@ -102,6 +103,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         if resp.double_clicked() {
                             app.ui.ribbon_collapsed = !collapsed;
                         }
+                        resp.context_menu(|ui| crate::customize::ribbon_menu(app, ui));
                         if app.keytips.prefix() == Some("")
                             && let Some(sequence) = keytip_table::tab_sequence(tab)
                         {
@@ -110,6 +112,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 });
             });
+            let current = &app.ui.ribbon_tab;
+            if app.ui.ribbon.hidden.contains(current) || (current.starts_with("custom") && !app.ui.ribbon.is_custom(current)) {
+                app.ui.ribbon_tab = app.ui.ribbon.visible_tabs().first().cloned().unwrap_or_else(|| "Home".into());
+            }
+            crate::customize::apply_requests(app, ui.ctx());
             if collapsed {
                 return;
             }
@@ -123,6 +130,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
+            // Right-click on the card's empty space (controls on top take their own clicks).
+            ui.interact(card, ui.scope_id().with("ribbon_card"), Sense::click()).context_menu(|ui| crate::customize::ribbon_menu(app, ui));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 // One scroll state per tab: a tab opened after scrolling another starts at its
                 // left edge, and a tab keeps its own offset while others are used.
@@ -141,7 +150,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let scroll = area.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
+                        match tab.as_str() {
+                            // A tab of the user's own holds only their groups.
+                            key if app.ui.ribbon.is_custom(key) => {}
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
                             "Draw" => draw(app, ui),
@@ -156,6 +167,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
+                        // The user's groups, after the tab's own (or alone on a tab of theirs).
+                        crate::customize::custom_groups(app, ui, &tab);
                     });
                 });
                 scroll_arrows(ui, &t, tab.as_str(), scroll);

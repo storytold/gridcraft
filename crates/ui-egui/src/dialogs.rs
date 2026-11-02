@@ -946,6 +946,9 @@ impl Dialog {
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
+            "customizeRibbon" => {
+                Dialog::custom("customizeRibbon", "Customize Ribbon and Toolbar", json!({"page": p("page").as_str().unwrap_or("ribbon")}))
+            }
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
                 let mut d = Dialog::custom("about", "About GridCraft", json!({}));
