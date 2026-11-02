@@ -1,7 +1,7 @@
 //! Insert tab: tables, charts, sparklines, pictures, shapes, hyperlinks, comments and notes,
 //! conditional formatting (Home › Styles) and symbols.
 
-use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
@@ -241,16 +241,18 @@ fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     } else {
         vec![block(s, p)?]
     };
-    // Whole columns/rows span a million cells: clip the far edges to the cells in use, so only
-    // a block that really is too large gets refused.
+    // Whole columns/rows span a million cells: clip their far edges to the cells in use, so only
+    // a block that really is too large gets refused. Bounded areas keep their extent as given.
     let sheet = target_sheet(s, p)?;
     if let Some(used) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         // Areas that start outside the used range keep their extent as given.
         for r in &mut areas {
-            if r.start.row <= used.end.row {
+            let whole_cols = r.start.row == 0 && r.end.row >= MAX_ROWS - 1;
+            let whole_rows = r.start.col == 0 && r.end.col >= MAX_COLS - 1;
+            if whole_cols && r.start.row <= used.end.row {
                 r.end.row = r.end.row.min(used.end.row);
             }
-            if r.start.col <= used.end.col {
+            if whole_rows && r.start.col <= used.end.col {
                 r.end.col = r.end.col.min(used.end.col);
             }
         }
@@ -1778,6 +1780,12 @@ mod tests {
         // A block that really is too large still is.
         s.execute("cell.set", json!({"cell": "B600000", "input": "1"})).unwrap();
         assert!(s.execute("insert.chart", json!({"range": "A:B", "type": "line"})).is_err());
+        // A bounded block keeps its extent, even where it runs past the data.
+        s.execute("insert.chart", json!({"range": "A1:A20", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$20"]);
         // A bounded block entirely below the data keeps its extent.
         s.execute("insert.chart", json!({"range": "C700000:C700010", "type": "line"})).unwrap();
         let d = s.doc().unwrap();
