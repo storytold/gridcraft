@@ -110,14 +110,15 @@ fn a_foreign_connections_part_is_kept_verbatim() {
     wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
     wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Aux")));
     // The file's own connections part with a database connection.
-    let preserved = foreign_connections_preserved();
-    wb.preserved = Some(std::sync::Arc::new(preserved));
+    wb.preserved = Some(std::sync::Arc::new(foreign_connections_preserved()));
+    let original = wb.preserved.as_ref().expect("preserved").parts[0].data.clone();
     let bytes = write_xlsx(&wb).expect("saves");
     let (back, _r) = read_xlsx(&bytes).expect("reopens");
     assert!(back.web_queries.is_empty(), "a foreign connection is not claimed by the model");
-    // And the foreign part's bytes are still in the package.
-    let pkg = package::Package::open(&bytes).expect("opens");
-    assert!(pkg.has("xl/connections.xml"), "the foreign part is kept");
+    // Verbatim means byte for byte: the saved part is the file's own, not a rewrite.
+    let mut pkg = package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the foreign part is kept");
+    assert_eq!(&part[..], &original[..], "the foreign part is byte-identical");
 }
 
 /// A `Preserved` whose only part is a foreign connections.xml, as an open would keep it.
