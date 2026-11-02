@@ -10,7 +10,7 @@ mod pivot;
 mod print;
 
 pub use pivot::{PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue};
-pub use print::{EditRange, HfPage, LineInfo, Orientation, PrintSettings, SheetProtection, password_hash};
+pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
 // ---------------------------------------------------------------- tables
 
@@ -540,6 +540,22 @@ impl Trendline {
     }
 }
 
+/// A chart's data table (`c:dTable`), independent of the chart legend.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartDataTable {
+    pub show_keys: bool,
+    pub horizontal_border: bool,
+    pub vertical_border: bool,
+    pub outline: bool,
+}
+
+impl Default for ChartDataTable {
+    fn default() -> Self {
+        Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -549,6 +565,8 @@ pub struct Chart {
     pub series: Vec<Series>,
     pub legend: LegendPos,
     pub data_labels: bool,
+    #[serde(default)]
+    pub data_table: Option<ChartDataTable>,
     pub gridlines: bool,
     pub style: u32,
     pub x_title: Option<String>,
@@ -560,6 +578,30 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+}
+
+impl Chart {
+    /// Data tables belong to category-axis column, bar, line and area charts.
+    pub fn supports_data_table(&self) -> bool {
+        let eligible = |kind| {
+            matches!(
+                kind,
+                ChartKind::ColumnClustered
+                    | ChartKind::ColumnStacked
+                    | ChartKind::ColumnStacked100
+                    | ChartKind::BarClustered
+                    | ChartKind::BarStacked
+                    | ChartKind::BarStacked100
+                    | ChartKind::Line
+                    | ChartKind::LineMarkers
+                    | ChartKind::LineStacked
+                    | ChartKind::Area
+                    | ChartKind::AreaStacked
+                    | ChartKind::AreaStacked100
+            )
+        };
+        eligible(self.kind) || (self.kind == ChartKind::Combo && self.series.iter().all(|s| eligible(s.kind.unwrap_or(ChartKind::Line))))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -602,6 +644,49 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+}
+
+/// The kinds of floating object a sheet holds. Commands name an object by kind and
+/// workbook-unique id (`{kind: "chart", id}`); [`ObjKind::name`] is that parameter's spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Slicer,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 4] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer];
+
+    /// The name used in command parameters.
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Slicer => "slicer",
+        }
+    }
+
+    /// The kind named `s` (any letter case).
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
 }
 
 /// Horizontal alignment of a shape's text (`a:pPr algn`).
