@@ -193,12 +193,17 @@ Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the da
 follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
 reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
 elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
-keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it. The dialog remembers the sheet it was opened on by name and follows a rename of it through
-the engine's recorded undo steps (a step that keeps the sheet count and changes one name, at
-that sheet's index, on a sheet that keeps its cells); a sheet deleted and another inserted in
-its place, even in one script batch, is not taken for it, so OK is refused and Cancel leaves
-the selection where it is. The collapse button is reachable from the keyboard and named for
-screen readers. Goal Seek, Solver
+keeps picking; a command that moves the selection (Undo, Go To) moves the reference with it.
+The dialog follows the sheet it was opened on through the engine's recorded undo steps: a step
+keeps it while a sheet with its name is there and that sheet's file id is unchanged (a sheet
+inserted in the session has none), renames it when the step keeps the sheet count and changes
+one name, at that sheet's index, on a sheet that keeps its cells and file id, and deletes it
+otherwise. A sheet deleted and another inserted in its place or given its own name, even in one
+script batch, is not taken for it: OK is refused and Cancel leaves the selection where it is;
+only an undo that brings the very sheet back makes it the dialog's again. When the steps since
+the dialog last looked cannot be accounted for (the undo history was trimmed meanwhile, or
+steps were undone and new ones run), a sheet with its name is taken for it. The collapse
+button is reachable from the keyboard and named for screen readers. Goal Seek, Solver
 (objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
 Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
@@ -227,7 +232,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons |
+| 2026-11-02 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons; the dialog's sheet is followed through the recorded undo steps, so a sheet deleted and recreated under its name is not taken for it and an undo of the deletion brings it back |
 | 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
 | 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |
 | 2026-11-01 | minor | Formulas › Error Checking › Trace Error (`formulas.traceError`): red arrows from the cell an error starts in to the selected cell, through the first reference showing the same error at each step, and blue arrows from that cell's own references, as measured in Excel; the command returns the source and the arrows |
