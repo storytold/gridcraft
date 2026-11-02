@@ -50,13 +50,17 @@ fn validate_shape_obj(obj: &El) -> Option<&El> {
     Some(sp)
 }
 
-fn validate_xfrm(sp: &El, anchor: &Anchor) -> Option<()> {
+fn validate_xfrm(sp: &El, anchor: &Anchor, grouped: bool) -> Option<()> {
     let xf = one(sp, "xfrm")?;
-    if !xf.attrs.is_empty() || !only_children(xf, &["off", "ext"]) {
+    if !only_attrs(xf, if grouped { &["rot"] } else { &[] }) || !only_children(xf, &["off", "ext"]) {
         return None;
     }
     let off = one(xf, "off")?;
-    if off.attr_i64("x")? != 0 || off.attr_i64("y")? != 0 {
+    let (ox, oy) = (off.attr_i64("x")?, off.attr_i64("y")?);
+    if !grouped && (ox != 0 || oy != 0) {
+        return None;
+    }
+    if grouped && xf.attr("rot").is_some() && xf.attr_i64("rot").is_none() {
         return None;
     }
     let ext = one(xf, "ext")?;
@@ -67,7 +71,7 @@ fn validate_xfrm(sp: &El, anchor: &Anchor) -> Option<()> {
     }
     let same_extent =
         |emu: i64, extent: f32| (emu as f64 / EMU_PER_PX - extent as f64).abs() <= 0.001_f64.max(extent as f64 * f32::EPSILON as f64 * 2.0);
-    if !same_extent(ew, anchor.width) || !same_extent(eh, anchor.height) {
+    if !grouped && (!same_extent(ew, anchor.width) || !same_extent(eh, anchor.height)) {
         return None;
     }
     Some(())
@@ -173,9 +177,14 @@ fn parse_points(path: &El, anchor: &Anchor, w: i64, h: i64) -> Option<String> {
 
 /// Do not partially import a path: losing a curve, subpath, transform or line effect changes
 /// the drawing. Accept only the explicit subset emitted below, including its line styling.
-pub(super) fn read(obj: &El, anchor: Anchor) -> Option<Shape> {
+///
+/// A stroke on its own is written at offset 0 with its anchor's size. A stroke in a group
+/// (`grouped`) sits at its offset and size in the group's child space, which the group maps
+/// onto `anchor`, and may carry a `rot`, which the group keeps for saving; the path fills that
+/// box whatever its size, so only a positive extent is required there.
+pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
     let sp = validate_shape_obj(obj)?;
-    validate_xfrm(sp, &anchor)?;
+    validate_xfrm(sp, &anchor, grouped)?;
     let (path, w, h) = validate_cust_geom(sp)?;
     let (width, line) = validate_line(sp)?;
     let text = parse_points(path, &anchor, w, h)?;
@@ -184,7 +193,7 @@ pub(super) fn read(obj: &El, anchor: Anchor) -> Option<Shape> {
 
 /// Invalid/native out-of-range data uses the existing rectangle fallback. A successful
 /// result is complete before it is appended, so malformed points never yield half a stroke.
-pub(super) fn write(shape: &Shape, theme: &Theme, id: usize) -> Option<String> {
+pub(super) fn write(shape: &Shape, theme: &Theme, id: usize, off: (i64, i64), ext: (i64, i64), rot: i64) -> Option<String> {
     if shape.kind != ShapeKind::Ink || shape.format.no_line {
         return None;
     }
@@ -219,7 +228,7 @@ pub(super) fn write(shape: &Shape, theme: &Theme, id: usize) -> Option<String> {
     let [r, g, b] = shape.line.resolve(theme)?;
     let mut xml = format!(
         "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Ink {id}\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>{}<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:pathLst><a:path w=\"{w}\" h=\"{h}\" fill=\"none\">",
-        xfrm(a, "a:xfrm")
+        xfrm("a:xfrm", off, ext, rot)
     );
     for (i, (x, y)) in points.iter().enumerate() {
         let tag = if i == 0 { "moveTo" } else { "lnTo" };

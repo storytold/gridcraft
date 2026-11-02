@@ -192,20 +192,72 @@ pub(super) fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The outermost group an object command acts on, and the object it names: a grouped chart,
+/// picture or shape, or a group (`kind: "group"`). As in Excel, where clicking a member selects
+/// its group, moving or deleting a member moves or deletes the whole group.
+fn group_target(sh: &Sheet, kind: &str, id: u32) -> Option<(u32, DrawingRef)> {
+    let r = match kind {
+        "chart" => DrawingRef::Chart(id),
+        "image" => DrawingRef::Image(id),
+        "shape" => DrawingRef::Shape(id),
+        "group" => {
+            sh.drawing_group(id)?;
+            DrawingRef::Group(id)
+        }
+        _ => return None,
+    };
+    let outer = sh.outer_group(r).or(if kind == "group" { Some(id) } else { None })?;
+    Some((outer, r))
+}
+
+/// Deletes an object. A grouped chart, picture or shape deletes its whole group, as in Excel,
+/// unless `member` asks for that object (or nested group) alone, as the eraser does for a
+/// grouped ink stroke: the rest of its group stays grouped.
 pub(super) fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("object.delete", "missing `id`"))?;
     let kind = str_param(p, "kind").unwrap_or("").to_string();
+    let member = bool_param(p, "member").unwrap_or(false);
     let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, &kind, id) {
+            if !member {
+                sh.delete_group(gid);
+                return Ok(Json::Null);
+            }
+            sh.remove_from_group(r);
+            if let DrawingRef::Group(g) = r {
+                sh.delete_group(g);
+            }
+        }
         match kind.as_str() {
             "chart" => sh.charts.retain(|c| c.id != id),
             "image" => sh.images.retain(|c| c.id != id),
             "slicer" => sh.slicers.retain(|c| c.id != id),
+            "group" => {}
             _ => sh.shapes.retain(|c| c.id != id),
         }
         Ok(Json::Null)
     })
+}
+
+/// Applies `object.move`'s `at`/`dx`/`dy`/`width`/`height` to an anchor.
+fn move_anchor(a: &mut Anchor, p: &Json, at: Option<CellRef>) {
+    if let Some(at) = at {
+        a.cell = at;
+    }
+    if let Some(v) = f64_param(p, "dx") {
+        a.dx = v as f32;
+    }
+    if let Some(v) = f64_param(p, "dy") {
+        a.dy = v as f32;
+    }
+    if let Some(v) = f64_param(p, "width") {
+        a.width = v.clamp(1.0, 10000.0) as f32;
+    }
+    if let Some(v) = f64_param(p, "height") {
+        a.height = v.clamp(0.0, 10000.0) as f32;
+    }
 }
 
 pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
@@ -215,6 +267,20 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, &kind, id) {
+            // The named object goes where it's asked to, and its outermost group moves (and
+            // sizes) with it by the same map.
+            let a = match r {
+                DrawingRef::Group(g) => sh.group_anchor(g),
+                leaf => sh.object_anchor(leaf),
+            };
+            let Some(mut a) = a else { return Err(bad("object.move", "no such object")) };
+            let from = sh.anchor_rect(&a);
+            move_anchor(&mut a, p, at);
+            let to = sh.anchor_rect(&a);
+            sh.transform_group(gid, from, to);
+            return Ok(Json::Null);
+        }
         let anchor = match kind.as_str() {
             "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
             "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
@@ -223,42 +289,33 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
-        if let Some(at) = at {
-            a.cell = at;
-        }
-        if let Some(v) = f64_param(p, "dx") {
-            a.dx = v as f32;
-        }
-        if let Some(v) = f64_param(p, "dy") {
-            a.dy = v as f32;
-        }
-        if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, 10000.0) as f32;
-        }
-        if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, 10000.0) as f32;
-        }
+        move_anchor(a, p, at);
         Ok(Json::Null)
     })
 }
 
 /// Sets an object's anchor mode (Excel's "Move and size with cells" / "Move but don't size with
 /// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
-/// when the sheet is sorted or edited structurally.
+/// when the sheet is sorted or edited structurally. A grouped object's group takes the mode.
 pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("object.setAnchorMode", "missing `id`"))?;
     let kind = str_param(p, "kind").unwrap_or("").to_string();
-    if !matches!(kind.as_str(), "chart" | "image" | "shape") {
-        return Err(bad("object.setAnchorMode", "kind must be chart, image or shape"));
+    if !matches!(kind.as_str(), "chart" | "image" | "shape" | "group") {
+        return Err(bad("object.setAnchorMode", "kind must be chart, image, shape or group"));
     }
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
     let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, _)) = group_target(sh, &kind, id) {
+            sh.set_group_anchor_mode(gid, mode);
+            return Ok(json!({"mode": anchor_mode_name(mode)}));
+        }
         let anchor = match kind.as_str() {
             "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
             "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;

@@ -3,8 +3,8 @@
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{
-    Anchor, Chart, Color, DefinedName, HAlign, LegendPos, NumFmt, Shape, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline, TrendlineKind,
-    Workbook,
+    Anchor, Chart, Color, DefinedName, DrawingRef, HAlign, LegendPos, NumFmt, Shape, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline,
+    TrendlineKind, Workbook,
 };
 use serde_json::{Value as Json, json};
 
