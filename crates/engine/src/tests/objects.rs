@@ -456,3 +456,21 @@ fn align_refuses_an_id_that_is_not_an_object_of_the_kind() {
     let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
     assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
 }
+
+#[test]
+fn align_refuses_ids_that_are_not_an_array() {
+    // `ids` may be absent (nothing to align) but, present, must be an array of object ids: `null`,
+    // a number, a string or an object is refused by `arrange.align` and `arrange.group`, and
+    // nothing moves.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let before = (anchor_of(&s, shape), anchor_of(&s, equation));
+    for ids in [json!(null), json!(7), json!("x"), json!({"ids": [1]})] {
+        assert!(s.execute("arrange.align", json!({"kind": "shape", "ids": ids, "align": "left"})).is_err(), "{ids}");
+        assert!(s.execute("arrange.group", json!({"kind": "shape", "ids": ids})).is_err(), "{ids}");
+    }
+    s.execute("arrange.align", json!({"kind": "shape", "align": "left"})).unwrap();
+    s.execute("arrange.group", json!({"kind": "shape"})).unwrap();
+    assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing moved");
+}

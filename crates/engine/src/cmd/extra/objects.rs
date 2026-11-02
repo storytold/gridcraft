@@ -121,16 +121,16 @@ fn anchors_of(sh: &mut Sheet, kind: ObjKind) -> Vec<(u32, &mut Anchor)> {
 
 pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = kind_param(p, "arrange.align")?;
-    // Every id must be an object id and name an object of the kind: a stale or mismatched id is
-    // an error, as for `arrange` and the `object.*` commands, not an object silently left out.
-    let ids: Vec<u32> = p
-        .get("ids")
-        .and_then(Json::as_array)
-        .map(|a| {
-            a.iter().map(|v| v.as_u64().and_then(|x| u32::try_from(x).ok()).ok_or_else(|| bad("arrange.align", "ids must be object ids"))).collect()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    // `ids` may be absent (nothing to align) but, present, must be an array whose every entry is
+    // an object id naming an object of the kind: a stale or mismatched id, or a value of another
+    // shape, is an error, as for `arrange` and the `object.*` commands, not something silently
+    // left out.
+    let bad_ids = || bad("arrange.align", "ids must be an array of object ids");
+    let ids: Vec<u32> = match p.get("ids") {
+        None => Vec::new(),
+        Some(Json::Array(a)) => a.iter().map(|v| v.as_u64().and_then(|x| u32::try_from(x).ok()).ok_or_else(bad_ids)).collect::<Result<_>>()?,
+        Some(_) => return Err(bad_ids()),
+    };
     let how = str_param(p, "align").unwrap_or("left").to_string();
     let si = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
