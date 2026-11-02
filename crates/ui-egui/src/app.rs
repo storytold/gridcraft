@@ -186,6 +186,9 @@ impl SheetApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         if !self.fonts_ready || self.fonts_rebind {
+            if let Some(dialog) = self.dialog.as_mut() {
+                dialog.cancel_save_changes();
+            }
             ctx.request_repaint();
             return;
         }
