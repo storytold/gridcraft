@@ -86,6 +86,12 @@ pub struct Dialog {
     refs: ref_edit::RefBoxes,
 }
 
+impl Dialog {
+    pub(crate) fn take_initial_focus(&mut self) -> bool {
+        !std::mem::replace(&mut self.focus_initialized, true)
+    }
+}
+
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
 /// reference at the caret instead of selecting it, and a drag grows it into a range.
 #[derive(Clone, Debug)]

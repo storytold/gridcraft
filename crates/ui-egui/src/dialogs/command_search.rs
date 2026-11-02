@@ -23,9 +23,8 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
             .desired_width(width)
             .hint_text(app.ui.language.tr("Search for a command, e.g. freeze, chart, bold…")),
     );
-    if !d.focus_initialized {
+    if d.take_initial_focus() {
         r.request_focus();
-        d.focus_initialized = true;
     }
     if r.changed() {
         d.list_index = 0;

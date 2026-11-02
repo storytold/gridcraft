@@ -378,7 +378,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
         });
     // The search box closes on a click outside it, as Excel's does.
-    if d.name == "commandSearch" && d.shown && shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+    if d.name == "commandSearch" && d.shown && shown.as_ref().is_some_and(|r| r.response.clicked_elsewhere()) {
         open = false;
     }
     d.shown = true;
