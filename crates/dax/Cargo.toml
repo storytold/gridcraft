@@ -1,6 +1,8 @@
 [package]
 name = "gridcraft-dax"
-version.workspace = true
+# A first release of this crate, not the workspace release line: nothing depends on a published
+# version of it yet, and 0.1.0 says what it is — new.
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "GridCraft DAX language: lexer, Pratt parser, syntax tree and canonical printer"
