@@ -276,16 +276,12 @@ impl<'h> Evaluator<'h> {
             "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
             "type" => {
                 let v = self.host.cell_value(a.sheet, c);
-                // German `ZELLE("Typ")` answers in German: `leer`, `Beschriftung`, `Wert`. The
-                // letters are not a translation of the English ones -- `l` means empty in German
-                // and text in English -- so mapping `typ` onto the English arm answered `v`
-                // where German Excel answers `w`, and `l`/`b` the wrong way round for the other
-                // two (noted in review).
+                // German `ZELLE("Typ")` keeps `b` for blank and `l` for label -- the two letters
+                // are not translated -- and answers `w` for Wert where English answers `v` for
+                // value (Microsoft's de-de ZELLE page). So only the third arm differs.
                 Ev::V(Value::text(match (v, german) {
-                    (Value::Empty, false) => "b",
-                    (Value::Empty, true) => "l",
-                    (Value::Text(_), false) => "l",
-                    (Value::Text(_), true) => "b",
+                    (Value::Empty, _) => "b",
+                    (Value::Text(_), _) => "l",
                     (_, false) => "v",
                     (_, true) => "w",
                 }))
