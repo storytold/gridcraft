@@ -133,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: Labelled distributions use a compiled GRIDCRAFT_BUILD_LABEL in desktop/window titles and disable only automatic startup update checks; manual checks remain available.
+
 | Date | What landed |
 |---|---|
 | 2026-11-02 | Equations: Insert › Equation (a split button with a gallery of examples) and an editor with quick-insert buttons, the error underlined at its position and a live preview; `insert.equation` and `equation.edit`; LaTeX laid out by RaTeX inside the new `gridcraft-math` crate, capped and panic-guarded, and cached on the shape so that painting never runs the layout engine; xlsx writes Office Math with a plain-text fallback and the source in `descr`, and reads Office Math back into LaTeX; PDF prints equations with the standard Symbol font and `[?]` for anything else |
