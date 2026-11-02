@@ -362,3 +362,65 @@ fn dragging_an_unselected_object_by_its_edge_moves_it() {
     assert!((after.size() - before.size()).length() < 0.5, "not resized: {before:?} {after:?}");
     assert!((after.min - before.min - vec2(30.0, 20.0)).length() < 1.0, "moved with the pointer: {before:?} {after:?}");
 }
+
+fn anchor(h: &Harness, o: ObjRef) -> gridcraft_engine::model::Anchor {
+    h.state().session.doc().unwrap().wb.active().unwrap().object_anchor(o).unwrap()
+}
+
+/// Makes the fixture's picture 12,000 by 60 and reopens the workbook from its XLSX bytes, the way
+/// a file can carry an object wider than the 10,000 points `object.move` gives a new size.
+/// Returns the picture as reopened.
+fn imported_oversized_picture(h: &mut Harness, o: &Objects) -> ObjRef {
+    {
+        let wb = std::sync::Arc::make_mut(&mut h.state_mut().session.doc_mut().unwrap().wb);
+        let a = wb.sheet_mut(0).unwrap().object_anchor_mut(o.image).unwrap();
+        a.width = 12_000.0;
+        a.height = 60.0;
+    }
+    let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    h.state_mut().run("file.open", json!({"name": "wide.xlsx", "base64": saved["base64"]})).unwrap();
+    h.run_steps(4);
+    let pic = ObjRef::new(ObjKind::Image, h.state().session.doc().unwrap().wb.active().unwrap().images[0].id);
+    let a = anchor(h, pic);
+    assert_eq!((a.width.round(), a.height.round()), (12_000.0, 60.0), "the reader keeps the file's size: {a:?}");
+    pic
+}
+
+/// Dragging the body of such a picture moves it and sends no size, so nothing shrinks it to the
+/// limit on the way.
+#[test]
+fn dragging_the_body_of_an_oversized_imported_object_keeps_its_size() {
+    let (mut h, o) = fixture();
+    let pic = imported_oversized_picture(&mut h, &o);
+    let before = rect(&h, pic);
+    // Well inside the body, on the part of the picture in view and clear of the handles' reach.
+    let grab = before.left_top() + vec2(30.0, 30.0);
+    click(&mut h, grab);
+    assert_eq!(h.state().selected_object, Some(pic));
+    drag(&mut h, grab, grab + vec2(30.0, 25.0));
+    let a = anchor(&h, pic);
+    assert_eq!((a.width.round(), a.height.round()), (12_000.0, 60.0), "the size is untouched: {a:?}");
+    let after = rect(&h, pic);
+    assert!((after.min - before.min - vec2(30.0, 25.0)).length() < 1.0, "moved with the pointer: {before:?} {after:?}");
+    // The drag sent the position only: the engine saw no size to cap.
+    let (_, p) = h.state().session.journal.iter().rev().find(|(id, _)| id == "object.move").unwrap();
+    assert!(p.get("width").is_none() && p.get("height").is_none(), "a body move sends no size: {p}");
+}
+
+/// A handle drag on such a picture resizes it by the drag only: the left handle moved 10 px to
+/// the right leaves it 11,990 wide, with no jump to 10,000.
+#[test]
+fn a_handle_drag_on_an_oversized_imported_object_resizes_by_the_drag_only() {
+    let (mut h, o) = fixture();
+    let pic = imported_oversized_picture(&mut h, &o);
+    let before = rect(&h, pic);
+    click(&mut h, before.left_top() + vec2(30.0, 30.0));
+    let grab = Handle::Left.pos(before);
+    drag(&mut h, grab, grab + vec2(10.0, 0.0));
+    // In window points (the grid draws at its zoom): 10 narrower, the left edge 10 further right.
+    let after = rect(&h, pic);
+    assert!((before.width() - after.width() - 10.0).abs() < 1.0, "narrower by the drag only: {before:?} {after:?}");
+    assert!((after.left() - before.left() - 10.0).abs() < 1.0 && (after.top() - before.top()).abs() < 0.5, "{before:?} {after:?}");
+    let a = anchor(&h, pic);
+    assert!(a.width > 11_900.0 && a.width < 12_000.0 && a.height.round() == 60.0, "no jump to the 10,000 limit: {a:?}");
+}
