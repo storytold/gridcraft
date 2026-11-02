@@ -117,11 +117,11 @@ fn scatter_axes_are_the_groups_own_and_x_comes_first() {
 }
 
 #[test]
-fn a_100_percent_line_or_area_axis_keeps_no_typed_format() {
-    // The model reads 100% stacked line and area as plain stacked and draws absolute values, so
-    // a `0.0%` typed for the 0%–100% axis would label them "2000000.0%". A column group on its
-    // own axes keeps its format.
-    for group in ["lineChart", "areaChart"] {
+fn a_100_percent_line_axis_keeps_no_typed_format_while_area_keeps_it() {
+    // The model reads 100% stacked line as plain stacked and draws absolute values, so a `0.0%`
+    // typed for the 0%–100% axis would label them "2000000.0%". A 100% stacked area group is
+    // modelled (`AreaStacked100`), so its axis keeps its typed format.
+    for (group, y2, alone) in [("lineChart", None, None), ("areaChart", Some("0.0%".into()), Some("0.0%".into()))] {
         let ch = read(&format!(
             "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>\
              <c:ser><c:idx val=\"0\"/><c:order val=\"0\"/><c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val></c:ser>\
@@ -134,7 +134,7 @@ fn a_100_percent_line_or_area_axis_keeps_no_typed_format() {
              <c:catAx><c:axId val=\"3\"/><c:delete val=\"1\"/><c:crossAx val=\"4\"/></c:catAx>\
              <c:valAx><c:axId val=\"4\"/><c:numFmt formatCode=\"0.0%\" sourceLinked=\"0\"/><c:crossAx val=\"3\"/></c:valAx>"
         ));
-        assert_eq!(ch.axis_number_formats, AxisNumberFormats { x: None, y: Some("#,##0".into()), y2: None }, "{group} on the secondary axis");
+        assert_eq!(ch.axis_number_formats, AxisNumberFormats { x: None, y: Some("#,##0".into()), y2 }, "{group} on the secondary axis");
         let ch = read(&format!(
             "<c:{group}><c:grouping val=\"percentStacked\"/>\
              <c:ser><c:idx val=\"0\"/><c:order val=\"0\"/><c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val></c:ser>\
@@ -142,7 +142,7 @@ fn a_100_percent_line_or_area_axis_keeps_no_typed_format() {
              <c:catAx><c:axId val=\"1\"/><c:crossAx val=\"2\"/></c:catAx>\
              <c:valAx><c:axId val=\"2\"/><c:numFmt formatCode=\"0.0%\" sourceLinked=\"0\"/><c:crossAx val=\"1\"/></c:valAx>"
         ));
-        assert_eq!(ch.axis_number_formats, AxisNumberFormats::default(), "{group} alone");
+        assert_eq!(ch.axis_number_formats, AxisNumberFormats { x: None, y: alone, y2: None }, "{group} alone");
     }
 }
 
@@ -159,6 +159,7 @@ fn chart(id: u32, kind: ChartKind, series: Vec<Series>, axes: AxisNumberFormats)
         series,
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,

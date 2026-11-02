@@ -289,14 +289,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         (cat_ax, val_axes.first().copied())
     };
     let secondary_ids = groups.iter().map(|(g, _)| axis_ids(g)).find(|ids| *ids != first_axes);
-    // A 100% stacked line or area group reads as plain stacked (the model has no 100% variant
-    // for them), so its values are drawn absolute. A format typed for its 0%–100% axis (`0.0%`)
-    // would label those absolute values ("2000000.0%"), so that axis keeps the source format.
+    // A 100% stacked line group reads as plain stacked (the model has no 100% line variant), so
+    // its values are drawn absolute. A format typed for its 0%–100% axis (`0.0%`) would label
+    // those absolute values ("2000000.0%"), so that axis keeps the source format.
     let pct_unmodelled = |ids: &[String]| {
         groups.iter().any(|(g, _)| {
-            matches!(g.name.as_str(), "lineChart" | "line3DChart" | "areaChart" | "area3DChart")
-                && g.child_val("grouping") == Some("percentStacked")
-                && axis_ids(g) == ids
+            matches!(g.name.as_str(), "lineChart" | "line3DChart") && g.child_val("grouping") == Some("percentStacked") && axis_ids(g) == ids
         })
     };
     let axis_number_formats = if scatter {
@@ -325,6 +323,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
+            show_keys: bool_val(t, "showKeys"),
+            horizontal_border: bool_val(t, "showHorzBorder"),
+            vertical_border: bool_val(t, "showVertBorder"),
+            outline: bool_val(t, "showOutline"),
+        }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -958,6 +962,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             crosses_max: true,
             fmt: ch.axis_number_formats.y2.as_deref(),
         }));
+    }
+    if let Some(t) = &ch.data_table {
+        let _ = write!(
+            s,
+            "<c:dTable><c:showHorzBorder val=\"{}\"/><c:showVertBorder val=\"{}\"/><c:showOutline val=\"{}\"/><c:showKeys val=\"{}\"/></c:dTable>",
+            u8::from(t.horizontal_border),
+            u8::from(t.vertical_border),
+            u8::from(t.outline),
+            u8::from(t.show_keys)
+        );
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
