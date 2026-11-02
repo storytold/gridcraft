@@ -188,6 +188,9 @@ pub struct Stats {
 
 pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
     let mut s = Stats { min: f64::INFINITY, max: f64::NEG_INFINITY, ..Default::default() };
+    // Cells are only visited twice when ranges overlap or a spill sits on a cell, so a single plain range
+    // skips the per-cell set (it costs time and memory on selections of millions of cells).
+    let track = ranges.len() > 1 || !sheet.spill.is_empty();
     let mut seen = std::collections::HashSet::new();
     for r in ranges {
         let r = match sheet.used_range().and_then(|u| r.intersection(&u)) {
@@ -195,7 +198,7 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
             None => continue,
         };
         let mut visit = |c: CellRef, v: &Value| {
-            if !seen.insert(c) || sheet.is_row_hidden(c.row) {
+            if (track && !seen.insert(c)) || sheet.is_row_hidden(c.row) {
                 return;
             }
             if v.is_empty() {
@@ -225,4 +228,22 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn stats_count_each_cell_once_for_one_range_and_for_overlapping_ranges() {
+        let mut sh = Sheet::new("S");
+        for (i, n) in [4.0, -1.0, 9.0, 2.0].into_iter().enumerate() {
+            sh.set_value(CellRef::new(i as u32, 0), Value::Number(n));
+        }
+        let one = stats(&sh, &[RangeRef::parse("A1:A4").unwrap()]);
+        assert_eq!((one.count, one.numeric, one.sum, one.min, one.max), (4, 4, 14.0, -1.0, 9.0));
+        // A2:A3 lies inside A1:A4 and must not be counted again.
+        let two = stats(&sh, &[RangeRef::parse("A1:A4").unwrap(), RangeRef::parse("A2:A3").unwrap()]);
+        assert_eq!((two.count, two.numeric, two.sum, two.min, two.max), (4, 4, 14.0, -1.0, 9.0));
+    }
 }
