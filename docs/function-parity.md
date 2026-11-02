@@ -12,14 +12,11 @@ Excel's worksheet functions, category by category, against GridCraft's function 
   them), plus 14 text functions the page lists under combined entries (FIND/FINDB, LEFT/LEFTB,
   LEN/LENB, MID/MIDB, REPLACE/REPLACEB, RIGHT/RIGHTB, SEARCH/SEARCHB), BETA.INV, and COPILOT and
   PY (Microsoft 365 functions not on that page when fetched).
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (503):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-  evaluator's special forms in `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE,
-  OFFSET, INDIRECT, INDEX, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
-  MAKEARRAY…), excluding the test-only `ADD2`. Every one is an Excel name.
+- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`), excluding
+  `USDOLLAR`, `ECMA.CEILING` and `FILTERJSON`, plus the evaluator's special forms in
+  `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE, OFFSET, INDIRECT, INDEX,
+  SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL, MAKEARRAY…), excluding
+  the test-only `ADD2`. Every counted entry is an Excel name.
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Extensions (ours, not Excel's):** FILTERJSON (category Web) reads JSON text with a bounded

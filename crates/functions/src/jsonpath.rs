@@ -80,7 +80,11 @@ fn bracket(s: &str) -> Option<(Seg, &str)> {
 }
 
 /// Every value the path selects, in document order.
-pub(crate) fn select<'a>(doc: &'a Json, path: &[Seg]) -> Vec<&'a Json> {
+///
+/// `limit` caps the number of intermediate matches so a path such as a long chain of `..name`
+/// segments cannot grow without bound on a deeply nested document. Returns `None` when the cap
+/// is exceeded.
+pub(crate) fn select<'a>(doc: &'a Json, path: &[Seg], limit: usize) -> Option<Vec<&'a Json>> {
     let mut current: Vec<&Json> = vec![doc];
     for seg in path {
         let mut next: Vec<&Json> = Vec::new();
@@ -99,13 +103,16 @@ pub(crate) fn select<'a>(doc: &'a Json, path: &[Seg]) -> Vec<&'a Json> {
                 Seg::Any => next.extend(node.items()),
                 Seg::Deep(key) => descend(node, key, &mut next),
             }
+            if next.len() > limit {
+                return None;
+            }
         }
         if next.is_empty() {
-            return next;
+            return Some(next);
         }
         current = next;
     }
-    current
+    Some(current)
 }
 
 /// `..key`: the member here, then the same search inside every child. Nesting is bounded by the
@@ -163,15 +170,33 @@ mod tests {
         let src = r#"{"valor":"3166.91","anio":2026,"ok":true,"nulo":null,
                       "lista":[{"id":1},{"id":2}],"a":{"b":{"id":3}}}"#;
         let Some(doc) = json::parse(src) else { return };
-        let one = |p: &str| -> Option<String> { select(&doc, &parse_ok(p)).first().map(|j| format!("{j:?}")) };
+        let one = |p: &str| -> Option<String> { select(&doc, &parse_ok(p), 100_000).unwrap().first().map(|j| format!("{j:?}")) };
         assert_eq!(one("$.valor"), Some(r#"Text("3166.91")"#.to_string()));
         assert_eq!(one("anio"), Some("Number(2026.0)".to_string()));
         assert_eq!(one("$.nulo"), Some("Null".to_string()));
         assert_eq!(one("$.a.b.id"), Some("Number(3.0)".to_string()));
         assert_eq!(one("$.lista[1].id"), Some("Number(2.0)".to_string()));
         assert_eq!(one("$.nada"), None);
-        assert_eq!(select(&doc, &parse_ok("$.lista[*]")).len(), 2);
-        assert_eq!(select(&doc, &parse_ok("$..id")).len(), 3);
+        assert_eq!(select(&doc, &parse_ok("$.lista[*]"), 100_000).unwrap().len(), 2);
+        assert_eq!(select(&doc, &parse_ok("$..id"), 100_000).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn deep_chain_stops_at_the_match_cap() {
+        // A chain of nested "a" objects is small on disk but a repeated `..a` path would
+        // otherwise multiply the match count without bound.
+        let mut src = String::from("{\"a\":");
+        for _ in 0..200 {
+            src.push_str("{\"a\":");
+        }
+        src.push('1');
+        for _ in 0..=200 {
+            src.push('}');
+        }
+        let Some(doc) = json::parse(&src) else { return };
+        let path = "$..a..a..a..a..a";
+        let segs = parse(path).unwrap();
+        assert!(select(&doc, &segs, 100_000).is_none());
     }
 
     #[test]
@@ -188,7 +213,7 @@ mod tests {
         for _ in 0..50_000 {
             // build a random path
             let mut path = String::new();
-            if rng(&mut s) % 2 == 0 {
+            if rng(&mut s).is_multiple_of(2) {
                 path.push('$');
             }
             for _ in 0..(rng(&mut s) % 4) {
@@ -196,13 +221,13 @@ mod tests {
                     0 => path.push_str(&format!(".k{}", rng(&mut s) % 3)),
                     1 => path.push_str(&format!("[{}]", rng(&mut s) % 3)),
                     2 => path.push_str("[*]"),
-                    3 => path.push_str(&format!("..id")),
-                    4 => path.push_str(&format!("['a']")),
-                    _ => path.push_str(&format!("[\"b\"]")),
+                    3 => path.push_str("..id"),
+                    4 => path.push_str("['a']"),
+                    _ => path.push_str("[\"b\"]"),
                 }
             }
             if let Some(segs) = parse(&path) {
-                let _ = select(&doc, &segs);
+                let _ = select(&doc, &segs, 100_000);
             }
         }
     }
