@@ -280,6 +280,10 @@ fn dates_and_times() {
     assert_eq!(f("d-mmm-yy", 46302.0), "7-Oct-26");
     assert_eq!(f("e", 46302.0), "2026");
     assert_eq!(f("YYYY-MM-DD", 46302.0), "2026-10-07");
+    assert_eq!(NumberFormat::parse("dd/mm/yyyy").date_order(), Some(gridcraft_core::DateOrder::Dmy));
+    assert_eq!(NumberFormat::parse("m/d/yyyy").date_order(), Some(gridcraft_core::DateOrder::Mdy));
+    assert_eq!(NumberFormat::parse("yyyy-mm-dd").date_order(), Some(gridcraft_core::DateOrder::Ymd));
+    assert_eq!(NumberFormat::parse("0.00").date_order(), None);
 }
 
 #[test]
