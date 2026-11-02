@@ -758,6 +758,70 @@ pub(crate) mod tests {
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
         assert!(host.cycles.is_empty());
         assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
+        // The block sum abandoned at the limit is remembered once its formulas are calculated.
+        assert_eq!(host.cells_summed, WIDTH as usize + 1);
+    }
+
+    /// Running totals down a column of formulas each continue the total above (`range_sum`), so
+    /// the pass walks each formula once, and every total is the top-down sum bit for bit.
+    #[test]
+    fn running_totals_over_formulas_walk_each_cell_once() {
+        const ROWS: u32 = 2000;
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        let mut put = |wb: &mut Workbook, at: CellRef, text: String| {
+            wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(&text)));
+            exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(&text[1..]).unwrap()));
+        };
+        for r in 1..=ROWS {
+            put(&mut wb, CellRef::new(r - 1, 0), format!("={r}/10"));
+            put(&mut wb, CellRef::new(r - 1, 1), format!("=SUM(A$1:A{r})"));
+        }
+        let mut rng = 1u64;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for r in 0..ROWS {
+            host.calculate((0, CellRef::new(r, 1)));
+        }
+        let mut total = 0.0;
+        for r in 0..ROWS {
+            total += f64::from(r + 1) / 10.0;
+            let got = host.results.get(&(0, CellRef::new(r, 1)));
+            assert!(matches!(got, Some(Value::Number(n)) if n.to_bits() == total.to_bits()), "B{}: {got:?}, want {total}", r + 1);
+        }
+        assert_eq!(host.cells_summed, ROWS as usize);
+    }
+
+    /// Within a pass, a total that calculates a formula spilling into the block it adds up counts
+    /// the spilled values, and a block remembered before a spill on its sheet isn't reused after
+    /// it (the next pass would correct either, from the spill it stores).
+    #[test]
+    fn block_sums_count_values_spilled_in_the_same_pass() {
+        let mut wb = Workbook::new();
+        let mut exprs = HashMap::default();
+        let mut put = |wb: &mut Workbook, at: &str, text: &str| {
+            let at = CellRef::parse(at).unwrap();
+            let cell = match text.strip_prefix('=') {
+                Some(f) => {
+                    exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(f).unwrap()));
+                    Cell::formula(Formula::new(text))
+                }
+                None => Cell::value(Value::Number(text.parse().unwrap())),
+            };
+            wb.sheet_mut(0).unwrap().cells.set(at, cell);
+        };
+        // D1 remembers E1:E2 before E3 spills; B1 reads C2 before it is calculated.
+        for (at, text) in [("B1", "=SUM(C1:C3)"), ("C1", "1"), ("C2", "=SEQUENCE(2)"), ("D1", "=SUM(E$1:E2)"), ("E1", "1"), ("E2", "2")] {
+            put(&mut wb, at, text);
+        }
+        put(&mut wb, "E3", "=SEQUENCE(2)");
+        put(&mut wb, "D5", "=SUM(E$1:E4)");
+        let mut rng = 1u64;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for at in ["D1", "B1", "C2", "E3", "D5"] {
+            host.calculate((0, CellRef::parse(at).unwrap()));
+        }
+        let got = |at: &str| host.results.get(&(0, CellRef::parse(at).unwrap())).cloned();
+        assert_eq!((got("B1"), got("D1"), got("D5")), (Some(Value::Number(4.0)), Some(Value::Number(3.0)), Some(Value::Number(6.0))));
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
