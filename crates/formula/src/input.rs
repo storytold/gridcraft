@@ -55,6 +55,7 @@ const FRENCH: &[(&str, &str)] = &[
     ("CEILING", "PLAFOND"),
     ("CEILING.MATH", "PLAFOND.MATH"),
     ("CEILING.PRECISE", "PLAFOND.PRECIS"),
+    ("ECMA.CEILING", "ECMA.PLAFOND"),
     ("DEGREES", "DEGRES"),
     ("EVEN", "PAIR"),
     ("FLOOR", "PLANCHER"),

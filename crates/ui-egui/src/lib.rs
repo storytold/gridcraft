@@ -32,6 +32,7 @@ mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -39,6 +40,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -265,8 +267,8 @@ pub struct SheetApp {
     /// false (a bare test/embedder that never runs the hook) capture code falls back to egui's
     /// current input instead of reusing a stale recorded value.
     pub(crate) capture_geometry_from_raw: bool,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape or slicer).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -284,6 +286,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
+    /// to the front, also when the app is hidden or the window minimized (a Dock quit).
+    pub bring_forward: bool,
     /// View › Switch Windows opens its list on the next frame the View tab draws (asked for by a
     /// key tip, the command search or a menu, possibly while another tab was showing).
     pub(crate) open_switch_windows: bool,
