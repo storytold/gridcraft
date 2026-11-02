@@ -313,6 +313,36 @@ fn arrows_escape_and_undo() {
 }
 
 #[test]
+fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
+    let mut h = harness(blank());
+    for t in ["x1", "x2"] {
+        text(&mut h, t);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+    }
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("what".into(), json!("x"));
+        d.values.insert("with".into(), json!("y"));
+    }
+    h.run_steps(2);
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // The Mac Redo shortcut works too, as it does on the sheet.
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("x1"));
+    key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    assert!(h.state().dialog.is_some(), "the dialog is still open");
+}
+
+#[test]
 fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
     let mut s = blank();
     s.execute("selection.set", json!({"cell": "A11"})).unwrap();
