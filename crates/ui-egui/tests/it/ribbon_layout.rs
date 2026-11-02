@@ -125,7 +125,7 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
     h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Auto Sum").hover();
     h.run_steps(6);
-    let shortcut = if cfg!(target_os = "macos") { "AutoSum (\u{2318}\u{21e7}T)" } else { "AutoSum (Alt+=)" };
+    let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "AutoSum (\u{2318}\u{21e7}T)" } else { "AutoSum (Alt+=)" };
     assert!(h.query_by_value(shortcut).is_some(), "tooltip with the shortcut");
     // The icon part sits above the label part, across the full width.
     let main = h.get_by_label("Auto Sum").rect();
