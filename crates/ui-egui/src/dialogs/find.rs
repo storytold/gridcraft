@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Dialog, Json, Key, SheetApp, json};
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
