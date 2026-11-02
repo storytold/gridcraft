@@ -181,6 +181,60 @@ pub(super) fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> Stri
     }
 }
 
+/// The x14 rule a solid data bar's `cfRule` links to (it holds the fill); `None` for other rules.
+/// GridCraft draws negative values in the bar's colour from the low end, with no axis; the x14
+/// defaults are an automatic axis and a separate negative colour, so both are written out.
+pub(super) fn solid_bar_x14(cf: &CondFormat, priority: u32) -> Option<String> {
+    let CfRule::DataBar { min, max, gradient: false, .. } = &cf.rule else { return None };
+    let (id, lo, hi) = (solid_bar_id(priority), x14_cfvo(min), x14_cfvo(max));
+    Some(format!(
+        "<x14:cfRule type=\"dataBar\" id=\"{id}\"><x14:dataBar gradient=\"0\" negativeBarColorSameAsPositive=\"1\" axisPosition=\"none\">{lo}{hi}</x14:dataBar></x14:cfRule>"
+    ))
+}
+
+/// Whether formula `f` refers to a sheet other than `own`, and whether it refers to a 3-D span of
+/// sheets.
+fn sheet_refs(f: &str, own: &str) -> (bool, bool) {
+    let Ok(e) = gridcraft_formula::parse(f.trim_start_matches('=')) else { return (false, false) };
+    let refs = e.references();
+    let other = refs.iter().any(|r| match &r.sheet {
+        gridcraft_formula::SheetSel::Named(n) => !n.chars().flat_map(char::to_lowercase).eq(own.chars().flat_map(char::to_lowercase)),
+        _ => false,
+    });
+    let span = refs.iter().any(|r| matches!(r.sheet, gridcraft_formula::SheetSel::Span(..)));
+    (other, span)
+}
+
+/// The Excel 2010 form (`x14:cfRule`, `xm:f` formulas, inline `x14:dxf`) of a cell-value or
+/// formula rule that refers to another sheet; `None` for rules that belong in the main section.
+/// MS-XLSX 2.6.27 (CT_CfRule) forbids 3-D spans (`sheet-range-reference`) in `xm:f`, so a rule
+/// with one stays in the main section.
+pub(super) fn x14_cf_rule_xml(cf: &CondFormat, own: &str, priority: u32, out: &mut Out) -> Option<String> {
+    let (ty, extra, formulas, style): (&str, String, Vec<&str>, &Style) = match &cf.rule {
+        CfRule::CellIs { op, a, b, style } => {
+            ("cellIs", format!(" operator=\"{}\"", cf_op_name(*op)), std::iter::once(a.as_str()).chain(b.as_deref()).collect(), style)
+        }
+        CfRule::Expression { formula, style } => ("expression", String::new(), vec![formula.as_str()], style),
+        _ => return None,
+    };
+    let refs: Vec<(bool, bool)> = formulas.iter().map(|f| sheet_refs(f, own)).collect();
+    if !refs.iter().any(|&(other, _)| other) || refs.iter().any(|&(_, span)| span) {
+        return None;
+    }
+    out.x14_cf_rules += 1;
+    let mut s = format!(
+        "<x14:cfRule type=\"{ty}\" priority=\"{priority}\"{}{extra} id=\"{}\">",
+        if cf.stop_if_true { " stopIfTrue=\"1\"" } else { "" },
+        x14_cf_rule_guid(out.x14_cf_rules)
+    );
+    for f in formulas {
+        let _ = write!(s, "<xm:f>{}</xm:f>", esc(&text_to_file(f)));
+    }
+    s.push_str(&dxf_xml("x14:dxf", style, &mut out.num_fmts));
+    s.push_str("</x14:cfRule>");
+    Some(s)
+}
+
 fn validation_formula(f: &str) -> String {
     let f = f.trim();
     if f.starts_with('"') {
