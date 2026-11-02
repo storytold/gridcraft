@@ -13,6 +13,9 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
+type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -71,7 +74,7 @@ pub(super) struct PassHost<'a> {
     /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
     /// cell and last column; each value maps a last row to the block's result (`None`: the block
     /// has a formula, a Python cell, an error value or a spilled value, so every longer one has too).
-    sums: HashMap<(usize, CellRef, u32), std::collections::BTreeMap<u32, Option<(f64, u64)>>>,
+    sums: HashMap<(usize, CellRef, u32), BlockSums>,
     /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.

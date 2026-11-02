@@ -2348,7 +2348,8 @@ fn aggregates_over_ranges_match_a_plain_fold_bit_for_bit() {
         }
     }
     // Formulas in column H and up: (function, optional leading number, blocks).
-    let mut oracle: Vec<(CellRef, &str, Option<f64>, Vec<(u32, u32, u32, u32)>)> = vec![];
+    type Oracle<'a> = (CellRef, &'a str, Option<f64>, Vec<(u32, u32, u32, u32)>);
+    let mut oracle: Vec<Oracle> = vec![];
     let funcs = ["SUM", "COUNT", "AVERAGE"];
     let mut at = 0;
     let mut add = |wb: &mut Workbook, f: &'static str, lead: Option<f64>, blocks: Vec<(u32, u32, u32, u32)>| {
