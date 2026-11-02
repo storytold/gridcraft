@@ -25,7 +25,7 @@ mod pass_host;
 use graph::Intervals;
 pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node};
-use pass_host::{PassHost, spills_as_before};
+use pass_host::{PassHost, legacy_range, spills_as_before};
 
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
@@ -284,6 +284,14 @@ impl Calc {
                 }
             }
         }
+        // So can the area a cleared or overwritten array spilled over (#2340), a legacy array's
+        // included (#2949).
+        for &(si, r) in &cleared {
+            match emptied.iter_mut().find(|x| x.0 == si) {
+                Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
+                None => emptied.push((si, r.end)),
+            }
+        }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
             for &(s, c) in self.graph.nodes.keys() {
@@ -300,6 +308,15 @@ impl Calc {
         }
         for (si, r) in &cleared {
             seeds.extend(r.iter().map(|c| (*si, c)));
+        }
+        // A legacy array entered over another formula's spill takes its whole range: that
+        // formula is evaluated again, and is now blocked (#2949).
+        for &k in changed {
+            if let Some(sh) = wb.sheet(k.0)
+                && let Some(r) = legacy_range(sh, k.1)
+            {
+                seeds.extend(sh.spill_ranges.iter().filter(|(a, s)| **a != k.1 && s.intersects(&r)).map(|(a, _)| (k.0, *a)));
+            }
         }
         let t0 = prof_now();
         let dirty = self.dirty_closure(wb, &seeds);

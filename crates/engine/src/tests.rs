@@ -2272,6 +2272,68 @@ fn part_of_a_legacy_array_cant_be_changed() {
 }
 
 #[test]
+fn a_legacy_array_over_a_spill_area_takes_its_range_and_blocks_the_spill() {
+    // #2949: with its top-left cell outside the spill area, the legacy array showed #SPILL! and
+    // the dynamic array kept spilling, so the saved file held two overlapping array ranges.
+    let row = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let ones = vec![Value::Number(1.0); 3];
+    let spill = Value::Error(gridcraft_core::CellError::Spill);
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "=SUM(D1:D5)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:E3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(row(&s, &["D1", "D2", "D4", "D5", "H1"]), vec![spill.clone(), Value::Empty, Value::Empty, Value::Empty, spill.clone()]);
+    // A full recalculation agrees, whatever order it evaluates the two formulas in.
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    // Saved and reopened, the sheet holds one array over C3:E3 and no spill over it.
+    reopen(&mut s);
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    assert!(!s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.contains_key(&CellRef::parse("D1").unwrap()));
+    // Deleting the array lets the dynamic array spill again.
+    s.execute("edit.clearContents", json!({"range": "C3:E3"})).unwrap();
+    assert_eq!(row(&s, &["D1", "D3", "D5", "H1"]), vec![Value::Number(1.0), Value::Number(3.0), Value::Number(5.0), Value::Number(15.0)]);
+    // Undo brings the array back over the spill, and Redo deletes it again.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "D3"), Value::Number(3.0));
+
+    // One array over two spill areas blocks both.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=SEQUENCE(5,1,10)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:G3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3", "F3", "G3"]), vec![Value::Number(1.0); 5]);
+    assert_eq!(row(&s, &["D1", "F1", "F2"]), vec![spill.clone(), spill.clone(), Value::Empty]);
+    s.execute("edit.clearContents", json!({"range": "C3:G3"})).unwrap();
+    assert_eq!(row(&s, &["D3", "F3"]), vec![Value::Number(3.0), Value::Number(12.0)]);
+}
+
+#[test]
+fn clearing_or_overwriting_a_dynamic_array_unblocks_the_one_it_blocked() {
+    // #2340: F13's area overlaps C14's spill, and stayed #SPILL! after C14 was cleared (or a value
+    // typed over it) until Calculate Now, because F13 is to the right of C14.
+    for replace in [None, Some(5)] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+        assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+        match replace {
+            None => s.execute("edit.clearContents", json!({"range": "C14"})).unwrap(),
+            Some(n) => s.execute("cell.set", json!({"cell": "C14", "input": n})).unwrap(),
+        };
+        assert_eq!([v(&s, "F13"), v(&s, "G17")], [Value::Number(1.0), Value::Number(10.0)], "{replace:?}");
+    }
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();
