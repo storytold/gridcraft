@@ -37,7 +37,7 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
 /// as a number, boolean, error, date or formula, or lose a leading apostrophe). Such text is shown
 /// for editing with a leading `'`, as Excel does for text carrying a quote prefix, so that
 /// committing the editor unchanged keeps the cell as text.
-fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bool {
+fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem, order: gridcraft_core::DateOrder) -> bool {
     if t.is_empty() {
         return false;
     }
@@ -49,7 +49,7 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
     if matches!(first, Some('+' | '-')) && second.is_some_and(|c| c.is_ascii_alphabetic() || c == '(') {
         return true;
     }
-    !matches!(gridcraft_core::parse::parse_input(t, sys).value, Value::Text(ref x) if x.as_ref() == t)
+    !matches!(gridcraft_core::parse::parse_input_with_order(t, sys, order).value, Value::Text(ref x) if x.as_ref() == t)
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
@@ -60,19 +60,21 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
+    let code = wb.styles.get(cell.style).num_fmt.as_str();
+    let order = gridcraft_core::parse::date_order_from_format(code).unwrap_or(gridcraft_core::DateOrder::Mdy);
     if let Value::Text(t) = &cell.value
         && cell.formula.is_none()
-        && wb.styles.get(cell.style).num_fmt.as_str() != "@"
-        && text_needs_quote_prefix(t, wb.date_system)
+        && code != "@"
+        && text_needs_quote_prefix(t, wb.date_system, order)
     {
         return format!("'{raw}");
     }
     let Value::Number(n) = &cell.value else { return raw };
-    let code = wb.styles.get(cell.style).num_fmt.as_str();
     if cell.formula.is_some() || !parsed(code).is_date() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
+    let reads_back =
+        |s: &str| matches!(gridcraft_core::parse::parse_input_with_order(s, wb.date_system, order).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
     if reads_back(&shown) {
         return shown;

@@ -9,6 +9,7 @@ mod cross_sheet_cut;
 mod csv_export_budget;
 mod custom_filter_blanks;
 mod custom_view_freeze;
+mod date_dmy_input;
 mod dynamicmetadata;
 mod extreme_selection_moves;
 mod font_scheme_minor;
