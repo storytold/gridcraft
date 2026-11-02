@@ -558,8 +558,14 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             }
             let sh = cx.sheet_mut(sheet)?;
             for (c, x) in cleared {
-                // The cell keeps its style; only the value and formula go.
-                sh.set_cell(c, gridcraft_model::Cell { formula: None, value: gridcraft_core::Value::Empty, style: x.style });
+                // The cell keeps its style, in place: a blank written through `set_cell`
+                // would REMOVE the cell (the store drops blanks), and a cell whose style
+                // is the default (an explicit General in a Text-formatted column, say)
+                // would lose that override and fall back to the column's format before the
+                // rewrite lands. Mutating what is already stored keeps every override.
+                let cell = sh.cells.get_mut(c).expect("the cell was collected from the sheet");
+                cell.formula = None;
+                cell.value = gridcraft_core::Value::Empty;
             }
             cx.structural = true;
             Ok(())
@@ -1559,6 +1565,34 @@ mod tests {
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "B");
     }
+#[test]
+    /// A cell with an explicit General format inside a Text-formatted column keeps that
+    /// override through a refresh: the clear must not remove the cell (a blank through
+    /// `set_cell` would drop it, and the cell would fall back to the column's `@` before
+    /// the rewrite), so the page's values keep parsing as numbers and text escapes apply.
+    fn an_explicit_general_cell_in_a_text_column_keeps_its_format_through_a_refresh() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The column is Text; the cell B2 explicitly overrides to General.
+        s.execute("home.numberFormat", json!({"range": "B:B", "code": "@"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2", "code": "General"})).unwrap();
+        // The page now serves a plain number where B2 is.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>X</td><td>42</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.webRefresh", json!({})).unwrap();
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let b2 = sh.cell(CellRef::parse("B2").unwrap()).expect("B2 survived the clear");
+        let fmt = d.wb.styles.get(sh.style_id(CellRef::parse("B2").unwrap())).num_fmt.as_str().to_string();
+        assert_eq!(fmt, "General", "the explicit General override survived, not the column's @");
+        assert_eq!(b2.value, gridcraft_core::Value::from(42.0), "the number parsed as a number, not text");
+    }
+
 #[test]
     /// A refresh that ADDS a row in a Text-formatted column: the new row has no stored cell,
     /// so the check must read the effective style (column format inherited through

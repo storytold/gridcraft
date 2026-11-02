@@ -277,7 +277,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels)?;
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
@@ -491,9 +491,11 @@ fn write_sheets(
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> Result<(String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter), IoError> {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
-    let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
+    // A kept-part merge that cannot run (the connections part and the model's web queries)
+    // fails the save rather than writing stale bytes.
+    let kept = crate::passthrough::write_workbook(wb, wb_rels, out)?;
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
@@ -520,7 +522,7 @@ fn write_sheets(
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    Ok((sheets_xml, kept, pivots))
 }
 
 fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {

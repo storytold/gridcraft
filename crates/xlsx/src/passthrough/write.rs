@@ -369,12 +369,12 @@ fn block_end(s: &str) -> Option<usize> {
 /// every foreign `<connection>` (no GridCraft extension) is copied verbatim, and the
 /// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
 /// when the part does not parse: it is kept exactly as the file held it.
-fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
-    let raw = std::str::from_utf8(data).ok()?;
+fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoError> {
+    let raw = std::str::from_utf8(data).map_err(|_| IoError::Format("the connections part is not valid UTF-8".into()))?;
     // Nothing of ours in the part and nothing to write: leave the file's part alone (a
     // foreign-only connections.xml is never rewritten, byte for byte).
     if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
-        return None;
+        return Ok(None);
     }
     // Foreign connections are kept as the exact bytes the file held: each <connection> block
     // (self-closing or a whole tree) is scanned out of the raw XML with a depth count \—
@@ -420,7 +420,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
             (None, None) => break,
         };
         let after = &rest[start..];
-        let end = block_end(after)?;
+        let end = block_end(after).ok_or_else(|| IoError::Format("the connections part could not be scanned".into()))?;
         let block = &after[..end];
         if !block.contains(crate::write::GC_URI) {
             foreign.push_str(block);
@@ -433,8 +433,8 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // from. The parser drops xmlns:* from its attribute list, so the raw start tag is scanned
     // instead; GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew),
     // and every other declaration is copied verbatim between the element name and its `>`.
-    let tag_start = raw.find("<connections")?;
-    let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e)?;
+    let tag_start = raw.find("<connections").ok_or_else(|| IoError::Format("the connections part has no connections element".into()))?;
+    let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e).ok_or_else(|| IoError::Format("the connections part's root tag is unterminated".into()))?;
     // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
     let kept_decls: String = raw_attributes(&raw[tag_start..=tag_end])
@@ -448,7 +448,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     w.push_str(&foreign);
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
-    let x = crate::xml::parse(data).ok()?;
+    let x = crate::xml::parse(data).map_err(|e| IoError::Format(format!("the connections part does not parse: {e}")))?;
     // Every query gets an id, however crowded the part is: the ids below the maximum that no
     // preserved connection holds (sparse parts reuse numbers freely, so the gaps are legal),
     // then the tail past the maximum. A zip over a bounded range could not do this: a range
@@ -457,7 +457,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     let mut ids = (1u32..=u32::MAX).filter(|i| !used.contains(i));
     for q in &wb.web_queries {
         // None only when every id the format allows is taken by a preserved connection.
-        let Some(id) = ids.next() else { return None };
+        let Some(id) = ids.next() else { return Err(IoError::Format("no connection id is left for a web query".into())) };
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
         let tid = q.table_id.unwrap_or(0);
         let synced = q.last_synced.unwrap_or(0);
@@ -474,13 +474,13 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
             synced);
     }
     w.push_str("</connections>");
-    Some(w)
+    Ok(Some(w))
 }
 
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
 /// (see [`chart_sheet_usable`]) are left out with the parts only they reach.
-pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> WorkbookKept {
-    let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
+pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Result<WorkbookKept, IoError> {
+    let Some(p) = wb.preserved.as_deref() else { return Ok(WorkbookKept::default()) };
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s));
     let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
     let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
@@ -502,8 +502,10 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     if let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml") {
         // Runs even when the model holds no connections now: the part's stale GridCraft
         // connections (removed since the open) must not survive the save, while foreign ones
-        // stay whatever the model does.
-        if let Some(merged) = merge_connections(&q.data, wb) {
+        // stay whatever the model does. A merge that cannot run (malformed part, no ids
+        // left) fails the save instead of writing the stale bytes: a save that silently
+        // dropped the user's new connection would lose it on the next open.
+        if let Some(merged) = merge_connections(&q.data, wb)? {
             q.data = merged.into_bytes().into();
         }
     }
@@ -514,7 +516,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             out.kept.root.push((r.rel_type.clone(), target, r.external));
         }
     }
-    WorkbookKept {
+    Ok(WorkbookKept {
         elements: p.elements.iter().filter(|e| e.slot == "externalReferences").filter_map(|e| remap(&e.xml, &ids)).collect(),
         sheets: live
             .iter()
@@ -528,7 +530,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
                 })
             })
             .collect(),
-    }
+    })
 }
 
 /// The workbook's kept elements of `slot` that refer to no part (`fileVersion`, `ext`).
