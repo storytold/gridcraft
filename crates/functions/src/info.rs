@@ -345,6 +345,7 @@ fn json_cell(j: &crate::json::Json) -> R<Value> {
     }
 }
 
+/// Reads a value selected by a JSONPath from JSON text.
 fn filterjson(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let src = text(a, 0)?;
     let path = text(a, 1)?;

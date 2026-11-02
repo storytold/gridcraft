@@ -189,11 +189,13 @@ mod tests {
     use super::*;
     use crate::json;
 
+    /// parse_ok.
     fn parse_ok(p: &str) -> Vec<Seg> {
         parse(p).unwrap_or_default()
     }
 
     #[test]
+    /// parses_the_subset.
     fn parses_the_subset() {
         assert_eq!(parse_ok("$.valor"), vec![Seg::Key("valor".to_string())]);
         assert_eq!(parse_ok("valor"), vec![Seg::Key("valor".to_string())]);
@@ -207,6 +209,7 @@ mod tests {
     }
 
     #[test]
+    /// rejects_everything_else.
     fn rejects_everything_else() {
         for bad in ["", ".", "..", "$.", "a..", "$[", "$[]", "$[a]", "$[-1]", "$[1.5]", "$[?(@.a)]", "$.a[*", "$.a()", "[:2]"] {
             assert_eq!(parse(bad), None, "debió rechazar {bad:?}");
@@ -214,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    /// selects_values.
     fn selects_values() {
         let src = r#"{"valor":"3166.91","anio":2026,"ok":true,"nulo":null,
                       "lista":[{"id":1},{"id":2}],"a":{"b":{"id":3}}}"#;
@@ -230,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    /// deep_chain_stops_at_the_match_cap.
     fn deep_chain_stops_at_the_match_cap() {
         // A chain of nested "a" objects is small on disk but a repeated `..a` path would
         // otherwise multiply the match count without bound.
@@ -248,7 +253,9 @@ mod tests {
     }
 
     #[test]
+    /// fuzz_parse_and_select_never_panics.
     fn fuzz_parse_and_select_never_panics() {
+        /// rng.
         fn rng(s: &mut u64) -> u64 {
             *s ^= *s << 13;
             *s ^= *s >> 7;
