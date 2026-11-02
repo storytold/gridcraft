@@ -116,18 +116,30 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             clear_validation_circles
         ),
-        cmd!(
-            "data.group",
-            "Group",
-            ["Data", "Outline"],
-            Some("Alt+Shift+Right"),
-            "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
-            has_doc,
-            |s, p| group(s, p, true)
-        ),
-        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
-            group(s, p, false)
-        }),
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+K"),
+            ..cmd!(
+                "data.group",
+                "Group",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Right"),
+                "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
+                has_doc,
+                |s, p| group(s, p, true)
+            )
+        },
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+J"),
+            ..cmd!(
+                "data.ungroup",
+                "Ungroup",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Left"),
+                "{rows? | cols? | by?: rows|cols, sheet?}",
+                has_doc,
+                |s, p| { group(s, p, false) }
+            )
+        },
         cmd!(
             "data.hideDetail",
             "Hide Detail",
