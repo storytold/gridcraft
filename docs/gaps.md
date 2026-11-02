@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (Histogram Chart Output; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -127,8 +127,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   model on cells of its sheet and reads it back; Reset All removes it. Solver Options sets the
   evaluation limit, Integer Optimality and the Evolutionary options, which are saved with the
   model. AllDifferent constraints and the Population report remain.
-- The Analysis ToolPak (`data.analysisToolPak`) has all 19 of Excel's tools; their chart output
-  remains. **Estimate:** 12–20 h.
+- The Analysis ToolPak (`data.analysisToolPak`) has all 19 of Excel's tools. Histogram offers
+  Chart Output (frequency columns, Pareto sorting and an optional cumulative percentage line);
+  chart output for the other tools remains. **Estimate:** 12–20 h.
 
 ### 14. Page Layout view and print polish (U, F)
 - Page Layout view landed (#329): paper view with rulers and in-place header/footer editing.
@@ -186,6 +187,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | §13: Histogram Chart Output implemented (frequency columns, Pareto sorting, optional cumulative percentage line); chart output for the other Analysis ToolPak tools remains. |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

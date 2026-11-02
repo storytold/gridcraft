@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{Cell, NumFmt, Sheet};
+use gridcraft_model::{Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, Series, Sheet};
 use serde_json::{Value as Json, json};
 
 use super::whatif::parse_range;
@@ -27,6 +27,8 @@ const MAX_MATRIX_VARS: usize = 256;
 const MAX_REGRESSORS: usize = 16;
 /// Most histogram bins.
 const MAX_BINS: usize = 100_000;
+/// Category charts currently draw at most 20,000 points, including the overflow bin.
+const MAX_HISTOGRAM_CHART_POINTS: u32 = 20_000;
 /// Excel's limit on Fourier Analysis input values.
 const MAX_FOURIER: usize = 4096;
 /// Most numbers Random Number Generation or Sampling writes in one run.
@@ -69,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Data Analysis…",
         ["Data", "Analysis"],
         None,
-        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|randomNumberGeneration|rankPercentile|regression|sampling|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels? (the first row holds column names and the first column row names), alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?; randomNumberGeneration: variables? (1), count (per variable; not for patterned), distribution: uniform{from, to} | normal{mean, standardDeviation} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{valueRange: two columns of value and probability}, seed? (whole number, not for patterned; the same seed repeats the numbers; the result reports the seed used), at most 1,000,000 numbers; sampling: range, method?: periodic|random, period (periodic), samples (random, with replacement), seed?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
+        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|randomNumberGeneration|rankPercentile|regression|sampling|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?, chartOutput?: bool (default false; frequency columns, with a secondary cumulative percentage line when cumulative is true; Pareto uses the sorted report block; at most 20,000 categories including More; report and chart share one Undo step; returns chart id); regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels? (the first row holds column names and the first column row names), alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?; randomNumberGeneration: variables? (1), count (per variable; not for patterned), distribution: uniform{from, to} | normal{mean, standardDeviation} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{valueRange: two columns of value and probability}, seed? (whole number, not for patterned; the same seed repeats the numbers; the result reports the seed used), at most 1,000,000 numbers; sampling: range, method?: periodic|random, period (periodic), samples (random, with replacement), seed?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
         has_doc,
         run
     )]
@@ -1744,6 +1746,67 @@ fn sampling(s: &Session, p: &Json, seed: Option<u64>) -> Result<Grid> {
 
 // ---------------------------------------------------------------- output
 
+/// Plot the report's frequency cells, not a second histogram of those counts. Pareto uses the
+/// sorted block; the optional cumulative line keeps its percentage format on a secondary axis.
+fn histogram_chart(p: &Json, sheet: &str, report: RangeRef, id: u32) -> Result<Chart> {
+    if report.height().saturating_sub(1) > MAX_HISTOGRAM_CHART_POINTS {
+        return Err(bad(CMD, "Chart Output supports at most 20,000 categories including More; use fewer bins or turn Chart Output off"));
+    }
+    let cumulative = flag(p, "cumulative");
+    let pareto = flag(p, "pareto");
+    let offset = if pareto { if cumulative { 3 } else { 2 } } else { 0 };
+    let col = report.start.col.checked_add(offset).filter(|c| *c < MAX_COLS).ok_or_else(|| bad(CMD, "chart source is outside the sheet"))?;
+    let first_row = report.start.row.checked_add(1).filter(|r| *r <= report.end.row).ok_or_else(|| bad(CMD, "the histogram has no bins"))?;
+    let q = gridcraft_formula::quote_sheet(sheet);
+    let cell = |row, col| format!("{q}!${}${}", gridcraft_core::col_to_letters(col), row + 1);
+    let range = |c| format!("{}:${}${}", cell(first_row, c), gridcraft_core::col_to_letters(c), report.end.row + 1);
+    let categories = range(col);
+    let mut series = vec![Series {
+        name: Some(cell(report.start.row, col + 1)),
+        categories: Some(categories.clone()),
+        values: range(col + 1),
+        kind: Some(ChartKind::ColumnClustered),
+        ..Default::default()
+    }];
+    if cumulative {
+        series.push(Series {
+            name: Some(cell(report.start.row, col + 2)),
+            categories: Some(categories),
+            values: range(col + 2),
+            kind: Some(ChartKind::Line),
+            secondary: true,
+            ..Default::default()
+        });
+    }
+    // Leave one column between the table and chart. Near the right edge use the space below
+    // the report instead; refuse before writing anything if neither placement fits.
+    let at = report
+        .end
+        .col
+        .checked_add(2)
+        .filter(|c| *c <= MAX_COLS - 10)
+        .map(|c| CellRef::new(report.start.row.min(MAX_ROWS - 20), c))
+        .or_else(|| report.end.row.checked_add(2).filter(|r| *r <= MAX_ROWS - 20).map(|r| CellRef::new(r, report.start.col.min(MAX_COLS - 10))))
+        .ok_or_else(|| bad(CMD, "there is no space beside or below the report for Chart Output"))?;
+    Ok(Chart {
+        id,
+        kind: if cumulative { ChartKind::Combo } else { ChartKind::ColumnClustered },
+        anchor: Anchor { cell: at, width: 480.0, height: 288.0, ..Default::default() },
+        title: Some(if pareto { "Pareto" } else { "Histogram" }.into()),
+        series,
+        legend: if cumulative { LegendPos::Bottom } else { LegendPos::None },
+        data_labels: false,
+        data_table: None,
+        gridlines: true,
+        style: 1,
+        x_title: Some("Bin".into()),
+        y_title: Some("Frequency".into()),
+        source: Some(format!("{q}!{}", RangeRef::new(CellRef::new(report.start.row, col), report.end).a1())),
+        by_rows: false,
+        pivot: None,
+    })
+}
+
 /// Writes the report at `output` (refusing to overwrite data unless `overwrite`) or on a new
 /// sheet.
 fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> {
@@ -1801,6 +1864,8 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
         return Err(EngineError::Other(format!("The output range {} {OVERWRITE_ERROR}; pass overwrite: true to replace it.", rect.a1())));
     }
     let sheet_name = new_sheet.clone().or_else(|| d.wb.sheet(si).map(|sh| sh.name.clone())).unwrap_or_default();
+    let chart = (tool == "histogram" && flag(p, "chartOutput")).then(|| histogram_chart(p, &sheet_name, rect, d.wb.next_object_id())).transpose()?;
+    let chart_id = chart.as_ref().map(|c| c.id);
     let new_index = edit(s, |cx| {
         let pct_fmt = NumFmt::new("0.00%");
         if let Some(name) = &new_sheet {
@@ -1825,6 +1890,7 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
             sh.set_cell(cell, Cell { value: v.clone(), formula: None, style, py: None });
             touched.push(cell);
         }
+        sh.charts.extend(chart);
         for c in touched {
             cx.touch(si, c);
         }
@@ -1833,7 +1899,11 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
     if let Some(i) = new_index {
         s.doc_mut()?.wb_switch_sheet(i);
     }
-    Ok(json!({"tool": tool, "sheet": sheet_name, "range": rect.a1(), "rows": rows, "cols": cols}))
+    let mut out = json!({"tool": tool, "sheet": sheet_name, "range": rect.a1(), "rows": rows, "cols": cols});
+    if let Some(id) = chart_id {
+        out["chart"] = json!(id);
+    }
+    Ok(out)
 }
 
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1888,6 +1958,8 @@ mod tests {
 
     use super::{MAX_OUTCOMES, call, f64_of, pmf_table};
     use crate::Session;
+
+    mod histogram_chart;
 
     fn s() -> Session {
         let mut s = Session::new();

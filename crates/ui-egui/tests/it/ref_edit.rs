@@ -287,7 +287,7 @@ fn choosing_new_worksheet_ply_after_picking_an_output_range_sticks() {
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert_eq!(field(&h, "outputTo"), "range");
 
-    let ply = h.get_by_label("New Worksheet Ply:").rect();
+    let ply = h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "New Worksheet Ply:").rect();
     click_at(&mut h, ply.center());
     h.run_steps(3);
     assert_eq!(field(&h, "outputTo"), "newSheet", "the radio choice is not overridden by the Output Range box");

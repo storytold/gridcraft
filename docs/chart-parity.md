@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (Histogram Chart Output; earlier: charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -76,6 +76,17 @@ has not been performed.
 
 Format reference: [Microsoft's DrawingML data table documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.datatable?view=openxml-3.0.1).
 
+The Analysis ToolPak's Histogram **Chart Output** (`data.analysisToolPak`, `tool: "histogram"`,
+`chartOutput: true`) plots the report's bin labels and frequency counts, including the More bin.
+`pareto: true` uses the report's sorted block. `cumulative: true` adds the report's cumulative
+percentages as a line on the secondary axis. Charts reference the static report cells, so later
+edits to the report update the chart; rerun the analysis to reflect changes to the original input.
+The command returns the chart id. Chart Output accepts at most 20,000 categories including More;
+requests past that limit or without room beside/below the report are refused without writing the
+report or chart. Excel-side visual verification has not been performed.
+
+Behavior reference: [Microsoft's Analysis ToolPak documentation](https://support.microsoft.com/en-us/excel/use-the-analysis-toolpak-to-perform-complex-data-analysis).
+
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
@@ -104,6 +115,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Analysis ToolPak Histogram Chart Output creates ordinary frequency columns, optionally sorted by frequency, with a secondary cumulative percentage line; the generated chart references its static report and survives XLSX save/reopen. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |

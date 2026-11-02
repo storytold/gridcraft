@@ -63,6 +63,7 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
+            Check { key: "chartOutput", label: "Chart Output" },
         ],
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
@@ -187,6 +188,7 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
         "rowsPerSample": "", "variance1": "", "variance2": "", "inverse": false,
+        "chartOutput": false,
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
     // Random Number Generation and Sampling.
@@ -297,7 +299,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
                 }
             } else {
                 let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).labelled_by(r.id).changed() {
                     d.values.insert(key.into(), json!(t));
                     d.values.insert("outputTo".into(), json!(choice));
                 }
