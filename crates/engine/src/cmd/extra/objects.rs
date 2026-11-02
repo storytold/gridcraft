@@ -1,8 +1,22 @@
+use gridcraft_model::ObjKind;
+
 use super::chart::format_series;
 use super::{
     Anchor, CellRef, Color, EngineError, Json, Result, Session, Shape, ShapeKind, Sheet, anchor_mode_name, bad, bool_param, edit, json, str_param,
     u32_param,
 };
+
+/// The kind of object a `kind` parameter names, `shape` when absent; an unknown kind is an
+/// error, as for the `object.*` commands.
+fn kind_param(p: &Json, cmd: &str) -> Result<ObjKind> {
+    ObjKind::parse(str_param(p, "kind").unwrap_or("shape")).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer or equation"))
+}
+
+/// Whether `kind` names the shape `sh`: an equation is a shape too, and a plain shape is not an
+/// equation, as `Sheet::object_anchor` has it for the `object.*` commands.
+fn shape_is(kind: ObjKind, sh: &Shape) -> bool {
+    kind != ObjKind::Equation || sh.kind == ShapeKind::Equation
+}
 
 pub(super) fn shape_fill(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "kind") == Some("shape") {
@@ -34,7 +48,7 @@ fn with_shape(s: &mut Session, p: &Json, f: impl FnOnce(&mut Shape)) -> Result<J
 
 pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("arrange", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("shape").to_string();
+    let kind = kind_param(p, "arrange")?;
     let extreme = bool_param(p, "toFront").or(bool_param(p, "toBack")).unwrap_or(false);
     let si = s.doc()?.wb.active_sheet();
     fn reorder<T>(v: &mut Vec<T>, i: usize, forward: bool, extreme: bool) {
@@ -52,28 +66,17 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
     }
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
-        match kind.as_str() {
-            "chart" => {
-                if let Some(i) = sh.charts.iter().position(|c| c.id == id) {
-                    reorder(&mut sh.charts, i, forward, extreme);
-                }
+        // An id that is not an object of this kind is an error, so a stale id, or a shape's id
+        // given as an equation, never reorders something else or succeeds silently.
+        let found = match kind {
+            ObjKind::Chart => sh.charts.iter().position(|c| c.id == id).map(|i| reorder(&mut sh.charts, i, forward, extreme)),
+            ObjKind::Image => sh.images.iter().position(|c| c.id == id).map(|i| reorder(&mut sh.images, i, forward, extreme)),
+            ObjKind::Slicer => sh.slicers.iter().position(|c| c.id == id).map(|i| reorder(&mut sh.slicers, i, forward, extreme)),
+            ObjKind::Shape | ObjKind::Equation => {
+                sh.shapes.iter().position(|c| c.id == id && shape_is(kind, c)).map(|i| reorder(&mut sh.shapes, i, forward, extreme))
             }
-            "image" => {
-                if let Some(i) = sh.images.iter().position(|c| c.id == id) {
-                    reorder(&mut sh.images, i, forward, extreme);
-                }
-            }
-            "slicer" => {
-                if let Some(i) = sh.slicers.iter().position(|c| c.id == id) {
-                    reorder(&mut sh.slicers, i, forward, extreme);
-                }
-            }
-            _ => {
-                if let Some(i) = sh.shapes.iter().position(|c| c.id == id) {
-                    reorder(&mut sh.shapes, i, forward, extreme);
-                }
-            }
-        }
+        };
+        found.ok_or_else(|| bad("arrange", "no such object"))?;
         Ok(Json::Null)
     })
 }
@@ -100,17 +103,18 @@ pub(super) fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(Json::Array(v))
 }
 
-fn anchors_of<'a>(sh: &'a mut Sheet, kind: &str) -> Vec<(u32, &'a mut Anchor)> {
+/// The anchors of every object of `kind` on the sheet; under `equation`, only the equations.
+fn anchors_of(sh: &mut Sheet, kind: ObjKind) -> Vec<(u32, &mut Anchor)> {
     match kind {
-        "chart" => sh.charts.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
-        "image" => sh.images.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
-        "slicer" => sh.slicers.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
-        _ => sh.shapes.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Chart => sh.charts.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Image => sh.images.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Slicer => sh.slicers.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Shape | ObjKind::Equation => sh.shapes.iter_mut().filter(|c| shape_is(kind, c)).map(|c| (c.id, &mut c.anchor)).collect(),
     }
 }
 
 pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
-    let kind = str_param(p, "kind").unwrap_or("shape").to_string();
+    let kind = kind_param(p, "arrange.align")?;
     let ids: Vec<u32> =
         p.get("ids").and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as u32)).collect()).unwrap_or_default();
     let how = str_param(p, "align").unwrap_or("left").to_string();
@@ -119,7 +123,7 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
         let sheet = cx.sheet_mut(si)?;
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
             let shc = sheet.clone();
-            anchors_of(sheet, &kind)
+            anchors_of(sheet, kind)
                 .into_iter()
                 .filter(|(id, _)| ids.contains(id))
                 .map(|(id, a)| (id, shc.col_left(a.cell.col) + a.dx as f64, shc.row_top(a.cell.row) + a.dy as f64, a.width, a.height))
@@ -133,7 +137,7 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
         let top = geo.iter().map(|g| g.2).fold(f64::INFINITY, f64::min);
         let bottom = geo.iter().map(|g| g.2 + g.4 as f64).fold(f64::NEG_INFINITY, f64::max);
         let shc = sheet.clone();
-        for (id, a) in anchors_of(sheet, &kind) {
+        for (id, a) in anchors_of(sheet, kind) {
             let Some(g) = geo.iter().find(|g| g.0 == id) else { continue };
             let (mut x, mut y) = (g.1, g.2);
             match how.as_str() {

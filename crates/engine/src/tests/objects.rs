@@ -371,3 +371,34 @@ fn chart_set_keeps_a_chart_size_a_file_made_larger_than_the_limit() {
     s.execute("chart.set", json!({"chart": chart, "width": 50_000, "height": 50_000})).unwrap();
     assert_eq!(size(&s), (11_990.0, 10_000.0), "hostile sizes are capped at the current width and at 10,000");
 }
+
+#[test]
+fn arrange_and_align_match_a_shape_id_to_its_kind() {
+    // `arrange.*` and `arrange.align` under `kind: "equation"` act on equations only: an
+    // ordinary shape's id given as an equation is refused by `arrange` and left in place by
+    // `align`, as `object.delete` refuses it. An equation is a shape too, so its id works under
+    // `shape`, as for the other object commands; an unknown kind, and an id of no object of the
+    // kind, are refused instead of acting on whatever shape has the id.
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    let (shape, equation) = (objs[2], objs[4]);
+    let order = |s: &Session| -> Vec<u32> { sheet(s, 0).shapes.iter().map(|c| c.id).collect() };
+    assert_eq!(order(&s), vec![shape.id, equation.id]);
+    assert!(s.execute("arrange.bringForward", json!({"kind": "equation", "id": shape.id, "toFront": true})).is_err());
+    assert_eq!(order(&s), vec![shape.id, equation.id], "the shape is not reordered as an equation");
+    s.execute("arrange.sendBackward", json!({"kind": "equation", "id": equation.id, "toBack": true})).unwrap();
+    assert_eq!(order(&s), vec![equation.id, shape.id]);
+    s.execute("arrange.bringForward", json!({"kind": "shape", "id": equation.id, "toFront": true})).unwrap();
+    assert_eq!(order(&s), vec![shape.id, equation.id], "an equation is a shape too");
+    assert!(s.execute("arrange.bringForward", json!({"kind": "widget", "id": shape.id})).is_err());
+    assert!(s.execute("arrange.bringForward", json!({"kind": "chart", "id": 9999})).is_err());
+    assert!(s.execute("arrange.bringForward", json!({"kind": "shape", "id": objs[0].id})).is_err(), "a chart's id is not a shape");
+    // Align: the shape given as an equation keeps its place while the two equations line up.
+    let second = ObjRef::new(ObjKind::Equation, id_of(&s.execute("insert.equation", json!({"latex": "y", "cell": "B30"})).unwrap(), "equation"));
+    let before = anchor_of(&s, shape);
+    s.execute("arrange.align", json!({"kind": "equation", "ids": [shape.id, equation.id, second.id], "align": "left"})).unwrap();
+    assert_eq!(anchor_of(&s, shape), before, "the shape is not aligned as an equation");
+    let (a, b) = (sheet(&s, 0).object_anchor(equation).unwrap(), sheet(&s, 0).object_anchor(second).unwrap());
+    assert_eq!((a.cell.col, a.dx), (b.cell.col, b.dx), "the equations line up");
+    assert!(s.execute("arrange.align", json!({"kind": "widget", "ids": [shape.id, equation.id], "align": "left"})).is_err());
+}
