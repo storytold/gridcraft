@@ -55,26 +55,31 @@ fn uses_random(e: &Expr) -> bool {
     found
 }
 
-fn run_level(graph: &Graph, host: &mut PassHost<'_>, exprs: &HashMap<Key, std::sync::Arc<Expr>>, level: &[Key], threads: usize) {
+fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usize) {
+    if !host.direct.is_empty() {
+        for (k, v) in std::mem::take(&mut host.direct) {
+            host.pending.remove(&k);
+            host.results.insert(k, v);
+        }
+    }
     if threads <= 1 || level.len() < PARALLEL_MIN {
         for &k in level {
             host.calculate(k);
         }
         return;
     }
-    let (random, mut parallel): (Vec<Key>, Vec<Key>) = level.iter().copied().partition(|k| exprs.get(k).is_some_and(|e| uses_random(e)));
+    let (random, mut parallel): (Vec<Key>, Vec<Key>) =
+        level.iter().copied().partition(|k| graph.nodes.get(k).is_some_and(|n| n.expr.as_ref().is_some_and(|e| uses_random(e))));
     let warm = WARM_UP.min(parallel.len());
     for k in parallel.drain(..warm) {
         host.calculate(k);
     }
     if !parallel.is_empty() {
         let pending: HashSet<Key> = parallel.iter().copied().collect();
-        if let Some(out) = parallel::eval_level(host.wb(), graph, exprs, &parallel, &host.results, &host.spills, host.now_value(), threads, &pending)
+        if let Some(out) =
+            parallel::eval_level(host.wb(), graph, &parallel, &host.results, &host.spills, host.now_value(), threads, &pending, host.in_pass())
         {
-            for (k, v) in out.values {
-                host.results.insert(k, v);
-                host.pending.remove(&k);
-            }
+            host.direct.extend(out.values);
             host.spills.extend(out.spills);
             host.thread_log.extend(out.threads);
             for k in out.deferred {
@@ -410,23 +415,21 @@ impl Calc {
             dirty.dedup();
             let now = self.now();
             let mut rng = self.rng;
-            let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
-            for k in &dirty {
-                if let Some(e) = self.graph.nodes.get(k).and_then(|n| n.expr.clone()) {
-                    exprs.insert(*k, e);
-                } else if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
-                    exprs.insert(*k, e);
-                }
-            }
+            let in_pass: HashSet<Key> = dirty.iter().copied().collect();
             let threads = if wb.calc.iterative { 1 } else { thread_count(&wb.calc) };
             let tp = prof_now();
             let plan = self.graph.levels(&dirty);
-            let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now);
+            let (results, spills, cycles, direct) = {
+                let mut host = PassHost::new(wb, &self.graph, &in_pass, &mut rng, now);
                 host.iterate = wb.calc.iterative;
-                host.pending = exprs.keys().copied().collect();
                 for level in plan.levels() {
-                    run_level(&self.graph, &mut host, &exprs, level, threads);
+                    run_level(&self.graph, &mut host, level, threads);
+                }
+                if !plan.rest().is_empty() || host.iterate {
+                    for (k, v) in std::mem::take(&mut host.direct) {
+                        host.pending.remove(&k);
+                        host.results.insert(k, v);
+                    }
                 }
                 for &k in plan.rest() {
                     host.calculate(k);
@@ -439,20 +442,21 @@ impl Calc {
                     }
                 }
                 self.last_formula_thread.extend(host.thread_log.iter().map(|(k, id)| (*k, *id)));
-                (host.results, host.spills, host.cycles)
+                let direct = std::mem::take(&mut host.direct);
+                (host.results, host.spills, host.cycles, direct)
             };
             self.rng = rng;
             if profile_enabled() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
             }
             let tw = prof_now();
-            self.last_recalc_cells += results.len();
+            self.last_recalc_cells += results.len() + direct.len();
             if !self.circular.is_empty() {
                 let evaluated: HashSet<Key> = dirty.iter().copied().collect();
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            let mut spill_changes = self.write_back(wb, &dirty, results, &spills, direct);
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
@@ -481,18 +485,31 @@ impl Calc {
         &mut self,
         wb: &mut Workbook,
         dirty: &[Key],
-        results: HashMap<Key, Value>,
+        mut results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
+        direct: Vec<(Key, Value)>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
-        for (key, value) in results {
+        for (key, value) in direct {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             if let Some(cell) = sheet.cells.get_mut(key.1)
                 && cell.value != value
             {
                 cell.value = value;
             }
+        }
+        for key in dirty {
+            let Some(value) = results.remove(key) else { continue };
+            let Some(sheet) = wb.sheet_mut(key.0) else { continue };
+            if let Some(cell) = sheet.cells.get_mut(key.1)
+                && cell.value != value
+            {
+                cell.value = value;
+            }
+        }
+        if spills.is_empty() && wb.sheets.iter().all(|sheet| sheet.spill.is_empty() && sheet.spill_ranges.is_empty()) {
+            return spill_changes;
         }
         for key in dirty {
             let new = spills.get(key);
@@ -593,9 +610,10 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
 }
 
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
-    let exprs = HashMap::default();
+    let graph = Graph::default();
+    let in_pass = HashSet::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
-    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut host = PassHost::new(wb, &graph, &in_pass, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
 }
@@ -616,7 +634,7 @@ pub(crate) mod tests {
     use gridcraft_core::{CellRef, RangeRef, Value};
     use gridcraft_model::{Cell, Formula, Workbook};
 
-    use super::{Calc, HashMap, HashSet, Host, Intervals, Key, PassHost};
+    use super::{Calc, HashSet, Host, Intervals, Key, PassHost};
 
     /// xorshift64 for repeatable pseudo-random cases.
     fn rng(state: &mut u64) -> u64 {
@@ -823,11 +841,9 @@ pub(crate) mod tests {
     fn wide_read_at_the_nesting_limit_suspends_once() {
         const WIDTH: u32 = 3000;
         let mut wb = Workbook::new();
-        let mut exprs = HashMap::default();
-        let mut put = |wb: &mut Workbook, at: String, text: String| {
+        let put = |wb: &mut Workbook, at: String, text: String| {
             let at = CellRef::parse(&at).unwrap();
             wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(&text)));
-            exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(&text[1..]).unwrap()));
         };
         // A1 reads A2, ..., A64 (the 64th formula deep) reads a wide range of formulas.
         for r in 1..64 {
@@ -837,8 +853,11 @@ pub(crate) mod tests {
         for r in 1..=WIDTH {
             put(&mut wb, format!("B{r}"), format!("={r}*2"));
         }
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        let in_pass: HashSet<Key> = calc.graph.nodes.keys().copied().collect();
         let mut rng = 1u64;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(&wb, &calc.graph, &in_pass, &mut rng, 0.0);
         host.calculate((0, CellRef::parse("A1").unwrap()));
         let total = (WIDTH * (WIDTH + 1)) as f64;
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
@@ -850,17 +869,15 @@ pub(crate) mod tests {
     /// values it hands over for `range` while the formulas in `pending` (cell, formula) have not been
     /// calculated yet, or `None` when it declines the block.
     pub(crate) fn probe_visit_range(wb: &Workbook, pending: &[(&str, &str)], range: RangeRef) -> Option<Vec<Value>> {
-        let mut exprs = HashMap::default();
-        for (at, formula) in pending {
-            let expr = gridcraft_formula::parse(formula.strip_prefix('=').unwrap_or(formula)).ok()?;
-            exprs.insert((0, CellRef::parse(at)?), std::sync::Arc::new(expr));
-        }
+        let mut calc = Calc::new();
+        calc.rebuild(wb);
+        let in_pass: HashSet<Key> = pending.iter().filter_map(|(at, _)| CellRef::parse(at).map(|c| (0, c))).collect();
 
         // A cell in `pending` is calculated the first time something reads it, which is the state
         // of a real pass partway through; `visit_range` has to cope with the formulas it reads
         // being calculated under it.
         let mut rng = 1u64;
-        let mut host = PassHost::new(wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(wb, &calc.graph, &in_pass, &mut rng, 0.0);
 
         let mut seen = Vec::new();
         host.visit_range(0, range, &mut |v| {
