@@ -588,6 +588,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Vyhledávání aktualizací…",
         "Could not check for updates." => "Aktualizace se nepodařilo ověřit.",
         "Check Again" => "Zkusit znovu",
+        "Search:" => "Hledat:",
+        "e.g. lookup, average, date" => "např. hledání, průměr, datum",
+        "All" => "Vše",
         _ => return None,
     })
 }

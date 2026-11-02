@@ -557,6 +557,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Zoeken naar updates…",
         "Could not check for updates." => "Kan niet naar updates zoeken.",
         "Check Again" => "Opnieuw controleren",
+        "Search:" => "Zoeken:",
+        "e.g. lookup, average, date" => "bijv. zoeken, gemiddelde, datum",
+        "All" => "Alle",
         _ => return None,
     })
 }

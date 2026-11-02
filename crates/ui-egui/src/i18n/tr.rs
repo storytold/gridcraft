@@ -447,6 +447,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Güncellemeler denetleniyor…",
         "Could not check for updates." => "Güncellemeler denetlenemedi.",
         "Check Again" => "Yeniden denetle",
+        "Insert Function" => "İşlev ekle",
+        "Search:" => "Ara:",
+        "e.g. lookup, average, date" => "ör. arama, ortalama, tarih",
+        "Cancel" => "İptal",
+        "All" => "Tümü",
         _ => return None,
     })
 }

@@ -482,6 +482,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Recherche de mises à jour…",
         "Could not check for updates." => "Impossible de rechercher les mises à jour.",
         "Check Again" => "Réessayer",
+        "Insert Function" => "Insérer une fonction",
+        "Search:" => "Rechercher :",
+        "e.g. lookup, average, date" => "p. ex. recherche, moyenne, date",
+        "Cancel" => "Annuler",
+        "All" => "Toutes",
         _ => return None,
     })
 }

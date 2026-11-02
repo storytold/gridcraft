@@ -477,6 +477,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Provera ažuriranja…",
         "Could not check for updates." => "Nije moguće proveriti ažuriranja.",
         "Check Again" => "Proveri ponovo",
+        "Insert Function" => "Umetni funkciju",
+        "Search:" => "Pretraga:",
+        "e.g. lookup, average, date" => "npr. pretraga, prosek, datum",
+        "Cancel" => "Otkaži",
+        "All" => "Sve",
         _ => return None,
     })
 }

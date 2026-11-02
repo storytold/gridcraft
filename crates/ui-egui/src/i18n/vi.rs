@@ -449,6 +449,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Đang kiểm tra bản cập nhật…",
         "Could not check for updates." => "Không thể kiểm tra bản cập nhật.",
         "Check Again" => "Kiểm tra lại",
+        "Insert Function" => "Chèn hàm",
+        "Search:" => "Tìm kiếm:",
+        "e.g. lookup, average, date" => "ví dụ: tra cứu, trung bình, ngày",
+        "Cancel" => "Hủy",
+        "All" => "Tất cả",
         _ => return None,
     })
 }

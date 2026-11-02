@@ -8,8 +8,10 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
     let language = app.ui.language;
     ui.horizontal(|ui| {
-        ui.label(language.tr("Search:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")));
+        let label = ui.label(language.tr("Search:"));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")))
+            .labelled_by(label.id);
         // Once only, so Tab can move on to the category list.
         take_first_focus(d, &r);
     });

@@ -318,10 +318,10 @@ fn main() -> eframe::Result<()> {
     let control_port = control_port;
     load_prefs(&mut app);
     // Stamp the startup workbook's author from the persisted user name.
-    if app.session.documents().is_empty() {
-        if let Err(error) = app.run("file.new", json!({})) {
-            log::warn!("new workbook: {error}");
-        }
+    if app.session.documents().is_empty()
+        && let Err(error) = app.run("file.new", json!({}))
+    {
+        log::warn!("new workbook: {error}");
     }
     app.after_engine(); // Show warnings from the sample.
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open

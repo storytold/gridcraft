@@ -478,6 +478,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "업데이트 확인 중…",
         "Could not check for updates." => "업데이트를 확인할 수 없습니다.",
         "Check Again" => "다시 확인",
+        "Insert Function" => "함수 삽입",
+        "Search:" => "검색:",
+        "e.g. lookup, average, date" => "예: 검색, 평균, 날짜",
+        "Cancel" => "취소",
+        "All" => "모두",
         _ => return None,
     })
 }

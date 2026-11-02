@@ -470,6 +470,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "正在检查更新…",
         "Could not check for updates." => "无法检查更新。",
         "Check Again" => "重新检查",
+        "Insert Function" => "插入函数",
+        "Search:" => "搜索：",
+        "e.g. lookup, average, date" => "例如：查找、平均值、日期",
+        "Cancel" => "取消",
+        "All" => "全部",
         _ => return None,
     })
 }

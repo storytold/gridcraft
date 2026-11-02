@@ -73,3 +73,18 @@ fn russian_formula_failure_keeps_the_typed_error() {
     h.state_mut().begin_edit(None, false);
     assert!(h.state().editor.as_ref().unwrap().text.contains("НЕСУЩЕСТВУЮЩАЯ"));
 }
+
+/// The function help's search field and cancellation keep their localized accessible controls in every language.
+#[test]
+fn function_dialog_controls_follow_each_interface_language() {
+    for language in Language::ALL {
+        let mut h = harness();
+        h.state_mut().ui.language = language;
+        h.state_mut().open_dialog("insertFunction", json!({"category":"Financial"}));
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, language.tr("Search:"));
+        h.get_by_role_and_label(egui::accesskit::Role::Button, &format!(" {} ", language.tr("Cancel"))).click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "{language:?}: Cancel must close the function dialog");
+    }
+}
