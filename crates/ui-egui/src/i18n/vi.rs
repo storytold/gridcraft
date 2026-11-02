@@ -457,6 +457,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "ví dụ: tra cứu, trung bình, ngày",
         "Cancel" => "Hủy",
         "All" => "Tất cả",
+        "Statistical" => "Thống kê",
+        "Database" => "Cơ sở dữ liệu",
+        "Information" => "Thông tin",
+        "Engineering" => "Kỹ thuật",
+        "Cube" => "Khối",
+        "Compatibility" => "Tương thích",
+        "Add-in and Automation" => "Phần bổ trợ và Tự động hóa",
         _ => return None,
     })
 }

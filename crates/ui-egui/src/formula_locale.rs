@@ -232,18 +232,29 @@ mod russian_help_tests {
     #[test]
     fn reported_tooltips_translate_descriptions_and_argument_lists() {
         for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
-            for name in ["XLOOKUP", "COLUMN", "RADIANS"] {
+            for (name, russian_name) in [("XLOOKUP", "ПРОСМОТРX"), ("COLUMN", "СТОЛБЕЦ"), ("RADIANS", "РАДИАНЫ")] {
                 let english = crate::formula_bar::function_description(name).unwrap();
                 let expected = language.function_description(&english).unwrap();
                 assert_ne!(expected, english);
                 assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(expected));
                 let english_signature = crate::formula_bar::function_signature(name).unwrap();
-                let (_, args) = split_signature(&english_signature).unwrap();
                 let translated = signature(name, FormulaLocale::Ru, language).unwrap();
-                for arg in args {
-                    assert!(translated.contains(&translate_argument(arg, language).unwrap()), "{translated}: {arg}");
-                }
-                assert!(translated.starts_with(FormulaLocale::Ru.function_name(name)));
+                let arg = |key| language.function_argument(key).unwrap();
+                // Independently spell the known signatures so swapped arguments or optionality fail.
+                let expected = match name {
+                    "XLOOKUP" => format!(
+                        "{russian_name}({}; {}; {}; [{}]; [{}]; [{}])",
+                        arg("lookup_value"),
+                        arg("lookup_array"),
+                        arg("return_array"),
+                        arg("if_not_found"),
+                        arg("match_mode"),
+                        arg("search_mode")
+                    ),
+                    "COLUMN" => format!("{russian_name}([{}])", arg("reference")),
+                    _ => format!("{russian_name}({})", arg("angle")), // The third case is RADIANS.
+                };
+                assert_eq!(translated, expected, "{language:?}: {name}");
                 assert_eq!(signature(name, FormulaLocale::En, Language::En).as_deref(), Some(english_signature.as_str()));
             }
         }
@@ -269,8 +280,14 @@ mod russian_help_tests {
             let locale = language.formula_locale();
             let hint = signature("SUM", locale, language).unwrap();
             let help = description("SUM", locale, language).unwrap();
+            let number = if language == Language::En { "number" } else { language.function_argument("number").unwrap() };
+            let expected = match locale {
+                FormulaLocale::Ru => format!("СУММ({number}1; [{number}2]; ...)"),
+                FormulaLocale::Es => format!("SUMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::En => format!("SUM({number}1, [{number}2], ...)"),
+            };
+            assert_eq!(hint, expected, "{language:?}");
             if language != Language::En {
-                assert!(hint.contains(language.function_argument("number").unwrap()), "{language:?}: {hint}");
                 assert_ne!(help, "Adds all the numbers in the arguments.", "{language:?}");
             }
         }

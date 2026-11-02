@@ -834,7 +834,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Confidence Level for Mean (%), blank for none:" => "Nível de confiabilidade para a média (%), em branco para nenhum:",
         "Kth Largest (blank for none):" => "K-ésimo maior (em branco para nenhum):",
         "Kth Smallest (blank for none):" => "K-ésimo menor (em branco para nenhum):",
-        "Bin Range (blank for automatic bins):" => "Intervalo do bloco (em branco para blocos automáticos):",
+        "Bin Range (blank for automatic bins):" => "Intervalo de classes (em branco para classes automáticas):",
         "Pareto (sorted histogram)" => "Pareto (histograma classificado)",
         "Cumulative Percentage" => "Porcentagem cumulativa",
         "Alpha:" => "Alfa:",

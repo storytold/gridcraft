@@ -303,7 +303,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Logical" => "논리",
         "Date & Time" => "날짜 및 시간",
         "Lookup & Reference" => "조회 및 참조",
-        "Math & Trig" => "수학 및 삼각",
+        "Math & Trig" => "수학 및 삼각 함수",
         "More Functions" => "기타 함수",
         "Page Layout|Orientation" => "용지 방향",
         "Display theme" => "표시 테마",

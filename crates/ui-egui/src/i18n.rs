@@ -389,6 +389,49 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Descriptions must not collapse distinct operations into the same translated operation.
+    #[test]
+    fn translated_help_keeps_distinct_math_and_statistics() {
+        let pairs = [
+            ("Arccosine in radians.", "Arcsine in radians."),
+            ("Arccotangent in radians (0 to pi).", "Arctangent in radians."),
+            ("Rounds a number down to a multiple of significance.", "Rounds a number up to a multiple of significance."),
+            ("Rounds a number down to the nearest integer or multiple.", "Rounds a number up to the nearest integer or multiple."),
+            ("Rounds a number toward negative infinity to a multiple.", "Rounds a number toward positive infinity to a multiple."),
+            ("Rounds a number away from zero to a given number of digits.", "Rounds a number toward zero to a given number of digits."),
+            ("Sample variance.", "Population variance."),
+            ("Sample standard deviation.", "Population standard deviation."),
+            ("Sample skewness.", "Population skewness."),
+        ];
+        for language in Language::ALL {
+            for (first, second) in pairs {
+                if let (Some(a), Some(b)) = (language.function_description(first), language.function_description(second)) {
+                    assert_ne!(a, b, "{language:?}: distinct operations collapsed: {first} / {second}");
+                }
+            }
+        }
+    }
+
+    /// Programmatic identifiers inside descriptions are mathematical notation, not words to translate.
+    #[test]
+    fn translated_help_preserves_mathematical_identifiers() {
+        let examples = [
+            ("Bessel function of the first kind, J_n(x).", "J_n(x)"),
+            ("Bessel function of the second kind, Y_n(x).", "Y_n(x)"),
+            ("Modified Bessel function of the first kind, I_n(x).", "I_n(x)"),
+            ("Modified Bessel function of the second kind, K_n(x).", "K_n(x)"),
+            ("Complementary error function, 1 - ERF(x).", "ERF(x)"),
+            ("Extracts data from XML with an XPath (not available; returns #VALUE!).", "XPath"),
+        ];
+        for language in Language::ALL {
+            for (english, identifier) in examples {
+                if let Some(translated) = language.function_description(english) {
+                    assert!(translated.contains(identifier), "{language:?}: missing {identifier} in {translated}");
+                }
+            }
+        }
+    }
+
     /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
     fn function_help_tables_are_sorted_and_unique() {

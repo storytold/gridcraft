@@ -117,7 +117,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Symbol" => "Symbole",
         "Equation" => "Équation",
         "Insert New Equation..." => "Insérer une nouvelle équation",
-        "Sparklines" => "Courbes de tendance",
+        "Sparklines" => "Graphiques sparkline",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
         "Header & Footer" => "En-tête et pied de page",
@@ -383,7 +383,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheets" => "Feuilles",
         "Protect Workbook" => "Protéger le classeur",
         "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => {
-            "La structure de la feuille est verrouillée : les feuilles ne peuvent pas être ajoutées, déplacées, renommées ou supprimées."
+            "La structure des feuilles est verrouillée : les feuilles ne peuvent pas être ajoutées, déplacées, renommées ou supprimées."
         }
         "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => {
             "Verrouiller la structure des feuilles pour qu'elles ne puissent pas être ajoutées, déplacées, renommées ou supprimées."
@@ -398,7 +398,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No workbook is open." => "Aucun classeur n'est ouvert.",
         "Save as type" => "Type de fichier",
         "Excel Workbook (*.xlsx)" => "Classeur Excel (*.xlsx)",
-        "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (séparateur point-virgule) (*.csv)",
+        "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (séparateur virgule) (*.csv)",
         "Web Page (*.html)" => "Page web (*.html)",
         "PDF (*.pdf)" => "PDF (*.pdf)",
         "Download" => "Télécharger",
@@ -419,8 +419,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Enregistrer la feuille en tant que document PDF qui conserve sa mise en page."
         }
         "Change File Type" => "Changer le type de fichier",
-        "CSV (Comma delimited)" => "CSV (séparateur point-virgule)",
-        "Save the active sheet as comma-separated text." => "Enregistrer la feuille active sous forme de texte séparé par des points-virgules.",
+        "CSV (Comma delimited)" => "CSV (séparateur virgule)",
+        "Save the active sheet as comma-separated text." => "Enregistrer la feuille active sous forme de texte séparé par des virgules.",
         "Web Page (.html)" => "Page web (.html)",
         "Save the workbook as a web page." => "Enregistrer le classeur en tant que page web.",
         "Options|General" => "Général",

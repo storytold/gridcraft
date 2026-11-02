@@ -27,7 +27,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Wrap Text" => "自动换行",
         "Merge & Center" => "合并后居中",
         "Merge Cells" => "合并单元格",
-        "Merge Across" => "跨行合并",
+        "Merge Across" => "跨越合并",
         "Unmerge Cells" => "取消合并单元格",
         "Fill Color" => "填充颜色",
         "Font Color" => "字体颜色",

@@ -476,6 +476,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Before sheet (position, 0 = first):" => "Перед листом (позиция, 0 = первый):",
         "Bin Range (blank for automatic bins):" => "Диапазон интервалов (пусто — автоматически):",
         "Blanks" => "Пустые ячейки",
+        "(Blanks)" => "(Пустые)",
         "Border" => "Граница",
         "Bottom" => "Нижняя",
         "Bottom Align" => "Выровнять по нижнему краю",

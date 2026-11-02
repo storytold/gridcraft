@@ -17,7 +17,7 @@ continue to fall back to English; this is coverage of catalog keys, not every li
 Formula input adapts #1850's 199 aliases to the current parser and help architecture. Unicode
 LET/LAMBDA name precedence and iterative handling of long flat expressions are retained.
 Russian help for all 515 currently registered functions (479 distinct descriptions and 283
-argument keys) is English-keyed in `i18n/ru_functions.rs`. The original rows are retained;
+argument keys) is English-keyed in `i18n/ru_functions.rs`. Original keys are retained, with terminology corrections;
 new descriptions translate GridCraft's own catalog. Localized error
 literals round-trip at the editor boundary, with canonical storage/API/XLSX syntax. Fixed
 messages use `tr_error`; selected dynamic parser/parameter messages preserve captured user data.
@@ -31,7 +31,7 @@ All 19 offered interface languages now have descriptions and argument labels for
 Japanese, Korean, Dutch, Polish, Brazilian Portuguese, Romanian, Russian, Serbian, Turkish,
 Ukrainian, Vietnamese and Simplified Chinese. Each translated table covers 479 distinct
 descriptions and 283 argument keys. Existing Spanish/Russian help and the previously added
-translated hints are retained. Mathematical variables such as `x`, `y` and `n`, and identifiers
+translated hints are reviewed alongside the new rows, preserving their keys and correcting mistranslations. Mathematical variables such as `x`, `y` and `n`, and identifiers
 such as XML/XPath, intentionally stay recognizable.
 
 The existing `i18n/<lang>_functions.rs` representation is shared by all languages. A single
@@ -43,11 +43,19 @@ catalog strings still fall back to English instead of blocking a new function.
 
 New non-Russian rows are machine-assisted translation drafts of GridCraft's own English text
 (Google Translate), with manual corrections for terminology, rounding direction/ties,
-forecast-statistic codes and untranslated rows. Existing GridCraft translations take priority;
+forecast-statistic codes and untranslated rows. A separate agent reviews each translated package
+against the English catalog and argument contexts, including existing rows. Existing GridCraft translations take priority where correct;
 no Office help text, vendor assets or another open PR's dictionary is imported. The new rows
 need native-speaker review, especially specialized financial/statistical terminology. Automated
 coverage and syntax checks establish completeness and structure, not linguistic certification.
 Serbian additions use the Latin script of the existing interface catalog.
+
+Chart rendering supplies translated generated series names through a resolver callback, including
+when a name formula or reference evaluates to an empty string. Explicit names remain unchanged;
+the default resolver used by files and APIs still generates canonical English names. Blank-filter
+search uses the displayed translation while commands retain their canonical blank-value payload.
+Generated sheet prefixes follow the existing sheet-name rules, and command metadata documents
+the localized book, sheet and table-column prefix parameters.
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
@@ -152,6 +160,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Review translated help by language; correct mathematical/statistical/financial terminology, localize empty resolved chart names and blank-filter search, validate generated sheet prefixes and assert complete hint signatures |
 | 2026-11-02 | minor | Complete help for the current 515 functions in all 18 translated interface languages; retain existing wording, separate help from formula syntax and test optional/repeated-argument structure |
 | 2026-11-02 | minor | Extend Russian help to 479 distinct descriptions and 283 argument keys; preserve original translations and canonical formula syntax; cover reported XLOOKUP, COLUMN and RADIANS tooltips |
 | 2026-11-02 | minor | Ctrl+Enter fills unchanged stored text as a typed literal without adding an apostrophe; fresh localized numeric entry retains normal parsing |

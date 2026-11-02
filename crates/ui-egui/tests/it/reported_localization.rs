@@ -111,3 +111,53 @@ fn localized_editor_preserves_python_code_and_literal_fill_replaces_it() {
     assert!(cell.py.is_none());
     assert_eq!(cell.value, Value::text("1,5"));
 }
+
+/// Invalid generated sheet names are rejected before a document is created; valid apostrophes remain allowed.
+#[test]
+fn generated_first_sheet_name_respects_the_sheet_name_contract() {
+    let mut session = gridcraft_engine::Session::new();
+    for prefix in ["'Data", "'", "Bad/Name"] {
+        assert!(session.execute("file.new", json!({"sheetPrefix":prefix})).is_err());
+        assert!(session.documents().is_empty());
+    }
+    session.execute("file.new", json!({"bookPrefix":"'Book", "sheetPrefix":"Data'"})).unwrap();
+    let wb = &session.active().unwrap().wb;
+    let name = &wb.active().unwrap().name;
+    assert_eq!(name, "Data'1");
+    assert!(wb.check_sheet_name(name, Some(0)).is_ok());
+}
+
+/// Native-language blank filtering matches the visible caption and preserves the engine's blank criterion.
+#[test]
+fn blank_filter_search_uses_its_localized_label() {
+    use egui::{Event, Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["Header"],["Apple"],[null],["Banana"]]})).unwrap();
+    h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::Key {
+            key: Key::ArrowDown,
+            physical_key: Some(Key::ArrowDown),
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        });
+    }
+    h.run_steps(4);
+    let label = Language::Ru.tr("(Blanks)");
+    assert_ne!(label, "(Blanks)");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label);
+    h.input_mut().events.push(Event::Text(label.trim_matches(['(', ')']).into()));
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label);
+    assert!(h.query_by_label("Apple").is_none());
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::Key { key: Key::Enter, physical_key: Some(Key::Enter), pressed, repeat: false, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(sh.is_row_hidden(1));
+    assert!(!sh.is_row_hidden(2));
+    assert!(sh.is_row_hidden(3));
+}

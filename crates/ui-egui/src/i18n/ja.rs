@@ -739,7 +739,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Search:", "検索:"),
     ("e.g. lookup, average, date", "例: 検索、平均、日付"),
     ("Date & Time", "日付/時刻"),
-    ("Lookup & Reference", "検索/行列"),
+    ("Lookup & Reference", "検索/参照"),
     ("Math & Trig", "数学/三角"),
     ("Statistical", "統計"),
     ("Engineering", "エンジニアリング"),

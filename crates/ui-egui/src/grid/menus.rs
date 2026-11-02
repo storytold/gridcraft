@@ -66,7 +66,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
+            let matches = |v: &str| needle.is_empty() || filter_value_label(v, lang).to_lowercase().contains(&needle);
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
@@ -79,7 +79,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, if v == "(Blanks)" { lang.tr("(Blanks)") } else { v.as_str() });
+                    ui.checkbox(on, filter_value_label(v, lang));
                 }
             });
             ui.ctx().data_mut(|d| {
@@ -120,6 +120,11 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         });
         app.grid.filter_menu = None;
     }
+}
+
+/// Localizes the reserved blank-value label without changing filter payload values.
+fn filter_value_label(value: &str, language: crate::i18n::Language) -> &str {
+    if value == "(Blanks)" { language.tr("(Blanks)") } else { value }
 }
 
 /// Draws and dispatches the cell context menu, including Show Details when offered, clipboard and insert/format actions; closes on Esc or an outside press.

@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format as Table",
             ["Home", "Styles"],
             None,
-            "{range?, style: \"TableStyleMedium2\", header?} (inside a table: restyles it)",
+            "{range?, style: \"TableStyleMedium2\", header?, columnPrefix?: string (default Column)} (inside a table: restyles it)",
             has_doc,
             format_as_table
         ),
