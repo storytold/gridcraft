@@ -627,19 +627,31 @@ fn group_char(e: &El, out: &mut String, depth: usize) -> Option<()> {
 /// `m:limLow`, `m:limUpp`: a limit under or over its base.
 fn limit(e: &El, out: &mut String, depth: usize) -> Option<()> {
     let low = e.name == "limLow";
+    let base = e.child("e");
     // A function name with a limit (lim, max) takes it as a subscript with \limits.
-    let base_is_fn = e.child("e").is_some_and(|b| {
+    let base_is_fn = base.is_some_and(|b| {
         let t: String = b.kids("r").map(run_text).collect();
         b.children.iter().all(|c| c.name == "r") && FUNCTIONS.contains(&t.trim())
     });
+    // A brace alone under the limit is a labelled brace, as `gridcraft_math::to_omml` writes
+    // `\underbrace{x}_{n}` and `\overbrace{x}^{n}`: the label is the brace's own script, below
+    // for `m:limLow` and above for `m:limUpp`, which is where a brace lays out either script.
+    let brace = base.and_then(|b| {
+        let mut content = b.children.iter().filter(|c| !c.name.ends_with("Pr"));
+        content.next().filter(|c| c.name == "groupChr" && content.next().is_none())
+    });
     if base_is_fn {
-        seq(e.child("e")?, out, depth)?;
+        seq(base?, out, depth)?;
         out.push_str(if low { "\\limits_" } else { "\\limits^" });
+        group(e.child("lim"), out, depth)?;
+    } else if let Some(brace) = brace {
+        group_char(brace, out, depth + 1)?;
+        out.push(if low { '_' } else { '^' });
         group(e.child("lim"), out, depth)?;
     } else {
         out.push_str(if low { "\\underset" } else { "\\overset" });
         group(e.child("lim"), out, depth)?;
-        group(e.child("e"), out, depth)?;
+        group(base, out, depth)?;
     }
     Some(())
 }
@@ -743,6 +755,64 @@ mod tests {
         let spaces = |l: &gridcraft_math::MathList| l.items.iter().filter(|i| matches!(i, gridcraft_math::Item::Glyph(g) if g.ch == ' ')).count();
         let (a, b) = (gridcraft_math::layout("\\text{if } x").unwrap(), gridcraft_math::layout(&back).unwrap());
         assert_eq!(spaces(&a), spaces(&b), "{back}");
+    }
+
+    #[test]
+    fn a_labelled_brace_reads_back_with_a_script_on_its_other_side() {
+        // A limit over a brace alone is the brace's label, which LaTeX writes as the brace's own
+        // script: `\underbrace{x}_{n}` and `\overbrace{x}^{n}`, as the writer writes them. A
+        // script around the whole (`m:sSup` around `m:limLow`) then comes back as well, so
+        // `\underbrace{x}_{n}^{2}` keeps its exponent through the round trip. A limit over any
+        // other base is still \underset or \overset.
+        let brace = |chr: &str, pos: &str| {
+            format!(
+                "<m:groupChr><m:groupChrPr><m:chr m:val=\"{chr}\"/><m:pos m:val=\"{pos}\"/></m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>"
+            )
+        };
+        let lim = "<m:lim><m:r><m:t>n</m:t></m:r></m:lim>";
+        let under = format!("<m:limLow><m:e>{}</m:e>{lim}</m:limLow>", brace("\u{23DF}", "bot"));
+        assert_eq!(latex(&under).as_deref(), Some("\\underbrace{x}_{n}"));
+        assert_eq!(
+            latex(&format!("<m:sSup><m:e>{under}</m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>")).as_deref(),
+            Some("{\\underbrace{x}_{n}}^{2}")
+        );
+        assert_eq!(latex(&format!("<m:limUpp><m:e>{}</m:e>{lim}</m:limUpp>", brace("\u{23DE}", "top"))).as_deref(), Some("\\overbrace{x}^{n}"));
+        // Control properties beside the brace do not make it a second child.
+        assert_eq!(
+            latex(&format!("<m:limLow><m:e><m:ctrlPr/>{}</m:e>{lim}</m:limLow>", brace("\u{23DF}", "bot"))).as_deref(),
+            Some("\\underbrace{x}_{n}")
+        );
+        assert_eq!(latex(&format!("<m:limLow><m:e><m:r><m:t>a</m:t></m:r></m:e>{lim}</m:limLow>")).as_deref(), Some("\\underset{n}{a}"));
+        assert_eq!(
+            latex(&format!("<m:limLow><m:e>{}<m:r><m:t>+1</m:t></m:r></m:e>{lim}</m:limLow>", brace("\u{23DF}", "bot"))).as_deref(),
+            Some("\\underset{n}{\\underbrace{x}+1}")
+        );
+        // Written by GridCraft and read back, both scripts are there and the glyphs are the same.
+        let back = |src: &str| {
+            let omml = gridcraft_math::to_omml(src, 11.0, None).unwrap();
+            to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap()
+        };
+        let glyphs = |l: &str| -> Vec<char> {
+            let mut g: Vec<char> = gridcraft_math::layout(l)
+                .unwrap()
+                .items
+                .iter()
+                .filter_map(|i| if let gridcraft_math::Item::Glyph(g) = i { Some(g.ch) } else { None })
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            g.sort_unstable();
+            g
+        };
+        for (src, expected) in [
+            ("\\underbrace{x}_{n}^{2}", "{\\underbrace{x}_{n}}^{2}"),
+            ("\\overbrace{x}^{n}_{m}", "{\\overbrace{x}^{n}}_{m}"),
+            ("\\underbrace{x}^{2}", "{\\underbrace{x}}^{2}"),
+            ("\\underbrace{x}_{n}", "\\underbrace{x}_{n}"),
+        ] {
+            let b = back(src);
+            assert_eq!(b, expected);
+            assert_eq!(glyphs(&b), glyphs(src), "{src} came back as {b}");
+        }
     }
 
     #[test]

@@ -372,3 +372,31 @@ fn office_math_beside_text_or_other_math_is_not_an_equation() {
     assert_eq!(s.len(), 1);
     assert_ne!(s[0].kind, ShapeKind::Equation, "two equations are not one");
 }
+
+#[test]
+fn a_brace_with_scripts_on_both_sides_round_trips() {
+    // `\underbrace{x}_{n}^{2}`: the label is the brace's limit and the exponent a superscript
+    // around the whole. With GridCraft's source in the description, the marker matches the body
+    // and the source comes back as written; with the source stripped (a file another application
+    // saved) the Office Math is converted and the exponent is still there.
+    let src = "\\underbrace{x}_{n}^{2}";
+    let wb = book(vec![equation(1, "B2", src, Color::Auto)]);
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&bytes);
+    let mut d = drawing(&parts);
+    assert!(d.contains("<m:sSup><m:e><m:limLow><m:e><m:groupChr>") && d.contains("</m:limLow></m:e><m:sup><m:r>"), "{d}");
+    assert!(described(&d, src), "{d}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(shapes(&back)[0].text, src, "the marker matches its own Office Math, so the source is taken");
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    while let Some(a) = d.find(" descr=\"gridcraft:latex:") {
+        let b = d[a + 8..].find('"').unwrap() + a + 9;
+        d.replace_range(a..b, "");
+    }
+    parts.insert(name, d.into_bytes());
+    let (converted, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&converted);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::Equation);
+    assert_eq!(s[0].text, "{\\underbrace{x}_{n}}^{2}", "converted from the Office Math, with both scripts");
+}

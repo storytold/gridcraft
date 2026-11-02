@@ -278,14 +278,36 @@ impl Writer {
                     self.out.push_str("</m:limLow>");
                     return Ok(());
                 }
-                // A brace with a label over or under it.
+                // A brace with a label over or under it (`\overbrace{x}^{n}`, `\underbrace{x}_{n}`):
+                // the label is the limit on the brace's side. A script on the other side
+                // (`\underbrace{x}_{n}^{2}`) is a script around the whole, `m:sSup` or `m:sSub`,
+                // so that it reaches Office Math too; without a label it goes around the bare
+                // brace, with no empty limit.
                 if let Some(b @ ParseNode::HorizBrace { is_over, .. }) = base.as_deref() {
-                    let (tag, label) = if *is_over { ("m:limUpp", sup.as_deref()) } else { ("m:limLow", sub.as_deref()) };
-                    self.out.push_str(&format!("<{tag}><m:e>"));
-                    self.node(b, st, depth + 1)?;
-                    self.out.push_str("</m:e>");
-                    self.wrap1("m:lim", label, st, depth + 1)?;
-                    self.out.push_str(&format!("</{tag}>"));
+                    let (lim_tag, label, (script_tag, script_arg), script) = if *is_over {
+                        ("m:limUpp", sup.as_deref(), ("m:sSub", "m:sub"), sub.as_deref())
+                    } else {
+                        ("m:limLow", sub.as_deref(), ("m:sSup", "m:sup"), sup.as_deref())
+                    };
+                    // Each wrapper around the brace is a level of its own.
+                    let inner = if script.is_some() { depth + 1 } else { depth };
+                    if script.is_some() {
+                        self.out.push_str(&format!("<{script_tag}><m:e>"));
+                    }
+                    if label.is_some() {
+                        self.out.push_str(&format!("<{lim_tag}><m:e>"));
+                        self.node(b, st, inner + 1)?;
+                        self.out.push_str("</m:e>");
+                        self.wrap1("m:lim", label, st, inner + 1)?;
+                        self.out.push_str(&format!("</{lim_tag}>"));
+                    } else {
+                        self.node(b, st, inner)?;
+                    }
+                    if script.is_some() {
+                        self.out.push_str("</m:e>");
+                        self.wrap1(script_arg, script, st, depth + 1)?;
+                        self.out.push_str(&format!("</{script_tag}>"));
+                    }
                     return Ok(());
                 }
                 let tag = match (sub.is_some(), sup.is_some()) {
@@ -517,6 +539,58 @@ mod tests {
         assert!(bare("\\text{if } x").contains("<m:rPr><m:nor/></m:rPr>"));
         assert!(bare("\\overbrace{a+b}^{n}").contains("<m:limUpp><m:e><m:groupChr>"));
         assert!(bare("a < b \\& c").contains("<m:t>&lt;</m:t>") && bare("a \\& b").contains("<m:t>&amp;</m:t>"));
+    }
+
+    #[test]
+    fn an_underbrace_with_both_scripts_keeps_its_exponent() {
+        // The label under the brace is its limit; the exponent on the other side is a
+        // superscript around the whole, so that an application reading the Office Math sees it
+        // (the source in `descr` hid its loss in a GridCraft-to-GridCraft round trip).
+        let brace = |chr: &str, pos: &str, vert: &str| {
+            format!(
+                "<m:groupChr><m:groupChrPr><m:chr m:val=\"{chr}\"/><m:pos m:val=\"{pos}\"/><m:vertJc m:val=\"{vert}\"/></m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>"
+            )
+        };
+        let under = brace("\u{23DF}", "bot", "top");
+        let over = brace("\u{23DE}", "top", "bot");
+        assert_eq!(
+            bare("\\underbrace{x}_{n}^{2}"),
+            format!(
+                "<m:oMath><m:sSup><m:e><m:limLow><m:e>{under}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:limLow></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath>"
+            )
+        );
+        // The mirror: the label over the brace, the subscript around the whole.
+        assert_eq!(
+            bare("\\overbrace{x}^{n}_{m}"),
+            format!(
+                "<m:oMath><m:sSub><m:e><m:limUpp><m:e>{over}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:limUpp></m:e><m:sub><m:r><m:t>m</m:t></m:r></m:sub></m:sSub></m:oMath>"
+            )
+        );
+        // Nested braces keep every script, one wrapper per level.
+        let nested = bare("\\underbrace{\\underbrace{x}_{a}^{b}}_{c}^{d}");
+        assert_eq!(nested.matches("<m:limLow>").count(), 2, "{nested}");
+        assert_eq!(nested.matches("<m:sup>").count(), 2, "{nested}");
+        for t in ["a", "b", "c", "d"] {
+            assert!(nested.contains(&format!("<m:t>{t}</m:t>")), "{nested}");
+        }
+    }
+
+    #[test]
+    fn an_underbrace_without_a_label_keeps_its_superscript() {
+        // No label: the script goes around the bare brace, and there is no empty limit.
+        let under = bare("\\underbrace{x}^{2}");
+        assert!(under.starts_with("<m:oMath><m:sSup><m:e><m:groupChr>"), "{under}");
+        assert!(under.ends_with("</m:groupChr></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath>"), "{under}");
+        assert!(!under.contains("<m:lim"), "{under}");
+        let over = bare("\\overbrace{x}_{m}");
+        assert!(over.starts_with("<m:oMath><m:sSub><m:e><m:groupChr>"), "{over}");
+        assert!(over.ends_with("</m:groupChr></m:e><m:sub><m:r><m:t>m</m:t></m:r></m:sub></m:sSub></m:oMath>"), "{over}");
+        assert!(!over.contains("<m:lim"), "{over}");
+        // A brace with neither script, and one with its label alone, are as they were.
+        let plain = bare("\\underbrace{x}");
+        assert!(plain.starts_with("<m:oMath><m:groupChr>") && !plain.contains("<m:sSup>") && !plain.contains("<m:lim"), "{plain}");
+        let labelled = bare("\\underbrace{x}_{n}");
+        assert!(labelled.starts_with("<m:oMath><m:limLow><m:e><m:groupChr>") && !labelled.contains("<m:sSup>"), "{labelled}");
     }
 
     #[test]
