@@ -232,17 +232,17 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         _ => ShapeKind::Rectangle,
     };
     // An equation: GridCraft's own source while the marker in the description still matches the
-    // body (another application that edits the Office Math, as Excel does, leaves the description
-    // alone), else the Office Math converted back to LaTeX. A body without Office Math (the
-    // plain-text fallback of an equation outside the subset) keeps the source.
+    // body (another application that edits the Office Math, or the text of a box without Office
+    // Math, leaves the description alone, as Excel does), else the Office Math converted back to
+    // LaTeX. A box without Office Math whose text was edited is a text box with the edited text,
+    // not the stale source, which the next save would write over the edit.
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
     let tb = obj.child("txBody");
     let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
     let source = match (has_math, described_source(descr)) {
-        (true, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker) => Some(src.to_string()),
+        (_, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker) => Some(src.to_string()),
         (true, _) => tb.and_then(crate::omml::equation_source),
-        (false, Some((_, src))) => Some(src.to_string()),
-        (false, None) => None,
+        (false, _) => None,
     };
     if let Some(text) = source {
         let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
@@ -351,8 +351,9 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
         .min(409.0);
     let fill = srgb(&sh.line, theme).map(|c| format!("<a:solidFill>{c}</a:solidFill>")).unwrap_or_default();
     let sz = (size_pt * 100.0).round() as u32;
-    // The marker of the body written beside the source goes into the description; the reader
-    // takes the source only while the file's body still matches it.
+    // Each box carries the marker of its own body beside the source in its description, the
+    // Office Math box and the plain-text fallback alike; the reader takes the source only while
+    // the body it reads still matches its marker.
     let tx = |body: &str| {
         format!(
             "<xdr:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" rtlCol=\"0\" anchor=\"ctr\" anchorCtr=\"1\"/><a:lstStyle/>{body}</xdr:txBody>"
@@ -381,7 +382,7 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
                 s,
                 "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent>",
                 sp(&tx(&math), &marker(&tx(&math))),
-                sp(&tx(&plain), &marker(&tx(&math)))
+                sp(&tx(&plain), &marker(&tx(&plain)))
             );
         }
         Err(_) => s.push_str(&sp(&tx(&plain), &marker(&tx(&plain)))),

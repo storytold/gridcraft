@@ -400,3 +400,44 @@ fn a_brace_with_scripts_on_both_sides_round_trips() {
     assert_eq!(s[0].kind, ShapeKind::Equation);
     assert_eq!(s[0].text, "{\\underbrace{x}_{n}}^{2}", "converted from the Office Math, with both scripts");
 }
+
+#[test]
+fn a_text_edit_to_an_equation_without_office_math_reads_back_as_the_edit() {
+    // An equation outside the subset (`\begin{CD}`) is written as a text box with the source as
+    // its text and the marker of that box in its description. Another application that edits the
+    // text leaves the description alone, as Excel does; the marker then no longer matches, so the
+    // box is read as a text box with the edited text, not as the stale source, which the next
+    // save would have written over the edit.
+    let cd = "\\begin{CD} A @>f>> B \\end{CD}";
+    let wb = book(vec![equation(1, "B2", cd, Color::Auto)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    assert!(!d.contains("<m:oMath>"), "{d}");
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    assert_eq!((shapes(&back)[0].kind, shapes(&back)[0].text.as_str()), (ShapeKind::Equation, cd), "unedited, the source is taken");
+    // Excel's edit: the text of the box, not the description.
+    let t0 = d.find("<a:t>").unwrap();
+    let t1 = d[t0..].find("</a:t>").unwrap() + t0 + "</a:t>".len();
+    d.replace_range(t0..t1, "<a:t>edited in Excel</a:t>");
+    parts.insert(name, d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!((s[0].kind, s[0].text.as_str()), (ShapeKind::TextBox, "edited in Excel"), "the edit, not the stale source");
+    // The fallback box of an equation with Office Math carries the marker of its own text, not
+    // the Office Math's, so a reader left with the fallback alone (the Choice gone) still takes
+    // the source.
+    let mut parts = unzip(&write_xlsx(&book(vec![equation(1, "B2", "x^2", Color::Auto)])).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    let markers: Vec<String> = d.match_indices("descr=\"gridcraft:latex:").map(|(i, m)| d[i + m.len()..i + m.len() + 16].to_string()).collect();
+    assert_eq!(markers.len(), 2, "{d}");
+    assert_ne!(markers[0], markers[1], "the Choice and the Fallback each carry their own body's marker");
+    let (c0, c1) = (d.find("<mc:Choice").unwrap(), d.find("</mc:Choice>").unwrap() + "</mc:Choice>".len());
+    d.replace_range(c0..c1, "");
+    parts.insert(name, d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!((s.len(), s[0].kind, s[0].text.as_str()), (1, ShapeKind::Equation, "x^2"), "the fallback alone still reads as the equation");
+}
