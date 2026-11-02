@@ -305,7 +305,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
             if cr.left() < area.left() {
                 view.scroll.x -= (area.left() - cr.left()) / geo.z;
             } else if cr.right() > area.right() - 2.0 {
-                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.z).min(cr.left() - area.left());
+                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.z).min((cr.left() - area.left()) / geo.z);
             }
         } else if from.is_some_and(|f| f.col >= geo.fc) {
             view.scroll.x = 0.0;

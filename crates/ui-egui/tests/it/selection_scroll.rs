@@ -364,3 +364,15 @@ fn ctrl_shift_right_on_a_whole_column_follows_across_and_keeps_the_rows() {
     assert!(scroll(&h).x > 0.0, "the view follows the extension across");
     assert_eq!(scroll(&h).y, down, "the view stays on the rows it showed");
 }
+
+#[test]
+fn ctrl_right_to_the_last_column_shows_it_at_once() {
+    // From the end of the data, Ctrl+Right goes to XFD1. The view used to stop well short of it
+    // (the horizontal step was capped in screen pixels, not sheet units) and took more key presses.
+    let mut h = harness();
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert!(visible(&h, "CV1"));
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert_eq!(active(&h), CellRef::parse("XFD1").unwrap());
+    assert!(visible(&h, "XFD1"), "XFD1 is on screen after the one key press");
+}
