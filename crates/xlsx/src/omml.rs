@@ -19,7 +19,7 @@ pub fn to_latex(e: &El) -> Option<String> {
 }
 
 /// The conversion itself, before the final check: `None` for a construct outside the subset, an
-/// equation nested past [`MAX_DEPTH`] or one whose LaTeX passes [`MAX_OUT_BYTES`].
+/// equation nested past [`MAX_DEPTH`] or one whose LaTeX exceeds [`MAX_OUT_BYTES`].
 fn convert(e: &El) -> Option<String> {
     let mut out = String::new();
     match e.name.as_str() {
@@ -206,7 +206,7 @@ fn run_text(r: &El) -> String {
     r.kids("t").map(|t| t.text.as_str()).collect()
 }
 
-/// Appends `s` escaped for `\text{…}`; `None` once the LaTeX passes [`MAX_OUT_BYTES`], checked
+/// Appends `s` escaped for `\text{…}`; `None` once the LaTeX exceeds [`MAX_OUT_BYTES`], checked
 /// after every character so that a long run never expands in full.
 fn escape_text(s: &str, out: &mut String) -> Option<()> {
     for c in s.chars() {
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
     fn latex_past_the_source_cap_stops_converting_and_falls_back() {
-        // 100,000 sibling runs: the conversion stops once its LaTeX passes the cap that
+        // 100,000 sibling runs: the conversion stops once its LaTeX exceeds the cap that
         // `gridcraft_math::check` enforces, instead of building the whole string and then
         // refusing it, so the caller falls back to the writer's text in bounded time.
         let wide = el(&"<m:r><m:t>x</m:t></m:r>".repeat(100_000));
