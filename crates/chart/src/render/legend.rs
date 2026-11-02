@@ -85,7 +85,7 @@ fn swatch_w(sw: Swatch, s: f32) -> f32 {
     if sw == Swatch::Box { s } else { s * 2.0 }
 }
 
-fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) {
+pub(super) fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) {
     match sw {
         Swatch::Box => ctx.rect(x, yc - s / 2.0, s, s, color, None),
         Swatch::Line => ctx.hline(x, x + 2.0 * s, yc, color, 2.0),
