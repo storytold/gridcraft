@@ -12,6 +12,27 @@ fn other_ui_owns_keys(app: &SheetApp) -> bool {
         || app.macros.question.is_some()
 }
 
+fn fill_owns_navigation(ctx: &egui::Context, key: egui::Key, physical: Option<egui::Key>, modifiers: egui::Modifiers) -> bool {
+    use crate::keymap::Shortcut;
+    use egui::Key;
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    if crate::keymap::altgr_text(ctx, modifiers, mac) {
+        return false;
+    }
+    // Keep the shortcut table's platform-specific distinction between selection and sheet changes.
+    match crate::keymap::lookup(key, physical, modifiers, mac) {
+        Some(Shortcut::Run("sheet.next" | "sheet.previous", _)) => false,
+        Some(Shortcut::Run(id, _)) if id.starts_with("selection.") || id == "edit.selectAll" => true,
+        Some(Shortcut::ExtendToStart | Shortcut::ExtendToEnd | Shortcut::ExtendToRowStart | Shortcut::ScreenRight | Shortcut::ScreenLeft) => true,
+        _ => match key {
+            Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End | Key::Tab | Key::Enter => true,
+            Key::PageUp | Key::PageDown => !modifiers.command,
+            Key::A => modifiers.command && !modifiers.alt,
+            _ => false,
+        },
+    }
+}
+
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
@@ -69,10 +90,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 }
                 return;
             }
-            // A primary fill owns arrow navigation until the drag ends.
-            egui::Event::Key {
-                key: egui::Key::ArrowUp | egui::Key::ArrowDown | egui::Key::ArrowLeft | egui::Key::ArrowRight, pressed: true, ..
-            } if matches!(app.grid.drag, Drag::Fill { menu: false, .. }) => {}
+            // A primary fill owns selection navigation until the drag ends.
+            egui::Event::Key { key, physical_key, pressed: true, modifiers, .. }
+                if matches!(app.grid.drag, Drag::Fill { menu: false, .. }) && fill_owns_navigation(ctx, key, physical_key, modifiers) => {}
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {

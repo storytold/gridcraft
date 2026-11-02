@@ -196,7 +196,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | Starting a fill-handle drag takes keyboard focus from ribbon text boxes; arrow keys, including Shift and Ctrl/Cmd combinations, keep a primary fill drag's source paired with its target. The preview and release use the original range, and ordinary arrow navigation resumes after release (#2598) |
+| 2026-11-01 | minor | Starting a fill-handle drag takes keyboard focus from ribbon text boxes; same-sheet navigation and selection shortcuts keep the primary fill source intact while sheet-navigation shortcuts remain available. Release maps the current pointer into the current sheet's geometry, and ordinary selection navigation resumes after release (#2598) |
 | 2026-11-01 | minor | Fill previews pause for the keyboard sheet-navigation frame, then resume using the new sheet's geometry and protection; release still commits the current sheet's predicted fill (#2598) |
 | 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
 | 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |

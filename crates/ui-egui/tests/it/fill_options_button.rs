@@ -227,6 +227,82 @@ fn arrows_keep_the_fill_source_and_preview_until_release() {
 }
 
 #[test]
+fn other_navigation_preserves_the_fill_source_until_release() {
+    use egui::Key;
+    let command = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    let combined = Modifiers { shift: true, ..command };
+    let mut cases = Vec::new();
+    for key in [Key::Home, Key::End] {
+        for modifiers in [Modifiers::NONE, Modifiers::SHIFT, command, combined] {
+            cases.push(("B1:B2", key, modifiers));
+        }
+    }
+    for key in [Key::PageUp, Key::PageDown] {
+        for modifiers in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT, Modifiers { alt: true, ..Modifiers::SHIFT }] {
+            cases.push(("B1:B2", key, modifiers));
+        }
+    }
+    for key in [Key::Tab, Key::Enter] {
+        for modifiers in [Modifiers::NONE, Modifiers::SHIFT] {
+            cases.push(("B2", key, modifiers));
+        }
+    }
+    cases.extend([
+        ("B1:B2", Key::A, command),
+        ("B1:B2", Key::A, combined),
+        ("B1:B2", Key::Space, Modifiers::SHIFT),
+        ("B1:B2", Key::Space, command),
+        ("B1:B2", Key::Space, combined),
+        ("B2", Key::Num8, combined),
+    ]);
+    let mut failures = Vec::new();
+    for (source, key, modifiers) in cases {
+        let mut h = harness(|s| {
+            one_two(s);
+            s.execute("selection.set", json!({"range": source})).unwrap();
+        });
+        let undo = h.state().session.active().unwrap().undo.len();
+        let series = if source == "B2" { modifiers.command } else { !modifiers.command };
+        let want = if series { "6" } else { "2" };
+        let labels_before = h.query_all_by_label(want).count();
+        let (start, end) = (corner(&h, "B2"), center(&h, "B6"));
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        h.input_mut()
+            .events
+            .extend([Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }]);
+        h.step();
+        let actual_source = selection(&h);
+        let preview = h.query_all_by_label(want).count() > labels_before;
+        h.input_mut().events.extend([
+            Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers },
+            Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers },
+        ]);
+        h.run_steps(3);
+        let expected = if series {
+            [n(3.0), n(4.0), n(5.0), n(6.0)]
+        } else if source == "B2" {
+            [n(2.0), n(2.0), n(2.0), n(2.0)]
+        } else {
+            [n(1.0), n(2.0), n(1.0), n(2.0)]
+        };
+        let committed = values(&h, &["B3", "B4", "B5", "B6"]) == expected;
+        let once = h.state().session.active().unwrap().undo.len() == undo + 1;
+        if actual_source != source || !preview || !committed || !once || h.state().message.is_some() {
+            failures.push(format!("{source} {key:?} {modifiers:?}: source={actual_source}, preview={preview}, committed={committed}, once={once}"));
+        } else {
+            h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+            h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
+            h.run_steps(2);
+            h.key_press(Key::Home);
+            h.run_steps(2);
+            assert_eq!(selection(&h), "A4", "Home works normally after the fill ends");
+        }
+    }
+    assert!(failures.is_empty(), "same-sheet navigation changed the fill source: {failures:?}");
+}
+
+#[test]
 fn escape_cancels_the_fill_preview_without_committing() {
     let mut h = harness(one_two);
     let before = h.state().session.active().unwrap().wb.clone();
@@ -428,6 +504,68 @@ fn formula_fill_preview_uses_the_selected_formula_language() {
     assert!(h.query_by_label("=SUMA(A4;1,5)").is_some());
     release(&mut h, end, PointerButton::Primary);
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().input_text(CellRef::parse("B4").unwrap()), "=SUM(A4,1.5)");
+}
+
+#[test]
+fn immediate_fill_release_after_sheet_navigation_uses_the_current_pointer_range() {
+    let mut failures = Vec::new();
+    for (zoom, rtl, os, key, modifiers) in [
+        (50, false, egui::os::OperatingSystem::Windows, egui::Key::PageDown, Modifiers::COMMAND),
+        (200, false, egui::os::OperatingSystem::Windows, egui::Key::PageDown, Modifiers::COMMAND),
+        (50, true, egui::os::OperatingSystem::Windows, egui::Key::PageDown, Modifiers::COMMAND),
+        (200, true, egui::os::OperatingSystem::Windows, egui::Key::PageDown, Modifiers::COMMAND),
+        (50, false, egui::os::OperatingSystem::Mac, egui::Key::ArrowRight, Modifiers::ALT),
+        (200, true, egui::os::OperatingSystem::Mac, egui::Key::ArrowRight, Modifiers::ALT),
+    ] {
+        let mut h = harness(|s| {
+            s.execute("cell.set", json!({"cell": "A1", "input": "=C1*2.71"})).unwrap();
+            s.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+            s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+            s.execute("cell.set", json!({"cell": "A1", "input": "=C1*1.17"})).unwrap();
+            s.execute("view.zoom", json!({"percent": zoom})).unwrap();
+            s.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+            s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+        });
+        h.ctx.set_os(os);
+        let (start, end) = (corner(&h, "A1"), center(&h, "A4"));
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        h.input_mut()
+            .events
+            .extend([Event::ModifiersChanged(modifiers), Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+        h.step();
+        if h.state().session.active().unwrap().wb.active_sheet() != 1 {
+            failures.push(format!("zoom={zoom} rtl={rtl} {os:?} {key:?}: sheet navigation was blocked"));
+            continue;
+        }
+        let app = h.state();
+        let d = app.session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+        let at = geo.cell_at(sh, geo.mirror_pos(end));
+        assert_ne!(at.row, 3, "fixture maps the unchanged pointer to a different row after navigation");
+        let undo = d.undo.len();
+        // No pointer move or idle pass on the destination sheet before this release.
+        h.input_mut().events.extend([
+            Event::ModifiersChanged(Modifiers::NONE),
+            Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+            Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ]);
+        h.run_steps(3);
+        let d = h.state().session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let last = CellRef::new(at.row, 0);
+        let correct = sh.input_text(last) == format!("=C{}*1.17", at.row + 1);
+        let bounded = sh.value(CellRef::new(at.row + 1, 0)) == Value::Empty;
+        let original_untouched = d.wb.sheet(0).unwrap().value(CellRef::parse("A4").unwrap()) == Value::Empty;
+        if !correct || !bounded || !original_untouched || d.undo.len() != undo + 1 || h.state().message.is_some() {
+            failures.push(format!(
+                "zoom={zoom} rtl={rtl}: pointer={at:?}, correct={correct}, bounded={bounded}, original_untouched={original_untouched}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "release used the previous sheet's target: {failures:?}");
 }
 
 #[test]

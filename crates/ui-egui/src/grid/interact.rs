@@ -724,6 +724,18 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::Fill { target: Some(t), menu: false } => {
                 let src = sel.current();
+                let t = pos
+                    .map(|p| {
+                        let at = geo.cell_at(
+                            sh,
+                            pos2(
+                                p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0),
+                                p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0),
+                            ),
+                        );
+                        fill_target(src, at)
+                    })
+                    .unwrap_or(t);
                 if t != src && !cancel_fill {
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
                     let mode = if mods.command { "alternate" } else { "series" };
