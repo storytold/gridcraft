@@ -124,6 +124,38 @@ fn the_write_root_itself_is_not_a_destination() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Through the server too, a link that leads out of a root is outside it: a file link in the read
+/// root doesn't open what it points to, a folder link in the write root doesn't take a save out.
+#[cfg(unix)]
+#[test]
+fn links_out_of_a_root_are_refused() {
+    let base = folders("links");
+    std::os::unix::fs::symlink(base.join("outside/secret.csv"), base.join("in/link.csv")).unwrap();
+    std::os::unix::fs::symlink(base.join("outside"), base.join("out/escape")).unwrap();
+    let mut srv = server(&base, None);
+    refused(&mut srv, "open_workbook", json!({"path": s(&base.join("in/link.csv"))}), "automation path rejected");
+    ok(&mut srv, "write_range", json!({"range": "A1", "values": [["x"]]}));
+    refused(&mut srv, "save_workbook", json!({"path": s(&base.join("out/escape/x.xlsx"))}), "automation path rejected");
+    assert!(!base.join("outside/x.xlsx").exists(), "nothing was written through the link");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A command named directly (`execute_command`) runs when it is on the list and is refused, with
+/// nothing changed, when it is not.
+#[test]
+fn a_command_named_directly_runs_only_if_listed() {
+    let base = folders("by-name");
+    let mut srv = server(&base, Some("cell.set, cell.get, document.inspect"));
+    ok(&mut srv, "execute_command", json!({"command": "cell.set", "params": {"cell": "A1", "input": "allowed"}}));
+    let cell = ok(&mut srv, "get_cell", json!({"cell": "A1"}));
+    assert!(cell.contains("allowed"), "{cell}");
+    refused(&mut srv, "execute_command", json!({"command": "home.bold", "params": {"range": "A1"}}), "not allowed");
+    refused(&mut srv, "execute_command", json!({"command": "edit.clearAll", "params": {"range": "A1"}}), "not allowed");
+    let cell = ok(&mut srv, "get_cell", json!({"cell": "A1"}));
+    assert!(cell.contains("allowed"), "the refused commands changed nothing: {cell}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Listed commands run, through any tool; the rest are refused.
 #[test]
 fn listed_commands_run_and_the_rest_are_refused() {
