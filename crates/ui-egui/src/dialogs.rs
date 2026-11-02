@@ -26,6 +26,7 @@ mod names;
 mod paste;
 mod show;
 mod spelling;
+mod styles;
 mod zoom;
 
 use analysis::toolpak_defaults;
@@ -36,6 +37,7 @@ pub(crate) use names::insert_name;
 use names::pasteable_names;
 pub(crate) use show::build_params;
 pub use show::show;
+use styles::{open_merge_styles, open_new_cell_style};
 use zoom::zoom_preset;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -616,6 +618,8 @@ impl Dialog {
                 }
                 d
             }
+            "newCellStyle" => open_new_cell_style(app),
+            "mergeStyles" => open_merge_styles(app),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",

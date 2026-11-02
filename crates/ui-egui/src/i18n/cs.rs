@@ -567,6 +567,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Zastavit",
         "New Macro" => "Nové makro",
         "Show" => "Zobrazit",
+        "New Cell Style…" => "Nový styl buňky…",
+        "Merge Styles…" => "Sloučit styly…",
+        "Merge Styles" => "Sloučit styly",
+        "Style" => "Styl",
+        "Style name:" => "Název stylu:",
+        "Merge styles from:" => "Sloučit styly z:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Není otevřen žádný jiný sešit. Otevřete sešit s požadovanými styly a potom znovu zvolte Sloučit styly."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} obsahuje styly se stejnými názvy jako tento sešit:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Nahradit je styly ze sešitu {name}? Ne ponechá styly tohoto sešitu a sloučí ostatní."
+        }
+        "Yes" => "Ano",
+        "No" => "Ne",
         _ => return None,
     })
 }

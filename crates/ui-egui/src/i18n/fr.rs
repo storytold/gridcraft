@@ -461,6 +461,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Arrêter",
         "New Macro" => "Nouvelle macro",
         "Show" => "Afficher",
+        "New Cell Style…" => "Nouveau style de cellule…",
+        "Merge Styles…" => "Fusionner des styles…",
+        "Merge Styles" => "Fusionner des styles",
+        "Style" => "Style",
+        "Style name:" => "Nom du style :",
+        "Merge styles from:" => "Fusionner les styles de :",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Aucun autre classeur n'est ouvert. Ouvrez le classeur qui contient les styles voulus, puis choisissez à nouveau Fusionner des styles."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} contient des styles qui portent les mêmes noms que dans ce classeur :",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Les remplacer par les styles de {name} ? Non conserve les styles de ce classeur et fusionne les autres."
+        }
+        "Yes" => "Oui",
+        "No" => "Non",
         _ => return None,
     })
 }

@@ -426,6 +426,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Durdur",
         "New Macro" => "Yeni Makro",
         "Show" => "Göster",
+        "Merge Styles…" => "Stilleri Birleştir…",
+        "Merge Styles" => "Stilleri Birleştir",
+        "Style" => "Stil",
+        "Style name:" => "Stil adı:",
+        "Merge styles from:" => "Stillerin alınacağı çalışma kitabı:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Açık başka çalışma kitabı yok. İstediğiniz stilleri içeren çalışma kitabını açın, sonra Stilleri Birleştir'i yeniden seçin."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name}, bu çalışma kitabındakilerle aynı adlara sahip stiller içeriyor:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Bunlar {name} içindeki stillerle değiştirilsin mi? Hayır, bu çalışma kitabının stillerini korur ve diğerlerini birleştirir."
+        }
+        "Yes" => "Evet",
+        "No" => "Hayır",
         _ => return None,
     })
 }

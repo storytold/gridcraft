@@ -990,6 +990,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Registrazione",
         "New Macro" => "Nuova macro",
         "Show" => "Mostra",
+        "New Cell Style…" => "Nuovo stile cella…",
+        "Merge Styles…" => "Unisci stili…",
+        "Merge Styles" => "Unisci stili",
+        "Style" => "Stile",
+        "Style name:" => "Nome stile:",
+        "Merge styles from:" => "Unisci stili da:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Non è aperta nessun'altra cartella di lavoro. Apri la cartella di lavoro con gli stili desiderati, quindi scegli di nuovo Unisci stili."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} contiene stili con gli stessi nomi di questa cartella di lavoro:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Sostituirli con gli stili di {name}? No mantiene gli stili di questa cartella di lavoro e unisce gli altri."
+        }
+        "Yes" => "Sì",
+        "No" => "No",
         _ => return None,
     })
 }

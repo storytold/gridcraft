@@ -473,6 +473,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Beenden",
         "New Macro" => "Neues Makro",
         "Show" => "Anzeigen",
+        "New Cell Style…" => "Neue Zellenformatvorlage…",
+        "Merge Styles…" => "Formatvorlagen zusammenführen…",
+        "Merge Styles" => "Formatvorlagen zusammenführen",
+        "Style" => "Formatvorlage",
+        "Style name:" => "Formatvorlagenname:",
+        "Merge styles from:" => "Formatvorlagen zusammenführen aus:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Es ist keine andere Arbeitsmappe geöffnet. Öffnen Sie die Arbeitsmappe mit den gewünschten Formatvorlagen, und wählen Sie dann erneut „Formatvorlagen zusammenführen“."
+        }
+        "{name} has styles with the same names as this workbook:" => "{name} enthält Formatvorlagen mit denselben Namen wie diese Arbeitsmappe:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Durch die Formatvorlagen aus {name} ersetzen? „Nein“ behält die Formatvorlagen dieser Arbeitsmappe und führt die übrigen zusammen."
+        }
+        "Yes" => "Ja",
+        "No" => "Nein",
         _ => return None,
     })
 }

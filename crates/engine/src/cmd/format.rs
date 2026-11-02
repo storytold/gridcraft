@@ -811,7 +811,7 @@ mod cell_styles;
 mod sizes;
 
 use cell_styles::cell_style;
-pub use cell_styles::{CELL_STYLE_NAMES, builtin_cell_style};
+pub use cell_styles::{CELL_STYLE_NAMES, StyleMerge, builtin_cell_style, builtin_style_name, merge_cell_styles, named_cell_style};
 pub use sizes::{approx_text_width, chars_to_points};
 use sizes::{autofit_cols, autofit_rows, col_width, default_width, hide, row_height};
 

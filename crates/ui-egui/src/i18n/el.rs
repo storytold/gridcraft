@@ -987,6 +987,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Καταγραφή",
         "New Macro" => "Νέα μακροεντολή",
         "Show" => "Εμφάνιση",
+        "New Cell Style…" => "Νέο στυλ κελιού…",
+        "Merge Styles…" => "Συγχώνευση στυλ…",
+        "Merge Styles" => "Συγχώνευση στυλ",
+        "Style" => "Στυλ",
+        "Style name:" => "Όνομα στυλ:",
+        "Merge styles from:" => "Συγχώνευση στυλ από:",
+        "No other workbook is open. Open the workbook whose styles you want, then choose Merge Styles again." => {
+            "Δεν είναι ανοιχτό άλλο βιβλίο εργασίας. Ανοίξτε το βιβλίο εργασίας με τα στυλ που θέλετε και, στη συνέχεια, επιλέξτε ξανά Συγχώνευση στυλ."
+        }
+        "{name} has styles with the same names as this workbook:" => "Το {name} έχει στυλ με τα ίδια ονόματα με αυτό το βιβλίο εργασίας:",
+        "Replace them with the styles from {name}? No keeps this workbook's styles and merges the others." => {
+            "Να αντικατασταθούν με τα στυλ του {name}; Το Όχι διατηρεί τα στυλ αυτού του βιβλίου εργασίας και συγχωνεύει τα υπόλοιπα."
+        }
+        "Yes" => "Ναι",
+        "No" => "Όχι",
         _ => return None,
     })
 }
