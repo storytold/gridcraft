@@ -30,10 +30,6 @@ use pass_host::{PassHost, spills_as_before};
 
 /// Formulas in a level below this count stay on one thread.
 const PARALLEL_MIN: usize = 512;
-/// Formulas of a multi-threaded level evaluated first on the main thread before workers start.
-/// Formulas calculated on the caller before workers start. This scheduler has no
-/// shared lookup cache to fill, so leaving them on the caller only slows the level.
-const WARM_UP: usize = 0;
 
 /// Calculation threads for `calc`: one on wasm, when multi-threaded calculation is off, or when
 /// the machine has one processor; else the manual count or every processor, at most 64.
@@ -70,12 +66,8 @@ fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usi
         }
         return;
     }
-    let (random, mut parallel): (Vec<Key>, Vec<Key>) =
+    let (random, parallel): (Vec<Key>, Vec<Key>) =
         level.iter().copied().partition(|k| graph.nodes.get(k).is_some_and(|n| n.expr.as_ref().is_some_and(|e| uses_random(e))));
-    let warm = WARM_UP.min(parallel.len());
-    for k in parallel.drain(..warm) {
-        host.calculate(k);
-    }
     if !parallel.is_empty() {
         let pending: HashSet<Key> = parallel.iter().copied().collect();
         if let Some(out) =
