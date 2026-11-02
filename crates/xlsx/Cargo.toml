@@ -23,3 +23,7 @@ zip = { workspace = true }
 aes = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+# Every registered function name, for the formula file-spelling test.
+gridcraft-functions = { workspace = true }
