@@ -555,7 +555,7 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
 
     h.input_mut().events.push(egui::Event::Key {
-        key: egui::Key::Z, // e.g. QWERTZ logical Z
+        key: egui::Key::Z,                // e.g. QWERTZ logical Z
         physical_key: Some(egui::Key::Y), // physical Y
         pressed: true,
         repeat: false,
