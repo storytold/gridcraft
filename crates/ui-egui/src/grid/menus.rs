@@ -393,7 +393,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_chart = None;
+                            app.selected_object = None;
                         }
                     }
                 }

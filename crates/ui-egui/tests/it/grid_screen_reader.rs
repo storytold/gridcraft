@@ -25,6 +25,11 @@ fn active_cell_label_reads_value_before_address_and_says_has_formula() {
     let node = cell.accesskit_node();
     assert_eq!(node.value().as_deref(), Some("6"));
     assert_eq!(node.data().description(), Some("has formula"));
+
+    h.state_mut().run("selection.set", json!({"range": "A1"})).unwrap();
+    h.run_steps(2);
+    let updated = h.get_by_role_and_label(Role::Cell, "2 A1").accesskit_node();
+    assert_eq!(updated.value().as_deref(), Some("2"));
 }
 
 #[test]
