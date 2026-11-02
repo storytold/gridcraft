@@ -77,6 +77,7 @@ pub(crate) fn indexing_pays<'a>(areas: impl ExactSizeIterator<Item = &'a RangeRe
 
 impl SpillIndex {
     /// Whether any area is indexed on `sheet`.
+    #[cfg(test)]
     pub(crate) fn has_sheet(&self, sheet: usize) -> bool {
         self.sheets.get(&sheet).is_some_and(|s| !s.entries.is_empty())
     }

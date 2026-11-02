@@ -1,5 +1,5 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
-use super::{Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icons, json, small_button, vec2};
+use super::{Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, vec2};
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
@@ -192,6 +192,25 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
         crate::paper_view::start_editing(app);
     }
+    // Symbols: Equation, then Symbol.
+    sep(ui);
+    let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
+    control_keytip(app, ui, &eq, "dialog:equation");
+    if eq.clicked() {
+        app.open_dialog("equation", json!({}));
+    }
+    egui::Popup::menu(&eq_menu).show(|ui| {
+        ui.set_width(300.0);
+        if ui.add(egui::Button::new(app.ui.language.tr("Insert New Equation...")).frame(false).min_size(vec2(290.0, 24.0))).clicked() {
+            app.open_dialog("equation", json!({}));
+            ui.close();
+        }
+        ui.separator();
+        if let Some(latex) = crate::equation::gallery(ui) {
+            act(app, "insert.equation", json!({"latex": latex}));
+            ui.close();
+        }
+    });
     let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
     control_keytip(app, ui, &sym, "insert.symbol");
     egui::Popup::menu(&sym).show(|ui| {
