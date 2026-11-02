@@ -454,3 +454,32 @@ fn a_connections_part_with_a_custom_name_is_merged_not_duplicated() {
     assert_eq!(text.matches("/connections\"").count(), 1, "exactly one connections relationship: {text}");
     let _ = &mut rels;
 }
+
+#[test]
+/// A single-quoted default namespace (`xmlns='...'`) is recognized, not doubled: the
+/// rebuilt root keeps the original declaration and adds no second xmlns.
+fn a_single_quoted_default_namespace_is_not_doubled() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<connections xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><connection id="1" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    // Exactly one default xmlns (an `xmlns:gc` prefixed declaration is not one).
+    assert_eq!(text.matches("xmlns='").count(), 1, "the original single-quoted default is kept: {text}");
+    assert!(!text.contains("xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""), "no second default was added: {text}");
+    assert!(text.contains("name=\"prices\""), "our connection is merged in");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+}

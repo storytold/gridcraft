@@ -473,7 +473,10 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // (`<x:connections>`) whose declarations are kept verbatim still has its prefix bound -
     // but a prefixed root with NO default namespace would leave the model's unprefixed
     // `<connection>` elements outside any namespace, so the default is emitted for it.
-    let has_default_ns = kept_decls.contains("xmlns=\"");
+    // Parsed attributes, not a quote-style search: a default namespace may be single-quoted
+    // (`xmlns='...'`) and a `contains("xmlns=\"")` check would miss it and add a second
+    // xmlns to the rebuilt root.
+    let has_default_ns = raw_attributes(&raw[tag_start..=tag_end]).any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
     let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
     let mut w = String::from(crate::write::XML_DECL);
     let _ = write!(w, "<connections{kept_decls}{default_ns} xmlns:gc=\"{}\">",
