@@ -322,6 +322,15 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // A protection action taken while a reference box picks on another sheet is for the
+        // dialog's sheet: the pick ends, showing that sheet again, before the action is chosen.
+        if matches!(name, "protectSheet" | "unprotectSheet")
+            && let Some(mut d) = self.dialog.take()
+        {
+            // The draft was committed above, so the sheet can be shown again.
+            let _ = d.end_pick(self);
+            self.dialog = Some(d);
+        }
         // Every Protect Sheet entry point (ribbon menus, keytips, tab menu) becomes Unprotect Sheet
         // on a protected sheet. A sheet without a password is unprotected straight away.
         let name = if name == "protectSheet" && self.active_sheet_protected() { "unprotectSheet" } else { name };

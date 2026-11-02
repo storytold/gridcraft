@@ -609,6 +609,26 @@ fn another_dialog_opened_while_picking_puts_the_selection_back() {
 }
 
 #[test]
+fn protect_sheet_opened_while_picking_on_a_protected_sheet_acts_on_the_dialogs_sheet() {
+    let mut s = two_sheets();
+    // Rates is protected with a password; Sheet1, the dialog's sheet, is not.
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("review.protectSheet", json!({"password": "rates"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    // Protect Sheet from the ribbon while the box picks on Rates: the dialog's sheet comes back
+    // first, and it is not protected, so Protect Sheet opens, not Unprotect Sheet for Rates.
+    h.state_mut().open_dialog("protectSheet", json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("protectSheet"));
+    assert_eq!(selection(&h), (0, "B5".into()));
+}
+
+#[test]
 fn arrow_keys_with_shift_select_a_range_into_the_collapsed_box() {
     let mut h = harness(workbook());
     open_goal_seek(&mut h);
