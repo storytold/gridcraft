@@ -115,10 +115,22 @@ fn a_foreign_connections_part_is_kept_verbatim() {
     let bytes = write_xlsx(&wb).expect("saves");
     let (back, _r) = read_xlsx(&bytes).expect("reopens");
     assert!(back.web_queries.is_empty(), "a foreign connection is not claimed by the model");
+    // The saved workbook keeps the relationship pointing at the part (an orphaned part
+    // would hold the same bytes and still be unreachable).
+    assert!(
+        back.preserved.as_ref().is_some_and(|p| p.rels.iter().any(|r| p.parts.iter().any(|q| q.name == "xl/connections.xml" && normalize_target(&r.target) == q.name))),
+        "the connections relationship survives the save"
+    );
     // Verbatim means byte for byte: the saved part is the file's own, not a rewrite.
     let mut pkg = package::Package::open(&bytes).expect("opens");
     let part = pkg.read("xl/connections.xml").expect("read").expect("the foreign part is kept");
     assert_eq!(&part[..], &original[..], "the foreign part is byte-identical");
+}
+
+/// The relationship target as a part name: the reader stores targets resolved against the
+/// owner part's folder, so `xl/connections.xml` is the name to compare with.
+fn normalize_target(target: &str) -> String {
+    target.trim_start_matches('/').to_string()
 }
 
 /// A `Preserved` whose only part is a foreign connections.xml, as an open would keep it.
@@ -135,7 +147,7 @@ fn foreign_connections_preserved() -> gridcraft_model::preserved::Preserved {
         rels: vec![gridcraft_model::preserved::PreservedRel {
             id: "rId9".into(),
             rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(),
-            target: "connections.xml".into(),
+            target: "xl/connections.xml".into(),
             external: false,
         }],
         parts: vec![part],
