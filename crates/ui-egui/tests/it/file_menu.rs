@@ -427,6 +427,117 @@ fn save_changes_shortcuts_cancel_or_discard_only_the_requested_workbook() {
 }
 
 #[test]
+fn save_changes_ignores_answer_keys_from_the_frame_that_opens_it() {
+    let mut failures = Vec::new();
+    for (backstage, key, release_in_opening_frame) in [
+        (true, egui::Key::N, false),
+        (true, egui::Key::N, true),
+        (true, egui::Key::Y, false),
+        (true, egui::Key::Y, true),
+        (false, egui::Key::N, false),
+        (false, egui::Key::N, true),
+        (false, egui::Key::Y, false),
+        (false, egui::Key::Y, true),
+    ] {
+        let case = format!("backstage={backstage} key={key:?} quick={release_in_opening_frame}");
+        let dir = std::env::temp_dir().join(format!("gridcraft-opening-{}-{backstage}-{key:?}-{release_in_opening_frame}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Book.xlsx");
+        let mut h = harness(Services::default());
+        h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let doc = h.state().session.doc().unwrap();
+        let (uid, before, revision, undo) = (doc.uid, doc.wb.clone(), doc.revision, doc.undo.len());
+        let close_pos = if backstage {
+            h.get_by_label("File").click();
+            h.run_steps(3);
+            let pos = h.get_by_role_and_label(egui::accesskit::Role::Button, "Close").rect().center();
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ]);
+            h.run_steps(1);
+            Some(pos)
+        } else {
+            None
+        };
+        // One real input batch contains the answer press and the action opening the
+        // question. The key was not pressed in response to that question.
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        if release_in_opening_frame {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        if let Some(pos) = close_pos {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        } else {
+            h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        }
+        let mut sent = step_commands(&mut h);
+        if !release_in_opening_frame {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+            sent.extend(step_commands(&mut h));
+        }
+        let preserved = h
+            .state()
+            .session
+            .doc()
+            .is_ok_and(|d| d.uid == uid && d.is_dirty() && Arc::ptr_eq(&before, &d.wb) && d.revision == revision && d.undo.len() == undo);
+        let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        let not_saved = on_disk.active().unwrap().value(CellRef::new(0, 0)) == Value::Empty;
+        let asking = h.state().dialog.as_ref().map(|d| d.name()) == Some("saveChanges");
+        let not_closed = !sent.contains(&egui::ViewportCommand::Close);
+        if !preserved || !not_saved || !asking || !not_closed {
+            failures.push(format!("{case}: preserved={preserved}, not_saved={not_saved}, asking={asking}, not_closed={not_closed}"));
+        } else {
+            if backstage
+                && key == egui::Key::N
+                && !release_in_opening_frame
+                && let Ok(snapshot) = std::env::var("GRIDCRAFT_SAVE_OPENING_SNAPSHOT")
+            {
+                h.render().unwrap().save(snapshot).unwrap();
+            }
+            h.key_press(key);
+            let sent = step_commands(&mut h);
+            assert!(h.state().dialog.is_none(), "a fresh answer works: {case}");
+            if backstage {
+                assert_ne!(h.state().session.doc().unwrap().uid, uid, "fresh answer closes only the requested workbook: {case}");
+            } else {
+                assert!(sent.contains(&egui::ViewportCommand::Close), "fresh answer continues quitting: {case}");
+            }
+            let (on_disk, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+            let expected = if key == egui::Key::Y { Value::Number(42.0) } else { Value::Empty };
+            assert_eq!(on_disk.active().unwrap().value(CellRef::new(0, 0)), expected, "only fresh Y saves: {case}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    assert!(failures.is_empty(), "opening-frame input answered a new question: {failures:?}");
+}
+
+#[test]
+fn save_changes_escape_cancels_in_the_opening_frame() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let uid = h.state().session.doc().unwrap().uid;
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none(), "Escape still cancels immediately");
+    assert_eq!(h.state().session.doc().unwrap().uid, uid);
+    assert!(h.state().session.doc().unwrap().is_dirty());
+}
+
+#[test]
 fn save_changes_shortcuts_ignore_modified_answers_and_held_n() {
     let mut h = harness(Services::default());
     for _ in 0..3 {

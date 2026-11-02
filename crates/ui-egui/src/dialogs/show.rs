@@ -656,6 +656,10 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
 }
 
 fn save_changes_shortcut(d: &mut Dialog, ctx: &egui::Context, focused: bool) -> Option<crate::SaveAnswer> {
+    // Opening and answering can reach this code in one input batch. Wait for a later
+    // frame, including when egui repeats the opening frame for layout.
+    let frame = ctx.cumulative_frame_nr();
+    let presented = *d.save_changes_frame.get_or_insert(frame) < frame;
     let mut answer = None;
     ctx.input_mut(|i| {
         if !focused {
@@ -668,7 +672,7 @@ fn save_changes_shortcut(d: &mut Dialog, ctx: &egui::Context, focused: bool) -> 
                     if matches!(key, Key::Y | Key::N) {
                         if *pressed {
                             if !repeat {
-                                d.save_changes_armed = (focused && modifiers.is_none()).then_some(*key);
+                                d.save_changes_armed = (presented && focused && modifiers.is_none()).then_some(*key);
                             }
                         } else if d.save_changes_armed.take() == Some(*key) && focused && modifiers.is_none() {
                             answer.get_or_insert(if *key == Key::Y { crate::SaveAnswer::Save } else { crate::SaveAnswer::DontSave });

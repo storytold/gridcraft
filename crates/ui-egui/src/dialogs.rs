@@ -70,6 +70,8 @@ pub struct Dialog {
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
     pub(crate) focus_initialized: bool,
+    /// Y/N presses cannot answer until after the frame that first presented Save Changes.
+    save_changes_frame: Option<u64>,
     /// Save/Don't Save answer on release, before quitting can move focus to another viewport.
     save_changes_armed: Option<Key>,
     /// A chosen answer waits for every Y/N key to be up before this window can close.
@@ -197,6 +199,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            save_changes_frame: None,
             save_changes_armed: None,
             save_changes_pending: None,
             pick: None,
@@ -222,6 +225,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            save_changes_frame: None,
             save_changes_armed: None,
             save_changes_pending: None,
             pick: None,
