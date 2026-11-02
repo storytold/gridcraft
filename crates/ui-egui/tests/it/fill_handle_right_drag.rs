@@ -1,6 +1,7 @@
 //! Dragging the fill handle with the right button fills nothing on release: it opens Excel's fill
-//! menu (Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…, and from
-//! a date Fill Days, Fill Weekdays, Fill Months and Fill Years).
+//! menu (Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…, from a
+//! date Fill Days, Fill Weekdays, Fill Months and Fill Years, and from numbers Linear Trend and
+//! Growth Trend).
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::Queryable;
@@ -222,6 +223,42 @@ fn a_number_gets_no_date_fills() {
     for label in ["Fill Days", "Fill Weekdays", "Fill Months", "Fill Years"] {
         assert!(h.query_by_label(label).is_none(), "{label}");
     }
+}
+
+#[test]
+fn growth_trend_multiplies_and_linear_trend_adds() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B5", PointerButton::Secondary);
+    h.get_by_label("Growth Trend").click();
+    h.run_steps(3);
+    assert_eq!(values(&h, &["B1", "B2", "B3", "B4", "B5"]), [n(1.0), n(2.0), n(4.0), n(8.0), n(16.0)]);
+    assert!(h.state().grid.fill_menu.is_none());
+    assert_eq!(selection(&h), "B1:B5");
+
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B5", PointerButton::Secondary);
+    h.get_by_label("Linear Trend").click();
+    h.run_steps(3);
+    assert_eq!(values(&h, &["B3", "B4", "B5"]), [n(3.0), n(4.0), n(5.0)]);
+}
+
+#[test]
+fn text_and_mixed_signs_leave_out_the_trends() {
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [["Item 1"], ["Item 2"]]})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+    });
+    drag_handle(&mut h, "B2", "B4", PointerButton::Secondary);
+    assert!(h.query_by_label("Fill Series").is_some());
+    assert!(h.query_by_label("Linear Trend").is_none() && h.query_by_label("Growth Trend").is_none());
+
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[-1], [2]]})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+    });
+    drag_handle(&mut h, "B2", "B4", PointerButton::Secondary);
+    assert!(h.query_by_label("Linear Trend").is_some());
+    assert!(h.query_by_label("Growth Trend").is_none());
 }
 
 #[test]

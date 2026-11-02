@@ -51,6 +51,8 @@ pub(super) fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         "weekdays" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Weekday),
         "months" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Month),
         "years" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Year),
+        "linearTrend" => crate::fill::FillMode::LinearTrend,
+        "growthTrend" => crate::fill::FillMode::GrowthTrend,
         _ => crate::fill::FillMode::Series,
     };
     if target.count() > crate::fill::MAX_FILL_CELLS || src.count() > crate::fill::MAX_FILL_CELLS {

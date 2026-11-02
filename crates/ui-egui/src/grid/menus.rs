@@ -258,6 +258,25 @@ fn fill_modes(app: &SheetApp, src: RangeRef) -> Vec<(&'static str, &'static str)
     FILL_MODES.into_iter().chain(DATE_FILL_MODES.into_iter().filter(|_| dates)).collect()
 }
 
+/// Linear Trend and Growth Trend, which the right-drag fill menu adds after the other fill modes
+/// when they apply to a fill from `src` to `target` on the active sheet.
+fn trend_fill_modes(app: &mut SheetApp, src: RangeRef, target: RangeRef) -> Vec<(&'static str, &'static str)> {
+    let Some(d) = app.session.active() else { return Vec::new() };
+    let key = (d.uid, d.revision, d.wb.active_sheet(), src, target);
+    if let Some((k, modes)) = &app.grid.fill_menu_trends
+        && *k == key
+    {
+        return modes.clone();
+    }
+    let modes: Vec<(&'static str, &'static str)> = [("Linear Trend", "linearTrend", false), ("Growth Trend", "growthTrend", true)]
+        .into_iter()
+        .filter(|(_, _, growth)| gridcraft_engine::fill::trend_applies(&d.wb, d.wb.active_sheet(), src, target, *growth))
+        .map(|(label, mode, _)| (label, mode))
+        .collect();
+    app.grid.fill_menu_trends = Some((key, modes.clone()));
+    modes
+}
+
 /// Remembers the fill just made so the Auto Fill Options button can offer the other ways.
 pub(super) fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
     app.grid.fill_tag =
@@ -341,6 +360,7 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((src, target, at)) = app.grid.fill_menu else { return };
     let mut close = false;
     let mut items = fill_modes(app, src);
+    items.extend(trend_fill_modes(app, src, target));
     items.extend([("-", ""), ("Series…", "ui:series")]);
     let response = egui::Area::new(egui::Id::unique("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {

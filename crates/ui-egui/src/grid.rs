@@ -21,6 +21,8 @@ pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
 type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+/// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
+pub type FillTrendsCache = ((u64, u64, usize, RangeRef, RangeRef), Vec<(&'static str, &'static str)>);
 
 mod cell_paint;
 mod cursor;
@@ -195,6 +197,9 @@ pub struct GridState {
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
     pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// The trends the fill menu lists, cached per (doc uid, revision, sheet, source, dragged range):
+    /// finding them reads every source cell.
+    pub fill_menu_trends: Option<FillTrendsCache>,
     /// After a left-drag of the fill handle: the Auto Fill Options button beside the filled cells.
     pub fill_tag: Option<FillTag>,
     /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.
