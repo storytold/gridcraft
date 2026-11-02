@@ -171,7 +171,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+        // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, &gridcraft_calc::is_known_function).map_err(|e| {
             EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
                 (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
                 _ => format!("We can't open '{name}': {e}"),
@@ -200,17 +201,17 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, encoding, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
         _ => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, encoding, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
     }
 }
