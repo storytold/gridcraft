@@ -143,8 +143,7 @@ fn empty_input_lists_recently_run_commands() {
     alt_q(&mut h);
     let _ = h.get_by_label("Recently used");
     // Clicking the listed recent runs it.
-    let label = format!("Bold    Home › Font    {}", recent[0]["shortcut"].as_str().unwrap());
-    h.get_by_label(&label).click();
+    h.get_by_label("Bold  (Ctrl+B)    Home › Font").click();
     h.run_steps(2);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "home.bold").count(), 2);
