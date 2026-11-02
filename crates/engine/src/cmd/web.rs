@@ -266,6 +266,14 @@ fn table_count(s: &Session) -> usize {
 /// (`=`, or `+`/`-`/`@` starting one) is escaped with the leading apostrophe, which parses as
 /// the text itself: page content never becomes live formulas (CSV injection).
 fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
+    json_rows_with(table, true)
+}
+
+/// The table's cells as `range.setValues` rows. `escape` prefixes typed-input markers
+/// (`=`, a leading `'`) so the page's text parses back to itself on a General-formatted
+/// cell; the refresh path passes `false` where the destination is Text-formatted (`@`),
+/// which stores input unchanged - an escaped value there would keep its apostrophe.
+fn json_rows_with(table: &WebTable, escape: bool) -> Vec<Vec<Json>> {
     table
         .rows
         .iter()
@@ -274,7 +282,7 @@ fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
                 .map(|c| {
                     if c.is_empty() {
                         Json::Null
-                    } else if needs_text_escape(c) {
+                    } else if escape && needs_text_escape(c) {
                         json!(format!("'{c}"))
                     } else {
                         json!(c)
@@ -416,7 +424,35 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     else {
         return Err(EngineError::Other(format!("The sheet or table of the connection `{}` is gone.", q.name)));
     };
-    let rows = json_rows(table);
+    // The rows the page holds, with typed-input markers escaped only where the destination
+    // cell parses them: a Text-formatted (`@`) cell stores input unchanged, so an escape
+    // there would survive as a literal apostrophe. The destination keeps the user's styles
+    // across a refresh, so each cell's format decides.
+    let rows = {
+        let sh = d.wb.sheet(sheet).ok_or_else(|| EngineError::Other(format!("The sheet of the connection `{}` is gone.", q.name)))?;
+        table
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(ri, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(ci, c)| {
+                        if c.is_empty() {
+                            return Json::Null;
+                        }
+                        let at = CellRef::new(old.start.row + ri as u32, old.start.col + ci as u32);
+                        let is_text = sh.cells.get(at).is_some_and(|cell| d.wb.styles.get(cell.style).num_fmt.as_str() == "@");
+                        if !is_text && needs_text_escape(c) {
+                            json!(format!("'{c}"))
+                        } else {
+                            json!(c)
+                        }
+                    })
+                    .collect::<Vec<Json>>()
+            })
+            .collect::<Vec<Vec<Json>>>()
+    };
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
     if rows.is_empty() || w == 0 {
         return Err(EngineError::Other("The table is empty.".into()));
@@ -1520,6 +1556,32 @@ mod tests {
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "B");
     }
+#[test]
+    /// A refresh writes into the user's styled cells: a Text-formatted (`@`) destination
+    /// stores input unchanged, so the apostrophe escape must be skipped there or a page
+    /// value of `'90s` would refresh to `''90s`. A General cell still escapes.
+    fn a_refresh_skips_the_apostrophe_escape_in_text_formatted_cells() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The user formats column B as Text.
+        s.execute("home.numberFormat", json!({"range": "B2", "code": "@"})).unwrap();
+        // The page now serves a value with a leading apostrophe.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Note</th></tr><tr><td>X</td><td>'90s</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.webRefresh", json!({})).unwrap();
+        // The Text-formatted cell holds the page's text exactly.
+        assert_eq!(a1(&s, "B2"), "'90s", "the Text cell keeps the page's apostrophe, unescaped");
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let b2 = sh.cell(CellRef::parse("B2").unwrap()).expect("B2");
+        assert_eq!(b2.value, gridcraft_core::Value::text("'90s"));
+    }
+
 #[test]
     /// Page text that begins with an apostrophe imports with the apostrophe: typed input
     /// would read `'` as its text marker and store `90s` for a page cell of `'90s`, which
