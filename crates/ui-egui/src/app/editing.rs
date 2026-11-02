@@ -9,6 +9,10 @@ pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        if !self.local_editing_allowed() {
+            self.notify_view_only_refused();
+            return;
+        }
         // The source formula is display-only on spill children. Grid replacement keeps its
         // existing behavior, but no formula-bar entry path may edit that displayed formula.
         if from_formula_bar && formula_bar::active_spill_anchor(self).is_some() {
@@ -194,9 +198,9 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.run_engine_synced("range.fill", json!({"input": text}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.run_engine_synced("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
         match r {
             Ok(_) => {
@@ -287,6 +291,10 @@ impl SheetApp {
     /// yet for a cell that isn't a Python cell. A cell inside a spill isn't edited, as with the
     /// formula bar's other entry paths.
     pub fn begin_python_edit(&mut self) {
+        if !self.local_editing_allowed() {
+            self.notify_view_only_refused();
+            return;
+        }
         if formula_bar::active_spill_anchor(self).is_some() {
             return;
         }
@@ -385,8 +393,8 @@ impl SheetApp {
         // other cell (code of spaces is still code). On another cell there is nothing to write.
         let r = match (ed.text.is_empty(), python_cell) {
             (true, false) => return true,
-            (true, true) => self.session.run("cell.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "input": ""})),
-            (false, _) => self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text})),
+            (true, true) => self.run_engine_synced("cell.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "input": ""})),
+            (false, _) => self.run_engine_synced("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text})),
         };
         match r {
             Ok(_) => {

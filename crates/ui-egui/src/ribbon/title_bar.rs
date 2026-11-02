@@ -72,8 +72,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             // The commands' own availability: there must be a step, and no undo group may be open on
             // the document (an action that spans several calls is still running).
-            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
-            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
+            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok() && app.local_editing_allowed();
+            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok() && app.local_editing_allowed();
             // Named and marked enabled or not for assistive technology (and the UI tests).
             let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
             undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
@@ -126,8 +126,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));
                 }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
+                let share = small_button(ui, Icon::Share, "Share", "Share: collaborate live, export, or save a copy", true);
                 egui::Popup::menu(&share).show(|ui| {
+                    crate::sync::share_popup_menu(app, ui);
                     if ui.button("Export as PDF…").clicked() {
                         app.run_or_alert("file.exportPdf", json!({}));
                     }
@@ -139,6 +140,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     }
                 });
+                crate::sync::share_title_bar_inline(app, ui);
                 let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "comments");
                 if __k.clicked() {
