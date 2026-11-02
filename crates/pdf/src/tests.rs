@@ -332,3 +332,20 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
     Ok(())
 }
+
+#[test]
+fn hangul_text_uses_the_korean_cid_font() -> Result<(), Box<dyn Error>> {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "테스트 123 ABC 编号");
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    // Hangul gets the Korean font (/F14), Chinese stays on the GB1 font (/F13).
+    assert!(find(&pdf, b"/F14 10 Tf\n<D14CC2A4D2B8> Tj").is_some());
+    assert!(find(&pdf, b"( 123 ABC ) Tj").is_some());
+    assert!(find(&pdf, b"/F13 10 Tf\n<7F1653F7> Tj").is_some());
+    assert!(find(&pdf, b"/Encoding /UniKS-UTF16-H").is_some());
+    assert!(find(&pdf, b"/Ordering (Korea1)").is_some());
+    assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some());
+    Ok(())
+}

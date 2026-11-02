@@ -3,7 +3,8 @@
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   font with the `UniGB-UTF16-H` CMap (Hangul: Adobe-Korea1, `UniKS-UTF16-H`) instead of being
+//!   replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -224,19 +225,33 @@ pub fn win_ansi(c: char) -> u8 {
 
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the Korean CID font, used for Hangul (Adobe-GB1 has no Hangul glyphs).
+const KOREAN_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
-/// Base font of the CID font used for characters WinAnsiEncoding lacks.
-const CID_BASE_FONT: &str = "STSong-Light";
-/// Default glyph width of the CID font (full-width), in 1/1000 em.
+const FONT_SLOTS: usize = KOREAN_FONT + 1;
+/// Base font, CMap, ordering and supplement of the CID font in `slot`.
+fn cid_font(slot: usize) -> (&'static str, &'static str, &'static str, u8) {
+    if slot == KOREAN_FONT { ("HYSMyeongJo-Medium", "UniKS-UTF16-H", "Korea1", 1) } else { ("STSong-Light", "UniGB-UTF16-H", "GB1", 4) }
+}
+/// Default glyph width of the CID fonts (full-width), in 1/1000 em.
 const CID_WIDTH: u16 = 1000;
 
-/// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
+/// True when `c` has no WinAnsiEncoding byte and is drawn with a CID font.
 fn needs_cid(c: char) -> bool {
     !c.is_control() && c != '?' && win_ansi(c) == b'?'
 }
 
-/// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
+/// True for Hangul jamo, compatibility jamo and syllables.
+fn is_hangul(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}')
+}
+
+/// The CID font slot for `c`, or `None` when it is set in WinAnsiEncoding.
+fn cid_slot(c: char) -> Option<usize> {
+    needs_cid(c).then_some(if is_hangul(c) { KOREAN_FONT } else { CID_FONT })
+}
+
+/// A PDF hex string `< … >` of `text` in UTF-16BE (the `Uni*-UTF16-H` encodings).
 fn pdf_utf16_string(text: &str) -> String {
     let mut s = String::with_capacity(text.len() * 4 + 2);
     s.push('<');
@@ -586,14 +601,17 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
-        // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
+        // Runs of WinAnsi text use `font`; runs it cannot encode use a CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;
         while let Some(first) = rest.chars().next() {
-            let cid = needs_cid(first);
-            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let cid = cid_slot(first);
+            let end = rest.char_indices().find(|(_, c)| cid_slot(*c) != cid).map_or(rest.len(), |(i, _)| i);
             let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+            let (slot, string) = match cid {
+                Some(slot) => (slot, pdf_utf16_string(run)),
+                None => (fi, pdf_string(run)),
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
@@ -740,7 +758,7 @@ impl PdfDoc {
             if *u {
                 font_ids[i] = next;
                 // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
+                next += if i >= CID_FONT { 3 } else { 1 };
             }
         }
         let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
@@ -751,26 +769,24 @@ impl PdfDoc {
         for (i, id) in font_ids.iter().enumerate() {
             if *id != 0 {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
-                if i == CID_FONT {
+                if i >= CID_FONT {
                     let (cid_id, desc_id) = (id + 1, id + 2);
+                    let (base, cmap, ordering, supplement) = cid_font(i);
                     objects.push((
                         *id,
-                        format!(
-                            "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
-                        )
-                        .into_bytes(),
+                        format!("<< /Type /Font /Subtype /Type0 /BaseFont /{base} /Encoding /{cmap} /DescendantFonts [{cid_id} 0 R] >>").into_bytes(),
                     ));
                     objects.push((
                         cid_id,
                         format!(
-                            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
+                            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{base} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement {supplement} >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
                         )
                         .into_bytes(),
                     ));
                     objects.push((
                         desc_id,
                         format!(
-                            "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
+                            "<< /Type /FontDescriptor /FontName /{base} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
                         )
                         .into_bytes(),
                     ));
