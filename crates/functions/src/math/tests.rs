@@ -46,6 +46,33 @@ fn sums() {
     is_err(ev("SUMXMY2", vec![av(x), av(row(&[1.0]))]), NA);
 }
 
+/// Sums that cancel show 0, as Excel does: `=0.1+0.2-0.3` displays 0 there, not
+/// 5.551115123125783E-17, and a finance column that cancels shows 0, not -2.2737E-13 (#3141).
+/// The bound is the additions' own: `n` addends no larger than `m` can wander `n · ε · m`, so a
+/// sum that close to zero is binary noise. Real small differences — 1E-7 between numbers in the
+/// ten thousands, or genuinely tiny addends — sit far above it and survive.
+#[test]
+fn sums_cancel_to_zero() {
+    // 17 × 1234.57 − 20987.69: exact decimal 0, double sum 2.2737367544323206E-13
+    let cancelled = (0..17).map(|_| n(1234.57)).chain([n(-20987.69)]).collect();
+    close_tol(ev("SUM", cancelled), 0.0, 0.0);
+    // =0.1+0.2-0.3: 2.7755575615628914E-17
+    close_tol(ev("SUM", vec![n(0.1), n(0.2), n(-0.3)]), 0.0, 0.0);
+    // Thirty dimes and three dollars: 1.6653345369377348E-16
+    let dimes = (0..30).map(|_| n(0.1)).chain([n(-1.0), n(-1.0), n(-1.0)]).collect();
+    close_tol(ev("SUM", dimes), 0.0, 0.0);
+    // A real difference survives: 1.00000761449337E-7 next to 10000 is not noise
+    close_tol(ev("SUM", vec![n(10000.0), n(-9999.9999999)]), 1.00000761449337E-7, 0.0);
+    // Genuinely small addends keep their value: nothing larger to hide behind
+    close_tol(ev("SUM", vec![n(1E-7), n(1E-7)]), 2E-7, 0.0);
+    // SUMIF and SUMIFS go through the same bound
+    let mut col_v = vec![1234.57; 17];
+    col_v.push(-20987.69);
+    let names = arr(vec![vec![tv("a")]; 18]);
+    close_tol(ev("SUMIF", vec![rf(names.clone()), t("a"), rf(col(&col_v))]), 0.0, 0.0);
+    close_tol(ev("SUMIFS", vec![rf(col(&col_v)), rf(names), t("a")]), 0.0, 0.0);
+}
+
 /// SUMPRODUCT cases observed in Excel (FormulaEvalTestData, row "Sumproduct"): scalars and
 /// single-cell references multiply in, text in a scalar argument is `#VALUE!`, sizes must match.
 #[test]
