@@ -5,24 +5,36 @@ use super::{
 
 // ---------------------------------------------------------------- entry
 
+/// Typing `=PY(` doesn't make a Python cell; this says what does.
+pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set command (the code as `code`), not by typing =PY(…).";
+
+/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
+/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+pub(crate) fn is_formula_input(input: &str) -> bool {
+    input.starts_with('=')
+        || (input.len() > 1
+            && (input.starts_with('+') || input.starts_with('-'))
+            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+}
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
-        let c = Cell { value: Value::Empty, formula: None, style };
+        let c = Cell { value: Value::Empty, formula: None, style, py: None };
         return Ok(if c.is_blank() { None } else { Some(c) });
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { value: Value::text(input), formula: None, style, py: None }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
+    let is_formula = is_formula_input(input);
+    if is_formula && gridcraft_model::python::is_py_formula(input) {
+        return Err(EngineError::Other(PY_FORMULA.into()));
+    }
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
@@ -74,7 +86,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if input.contains('\n') && !wb.styles.get(style).align.wrap {
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
-    Ok(Some(Cell { value: parsed.value, formula: None, style }))
+    Ok(Some(Cell { value: parsed.value, formula: None, style, py: None }))
 }
 
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
@@ -142,7 +154,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
             for c in range.iter().skip(1).take(1_000_000) {
-                if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
+                if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
                 }
@@ -234,10 +246,14 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         value: Value::number(n.as_f64().unwrap_or(0.0)),
                         formula: None,
                         style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                        py: None,
                     }),
-                    Json::Bool(b) => {
-                        Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
-                    }
+                    Json::Bool(b) => Some(Cell {
+                        value: Value::Bool(*b),
+                        formula: None,
+                        style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                        py: None,
+                    }),
                     // Text as given: no date or number reading, and a leading `'` is part of the
                     // text rather than the marker that makes it text. A formula is still a
                     // formula, which is what the ticket asks for and what `=` means in a cell.
@@ -253,7 +269,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                                 style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                             }
-                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
+                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style, py: None })
                         }
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,

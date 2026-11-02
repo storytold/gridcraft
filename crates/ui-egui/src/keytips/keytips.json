@@ -1081,11 +1081,10 @@
   },
   {
    "seq": "NE",
-   "kind": "command",
-   "target": "insert.equation",
-   "pending": true,
-   "excel": "Equations",
-   "note": "Equations; reserved until the command lands"
+   "kind": "dialog",
+   "target": "equation",
+   "excel": "Equation",
+   "note": "the Equation split button's main half opens the editor"
   },
   {
    "seq": "NF",
@@ -1667,6 +1666,13 @@
    "excel": "More Functions Menu",
    "note": "group level: containment(More Functions)",
    "target": "formulas.moreFunctions"
+  },
+  {
+   "seq": "MR",
+   "kind": "control",
+   "excel": "Recently Used Menu",
+   "note": "opens the Recently Used menu",
+   "target": "formulas.recentlyUsed"
   },
   {
    "seq": "MS",

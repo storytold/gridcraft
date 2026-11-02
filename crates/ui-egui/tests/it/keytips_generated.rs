@@ -1143,10 +1143,7 @@ fn keytip_nd_() {
 fn keytip_ne_() {
     let mut h = harness(blank());
     sequence(&mut h, "NE", false);
-    assert!(h.state().dialog.is_none(), "NE must not open a dialog");
-    assert!(h.state().message.is_none(), "NE must not open a message box");
-    assert!(h.state().toast.is_none(), "NE must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "NE must not journal");
+    assert!(h.state().dialog.is_some(), "NE must open the equation dialog");
 }
 
 #[test]
@@ -1768,6 +1765,14 @@ fn keytip_mq_() {
     let mut h = harness(blank());
     sequence(&mut h, "MQ", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "MQ must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_mr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MR", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "MR must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
 }
 
@@ -2761,7 +2766,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 366;
+    const EXPECTED: usize = 367;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 
