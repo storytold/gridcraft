@@ -276,11 +276,14 @@ fn linked_number(wb: &Workbook, host: usize, c: &FormControl) -> Option<f64> {
     wb.sheet(si)?.cell(cell)?.value.as_f64()
 }
 
-/// Writes `value` to the linked cell through `cell.set` (nothing without a link).
+/// Writes `value` to the linked cell through `cell.set` (nothing without a link, or when the cell
+/// already shows `value`, formula or not: Format Control's OK sends the value back every time, and
+/// a write that changes nothing must not turn a formula into a constant or fail on a locked cell
+/// of a protected sheet; a real change replaces a formula with the constant, as in Excel).
 fn write_link(s: &mut Session, host: usize, link: Option<&str>, value: u32) -> Result<()> {
     let Some(link) = link else { return Ok(()) };
     let Some((si, cell)) = link_target(&s.doc()?.wb, host, link) else { return Ok(()) };
-    let holds = s.doc()?.wb.sheet(si).and_then(|sh| sh.cell(cell)).and_then(|c| if c.formula.is_none() { c.value.as_f64() } else { None });
+    let holds = s.doc()?.wb.sheet(si).and_then(|sh| sh.cell(cell)).and_then(|c| c.value.as_f64());
     if holds == Some(value as f64) {
         return Ok(());
     }

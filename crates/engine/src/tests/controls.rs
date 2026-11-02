@@ -697,6 +697,42 @@ fn a_button_command_that_would_open_a_dialog_or_a_page_is_refused_after_it_runs(
     assert_eq!(s.ui_requests.len(), 2);
 }
 
+/// A linked cell that holds a formula: a write of the value the formula already shows is skipped,
+/// so Format Control's OK (which sends the value back every time) keeps the formula, also on a
+/// protected sheet with the cell locked; a changed value replaces the formula with the constant.
+#[test]
+fn a_formula_in_the_linked_cell_survives_a_write_of_the_value_it_shows() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    let formula =
+        |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().cell(gridcraft_core::CellRef::parse("B1").unwrap()).is_some_and(|c| c.formula.is_some());
+    assert!(formula(&s));
+    // Inserting with the value the formula shows (10 * 2 = 20) writes nothing.
+    let c = id(&s.execute("insert.slider", json!({"at": "D2", "link": "B1", "value": 20})).unwrap());
+    assert!(formula(&s), "the formula stays");
+    assert_eq!(v(&s, "B1"), Value::Number(20.0));
+    // The dialog's OK: every number sent back, the value unchanged, a new name.
+    s.execute("control.format", json!({"id": c, "name": "Speed", "value": 20, "min": 0, "max": 100, "step": 1, "page": 10, "locked": false}))
+        .unwrap();
+    assert!(formula(&s), "a rename keeps the formula");
+    // Editing A1 moves the control through the formula (15 * 2 = 30); OK with that value keeps it.
+    s.execute("cell.set", json!({"cell": "A1", "input": "15"})).unwrap();
+    assert_eq!(control(&s, c).value, 30);
+    s.execute("control.format", json!({"id": c, "value": 30, "min": 0, "max": 100, "step": 1})).unwrap();
+    assert!(formula(&s));
+    // On a protected sheet with B1 locked, the same OK is not refused.
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("control.format", json!({"id": c, "name": "Rate", "value": 30, "min": 0, "max": 100, "step": 1})).unwrap();
+    assert_eq!(control(&s, c).name, "Rate");
+    assert!(formula(&s));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    // A changed value writes the constant over the formula.
+    s.execute("control.format", json!({"id": c, "value": 40, "min": 0, "max": 100, "step": 1})).unwrap();
+    assert!(!formula(&s), "the formula is replaced");
+    assert_eq!(v(&s, "B1"), Value::Number(40.0));
+}
+
 /// Using a slider or spin button writes its linked cell through `cell.set`, so the cell's
 /// protection governs it: a locked cell on a protected sheet refuses the change, and the control
 /// keeps its value (the control's change and the cell write are one group, rolled back together).
