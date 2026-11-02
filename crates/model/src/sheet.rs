@@ -723,6 +723,7 @@ mod tests {
                 series: vec![],
                 legend: LegendPos::default(),
                 data_labels: false,
+                data_table: None,
                 gridlines: false,
                 style: 0,
                 x_title: None,
