@@ -151,6 +151,7 @@ fn command_palette_shortcuts_come_from_engine_metadata() {
 
     for (id, mac, other) in [
         ("home.bold", Some("Cmd+B"), Some("Ctrl+B")),
+        ("edit.find", Some("Cmd+F"), Some("Ctrl+F")),
         ("edit.selectAll", Some("Cmd+A"), Some("Ctrl+A")),
         ("edit.undo", Some("Cmd+Z"), Some("Ctrl+Z")),
         ("edit.redo", Some("Cmd+Y"), Some("Ctrl+Y")),
@@ -172,8 +173,13 @@ fn command_palette_shortcuts_come_from_engine_metadata() {
         ("selection.column", Some("Ctrl+Space"), Some("Ctrl+Space")),
     ] {
         let command = commands.iter().find(|c| c.id == id).unwrap();
-        assert_eq!(command.shortcut_for_platform(true), mac, "{id}: macOS");
-        assert_eq!(command.shortcut_for_platform(false), other, "{id}: Windows/Linux");
+        assert_eq!(command.shortcut_for_platform(true), mac.map(str::to_string), "{id}: macOS");
+        assert_eq!(command.shortcut_for_platform(false), other.map(str::to_string), "{id}: Windows/Linux");
+    }
+
+    for (id, legacy) in [("data.group", "Alt+Shift+Right"), ("data.ungroup", "Alt+Shift+Left")] {
+        let command = commands.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(command.shortcut, Some(legacy), "{id}: legacy CLI shortcut");
     }
 
     let command = commands.iter().find(|c| c.id == "home.alignRight").unwrap();

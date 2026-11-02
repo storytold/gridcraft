@@ -41,7 +41,6 @@ pub struct CommandSpec {
     pub menu: &'static [&'static str],
     pub shortcut: Option<&'static str>,
     pub shortcut_mac: Option<&'static str>,
-    pub shortcut_other: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
     pub run: Run,
@@ -56,7 +55,6 @@ pub struct CommandInfo {
     pub menu: Vec<&'static str>,
     pub shortcut: Option<&'static str>,
     pub shortcut_mac: Option<&'static str>,
-    pub shortcut_other: Option<&'static str>,
     pub params: &'static str,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,9 +62,13 @@ pub struct CommandInfo {
 }
 
 impl CommandInfo {
-    /// Shortcut declared by the engine for the active platform.
-    pub fn shortcut_for_platform(&self, mac: bool) -> Option<&'static str> {
-        if mac { self.shortcut_mac } else { self.shortcut_other }
+    /// Format the portable shortcut notation for the runtime operating system.
+    pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
+        let keys = if mac { self.shortcut_mac.or(self.shortcut) } else { self.shortcut }?;
+        if mac {
+            return Some(keys.to_owned());
+        }
+        Some(keys.split('+').map(|part| if part == "Cmd" { "Ctrl" } else { part }).collect::<Vec<_>>().join("+"))
     }
 }
 
@@ -79,7 +81,6 @@ impl CommandSpec {
             menu: self.menu.to_vec(),
             shortcut: self.shortcut,
             shortcut_mac: self.shortcut_mac,
-            shortcut_other: self.shortcut_other,
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
@@ -129,45 +130,14 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 }
 
 macro_rules! cmd {
-    (platform $id:literal, $label:literal, [$($m:literal),*], $mac:expr, $other:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec {
-            id: $id,
-            label: $label,
-            menu: &[$($m),*],
-            shortcut: $mac,
-            shortcut_mac: $mac,
-            shortcut_other: $other,
-            params: $params,
-            enabled: $en,
-            run: $run,
-            journal: true,
-            undoable: true,
-        }
-    };
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: $sc, shortcut_other: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: $sc, shortcut_other: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: $sc, shortcut_other: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
-    };
-    (platform_noundo $id:literal, $label:literal, [$($m:literal),*],
-        $mac:expr, $other:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec {
-            id: $id,
-            label: $label,
-            menu: &[$($m),*],
-            shortcut: $mac,
-            shortcut_mac: $mac,
-            shortcut_other: $other,
-            params: $params,
-            enabled: $en,
-            run: $run,
-            journal: true,
-            undoable: false,
-        }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -223,7 +193,6 @@ pub fn register_test_command(id: &'static str, run: Run) {
         menu: &[],
         shortcut: None,
         shortcut_mac: None,
-        shortcut_other: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -242,7 +211,6 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         menu: &[],
         shortcut: None,
         shortcut_mac: None,
-        shortcut_other: None,
         params: "",
         enabled: |_| Ok(()),
         run,

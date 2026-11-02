@@ -9,22 +9,23 @@ use super::*;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // Font
-        cmd!(platform "home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), Some("Ctrl+B"), "{range?, on?: bool}", has_doc, |s, p| toggle(
+        cmd!("home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{range?, on?: bool}", has_doc, |s, p| toggle(
             s,
             p,
             |st| st.font.bold,
             |st, v| st.font.bold = v
         )),
-        cmd!(platform "home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), Some("Ctrl+I"), "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!("home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{range?, on?}", has_doc, |s, p| toggle(
             s,
             p,
             |st| st.font.italic,
             |st, v| st.font.italic = v
         )),
-        cmd!(platform "home.underline",
+        cmd!(
+            "home.underline",
             "Underline",
             ["Home", "Font"],
-            Some("Cmd+U"), Some("Ctrl+U"),
+            Some("Cmd+U"),
             "{range?, on?, style?: single|double|singleAccounting|doubleAccounting}",
             has_doc,
             underline
@@ -86,8 +87,14 @@ pub fn specs() -> Vec<CommandSpec> {
             format_cells
         ),
         // Alignment
-        cmd!(platform "home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left)),
-        cmd!(platform "home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center)),
+        CommandSpec {
+            shortcut_mac: Some("Cmd+L"),
+            ..cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left))
+        },
+        CommandSpec {
+            shortcut_mac: Some("Cmd+E"),
+            ..cmd!("home.alignCenter", "Center", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center))
+        },
         cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
         cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
         cmd!("home.alignTop", "Top Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Top)),
