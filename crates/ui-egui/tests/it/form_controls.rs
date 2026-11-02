@@ -1,7 +1,8 @@
 //! Form controls through real pointer and keyboard input: dragging a slider (one undo step),
 //! paging on the track, clicking and holding spin arrows, keyboard steps, a button running its
 //! macro, Cmd+click or right-click selecting a control without running it, right-to-left
-//! sheets, and the Insert › Controls buttons, context menu and dialogs.
+//! sheets, a button's questions (an answer runs only the action it asked about), and the Insert ›
+//! Controls buttons, context menu and dialogs.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use gridcraft_engine::Session;
@@ -407,6 +408,159 @@ fn a_button_from_a_file_asks_before_it_runs() {
     h.run_steps(2);
     assert_eq!(cell(&h, "H1"), Value::text("pressed"), "Run presses it again with the approval");
     assert!(h.state().dialog.is_none());
+}
+
+/// A file this test may write, removed first: `<temp>/gridcraft-press-<pid>-<name>`.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("gridcraft-press-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_file(&p);
+    p
+}
+
+/// Points the fixture's button at `file.exportCsv` to `path` and presses it: the question about
+/// the file opens.
+fn ask_export(h: &mut Harness, button: u32, path: &std::path::Path) {
+    h.state_mut().run("control.assign", json!({"id": button, "command": "file.exportCsv", "params": {"path": path}})).unwrap();
+    h.state_mut().press_button(button);
+    h.run_steps(4);
+    let d = h.state().dialog.clone().expect("a prompt");
+    assert_eq!(d.name(), "controlQuestion");
+    let text = d.values["text"].as_str().unwrap_or("").to_string();
+    assert!(text.contains(&path.display().to_string()), "{text}");
+}
+
+/// Clicks `label` in the open prompt.
+fn answer(h: &mut Harness, label: &str) {
+    use egui_kittest::kittest::Queryable as _;
+    h.get_by_label(label).click();
+    h.run_steps(2);
+}
+
+/// An agent reassigns the button while its question is open: the answer was about the old file,
+/// so neither file is written, and the next press asks about the new one.
+#[test]
+fn an_answer_does_not_run_an_action_reassigned_while_the_question_was_open() {
+    let (mut h, ids) = fixture();
+    let (a, b) = (scratch("a.csv"), scratch("b.csv"));
+    ask_export(&mut h, ids.button, &a);
+    h.state_mut().session.execute("control.assign", json!({"id": ids.button, "command": "file.exportCsv", "params": {"path": b}})).unwrap();
+    answer(&mut h, " Run ");
+    assert!(!a.exists() && !b.exists(), "the stale answer ran nothing");
+    assert!(h.state().dialog.as_ref().is_none_or(|d| d.name() != "controlQuestion"));
+    let msg = h.state().message.clone().map(|m| m.1).unwrap_or_default();
+    assert!(msg.contains("changed while the question was open"), "{msg}");
+    // The approval was not cached for the new file either: pressing again asks about it.
+    h.state_mut().message = None;
+    h.state_mut().press_button(ids.button);
+    h.run_steps(4);
+    let text = h.state().dialog.clone().map(|d| d.values["text"].as_str().unwrap_or("").to_string()).unwrap_or_default();
+    assert!(text.contains(&b.display().to_string()), "{text}");
+    answer(&mut h, " Run ");
+    assert!(b.exists() && !a.exists(), "the new question's answer runs the new action");
+    let _ = std::fs::remove_file(&b);
+    // A change to a different command, and to a macro, is refused the same way.
+    let c = scratch("c.csv");
+    ask_export(&mut h, ids.button, &c);
+    h.state_mut().session.execute("control.assign", json!({"id": ids.button, "macro": "Mark"})).unwrap();
+    answer(&mut h, " Run ");
+    assert!(!c.exists());
+    assert_eq!(cell(&h, "H1"), Value::Empty, "the macro put in its place did not run");
+}
+
+/// Reassigning the same action (identical parameters) changes nothing the question asked about,
+/// so the answer still runs it.
+#[test]
+fn an_answer_runs_when_the_action_is_reassigned_unchanged() {
+    let (mut h, ids) = fixture();
+    let a = scratch("same.csv");
+    ask_export(&mut h, ids.button, &a);
+    h.state_mut().session.execute("control.assign", json!({"id": ids.button, "command": "file.exportCsv", "params": {"path": a}})).unwrap();
+    answer(&mut h, " Run ");
+    assert!(a.exists(), "{:?}", h.state().message);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let _ = std::fs::remove_file(&a);
+}
+
+/// The button deleted, its workbook closed, or another workbook (with an identical button)
+/// active while the question is open: nothing runs.
+#[test]
+fn an_answer_runs_nothing_when_the_button_or_its_workbook_is_gone() {
+    let (mut h, ids) = fixture();
+    let a = scratch("gone.csv");
+    ask_export(&mut h, ids.button, &a);
+    h.state_mut().session.execute("object.delete", json!({"kind": "control", "id": ids.button})).unwrap();
+    answer(&mut h, " Run ");
+    assert!(!a.exists());
+    let msg = h.state().message.clone().map(|m| m.1).unwrap_or_default();
+    assert!(msg.contains("gone"), "{msg}");
+
+    // Another workbook with the same button (same id, same action) becomes active.
+    let (mut h, ids) = fixture();
+    ask_export(&mut h, ids.button, &a);
+    let s = &mut h.state_mut().session;
+    s.new_workbook();
+    for at in ["A1", "A5"] {
+        s.execute("insert.button", json!({"at": at})).unwrap();
+    }
+    let id = s.execute("insert.button", json!({"at": "E12", "command": "file.exportCsv", "params": {"path": a}})).unwrap()["control"].as_u64();
+    assert_eq!(id, Some(u64::from(ids.button)), "the other workbook's button has the same id");
+    answer(&mut h, " Run ");
+    assert!(!a.exists(), "the answer belongs to the first workbook's button");
+
+    // The workbook closed.
+    let (mut h, ids) = fixture();
+    ask_export(&mut h, ids.button, &a);
+    h.state_mut().session.execute("file.close", json!({"force": true, "document": true})).unwrap();
+    assert!(h.state().session.doc().is_err(), "no workbook is open");
+    answer(&mut h, " Run ");
+    assert!(!a.exists());
+}
+
+/// The overwrite question is about the cells the macro would write: when the macro (or the
+/// selection it runs on) changes while it is open, Overwrite writes over nothing.
+#[test]
+fn an_overwrite_answer_applies_only_to_the_output_it_asked_about() {
+    let (mut h, ids) = fixture();
+    let s = &mut h.state_mut().session;
+    s.execute("macro.save", json!({"name": "Note", "steps": [{"command": "cell.set", "params": {"cell": "H2", "input": "noted"}}]})).unwrap();
+    s.execute("cell.set", json!({"cell": "H2", "input": "keep"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H3", "input": "keep too"})).unwrap();
+    s.execute("control.assign", json!({"id": ids.button, "macro": "Note"})).unwrap();
+    let ask = |h: &mut Harness| {
+        h.state_mut().press_button(ids.button);
+        h.run_steps(4);
+        let text = h.state().dialog.clone().map(|d| d.values["text"].as_str().unwrap_or("").to_string()).unwrap_or_default();
+        assert!(text.contains("Overwrite them"), "{text}");
+    };
+    ask(&mut h);
+    // The macro now writes H3 instead.
+    h.state_mut()
+        .session
+        .execute(
+            "macro.save",
+            json!({"name": "Note", "replace": true, "steps": [{"command": "cell.set", "params": {"cell": "H3", "input": "noted"}}]}),
+        )
+        .unwrap();
+    answer(&mut h, " Overwrite ");
+    assert_eq!((cell(&h, "H2"), cell(&h, "H3")), (Value::text("keep"), Value::text("keep too")));
+    // The output cell given to the button changes.
+    h.state_mut().message = None;
+    ask(&mut h);
+    h.state_mut().session.execute("control.assign", json!({"id": ids.button, "macro": "Note", "output": "H2"})).unwrap();
+    answer(&mut h, " Overwrite ");
+    assert_eq!((cell(&h, "H2"), cell(&h, "H3")), (Value::text("keep"), Value::text("keep too")));
+    // The selection the macro runs on changes.
+    h.state_mut().message = None;
+    h.state_mut().session.execute("control.assign", json!({"id": ids.button, "macro": "Note"})).unwrap();
+    ask(&mut h);
+    h.state_mut().session.execute("selection.set", json!({"cell": "A21"})).unwrap();
+    answer(&mut h, " Overwrite ");
+    assert_eq!(cell(&h, "H3"), Value::text("keep too"));
+    // Nothing changed: Overwrite overwrites.
+    h.state_mut().message = None;
+    ask(&mut h);
+    answer(&mut h, " Overwrite ");
+    assert_eq!(cell(&h, "H3"), Value::text("noted"));
 }
 
 #[test]

@@ -124,10 +124,43 @@ fn confirm_text(e: &str) -> Option<String> {
     Some(rest.split_once(" (run again with").map_or(rest, |(q, _)| q).to_string())
 }
 
+/// What a press of the button `params` names would run, as text: the workbook, the sheet, the
+/// button, its action, the content of the macro it runs, and the selection (a macro on the
+/// selection, or a command without a range, works there). `None` when the active sheet has no
+/// such button. A question is answered only while this is unchanged, so an answer never applies
+/// to an action other than the one it asked about.
+fn press_binding(app: &SheetApp, params: &Json) -> Option<String> {
+    let id = params.get("id").and_then(Json::as_u64).and_then(|i| u32::try_from(i).ok())?;
+    let d = app.session.active()?;
+    let sheet = d.wb.active_sheet();
+    let sh = d.wb.sheet(sheet)?;
+    let c = sh.controls.iter().find(|c| c.id == id && c.kind == ControlKind::Button)?;
+    let mac = match &c.action {
+        Some(ControlAction::Macro { name, .. }) => {
+            gridcraft_engine::macros::find(&d.wb, name).and_then(|i| d.wb.macros.get(i)).map(gridcraft_engine::macros::fingerprint)
+        }
+        _ => None,
+    };
+    Some(
+        json!({
+            "doc": d.uid,
+            "sheet": sheet,
+            "sheetName": sh.name,
+            "control": id,
+            "action": c.action,
+            "macro": mac,
+            "selection": d.selection,
+        })
+        .to_string(),
+    )
+}
+
 /// Presses a button (`control.press` with `params`). A question (approve the action, or make
-/// room for a macro's output) opens a prompt whose buttons press it again with the answer; any
-/// other error shows in a message box.
+/// room for a macro's output) opens a prompt whose buttons press it again with the answer, bound
+/// to what the question was about (see [`press_binding`]); any other error shows in a message
+/// box.
 pub fn press(app: &mut SheetApp, params: Json) {
+    let bound = press_binding(app, &params);
     let Err(e) = app.run("control.press", params.clone()) else { return };
     let (text, choices) = if let Some(q) = approve_text(&e) {
         (q, json!([["Run", {"approve": true}]]))
@@ -141,12 +174,17 @@ pub fn press(app: &mut SheetApp, params: Json) {
         app.message = Some(("Button".into(), crate::clean_error(&e)));
         return;
     };
-    app.open_dialog("controlQuestion", json!({"text": text, "params": params, "choices": choices}));
+    app.open_dialog("controlQuestion", json!({"text": text, "params": params, "choices": choices, "bound": bound}));
 }
 
 pub fn open_question(params: &Json) -> Option<Dialog> {
     let text = params.get("text").and_then(Json::as_str)?;
-    let v = json!({"text": text, "params": params.get("params").cloned().unwrap_or_else(|| json!({})), "choices": params.get("choices").cloned().unwrap_or_else(|| json!([]))});
+    let v = json!({
+        "text": text,
+        "params": params.get("params").cloned().unwrap_or_else(|| json!({})),
+        "choices": params.get("choices").cloned().unwrap_or_else(|| json!([])),
+        "bound": params.get("bound").and_then(Json::as_str),
+    });
     Some(Dialog::custom("controlQuestion", "Button", v))
 }
 
@@ -174,6 +212,20 @@ pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &m
     if let Some(extra) = answer {
         *open = false;
         let mut params = d.values.get("params").cloned().unwrap_or_else(|| json!({}));
+        // The answer is for the action the question named: if the workbook, the sheet, the
+        // button, its action, its macro or the selection changed meanwhile (an agent reassigned
+        // it), nothing runs, and the next press asks about what it runs now.
+        let asked = d.values.get("bound").and_then(Json::as_str);
+        let now = press_binding(app, &params);
+        if asked.is_none() || asked != now.as_deref() {
+            let why = if now.is_none() {
+                "The button is gone, so nothing ran."
+            } else {
+                "The button changed while the question was open, so nothing ran. Press it again to see what it runs now."
+            };
+            app.message = Some(("Button".into(), why.into()));
+            return;
+        }
         if let (Some(p), Some(x)) = (params.as_object_mut(), extra.as_object()) {
             for (k, v) in x {
                 p.insert(k.clone(), v.clone());

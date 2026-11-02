@@ -267,6 +267,10 @@ in a workbook opened from a file asks before it runs anything. Like a step, a bu
 never opens a web page or a dialog: `link.open` is refused when it is assigned or comes in from
 a file, and a command that would open a dialog or a page once it runs (a command given no
 parameters opens its dialog) is refused then, with the request dropped and nothing done.
+In the window, a press that asks (approve the action, or overwrite data in the macro's way) opens
+a prompt whose answer applies only to what it asked about: if the workbook, the sheet, the
+button, its action, its macro or the selection changes while the prompt is open (an agent
+reassigns the button), the answer runs nothing and the next press asks again.
 
 In xlsx a button carries its macro as Excel writes it (`macro="[0]!Name"`, a macro run on the
 selection). A command, a fixed input range or an output cell has no place there and is kept in a
