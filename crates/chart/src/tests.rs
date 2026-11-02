@@ -1437,3 +1437,39 @@ fn explicit_style_nine_draws_white_column_outlines() {
         }
     }
 }
+
+/// Excel's default line weights are 3 pt for style 1 and 5 pt for style 9.
+/// Other styles retain GridCraft's existing stroke width.
+#[test]
+fn explicit_excel_styles_set_line_stroke_width() {
+    let color: Rgba = [17, 73, 131, 255];
+
+    for kind in [ChartKind::Line, ChartKind::LineMarkers, ChartKind::LineStacked] {
+        let data = ChartData {
+            categories: ["Jan", "Feb", "Mar", "Apr"].map(String::from).to_vec(),
+            category_levels: vec![],
+            palette: vec![],
+            series: vec![series("North", &[12.0, 19.0, 25.0, 30.0], color, kind)],
+        };
+
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+
+        for (style, expected_width) in [(0, 2.25_f32), (1, 3.0), (2, 2.25), (9, 5.0), (48, 2.25)] {
+            c.style = style;
+
+            let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+
+            let widths: Vec<f32> = prims
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Line { color: line_color, width, .. } if *line_color == color => Some(*width),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(widths, vec![expected_width], "Unexpected stroke width for {kind:?}, style {style}");
+        }
+    }
+}

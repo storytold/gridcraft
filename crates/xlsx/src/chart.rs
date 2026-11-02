@@ -269,7 +269,13 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         legend,
         data_labels,
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
-        style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        // Excel can wrap the legacy chart style in mc:AlternateContent.
+        // The c14 Choice uses different IDs, so read the c:style Fallback.
+        style: root
+            .child_val("style")
+            .and_then(|v| v.parse().ok())
+            .or_else(|| root.path(&["AlternateContent", "Fallback"]).and_then(|fallback| fallback.child_val("style")).and_then(|v| v.parse().ok()))
+            .unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,

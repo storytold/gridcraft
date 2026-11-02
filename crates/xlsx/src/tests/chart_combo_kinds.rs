@@ -44,3 +44,39 @@ fn line_first_group_stays_a_line() {
     assert!(matches!(k[0], Some(ChartKind::Line | ChartKind::LineMarkers)));
     assert_eq!(k[1], Some(ChartKind::ColumnClustered));
 }
+
+#[test]
+fn explicit_chart_style_survives_xml_roundtrip() {
+    use gridcraft_model::Workbook;
+
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::Line] {
+        for style in [1, 9, 48] {
+            let mut chart = crate::chart::read_chart(
+                &parse(
+                    format!(
+                        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">\
+                         <c:style val=\"{style}\"/>\
+                         <c:chart><c:plotArea>\
+                         <c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>\
+                         <c:ser><c:idx val=\"0\"/><c:order val=\"0\"/></c:ser>\
+                         </c:barChart>\
+                         </c:plotArea></c:chart></c:chartSpace>"
+                    )
+                    .as_bytes(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            chart.kind = kind;
+            assert_eq!(chart.style, style);
+
+            let wb = Workbook::default();
+            let xml = crate::chart::write_chart(&wb, 0, &chart, "Book.xlsx");
+            let root = parse(xml.as_bytes()).unwrap();
+            let restored = crate::chart::read_chart(&root).unwrap();
+
+            assert_eq!(restored.style, style, "chart style changed for {kind:?}");
+        }
+    }
+}
