@@ -314,6 +314,10 @@ fn modulo(x: f64, d: f64) -> R<f64> {
     if d == 0.0 {
         return Err(CellError::Div0);
     }
+    // Excel returns #NUM! once the quotient magnitude reaches 1.1259E12 (checked against Excel 16).
+    if (x / d).abs() >= 1.1259e12 {
+        return Err(CellError::Num);
+    }
     // `%` is an exact remainder (truncated), so |r| < |d| even for tiny divisors.
     let r = x % d;
     // Keep the sign of the divisor and avoid returning |d| from rounding.

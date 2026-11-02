@@ -1269,6 +1269,25 @@ fn array_broadcast_result_is_capped() {
     assert_eq!(t.num("C3"), 5.0);
 }
 
+/// MAP refuses a result past `MAX_CELLS` by its checked product, before allocating it (the
+/// 2^32-cell wrap that a 32-bit `usize` product would turn into 0 is pinned in
+/// `broadcast_len_rejects_a_product_that_wraps_to_zero_on_32_bits`; `SEQUENCE` tops out at
+/// 16384 columns, so the widest product it can build is 16384 squared).
+#[test]
+fn map_caps_its_result_size() {
+    let mut t = T::new();
+    for (at, formula) in
+        [("A1", "=MAP(SEQUENCE(4001),SEQUENCE(1,4000),LAMBDA(a,b,a))"), ("A2", "=MAP(SEQUENCE(16384),SEQUENCE(1,16384),LAMBDA(a,b,a))")]
+    {
+        t.set(at, formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Within the cap the broadcast shape is unchanged.
+    t.set("A3", "=ROWS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    t.set("A4", "=COLUMNS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    assert_eq!((t.num("A3"), t.num("A4")), (3.0, 2.0));
+}
+
 #[test]
 fn text_function() {
     let mut t = T::new();
