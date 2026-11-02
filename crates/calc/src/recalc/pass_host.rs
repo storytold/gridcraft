@@ -400,6 +400,7 @@ impl PassHost<'_> {
                     && a.cols >= 1
                     && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS);
                 if sane {
+                    self.spill_index.insert(k, a.rows, a.cols);
                     self.spills.insert(k, a.clone());
                     a.data.first().cloned().unwrap_or_default()
                 } else {
@@ -411,6 +412,7 @@ impl PassHost<'_> {
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
                 self.spills.remove(&k);
+                self.spill_index.remove(k);
                 Value::Error(CellError::Spill)
             }
             _ => v,
