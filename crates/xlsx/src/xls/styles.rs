@@ -379,7 +379,7 @@ pub(super) fn build(r: &StyleRecords, formats: &HashMap<u16, String>, wb: &mut W
     let normal_xf = r.styles.iter().find(|s| s.builtin == Some(0)).map_or(0, |s| usize::from(s.ixf));
     let normal_font = r.xfs.get(normal_xf).map(|xf| xf_font(xf.ifnt, &fonts)).or_else(|| fonts.first().cloned());
     if let Some(font) = normal_font {
-        wb.styles = StyleTable::with_default(Style { font, ..Style::default() });
+        wb.styles = StyleTable::with_default(Style { font, ..Style::default() }).into();
     }
     let out = r.xfs.iter().map(|xf| wb.styles.intern(xf_style(xf, &fonts, formats, &table))).collect();
     // User-defined named styles. Excel 2007 and later write every built-in style into each .xls
