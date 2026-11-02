@@ -208,6 +208,14 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let save = bool_param(&params, "saveModel").unwrap_or(true);
     let reports = report_kinds(CMD, &params)?;
     let prob = build_problem(&model);
+    // A Sensitivity report the model has none of (integer, Evolutionary, Value Of) fails the
+    // call, so it is refused before the solve runs rather than after it.
+    if let Some(kinds) = &reports
+        && kinds.contains(&reports::ReportKind::Sensitivity)
+        && let Some(why) = sensitivity::sensitivity_refusal(&model, &prob)
+    {
+        return Err(EngineError::Other(why.into()));
+    }
     let d = s.doc()?;
     let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
     let x0: Vec<f64> = model.vars.iter().map(|c| as_num(&sh.value(*c))).map(|v| if v.is_finite() { v } else { 0.0 }).collect();

@@ -805,6 +805,37 @@ fn solver_report_can_skip_a_sensitivity_report_the_values_do_not_support() {
 }
 
 #[test]
+fn a_sensitivity_refusal_of_the_model_comes_before_any_report_is_built() {
+    // The refusals that apply to the model (integer or binary constraints, the Evolutionary
+    // method, a Value Of goal) are checked before any report is built, in both modes and from
+    // both commands: a Limits report listed first would otherwise run its two optimisations per
+    // variable, and data.solver its whole solve, for an error. An integer model asking for
+    // limits and sensitivity gets the Sensitivity refusal, not the Limits report's, which the
+    // report loop reached first; a Value Of model, whose Limits report is not refused, gets the
+    // Sensitivity refusal with no sheet written and the workbook as it was.
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+    let before = s.doc().unwrap().clone();
+    let int_model = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"]});
+    let value_model = json!({"objective": "B1", "goal": "value", "value": 4, "variables": "A1", "constraints": ["A1 <= 5"]});
+    for (model, values, why) in
+        [(&int_model, json!({"A1": 1}), "The Sensitivity report doesn't apply"), (&value_model, json!({"A1": 2}), "maximise or minimise")]
+    {
+        for skip in [false, true] {
+            let p = json!({"reports": ["limits", "sensitivity"], "model": model, "values": values, "skipNotOptimal": skip});
+            let err = s.execute("data.solverReport", p).unwrap_err();
+            assert!(err.to_string().contains(why), "{skip}: {err}");
+        }
+    }
+    let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 5", "A1 int"], "method": "simplex", "reports": ["limits", "sensitivity"]});
+    let err = s.execute("data.solver", p).unwrap_err();
+    assert!(err.to_string().contains("The Sensitivity report doesn't apply"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+}
+
+#[test]
 fn nonlinear_sensitivity_with_too_many_binding_constraints_is_refused_without_change() {
     // 80 binding rows on two free variables pass the work limit (lowered in tests); 40 don't.
     let mut s = s();

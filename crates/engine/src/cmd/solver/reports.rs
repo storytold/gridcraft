@@ -288,16 +288,23 @@ pub(super) fn prepare_reports(
     if must_write && d.wb.protected_structure {
         return Err(protected());
     }
+    // A model that has no Sensitivity report (integer, Evolutionary, Value Of) is refused in
+    // both modes before any report is built: a Limits report listed first would otherwise run
+    // its two optimisations per variable for an error. Only the solution's own refusal (not
+    // optimal) waits for the loop, where `Skip` may leave the report out.
+    if kinds.contains(&ReportKind::Sensitivity)
+        && let Some(why) = sensitivity_refusal(inp.model, inp.prob)
+    {
+        return Err(EngineError::Other(why.into()));
+    }
     let sh = d.wb.sheet(inp.model.sheet).ok_or(EngineError::NoDocument)?;
     let mut built = Vec::new();
     let mut skipped = Vec::new();
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
-            // A model that has no Sensitivity report (integer, Evolutionary, Value Of) is refused
-            // in both modes.
-            ReportKind::Sensitivity => match (not_optimal, sensitivity_refusal(inp.model, inp.prob)) {
-                (NotOptimal::Skip { optimum }, None) => {
+            ReportKind::Sensitivity => match not_optimal {
+                NotOptimal::Skip { optimum } => {
                     let got = if optimum {
                         sensitivity_report(d, sh, inp).map_err(|e| e.to_string())
                     } else {
@@ -311,7 +318,7 @@ pub(super) fn prepare_reports(
                         }
                     }
                 }
-                _ => sensitivity_report(d, sh, inp)?,
+                NotOptimal::Refuse => sensitivity_report(d, sh, inp)?,
             },
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
