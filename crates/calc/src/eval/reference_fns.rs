@@ -249,9 +249,14 @@ impl<'h> Evaluator<'h> {
     }
 
     pub(super) fn cell_info(&mut self, args: &[Expr]) -> Ev {
-        let kind = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
+        let (kind, german) = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
             // Lower-cased by Unicode, not ASCII: the German `PRÄFIX` has to reach `präfix`.
-            Some(Ok(t)) => cell_info_type(&t.to_lowercase()).to_string(),
+            Some(Ok(t)) => {
+                let asked = t.to_lowercase();
+                // `type` is the one info type whose *result* is a letter German localizes, so
+                // which spelling was asked for decides which letters come back (noted in review).
+                (cell_info_type(&asked).to_string(), asked == "typ")
+            }
             Some(Err(e)) => return err(e),
             None => return err(CellError::Value),
         };
@@ -271,10 +276,18 @@ impl<'h> Evaluator<'h> {
             "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
             "type" => {
                 let v = self.host.cell_value(a.sheet, c);
-                Ev::V(Value::text(match v {
-                    Value::Empty => "b",
-                    Value::Text(_) => "l",
-                    _ => "v",
+                // German `ZELLE("Typ")` answers in German: `leer`, `Beschriftung`, `Wert`. The
+                // letters are not a translation of the English ones -- `l` means empty in German
+                // and text in English -- so mapping `typ` onto the English arm answered `v`
+                // where German Excel answers `w`, and `l`/`b` the wrong way round for the other
+                // two (noted in review).
+                Ev::V(Value::text(match (v, german) {
+                    (Value::Empty, false) => "b",
+                    (Value::Empty, true) => "l",
+                    (Value::Text(_), false) => "l",
+                    (Value::Text(_), true) => "b",
+                    (_, false) => "v",
+                    (_, true) => "w",
                 }))
             }
             "width" => Ev::V(Value::number(sheet.map_or(8.43, |s| gridcraft_model::points_to_chars(s.col_width(c.col) as f64)).round())),

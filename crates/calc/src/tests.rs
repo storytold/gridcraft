@@ -2285,13 +2285,13 @@ fn cell_accepts_the_german_info_types() {
     t.set("A3", "7");
     t.set("C1", "3");
 
-    // Each German name gives what its English counterpart gives.
+    // Each German name gives what its English counterpart gives -- except `typ`, whose *result*
+    // German localizes as well, which is checked on its own below.
     for (de, en) in [
         ("adresse", "address"),
         ("zeile", "row"),
         ("spalte", "col"),
         ("inhalt", "contents"),
-        ("typ", "type"),
         ("breite", "width"),
         ("dateiname", "filename"),
         ("schutz", "protect"),
@@ -2323,6 +2323,17 @@ fn cell_accepts_the_german_info_types() {
     assert_eq!(t.get("B5"), t.get("E3"), "PRÄFIX reaches the table through a Unicode lower-casing");
     t.set("B6", "=CELL(\"präfix\",A2)");
     assert_eq!(t.get("B6"), t.get("E3"), "and so does the lower-case spelling");
+
+    // `Typ` answers in German: `leer`, `Beschriftung`, `Wert`. The letters are not a translation
+    // of the English ones -- `l` is empty in German and text in English -- so answering with the
+    // English arm was wrong for every one of the three, not only for a value (noted in review).
+    t.set("A5", "some text");
+    for (cell, en, de) in [("A4", "b", "l"), ("A5", "l", "b"), ("A2", "v", "w")] {
+        t.set("E4", &format!("=CELL(\"type\",{cell})"));
+        t.set("E5", &format!("=CELL(\"Typ\",{cell})"));
+        assert_eq!(t.get("E4"), Value::from(en), "CELL(\"type\",{cell})");
+        assert_eq!(t.get("E5"), Value::from(de), "CELL(\"Typ\",{cell}) answers in German");
+    }
 
     // An unknown type is still #VALUE!, so the aliases have not made CELL permissive.
     t.set("B7", "=CELL(\"nonsense\",A2)");
