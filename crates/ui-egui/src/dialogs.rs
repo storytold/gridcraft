@@ -698,53 +698,7 @@ impl Dialog {
                 d
             }
             "equation" => return crate::equation::open_editor(app, &params),
-            "fromDatabase" => {
-                // Connection fields compose the connection; `connection` is a hand-written one
-                // that replaces it (and what `ui.dialog.set` and older scripts fill in).
-                let mut values = json!({
-                    "driver": "postgres", "host": "", "port": "", "database": "", "file": "", "dsn": "", "user": "", "password": "",
-                    "connection": "", "editConnection": false, "mode": "table", "tables": [], "tablesFor": "", "filter": "",
-                    "table": "", "schema": "", "columns": [], "selected": [], "query": "SELECT ", "sheet": "", "profile": "", "saveName": "",
-                });
-                if let (Some(v), Some(given)) = (values.as_object_mut(), params.as_object()) {
-                    v.extend(given.iter().map(|(k, x)| (k.clone(), x.clone())));
-                }
-                if values["connection"].as_str().is_some_and(|c| !c.is_empty()) {
-                    values["editConnection"] = json!(true);
-                }
-                let mut d = Dialog::custom("fromDatabase", "From Database", values);
-                d.command = Some("data.fromDatabase");
-                d
-            }
-            "dbPassword" => {
-                let lang = app.ui.language;
-                let user = p("user").as_str().map(|u| format!(" ({u})")).unwrap_or_default();
-                let text = format!(
-                    "{}: {}\n{}: {}{user}\n{}",
-                    lang.tr("Table"),
-                    p("table").as_str().unwrap_or(""),
-                    lang.tr("Connection"),
-                    p("connection").as_str().unwrap_or(""),
-                    lang.tr("Enter the password to refresh it (it is not saved).")
-                );
-                let mut values = params.clone();
-                values["password"] = json!("");
-                Dialog::form(
-                    "dbPassword",
-                    "Database Password",
-                    "data.refresh",
-                    vec![Note(text), Password { key: "password", label: "Password:" }],
-                    values,
-                )
-            }
-            "dbTrust" => {
-                // Excel's external data security warning: the connections and SQL come from the
-                // file, so nothing runs until the user enables them for this workbook.
-                let fields = trust_fields(p("queries").as_array().map(Vec::as_slice).unwrap_or_default());
-                let mut values = params.clone();
-                values["trust"] = json!(true);
-                Dialog::form("dbTrust", "Security Warning", "data.refresh", fields, values)
-            }
+            "fromDatabase" | "dbPassword" | "dbTrust" => database::open(app, name, &params)?,
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
