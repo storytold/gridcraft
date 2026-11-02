@@ -97,12 +97,14 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        grid::setup_scrollbar_input(ctx);
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        grid::cancel_scrollbar_drag(ctx);
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
