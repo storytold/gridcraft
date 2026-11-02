@@ -308,6 +308,39 @@ fn assert_values_on_rows_position(s: &mut Session) {
 }
 
 #[test]
+fn explicit_values_drop_position_is_atomic_and_validated() {
+    for command in ["pivot.addField", "pivot.moveField"] {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows":["Region"],"columns":["Product"],"values":["Sales","Units"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field":"Σ Values","from":"columns","to":"rows","position":0})).unwrap();
+        let before = serde_json::to_value(pt(&s)).unwrap();
+        let undo = s.active().unwrap().undo.len();
+        let params = json!({"field":"Product","area":"rows","from":"columns","to":"rows","position":0,"valuesPosition":0});
+        for invalid in [json!(-1), json!(999), json!("0"), json!(null), json!(u64::MAX)] {
+            let mut bad = params.clone();
+            bad["valuesPosition"] = invalid;
+            assert!(s.execute(command, bad).is_err());
+            assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+            assert_eq!(s.active().unwrap().undo.len(), undo);
+        }
+        let mut wrong_area = params.clone();
+        wrong_area["area"] = json!("columns");
+        wrong_area["to"] = json!("columns");
+        assert!(s.execute(command, wrong_area).is_err());
+        assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+        assert_eq!(s.active().unwrap().undo.len(), undo);
+        s.execute(command, params).unwrap();
+        assert_eq!(pt(&s).values_position, Some(0));
+        assert_eq!(pt(&s).rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Product", "Region"]);
+        assert_eq!(s.active().unwrap().undo.len(), undo + 1);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(pt(&s).values_position, Some(0));
+    }
+}
+
+#[test]
 fn values_on_rows_layouts() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
