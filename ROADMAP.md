@@ -133,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: macOS disk images preserve signed bundle metadata: create from the staged folder, clear extended attributes before signing, and strictly verify both the mounted app and an installed copy before notarizing the DMG.
+
 | Date | What landed |
 |---|---|
 | 2026-11-02 | Equations: Insert › Equation (a split button with a gallery of examples) and an editor with quick-insert buttons, the error underlined at its position and a live preview; `insert.equation` and `equation.edit`; LaTeX laid out by RaTeX inside the new `gridcraft-math` crate, capped and panic-guarded, and cached on the shape so that painting never runs the layout engine; xlsx writes Office Math with a plain-text fallback and the source in `descr`, and reads Office Math back into LaTeX; PDF prints equations with the standard Symbol font and `[?]` for anything else |
