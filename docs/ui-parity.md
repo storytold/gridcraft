@@ -200,18 +200,13 @@ keyboard; a command that moves the selection (Undo, Go To) moves the reference w
 box the dialog stops showing (Solver's Options view, the Model Range of a hidden Load/Save area,
 the constraint value once the operator is int or bin) is no longer picked into: a selection
 made meanwhile does not land in it when it is shown again.
-The dialog follows the sheet it was opened on through the engine's recorded undo steps. A sheet
-that came from a file is found by the file's sheet id wherever a step puts it and whatever it
-renames it to; a sheet inserted in the session (no id) is followed by name: a step keeps it
-while a sheet with its name is there that did not come from a file, renames it when the step
-keeps the sheet count and changes one name, at that sheet's index, on a sheet that keeps its
-cells, and deletes it otherwise. A sheet deleted and another inserted in its place or given
-its own name, even in one script batch, is not taken for it: OK is refused and Cancel leaves
-the selection where it is; only an undo that brings the very sheet back makes it the dialog's
-again. When the steps since the dialog last looked cannot be accounted for (the undo history
-was trimmed meanwhile, or steps were undone and new ones run), a sheet with its name is taken
-for it. The collapse button is reachable from the keyboard and named for screen readers. Goal
-Seek, Solver
+The dialog follows the sheet it was opened on by the sheet's identity while the app runs
+(fresh for every sheet added, inserted, copied or read from a file; kept through renames,
+moves, undo and redo), wherever it is moved and whatever it is renamed to. A sheet deleted and
+another inserted in its place or given its own name, or a copy of it, even in one script batch
+or one undo step, is not taken for it: OK is refused and Cancel leaves the selection where it
+is; an undo that brings the sheet back makes it the dialog's again. The collapse button is
+reachable from the keyboard and named for screen readers. Goal Seek, Solver
 (objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
 Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
