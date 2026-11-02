@@ -357,11 +357,18 @@ fn step_part(app: &mut SheetApp, c: &FormControl, part: Part) {
     };
 }
 
+/// Whether the focused control is a button. Space presses one, so the space it types must not
+/// start a cell edit; a slider or spin button doesn't take Space, and its space reaches the grid
+/// like any other character.
+pub fn focused_button(app: &SheetApp, sh: &Sheet) -> bool {
+    app.grid.focused_control.and_then(|id| find(sh, id)).is_some_and(|c| c.kind == ControlKind::Button)
+}
+
 /// The grid takes a key while a control is focused: a button gives the keyboard back, so a later
 /// Enter or Space doesn't press it again and Space starts a cell edit; a slider or spin button
 /// keeps it, as the control last worked, which the arrows still step.
 pub fn key_to_grid(app: &mut SheetApp, sh: &Sheet) {
-    if app.grid.focused_control.and_then(|id| find(sh, id)).is_some_and(|c| c.kind == ControlKind::Button) {
+    if focused_button(app, sh) {
         app.grid.focused_control = None;
     }
 }

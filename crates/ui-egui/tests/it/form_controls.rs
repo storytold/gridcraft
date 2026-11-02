@@ -321,6 +321,32 @@ fn a_button_gives_the_keyboard_back_when_the_grid_takes_a_key() {
     assert_eq!(active(&h), "A1");
 }
 
+/// Space is a key a slider or spin button doesn't take, so it reaches the grid like any other
+/// character: a cell edit starts with a space and the control's value is unchanged. The control
+/// keeps the keyboard, as the control last worked: after the edit, the arrows still step it.
+#[test]
+fn space_starts_a_cell_edit_while_a_slider_or_spin_button_is_focused() {
+    let (mut h, ids) = fixture();
+    let spin = rect(&h, ids.spin);
+    for (id, at, step) in
+        [(ids.slider, thumb(&h, ids.slider).center(), Key::ArrowRight), (ids.spin, Pos2::new(spin.center().x, spin.top() + 5.0), Key::ArrowUp)]
+    {
+        click(&mut h, at);
+        assert_eq!(h.state().grid.focused_control, Some(id));
+        let value = control(&h, id).value;
+        space(&mut h);
+        assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some(" "), "Space starts editing the cell with a space");
+        assert_eq!(control(&h, id).value, value, "the control is unchanged");
+        assert_eq!(h.state().grid.focused_control, Some(id), "the control last worked keeps the keyboard");
+        key(&mut h, Key::Escape);
+        assert!(h.state().editor.is_none(), "Escape cancels the edit");
+        key(&mut h, step);
+        assert_eq!(control(&h, id).value, value + control(&h, id).step, "the arrows still step it");
+        key(&mut h, Key::Escape);
+        assert_eq!(h.state().grid.focused_control, None);
+    }
+}
+
 /// A right-click on a cell takes the keyboard from a button, like any other click on the grid:
 /// the Enter that follows does not press it again.
 #[test]
