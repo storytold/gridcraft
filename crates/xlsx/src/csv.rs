@@ -3,15 +3,16 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
 use gridcraft_core::parse::{Parsed, parse_input};
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
+use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::text_layout::{
     self, Completeness, Decimal, Evidence, Numbers, Split, TextReport, detect, detect_numbers, evidence, most_common_fields, records_before_table,
     sample_rows, split_records,
 };
-use crate::{CsvOptions, IoError};
+use crate::{CsvOptions, IoError, ReadReport};
 
 /// The largest CSV or tab-separated file written (bytes).
 pub const MAX_CSV_BYTES: usize = 512 << 20;
@@ -210,8 +211,213 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
     }
 }
 
+/// What a column's numeric dates say about the order of day and month.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DateRule {
+    /// No `d/m/y` or `d-m-y` value in the sample: read as typed input does.
+    NoDates,
+    /// A value reads only month first (`12/31/2026`), none reads only day first.
+    MonthFirst,
+    /// A value reads only day first (`31/05/2026`), none reads only month first.
+    DayFirst,
+    /// Every date is ambiguous (`03/04/2026`): keep the input parser's month-first reading.
+    Ambiguous,
+    /// Values read only day first and values read only month first: the dates stay text.
+    Conflict,
+}
+
+impl DateRule {
+    fn of(day_first: usize, month_first: usize, ambiguous: usize) -> Self {
+        match (day_first > 0, month_first > 0, ambiguous > 0) {
+            (true, true, _) => Self::Conflict,
+            (true, false, _) => Self::DayFirst,
+            (false, true, _) => Self::MonthFirst,
+            (false, false, true) => Self::Ambiguous,
+            (false, false, false) => Self::NoDates,
+        }
+    }
+}
+
+/// The evidence a column's sample gives for its date order.
+#[derive(Clone, Default)]
+struct DateEvidence {
+    day_first: usize,
+    month_first: usize,
+    ambiguous: usize,
+    day_first_example: Option<String>,
+    month_first_example: Option<String>,
+    ambiguous_example: Option<String>,
+}
+
+/// A numeric `d/m/y` or `d-m-y` field, with the serial it has read each way and its time of day.
+struct NumericDate {
+    day_first: Option<f64>,
+    month_first: Option<f64>,
+    time: Option<f64>,
+}
+
+impl NumericDate {
+    /// The field under the column's rule: a date when that reading is valid, else text.
+    fn read(&self, field: &str, rule: DateRule) -> Parsed {
+        let serial = match rule {
+            DateRule::DayFirst => self.day_first,
+            DateRule::MonthFirst | DateRule::Ambiguous => self.month_first,
+            DateRule::Conflict | DateRule::NoDates => None,
+        };
+        match serial {
+            Some(serial) => Parsed {
+                value: Value::number(serial + self.time.unwrap_or(0.0)),
+                format: Some(if self.time.is_some() { "m/d/yyyy h:mm" } else { "m/d/yyyy" }),
+            },
+            None => Parsed { value: Value::text(field), format: None },
+        }
+    }
+}
+
+/// A numeric date written with `/` or `-`, with the serial it has read day first and month first.
+/// `None` when the field isn't such a date (including ISO `yyyy-mm-dd`, month names and dots,
+/// which read one way and keep the input parser).
+fn numeric_date(field: &str, sys: DateSystem) -> Option<NumericDate> {
+    let text = field.trim();
+    let (date, time) = split_time(text, sys);
+    // Typed input reads a trailing comma after a date (`3/4/2026,`); do the same here.
+    let date = date.trim_end_matches(',');
+    let mut parts = date.split(['/', '-']);
+    let (a, b, c) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let (a, b, c) = (a.trim(), b.trim(), c.trim());
+    // ISO dates are unambiguous; the input parser reads them. A three-digit year is not a
+    // date to typed input either.
+    if a.len() == 4 || c.len() == 3 {
+        return None;
+    }
+    let a = parse_digits(a)?;
+    let b = parse_digits(b)?;
+    let year = expand_year(c, parse_digits(c)?);
+    let day_first = valid_date(sys, year, b, a);
+    let month_first = valid_date(sys, year, a, b);
+    if day_first.is_none() && month_first.is_none() {
+        return None;
+    }
+    Some(NumericDate { day_first, month_first, time })
+}
+
+/// Splits a field into its date and a time of day, when the tail reads as a time. Both the first
+/// and last space are tried, so `03/04/2026 10:30 AM` and `03 / 04 / 2026 10:30` both split.
+fn split_time(text: &str, sys: DateSystem) -> (&str, Option<f64>) {
+    for at in [text.find(' '), text.rfind(' ')].into_iter().flatten() {
+        let (date, time) = text.split_at(at);
+        let time = time.trim();
+        // Times are short; a long tail is not one, and parsing it would be wasted work.
+        if time.len() > 40 {
+            continue;
+        }
+        if let Some(fraction) = time_of_day(time, sys) {
+            return (date.trim(), Some(fraction));
+        }
+    }
+    (text, None)
+}
+
+fn time_of_day(text: &str, sys: DateSystem) -> Option<f64> {
+    match parse_input(text, sys) {
+        Parsed { value: Value::Number(fraction), format: Some(code) } if code.contains('h') => Some(fraction),
+        _ => None,
+    }
+}
+
+fn parse_digits(s: &str) -> Option<i64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// Expands a one- or two-digit year the way typed input does (`26` is 2026, `30` is 1930).
+fn expand_year(text: &str, year: i64) -> i64 {
+    if text.len() <= 2 { if year < 30 { 2000 + year } else { 1900 + year } } else { year }
+}
+
+/// The serial for a date the input parser accepts, or `None`.
+fn valid_date(sys: DateSystem, year: i64, month: i64, day: i64) -> Option<f64> {
+    if !(1..=12).contains(&month) || day < 1 || year < 1900 {
+        return None;
+    }
+    let year = i32::try_from(year).ok()?;
+    let month = u32::try_from(month).ok()?;
+    if day > i64::from(days_in_month_in(sys, year, month)) {
+        return None;
+    }
+    serial_from_ymd(sys, i64::from(year), i64::from(month), day)
+}
+
+/// The date rule for each column, from the sample.
+fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem) -> Vec<(DateRule, DateEvidence)> {
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0).min(MAX_COLS as usize);
+    let mut columns = vec![DateEvidence::default(); width];
+    for row in rows {
+        for (col, field) in row.iter().enumerate() {
+            let Some(column) = columns.get_mut(col) else { continue };
+            let Some(date) = numeric_date(field, sys) else { continue };
+            let example = || field.trim().chars().take(40).collect::<String>();
+            match (date.day_first.is_some(), date.month_first.is_some()) {
+                (true, true) => {
+                    column.ambiguous += 1;
+                    column.ambiguous_example.get_or_insert_with(example);
+                }
+                (true, false) => {
+                    column.day_first += 1;
+                    column.day_first_example.get_or_insert_with(example);
+                }
+                (false, true) => {
+                    column.month_first += 1;
+                    column.month_first_example.get_or_insert_with(example);
+                }
+                (false, false) => {}
+            }
+        }
+    }
+    columns.into_iter().map(|c| (DateRule::of(c.day_first, c.month_first, c.ambiguous), c)).collect()
+}
+
+/// Warns when the sample could not choose a date order: an all-ambiguous column keeps the
+/// month-first reading, and a column with both kinds keeps its dates as text.
+fn date_warnings(columns: &[(DateRule, DateEvidence)]) -> Vec<String> {
+    let mut out = vec![];
+    for (col, (rule, evidence)) in columns.iter().enumerate() {
+        match rule {
+            DateRule::Ambiguous => out.push(format!(
+                "column {}: every date is ambiguous, so it was read month first ({})",
+                col_to_letters(col as u32),
+                evidence.ambiguous_example.as_deref().unwrap_or("a date")
+            )),
+            DateRule::Conflict => out.push(format!(
+                "column {}: it holds both day-first and month-first dates ({} and {}), so its dates stay text",
+                col_to_letters(col as u32),
+                evidence.day_first_example.as_deref().unwrap_or("a day-first date"),
+                evidence.month_first_example.as_deref().unwrap_or("a month-first date")
+            )),
+            DateRule::NoDates | DateRule::MonthFirst | DateRule::DayFirst => {}
+        }
+    }
+    out
+}
+
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     read_text(bytes, opts).map(|(wb, _)| wb)
+}
+
+/// [`read_csv`], with the warnings an open shows: a column whose date order had to be guessed,
+/// or whose dates stayed text because it holds both orders.
+pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, ReadReport), IoError> {
+    let (wb, text) = read_text(bytes, opts)?;
+    let mut report = ReadReport::default();
+    for w in text.dates {
+        report.warn(w);
+    }
+    Ok((wb, report))
 }
 
 /// The settings a text file is read with, given or detected.
@@ -223,6 +429,8 @@ struct Resolved {
     start: usize,
     fields: usize,
     numbers: Numbers,
+    /// Each column's date order, from the sample (#2765); empty when every field is kept as text.
+    dates: Vec<(DateRule, DateEvidence)>,
 }
 
 impl Resolved {
@@ -252,7 +460,8 @@ impl Resolved {
             Some(d) => Numbers::given(d),
             None => detect_numbers(&sample, &split),
         };
-        Ok(Resolved { text, quote, split, layout, start, fields, numbers })
+        let dates = if opts.parse_values { infer_date_rules(&sample, opts.date_system) } else { vec![] };
+        Ok(Resolved { text, quote, split, layout, start, fields, numbers, dates })
     }
 
     fn report(self, done: Completeness) -> TextReport {
@@ -267,6 +476,7 @@ impl Resolved {
             other_rows: done.other_rows,
             split_numbers: done.split_numbers,
             uncertain: self.layout.map(|l| l.uncertain).unwrap_or_default(),
+            dates: date_warnings(&self.dates),
         }
     }
 }
@@ -295,7 +505,7 @@ pub fn preview_text(bytes: &[u8], opts: &CsvOptions, rows: usize) -> Result<(Vec
 /// `delimiter` is given), the decimal separator, and how complete the rows are over the file.
 pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextReport), IoError> {
     let resolved = Resolved::new(bytes, opts)?;
-    let Resolved { text, quote, split, start, numbers, .. } = &resolved;
+    let Resolved { text, quote, split, start, numbers, dates, .. } = &resolved;
     let (quote, start) = (*quote, *start);
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
@@ -326,7 +536,8 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = read_field(&f, numbers.column(col), opts.date_system);
+                let rule = dates.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
+                let p = read_field(&f, numbers.column(col), rule, opts.date_system);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
@@ -368,12 +579,18 @@ impl From<Parsed> for Read {
 /// number is rewritten with a point first (`1.234,5` → `1,234.5`); a value that is a number
 /// only with the other separator stays text, as it does in Excel (`0.125` under a decimal
 /// comma), and `1,5E3` is 1500. In a column holding both kinds (`None`), any value that depends
-/// on the separator stays text. Dates with dots are day first (`01.11.2026`), amounts carry any
-/// currency sign (`7,50 €`), Swiss `'` groups and a trailing minus read (`1'234.50`, `7,50-`).
-fn read_field(f: &str, decimal: Option<Decimal>, sys: gridcraft_core::DateSystem) -> Read {
+/// on the separator stays text. Dates with dots are day first (`01.11.2026`), dates with `/` or
+/// `-` follow the column's date order (`rule`), amounts carry any currency sign (`7,50 €`), Swiss
+/// `'` groups and a trailing minus read (`1'234.50`, `7,50-`).
+fn read_field(f: &str, decimal: Option<Decimal>, rule: DateRule, sys: DateSystem) -> Read {
     let text = || Read { value: Value::text(f), format: None };
     if let Some(date) = dotted_date(f, sys) {
         return date;
+    }
+    if rule != DateRule::NoDates
+        && let Some(date) = numeric_date(f, sys)
+    {
+        return date.read(f, rule).into();
     }
     let number = |p: Parsed| matches!(p.value, Value::Number(_)).then(|| Read::from(p));
     let amount = |d: Decimal| text_layout::currency_amount(f, d).map(|(v, code)| Read { value: Value::Number(v), format: Some(Cow::Owned(code)) });

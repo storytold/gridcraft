@@ -207,7 +207,8 @@ fn read_plain(name: &str, bytes: &[u8], text: &TextOpen) -> Result<(Workbook, Ve
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+        // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, &gridcraft_calc::is_known_function).map_err(|e| {
             EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
                 (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
                 _ => format!("We can't open '{name}': {e}"),
@@ -262,6 +263,7 @@ fn text_warnings(name: &str, r: &gridcraft_xlsx::text_layout::TextReport) -> Vec
     for (row, number) in &r.split_numbers {
         out.push(format!("{name}: in row {row} of the file, {number} was split at its thousands separator"));
     }
+    out.extend(r.dates.iter().map(|w| format!("{name}: {w}")));
     out
 }
 

@@ -205,6 +205,9 @@ pub struct TextReport {
     pub split_numbers: Vec<(usize, String)>,
     /// Why the split may be wrong (detected splits only).
     pub uncertain: Vec<String>,
+    /// Columns whose date order had to be guessed, or whose dates stay text because they hold
+    /// both orders (#2765).
+    pub dates: Vec<String>,
 }
 
 // ---------------------------------------------------------------- splitting
@@ -1004,7 +1007,7 @@ fn has_space_run(line: &str) -> bool {
 }
 
 /// The first non-blank rows of `text` after its first `skip` records, split with `split`, for
-/// [`detect_numbers`] and the field count.
+/// [`detect_numbers`], the field count and the date order.
 pub fn sample_rows(text: &str, split: &Split, quote: Option<char>, skip: usize) -> Vec<Vec<String>> {
     let mut cut = text.len().min(SAMPLE_BYTES);
     while !text.is_char_boundary(cut) {
@@ -1019,6 +1022,10 @@ pub fn sample_rows(text: &str, split: &Split, quote: Option<char>, skip: usize) 
         }
         rows.len() < SAMPLE_ROWS
     });
+    // A cut through the last record leaves a partial field; it says nothing reliable.
+    if cut < text.len() {
+        rows.pop();
+    }
     rows
 }
 
