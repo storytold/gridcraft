@@ -5244,6 +5244,7 @@ fn a_script_cannot_switch_windows() {
 }
 
 mod macros;
+mod objects;
 mod seams;
 
 #[test]
