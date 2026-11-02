@@ -2367,6 +2367,15 @@ fn formulas_reading_a_linked_workbook_keep_their_saved_value() {
     }
     t.calc.recalc_all(&mut t.wb);
     assert_eq!((t.num("E3"), t.num("E4")), (5.0, 5.0));
+    // A circular reference is still reported.
+    let mut cell = Cell::formula(Formula::new("=F2+'[1]Sheet1'!A1"));
+    cell.value = Value::number(7.0);
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F1"), cell);
+    t.set("F2", "=1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("F1"), 7.0);
+    t.set("F2", "=F1");
+    assert_eq!(t.get("F1"), Value::Error(CellError::Circ));
 }
 
 /// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`

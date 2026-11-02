@@ -288,7 +288,9 @@ impl PassHost<'_> {
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let mut ev = Evaluator::new(self, k.0, k.1);
         let v = ev.value(&expr);
-        let v = if ev.reads_linked_workbook() { self.saved_value(k).unwrap_or(v) } else { v };
+        let linked = ev.reads_linked_workbook();
+        // A formula found on a circular reference keeps `#CIRC!`.
+        let v = if linked && !self.cycle_seen.contains(&k) { self.saved_value(k).unwrap_or(v) } else { v };
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
             // It ran out of the stack left below the formulas that read it: it is calculated
