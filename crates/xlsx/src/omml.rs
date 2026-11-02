@@ -83,6 +83,65 @@ fn count_math(e: &El, depth: usize) -> usize {
     n
 }
 
+/// A marker for the equation a text body holds: 16 hex digits of an FNV-1a 64-bit hash over what
+/// carries the equation's meaning, the OMML element names in document order and the text of the
+/// runs. The writer puts it in the shape's description beside the LaTeX source; the reader takes
+/// the source only while the marker still matches the body, so an equation whose Office Math
+/// another application edited (Excel leaves the description alone) is converted from that Office
+/// Math instead of coming back as the old source. What a re-serialisation may change without
+/// changing the equation is left out: property elements (`*Pr`) and extension lists, the
+/// DrawingML containers (`txBody`, `p`, `r`, `fld`, `lstStyle`), attributes, namespace prefixes
+/// and whitespace between elements; adjacent runs are joined, so splitting or merging runs
+/// changes nothing. A text change, an added run or a structural change does.
+pub fn body_marker(tb: &El) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut text = String::new();
+    mark(tb, &mut h, &mut text, 0);
+    mark_text(&mut h, &mut text);
+    format!("{h:016x}")
+}
+
+fn mark(e: &El, h: &mut u64, text: &mut String, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for c in &e.children {
+        if c.name.ends_with("Pr") || c.name == "extLst" {
+            continue;
+        }
+        match c.name.as_str() {
+            "txBody" | "p" | "r" | "fld" | "lstStyle" => mark(c, h, text, depth + 1),
+            "t" => text.push_str(&c.text),
+            "br" => text.push('\n'),
+            name => {
+                mark_text(h, text);
+                mark_bytes(h, b"<");
+                mark_bytes(h, name.as_bytes());
+                mark(c, h, text, depth + 1);
+                mark_text(h, text);
+                mark_bytes(h, b">");
+            }
+        }
+    }
+}
+
+/// Hashes the run text gathered so far, if any, and clears it.
+fn mark_text(h: &mut u64, text: &mut String) {
+    if !text.is_empty() {
+        mark_bytes(h, b"\"");
+        mark_bytes(h, text.as_bytes());
+        mark_bytes(h, b"\"");
+        text.clear();
+    }
+}
+
+fn mark_bytes(h: &mut u64, bytes: &[u8]) {
+    for b in bytes {
+        *h ^= u64::from(*b);
+        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
 /// Children in order, skipping property elements.
 fn seq(e: &El, out: &mut String, depth: usize) -> Option<()> {
     if depth > MAX_DEPTH {
@@ -624,6 +683,33 @@ mod tests {
         let spaces = |l: &gridcraft_math::MathList| l.items.iter().filter(|i| matches!(i, gridcraft_math::Item::Glyph(g) if g.ch == ' ')).count();
         let (a, b) = (gridcraft_math::layout("\\text{if } x").unwrap(), gridcraft_math::layout(&back).unwrap());
         assert_eq!(spaces(&a), spaces(&b), "{back}");
+    }
+
+    #[test]
+    fn the_body_marker_follows_the_equation_not_its_serialisation() {
+        let tb = |inner: &str| {
+            crate::xml::parse(
+                format!(
+                    "<xdr:txBody xmlns:xdr=\"x\" xmlns:a=\"a\" xmlns:m=\"m\" xmlns:a14=\"a14\"><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara><m:oMathParaPr/><m:oMath>{inner}</m:oMath></m:oMathPara></a14:m><a:endParaRPr/></a:p></xdr:txBody>"
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        let base = body_marker(&tb("<m:r><m:t>x+1</m:t></m:r>"));
+        assert_eq!(base.len(), 16);
+        assert!(base.bytes().all(|b| b.is_ascii_hexdigit()));
+        // Properties, run boundaries, whitespace between elements and attributes are not the
+        // equation: what Excel re-serialises differently leaves the marker alone.
+        assert_eq!(body_marker(&tb("<m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>x</m:t></m:r><m:r><m:t>+1</m:t></m:r>")), base);
+        assert_eq!(body_marker(&tb("\n  <m:r>\n <a:rPr lang=\"en-US\" sz=\"1100\"/><m:t xml:space=\"preserve\">x+1</m:t></m:r>\n")), base);
+        assert_eq!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><m:ctrlPr/>")), base);
+        // Text and structure are the equation.
+        assert_ne!(body_marker(&tb("<m:r><m:t>x+2</m:t></m:r>")), base);
+        assert_ne!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r><m:r><m:t> </m:t></m:r>")), base, "a space added is a change");
+        assert_ne!(body_marker(&tb("<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>+1</m:t></m:r></m:sup></m:sSup>")), base);
+        assert_ne!(body_marker(&tb("<m:f><m:num><m:r><m:t>x</m:t></m:r></m:num><m:den><m:r><m:t>+1</m:t></m:r></m:den></m:f>")), base);
+        assert_ne!(body_marker(&tb("<m:r><m:t>x+1</m:t></m:r>")), body_marker(&tb("")));
     }
 
     #[test]

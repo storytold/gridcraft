@@ -231,11 +231,18 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         "rightArrow" => ShapeKind::Arrow,
         _ => ShapeKind::Rectangle,
     };
-    // An equation: GridCraft's own source, else Office Math converted back to LaTeX.
+    // An equation: GridCraft's own source while the marker in the description still matches the
+    // body (another application that edits the Office Math, as Excel does, leaves the description
+    // alone), else the Office Math converted back to LaTeX. A body without Office Math (the
+    // plain-text fallback of an equation outside the subset) keeps the source.
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
-    let source = match descr.strip_prefix(LATEX_DESCR) {
-        Some(src) if !src.trim().is_empty() => Some(src.to_string()),
-        _ => obj.child("txBody").and_then(crate::omml::equation_source),
+    let tb = obj.child("txBody");
+    let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
+    let source = match (has_math, described_source(descr)) {
+        (true, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker) => Some(src.to_string()),
+        (true, _) => tb.and_then(crate::omml::equation_source),
+        (false, Some((_, src))) => Some(src.to_string()),
+        (false, None) => None,
     };
     if let Some(text) = source {
         let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
@@ -299,8 +306,18 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
     f
 }
 
-/// The `descr` prefix that carries an equation's LaTeX source.
+/// The `descr` prefix that carries an equation's LaTeX source, as
+/// `gridcraft:latex:<marker>:<source>`: the marker is [`crate::omml::body_marker`] of the text
+/// body written beside it, 16 hex digits.
 const LATEX_DESCR: &str = "gridcraft:latex:";
+
+/// The marker and source of a `gridcraft:latex:<marker>:<source>` description; `None` for any
+/// other description, a malformed marker or a blank source.
+fn described_source(descr: &str) -> Option<(&str, &str)> {
+    let rest = descr.strip_prefix(LATEX_DESCR)?;
+    let (marker, src) = (rest.get(..16)?, rest.get(17..)?);
+    (rest.as_bytes().get(16) == Some(&b':') && marker.bytes().all(|b| b.is_ascii_hexdigit()) && !src.trim().is_empty()).then_some((marker, src))
+}
 
 /// The colour of the first run (DrawingML `rPr` with a fill) under `e`.
 fn first_run_color(e: &El, depth: usize) -> Option<Color> {
@@ -334,11 +351,19 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
         .min(409.0);
     let fill = srgb(&sh.line, theme).map(|c| format!("<a:solidFill>{c}</a:solidFill>")).unwrap_or_default();
     let sz = (size_pt * 100.0).round() as u32;
-    let sp = |body: &str| {
+    // The marker of the body written beside the source goes into the description; the reader
+    // takes the source only while the file's body still matches it.
+    let tx = |body: &str| {
         format!(
-            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr><xdr:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" rtlCol=\"0\" anchor=\"ctr\" anchorCtr=\"1\"/><a:lstStyle/>{body}</xdr:txBody></xdr:sp>",
+            "<xdr:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" rtlCol=\"0\" anchor=\"ctr\" anchorCtr=\"1\"/><a:lstStyle/>{body}</xdr:txBody>"
+        )
+    };
+    let marker = |tx: &str| crate::xml::parse(tx.as_bytes()).map(|e| crate::omml::body_marker(&e)).unwrap_or_else(|_| "0".repeat(16));
+    let sp = |tx: &str, marker: &str| {
+        format!(
+            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
             id - 1,
-            esc_attr(&format!("{LATEX_DESCR}{}", sh.text)),
+            esc_attr(&format!("{LATEX_DESCR}{marker}:{}", sh.text)),
             xfrm(&sh.anchor, "a:xfrm")
         )
     };
@@ -355,11 +380,11 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
             let _ = write!(
                 s,
                 "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent>",
-                sp(&math),
-                sp(&plain)
+                sp(&tx(&math), &marker(&tx(&math))),
+                sp(&tx(&plain), &marker(&tx(&math)))
             );
         }
-        Err(_) => s.push_str(&sp(&plain)),
+        Err(_) => s.push_str(&sp(&tx(&plain), &marker(&tx(&plain)))),
     }
 }
 

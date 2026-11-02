@@ -63,6 +63,17 @@ fn shapes(wb: &Workbook) -> Vec<Shape> {
     wb.sheets[0].shapes.clone()
 }
 
+/// Whether the drawing `d` describes an equation with `src`: `descr="gridcraft:latex:<16 hex>:src"`.
+fn described(d: &str, src: &str) -> bool {
+    d.match_indices("descr=\"gridcraft:latex:").any(|(i, m)| {
+        let rest = &d[i + m.len()..];
+        rest.len() > 17
+            && rest.as_bytes()[..16].iter().all(u8::is_ascii_hexdigit)
+            && rest[16..].starts_with(':')
+            && rest[17..].starts_with(&format!("{src}\""))
+    })
+}
+
 #[test]
 fn equations_write_office_math_with_a_text_fallback_and_read_back() {
     let quad = "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}";
@@ -79,7 +90,7 @@ fn equations_write_office_math_with_a_text_fallback_and_read_back() {
     assert!(d.contains("<mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">"));
     assert!(d.contains("<a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"));
     assert!(d.contains("<m:f><m:num>") && d.contains("<m:rad>"));
-    assert!(d.contains("descr=\"gridcraft:latex:x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\""));
+    assert!(described(&d, "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}"), "{d}");
     assert!(d.contains("<a:t>x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}</a:t>"), "the fallback shows the source");
     assert!(d.contains("<a:srgbClr val=\"1F4E79\"/>"), "the ink colour is kept");
     // The colour sits on the Office Math runs themselves, not only on the text fallback (which
@@ -91,7 +102,7 @@ fn equations_write_office_math_with_a_text_fallback_and_read_back() {
     );
     // A commutative diagram is outside the Office Math subset: text only, no choice.
     assert_eq!(d.matches("<mc:AlternateContent").count(), 2, "{d}");
-    assert!(d.contains("descr=\"gridcraft:latex:\\begin{CD} A @&gt;f&gt;&gt; B \\end{CD}\""));
+    assert!(described(&d, "\\begin{CD} A @&gt;f&gt;&gt; B \\end{CD}"), "{d}");
     // Read back: the source wins, exactly, including quotes and a newline.
     let (back, _) = read_xlsx(&bytes).unwrap();
     let s = shapes(&back);
@@ -160,6 +171,60 @@ fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
     assert_eq!(s[1].text, "\u{1F600} & ]]> <!-- -->", "XML-illegal characters are dropped, the rest kept");
     assert_eq!(s[2].kind, ShapeKind::TextBox);
     assert_eq!(s[2].text, "plain");
+}
+
+#[test]
+fn office_math_edited_elsewhere_reads_back_as_edited() {
+    // GridCraft writes the source in the description and Office Math in the body. Another
+    // application that edits the Office Math (Excel) leaves the description alone; the marker in
+    // the description no longer matches the body, so the Office Math is converted and the stale
+    // source dropped, and the next save writes the edited equation.
+    let wb = book(vec![equation(1, "B2", "x^2", Color::Rgb(0x1F4E79))]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    assert!(described(&d, "x^2"));
+    // Excel's edit: the base `x` becomes `y`, in the Office Math only.
+    let (m0, m1) = (d.find("<m:oMath>").unwrap(), d.find("</m:oMath>").unwrap());
+    let edited = d[m0..m1].replacen("<m:t>x</m:t>", "<m:t>y</m:t>", 1);
+    assert_ne!(edited, d[m0..m1]);
+    d.replace_range(m0..m1, &edited);
+    parts.insert(name, d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::Equation);
+    assert_eq!(s[0].text, "{y}^{2}", "the edited Office Math, converted");
+    assert_eq!(s[0].line, Color::Rgb(0x1F4E79));
+    // Saving writes the edited equation; the old source is gone.
+    let again = drawing(&unzip(&write_xlsx(&back).unwrap()));
+    assert!(described(&again, "{y}^{2}") && !again.contains("x^2"), "{again}");
+}
+
+#[test]
+fn a_marker_over_garbage_office_math_falls_back_without_panicking() {
+    // Office Math that is not the marker's and not in the subset either: the Choice is left
+    // alone and the fallback text box, which carries the description, is read as the equation.
+    let wb = book(vec![equation(1, "B2", "x^2", Color::Auto)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    let (m0, m1) = (d.find("<m:oMath>").unwrap(), d.find("</m:oMath>").unwrap());
+    d.replace_range(m0..m1 + "</m:oMath>".len(), "<m:oMath><m:sPre/><m:f><m:num/></m:f><m:r/><m:t>junk</m:t><m:oMath/><m:e/></m:oMath>");
+    parts.insert(name.clone(), d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::Equation);
+    assert_eq!(s[0].text, "x^2");
+    // A description whose marker is malformed is not GridCraft's source: with Office Math the
+    // maths is converted; without it the box is text.
+    let d2 = drawing(&unzip(&write_xlsx(&wb).unwrap())).replace("descr=\"gridcraft:latex:", "descr=\"gridcraft:latex:zz:");
+    parts.insert(name, d2.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!((s[0].kind, s[0].text.as_str()), (ShapeKind::Equation, "{x}^{2}"));
 }
 
 #[test]
