@@ -32,7 +32,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
 use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
@@ -433,7 +433,12 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
         }
         for c in keys {
             let (va, vb) = (x.value(c), y.value(c));
-            if !same_value(&va, &vb) {
+            // A file caches the Python errors as #VALUE! (they aren't error codes of the file
+            // format), in a Python cell and in the formulas that read one; reading it back runs
+            // nothing.
+            let python_error = matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
+                && vb == Value::Error(CellError::Value);
+            if !same_value(&va, &vb) && !python_error {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
@@ -787,6 +792,8 @@ const CURATED: &[(&str, usize)] = &[
     ("formulas.defineName", 2),
     ("formulas.deleteName", 1),
     ("edit.replace", 1),
+    ("python.set", 3),
+    ("python.output", 2),
 ];
 
 fn generate(rng: &mut Rng, s: &Session) -> Step {
@@ -820,6 +827,33 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             p
         }
         "range.setValues" => json!({"range": near_cell(rng).a1(), "values": values_2d(rng, wb)}),
+        "python.set" => {
+            // Code with xl() references (which follow structural edits), quotes and line breaks;
+            // sometimes long enough to meet the formula limit.
+            let mut code = match rng.below(5) {
+                0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
+                1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
+                2 => "[[1, 2], [3, 4]]".to_string(),
+                3 => String::new(),
+                _ => "\"".repeat(rng.int(1, 5000) as usize),
+            };
+            if rng.chance(5) {
+                code.push_str(&"x".repeat(8_100));
+            }
+            let mut p = json!({"cell": near_cell(rng).a1(), "code": code});
+            if rng.chance(30) {
+                p["output"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            p
+        }
+        "python.output" => {
+            // Mostly the cells python.set writes to; a missing mode switches.
+            let mut p = json!({"cell": near_cell(rng).a1()});
+            if rng.chance(50) {
+                p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            p
+        }
         "range.fill" => json!({"range": near_range(rng).a1(), "input": input(rng, wb)}),
         "selection.set" => {
             let mut p = json!({"range": range(rng)});
