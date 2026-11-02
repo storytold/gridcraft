@@ -212,7 +212,16 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
     let mut url = get("url");
     egui::Grid::new("fw").show(ui, |ui| {
         ui.label("URL:");
-        ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).hint_text("https://example.com/table.html"));
+        let field = ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).hint_text("https://example.com/table.html"));
+        // Enter in the field is Go: Excel's dialog submits on it, and a user pasting a URL
+        // should not have to reach for the button.
+        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !url.trim().is_empty() {
+            d.values.insert("url".into(), json!(url.trim()));
+            d.values.insert("preview_url".into(), json!(url.trim()));
+            d.values.insert("tables".into(), Json::Null);
+            d.values.insert("pick".into(), json!(0));
+            start_preview_fetch(app, d, url.trim());
+        }
         // An edited address invalidates the preview: don't let Load pair the old page's
         // table names with the new URL.
         if d.values.get("preview_url").and_then(Json::as_str).is_some_and(|u| u != url.trim()) {

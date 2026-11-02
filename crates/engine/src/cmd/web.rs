@@ -58,25 +58,15 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Wall-clock ms since the epoch; `0` on wasm, where reading the clock traps.
-#[allow(clippy::disallowed_methods)]
+/// Wall-clock ms since the epoch, on the shared clock the workbook's other timestamps use
+/// (`0` when it cannot be read; the web build reads it through js_sys like the rest).
 fn now_ms() -> u64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0
-    }
+    gridcraft_core::date::unix_now_ms().map(|ms| ms.max(0.0) as u64).unwrap_or(0)
 }
 
 /// A page request from the command params, with the caps clamped (shared by the three commands).
 fn request(p: &Json) -> Result<WebRequest> {
     const ID: &str = "data.fromWeb";
-    // HTTPS only, like the fetch provider itself: a plain-http address must be refused before
-    // the prefetched paths too, or a caller-supplied page bypasses the https-only contract.
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or_else(|| bad(ID, "missing `url`"))?;
     // HTTPS only and no userinfo, like the fetch provider itself: both are refused before the
     // prefetched paths too, or a caller-supplied page bypasses the provider's contract.
