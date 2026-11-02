@@ -449,11 +449,15 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
     let x = crate::xml::parse(data).ok()?;
-    // Checked: a preserved part may already sit at the format's highest id, and the next one
-    // must not wrap to zero (a duplicate) or panic; the merge gives up and the file's part is
-    // kept as it was, an honest save over a corrupt one.
-    let first_id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0).checked_add(1)?;
-    for (id, q) in (first_id..=u32::MAX).zip(&wb.web_queries) {
+    // Every query gets an id, however crowded the part is: the ids below the maximum that no
+    // preserved connection holds (sparse parts reuse numbers freely, so the gaps are legal),
+    // then the tail past the maximum. A zip over a bounded range could not do this: a range
+    // that ends early silently drops the queries it runs out of, and the save would lose them.
+    let used: std::collections::HashSet<u32> = x.kids("connection").filter_map(|c| c.attr_u32("id")).collect();
+    let mut ids = (1u32..=u32::MAX).filter(|i| !used.contains(i));
+    for q in &wb.web_queries {
+        // None only when every id the format allows is taken by a preserved connection.
+        let Some(id) = ids.next() else { return None };
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
         let tid = q.table_id.unwrap_or(0);
         let synced = q.last_synced.unwrap_or(0);

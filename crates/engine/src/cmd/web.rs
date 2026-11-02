@@ -442,7 +442,10 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                             return Json::Null;
                         }
                         let at = CellRef::new(old.start.row + ri as u32, old.start.col + ci as u32);
-                        let is_text = sh.cells.get(at).is_some_and(|cell| d.wb.styles.get(cell.style).num_fmt.as_str() == "@");
+                        // The effective style, not the stored cell: a row the refresh adds
+                        // in a Text-formatted column has no cell yet, and inherits the
+                        // column's format (style_id resolves cell, row and column).
+                        let is_text = d.wb.styles.get(sh.style_id(at)).num_fmt.as_str() == "@";
                         if !is_text && needs_text_escape(c) {
                             json!(format!("'{c}"))
                         } else {
@@ -1556,6 +1559,30 @@ mod tests {
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "B");
     }
+#[test]
+    /// A refresh that ADDS a row in a Text-formatted column: the new row has no stored cell,
+    /// so the check must read the effective style (column format inherited through
+    /// style_id), or the page's leading apostrophe would be escaped twice into a `@` cell.
+    fn a_refresh_adding_a_row_in_a_text_formatted_column_is_not_escaped_twice() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The user formats the whole column B as Text (the format lives on the column, not
+        // on the cells - and B2 is the only cell that exists yet).
+        s.execute("home.numberFormat", json!({"range": "B:B", "code": "@"})).unwrap();
+        // The page now serves an extra row with a leading apostrophe.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Note</th></tr><tr><td>X</td><td>'90s</td></tr><tr><td>Y</td><td>'00s</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.webRefresh", json!({})).unwrap();
+        // Both the styled cell and the newly added row hold the page text exactly.
+        assert_eq!(a1(&s, "B2"), "'90s", "the styled cell keeps the page's apostrophe");
+        assert_eq!(a1(&s, "B3"), "'00s", "the new row (no stored cell, column format) is not escaped twice");
+    }
+
 #[test]
     /// A refresh writes into the user's styled cells: a Text-formatted (`@`) destination
     /// stores input unchanged, so the apostrophe escape must be skipped there or a page
