@@ -1501,3 +1501,177 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }
+
+#[test]
+fn workbook_view_settings_survive_a_round_trip() {
+    // #3057: a workbook Excel saved with the sheet tabs and both scroll bars hidden
+    // (and a non-default tab split) must open with those settings in the model and
+    // save with them still in the file.
+    let bytes = super::minimal(
+        "",
+        &[],
+        "",
+        "<bookViews><workbookView activeTab=\"0\" showSheetTabs=\"0\" showHorizontalScroll=\"0\" showVerticalScroll=\"0\" tabRatio=\"250\"/></bookViews>",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(
+        wb.view,
+        WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: false, show_vertical_scroll: false, tab_ratio: 250 },
+        "the reader takes the view settings from <workbookView>"
+    );
+
+    let out = write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    for attr in ["showSheetTabs=\"0\"", "showHorizontalScroll=\"0\"", "showVerticalScroll=\"0\"", "tabRatio=\"250\""] {
+        assert!(xml.contains(attr), "the writer keeps {attr} in {xml}");
+    }
+
+    // A workbook with the format's defaults writes the bare element it always has.
+    let plain = write_xlsx(&Workbook::new()).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(plain)).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    assert!(xml.contains("<workbookView activeTab=\"0\"/>"), "defaults stay unwritten: {xml}");
+}
+
+/// Three original empty worksheets let view selection be checked through `activeTab`,
+/// independently of the flags and ratio carried by the same window.
+fn workbook_with_window_views(views: &str) -> Vec<u8> {
+    let workbook = format!(
+        r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews>{views}</bookViews><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Second" sheetId="2" r:id="rId2"/><sheet name="Third" sheetId="3" r:id="rId3"/></sheets></workbook>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/></Relationships>"#;
+    let sheet = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    super::make_zip(&[
+        ("[Content_Types].xml", super::CT.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet),
+        ("xl/worksheets/sheet2.xml", sheet),
+        ("xl/worksheets/sheet3.xml", sheet),
+    ])
+}
+
+fn saved_workbook_view_xml(wb: &Workbook) -> String {
+    let bytes = write_xlsx(wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    zip.by_name("xl/workbook.xml").unwrap().read_to_string(&mut xml).unwrap();
+    xml
+}
+
+#[test]
+fn workbook_view_attributes_round_trip_independently() {
+    for (attribute, value, expected) in [
+        ("showSheetTabs", "0", WorkbookView { show_sheet_tabs: false, ..Default::default() }),
+        ("showSheetTabs", "1", WorkbookView::default()),
+        ("showHorizontalScroll", "0", WorkbookView { show_horizontal_scroll: false, ..Default::default() }),
+        ("showHorizontalScroll", "1", WorkbookView::default()),
+        ("showVerticalScroll", "0", WorkbookView { show_vertical_scroll: false, ..Default::default() }),
+        ("showVerticalScroll", "1", WorkbookView::default()),
+        ("tabRatio", "250", WorkbookView { tab_ratio: 250, ..Default::default() }),
+        ("tabRatio", "600", WorkbookView::default()),
+    ] {
+        let view = format!("<workbookView {attribute}=\"{value}\"/>");
+        let (wb, _) = read_xlsx(&workbook_with_window_views(&view)).unwrap();
+        assert_eq!(wb.view, expected, "only {attribute} is supplied");
+        let xml = saved_workbook_view_xml(&wb);
+        assert_eq!(xml.contains(&format!("{attribute}=\"{value}\"")), expected != WorkbookView::default(), "{xml}");
+        for other in ["showSheetTabs", "showHorizontalScroll", "showVerticalScroll", "tabRatio"] {
+            if other != attribute {
+                assert!(!xml.contains(&format!("{other}=")), "unrelated defaults stay omitted: {xml}");
+            }
+        }
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view, expected, "{attribute}={value} survives a round trip");
+    }
+}
+
+#[test]
+fn workbook_view_selects_first_visible_window_consistently() {
+    let cases = [
+        (
+            r#"<workbookView visibility="hidden" activeTab="0" showSheetTabs="0" showHorizontalScroll="0" showVerticalScroll="0" tabRatio="111"/><workbookView visibility="veryHidden" activeTab="1" tabRatio="222"/><workbookView visibility="visible" activeTab="2" showSheetTabs="1" showHorizontalScroll="0" showVerticalScroll="1" tabRatio="750"/><workbookView visibility="visible" activeTab="0" tabRatio="250"/>"#,
+            2,
+            WorkbookView { show_sheet_tabs: true, show_horizontal_scroll: false, show_vertical_scroll: true, tab_ratio: 750 },
+        ),
+        // Visibility defaults to visible, so this view takes precedence over a later explicit one.
+        (
+            r#"<workbookView visibility="hidden" activeTab="0" showSheetTabs="0" tabRatio="111"/><workbookView activeTab="1" showVerticalScroll="0" tabRatio="350"/><workbookView visibility="visible" activeTab="2" tabRatio="900"/>"#,
+            1,
+            WorkbookView { show_vertical_scroll: false, tab_ratio: 350, ..Default::default() },
+        ),
+        // No visible window: retain the first window's settings and active sheet as one unit.
+        (
+            r#"<workbookView visibility="hidden" activeTab="1" showSheetTabs="0" tabRatio="100"/><workbookView visibility="veryHidden" activeTab="2" tabRatio="900"/>"#,
+            1,
+            WorkbookView { show_sheet_tabs: false, tab_ratio: 100, ..Default::default() },
+        ),
+    ];
+    for (views, active, view) in cases {
+        let (wb, _) = read_xlsx(&workbook_with_window_views(views)).unwrap();
+        assert_eq!(wb.active_sheet(), active, "activeTab must come from the selected view: {views}");
+        assert_eq!(wb.view, view, "all settings must come from the selected view: {views}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.active_sheet(), active);
+        assert_eq!(back.view, view);
+    }
+}
+
+#[test]
+fn workbook_view_without_a_window_uses_defaults() {
+    for bytes in [super::minimal("", &[], "", ""), workbook_with_window_views("")] {
+        let (wb, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(wb.active_sheet(), 0);
+        assert_eq!(wb.view, WorkbookView::default());
+        let xml = saved_workbook_view_xml(&wb);
+        assert!(xml.contains("<workbookView activeTab=\"0\"/>"), "missing views keep defaults omitted: {xml}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.active_sheet(), 0);
+        assert_eq!(back.view, WorkbookView::default());
+    }
+}
+
+#[test]
+fn workbook_view_tab_ratio_normalizes_imported_values() {
+    for (raw, expected) in [
+        (None, 600),
+        (Some("0"), 0),
+        (Some("600"), 600),
+        (Some("1000"), 1000),
+        (Some("1001"), 1000),
+        (Some("4294967295"), 1000),
+        (Some("4294967296"), 600),
+        (Some("-1"), 600),
+        (Some("invalid"), 600),
+        (Some(""), 600),
+    ] {
+        let attr = raw.map(|value| format!(" tabRatio=\"{value}\"")).unwrap_or_default();
+        let views = format!("<workbookView{attr}/>");
+        let (wb, _) = read_xlsx(&workbook_with_window_views(&views)).unwrap();
+        assert_eq!(wb.view.tab_ratio, expected, "tabRatio={raw:?}");
+        let xml = saved_workbook_view_xml(&wb);
+        if expected == 600 {
+            assert!(!xml.contains("tabRatio="), "the default is omitted: {xml}");
+        } else {
+            assert!(xml.contains(&format!("tabRatio=\"{expected}\"")), "{xml}");
+        }
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view.tab_ratio, expected);
+    }
+}
+
+#[test]
+fn workbook_view_writer_clamps_out_of_range_model_values() {
+    for raw in [1001, u32::MAX] {
+        let mut wb = Workbook::new();
+        wb.view.tab_ratio = raw;
+        let xml = saved_workbook_view_xml(&wb);
+        assert!(xml.contains("tabRatio=\"1000\""), "an out-of-range model value is bounded on write: {xml}");
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(back.view.tab_ratio, 1000);
+    }
+}

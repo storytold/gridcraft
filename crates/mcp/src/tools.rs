@@ -190,11 +190,13 @@ fn base_tool_definitions() -> Vec<Value> {
             "Write range",
             "Write a 2-D array of values starting at the top-left cell of `range` (rows of cells). Numbers, booleans, null (clears) \
              and strings are accepted; strings starting with = are formulas (\"=SUM(B2:B4)\"), other strings are parsed like typed \
-             input (\"12%\", \"1/2/2024\", \"$5\"). One undo step. Example: {\"range\":\"A1\",\"values\":[[\"Item\",\"Cost\"],[\"Rent\",1200]]}.",
+             input (\"12%\", \"1/2/2024\", \"$5\") unless `parse` is false, which stores them as the text they are. The result's \
+             `converted` lists the strings that were read as something else. One undo step. Example: {\"range\":\"A1\",\"values\":[[\"Item\",\"Cost\"],[\"Rent\",1200]]}.",
             obj(
                 json!({
                     "range": string("Top-left cell or range, e.g. \"A1\" or \"Sheet2!B3\""),
                     "values": {"type": "array", "description": "Rows of cell values", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
+                    "parse": boolean("Read strings not starting with = like typed input, so \"05.04.2026\" becomes a date (default true); false stores them as the text they are, and \"\" clears the cell"),
                 }),
                 &["range", "values"],
             ),
@@ -637,7 +639,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
         "list_windows" => exec(b, "window.list", json!({})),
         "inspect_workbook" => b.call("document.inspect", json!({})),
         "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted"])),
-        "write_range" => exec(b, "range.setValues", pick(a, &["range", "values"])),
+        "write_range" => exec(b, "range.setValues", pick(a, &["range", "values", "parse"])),
         "set_cell" => exec(b, "cell.set", pick(a, &["cell", "input"])),
         "get_cell" => exec(b, "cell.get", pick(a, &["cell"])),
         "evaluate_formula" => {

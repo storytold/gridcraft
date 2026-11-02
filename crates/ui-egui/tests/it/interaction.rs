@@ -836,6 +836,289 @@ fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
 }
 
 #[test]
+fn solver_dialog_saves_loads_and_resets_the_model() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [
+            ("objective", json!("B1")),
+            ("variables", json!("A1:A2")),
+            ("constraints", json!(["B2 <= 12", "A1 <= 4"])),
+            ("modelArea", json!(true)),
+            ("modelRange", json!("H1")),
+        ] {
+            d.values.insert(k.into(), v);
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    let note = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.get("modelNote").cloned();
+    assert_eq!(note(&h), Some(json!("The model was saved to H1:H5.")));
+    // Reset All clears the form; Load fills it again from the saved cells.
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("objective"), Some(&json!("")));
+    h.get_by_label("Load").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.values.get("objective"), Some(&json!("B1")), "{:?}", d.values.get("modelNote"));
+    assert_eq!(d.values.get("constraints"), Some(&json!(["B2 <= 12", "A1 <= 4"])));
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0);
+    assert_eq!(saved.map(|m| m["variables"].clone()), Some(json!("A1:A2")));
+}
+
+#[test]
+fn solver_dialog_asks_before_save_model_replaces_data() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("B1", "=3*A1"), ("H2", "kept")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let form = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "modelArea": true, "modelRange": "H1"});
+    h.state_mut().open_dialog("solver", form);
+    h.run_steps(2);
+    let values = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.clone();
+    // Save over data asks first and writes nothing; Don't Replace keeps the data.
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(values(&h).get("askModelOverwrite"), Some(&json!("H1")));
+    assert_eq!(value(&h, "H2"), Value::text("kept"));
+    h.get_by_label("Don't Replace").click();
+    h.run_steps(2);
+    assert_eq!((values(&h).get("askModelOverwrite"), value(&h, "H2")), (None, Value::text("kept")));
+    // Editing the range drops the question, so Replace never writes somewhere else.
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("J1"));
+    h.run_steps(2);
+    assert_eq!(values(&h).get("askModelOverwrite"), None);
+    assert!(h.query_by_label("Replace").is_none());
+    // Replace writes the model in one undo step.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    h.get_by_label("Replace").click();
+    h.run_steps(2);
+    assert_eq!(values(&h).get("modelNote"), Some(&json!("The model was saved to H1:H4.")));
+    assert_eq!(values(&h).get("askModelOverwrite"), None);
+    assert_eq!(value(&h, "H2"), Value::Number(1.0));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(value(&h, "H2"), Value::text("kept"));
+}
+
+#[test]
+fn solver_reset_all_and_load_model_drop_the_old_models_options() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    // A GRG Nonlinear model on cells, which has no Evolutionary options.
+    s.execute("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "goal": "min", "variables": "A1"}})).unwrap();
+    let mut h = harness(s);
+    let old = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "maxEvaluations": "7", "integerOptimality": "5", "requireBounds": false, "convergence": "0.5", "randomSeed": "11", "populationSize": "40", "mutationRate": "0.5", "generationsWithoutImprovement": "5", "modelArea": true, "modelRange": "H1"});
+    h.state_mut().open_dialog("solver", old.clone());
+    h.run_steps(2);
+    let keys = [
+        "maxEvaluations",
+        "integerOptimality",
+        "requireBounds",
+        "convergence",
+        "randomSeed",
+        "populationSize",
+        "mutationRate",
+        "generationsWithoutImprovement",
+    ];
+    let left = |h: &egui_kittest::Harness<'_, SheetApp>| -> Vec<&str> {
+        let d = h.state().dialog.as_ref().unwrap();
+        keys.into_iter().filter(|k| d.values.contains_key(*k)).collect()
+    };
+    let kept = |h: &egui_kittest::Harness<'_, SheetApp>| -> Vec<&str> {
+        let d = h.state().dialog.as_ref().unwrap();
+        keys.into_iter().filter(|k| d.values.get(*k) == old.get(*k)).collect()
+    };
+    // Load Model keeps none of the old options: the loaded model's own, or none.
+    h.get_by_label("Load").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("method"), Some(&json!("grg")));
+    assert_eq!(kept(&h), Vec::<&str>::new());
+    // Reset All drops them.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in old.as_object().unwrap() {
+            d.values.insert(k.clone(), v.clone());
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    assert_eq!(left(&h), Vec::<&str>::new());
+    // A new Evolutionary model then solves with the default options.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [
+            ("objective", json!("B1")),
+            ("goal", json!("min")),
+            ("variables", json!("A1")),
+            ("constraints", json!(["A1 <= 10"])),
+            ("method", json!("evolutionary")),
+        ] {
+            d.values.insert(k.into(), v);
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!(
+        (saved["requireBounds"].as_bool(), saved["randomSeed"].as_f64(), saved["convergence"].as_f64()),
+        (Some(true), Some(0.0), Some(0.0001)),
+        "{saved}"
+    );
+    assert_eq!((saved["populationSize"].as_f64(), saved["generationsWithoutImprovement"].as_f64()), (Some(100.0), Some(50.0)), "{saved}");
+    assert_eq!((saved["maxEvaluations"].as_f64(), saved["integerOptimality"].as_f64()), (Some(20000.0), Some(0.0)), "{saved}");
+}
+
+#[test]
+fn solver_options_go_with_the_solve() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    // Switching between the parameters and the options changes the window's height, and it
+    // re-centres over the next frames, so each switch is followed by a few frames.
+    h.get_by_label("Options").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
+    // Cancel keeps the options as they were; OK keeps the edits.
+    let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), v);
+    };
+    put(&mut h, "maxEvaluations", json!("7"));
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(4);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    h.get_by_label("Options").click();
+    h.run_steps(4);
+    put(&mut h, "requireBounds", json!(false));
+    put(&mut h, "randomSeed", json!("11"));
+    h.get_by_label("  OK  ").click();
+    h.run_steps(4);
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    assert!(matches!(value(&h, "A1"), Value::Number(v) if (v - 4.0).abs() < 1e-6));
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!((saved["randomSeed"].as_f64(), saved["requireBounds"].as_bool()), (Some(11.0), Some(false)));
+}
+
+#[test]
+fn solver_reset_all_resets_the_options() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let options = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "maxEvaluations": "7", "integerOptimality": "5", "randomSeed": "11", "requireBounds": false});
+    h.state_mut().open_dialog("solver", options);
+    h.run_steps(2);
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    for key in ["maxEvaluations", "integerOptimality", "randomSeed", "requireBounds"] {
+        assert_eq!(d.values.get(key), None, "{key}");
+    }
+    // Options shows the defaults again.
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.values.get("maxEvaluations"), d.values.get("randomSeed")), (Some(&json!("20000")), Some(&json!("0"))));
+}
+
+#[test]
+fn escape_in_solver_options_cancels_the_options_only() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    // A parameter edited before opening Options stays; the option edited there is undone.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("constraints".into(), json!(["A1 <= 9"]));
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("maxEvaluations".into(), json!("7"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let d = h.state().dialog.as_ref().expect("Escape leaves the Solver dialog open");
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    assert_eq!(d.values.get("constraints"), Some(&json!(["A1 <= 9"])));
+    // In the parameters, Escape closes the dialog as before.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn solver_dialog_opened_in_its_options_shows_the_defaults_and_cancel_restores_them() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let params =
+        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 10"], "method": "evolutionary", "optionsView": true});
+    let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), v);
+    };
+    let get = |h: &egui_kittest::Harness<'_, SheetApp>, k: &str| h.state().dialog.as_ref().unwrap().values.get(k).cloned();
+    // With no saved model, the fields show the defaults, as after the Options button.
+    h.state_mut().open_dialog("solver", params.clone());
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
+    assert!(h.query_all_by_label("Max Evaluations:").next().is_some());
+    assert_eq!(
+        (get(&h, "maxEvaluations"), get(&h, "randomSeed"), get(&h, "integerOptimality")),
+        (Some(json!("20000")), Some(json!("0")), Some(json!("0")))
+    );
+    // Cancel restores them.
+    put(&mut h, "randomSeed", json!("11"));
+    put(&mut h, "requireBounds", json!(false));
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Parameters");
+    assert_eq!((get(&h, "randomSeed"), get(&h, "requireBounds")), (Some(json!("0")), Some(json!(true))));
+    // So does Escape.
+    h.state_mut().dialog = None;
+    h.state_mut().open_dialog("solver", params);
+    h.run_steps(4);
+    put(&mut h, "maxEvaluations", json!("7"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog.as_ref().unwrap().title.as_str(), get(&h, "maxEvaluations")), ("Solver Parameters", Some(json!("20000"))));
+    // The next Solve uses the defaults.
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!(
+        (saved["maxEvaluations"].as_f64(), saved["randomSeed"].as_f64(), saved["requireBounds"].as_bool()),
+        (Some(20000.0), Some(0.0), Some(true)),
+        "{saved}"
+    );
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
