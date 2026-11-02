@@ -15,6 +15,12 @@ pub struct KeptOut {
 }
 
 impl KeptOut {
+    /// True when a kept (pass-through) part already holds this exact name: the writer must
+    /// not put its own part there (a zip entry cannot repeat).
+    pub fn used_contains(&self, name: &str) -> bool {
+        self.used.contains(&name.to_ascii_lowercase())
+    }
+
     /// Reserves the VML shape blocks the kept header and footer drawings of `wb` use, so that the
     /// notes drawings GridCraft writes don't reuse their shape ids.
     pub fn reserve_vml_blocks(&mut self, wb: &Workbook) {
@@ -270,6 +276,191 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
     formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
 }
 
+/// The attributes of a raw start tag (`<connections xmlns="..." k="v">`), each as it was
+/// written: name, `=` and quoted value, quote-aware so a value holding spaces stays whole.
+/// The element name itself is not an attribute and is skipped.
+fn raw_attributes(tag: &str) -> impl Iterator<Item = String> + '_ {
+    let mut out = Vec::new();
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // The name: up to `=`.
+        let Some(eq) = tag[i..].find('=').map(|e| i + e) else { break };
+        // The value: a quote-delimited string (the closing quote is the boundary, so spaces
+        // inside survive). The attribute is the raw slice, name, `=` and value as written.
+        // Only a real quote starts a value (an unquoted or a missing quote ends the scan, so
+        // malformed input cannot slice inside a multibyte character and panic the save), and
+        // the name is bounded by XML whitespace only (a Unicode space would land mid-byte).
+        let Some(&q) = bytes.get(eq + 1).filter(|b| matches!(**b, b'"' | b'\'')) else { break };
+        let vstart = eq + 2;
+        let Some(vend) = tag[vstart..].find(q as char).map(|v| vstart + v) else { break };
+        let name_start = tag[..eq].rfind([' ', '\t', '\r', '\n']).map(|w| w + 1).unwrap_or(0);
+        let attribute = &tag[name_start..=vend];
+        if !attribute.starts_with(char::is_whitespace) {
+            out.push(attribute.to_string());
+        }
+        i = vend + 1;
+    }
+    out.into_iter()
+}
+
+/// The end of the element starting at `s` (`<connection ...`): the whole block, whether it
+/// is self-closing (`<connection id="1"/>`) or holds children (`<connection ...><webPr .../>/// </connection>`). A depth count walks the tags: an inner `/>` closes a child, not the
+/// connection, and a later block's `</connection>` never ends an earlier self-closing one.
+fn block_end(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    // Depth 0 = outside the element; the first tag is the connection's own opener, and the
+    // walk returns when it closes (self-closing at once, or its `</connection>`).
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        // A comment between tags is skipped whole: its text may hold anything.
+        if s[i..].starts_with("<!--") {
+            let Some(end) = s[i..].find("-->").map(|e| i + e + 3) else { break };
+            i = end;
+            continue;
+        }
+        // The tag's end: a `>` inside a quoted attribute value is not it.
+        let mut gt = None;
+        let mut quote = 0u8;
+        for (j, &b) in bytes[i..].iter().enumerate() {
+            match (quote, b) {
+                (0, b'"') | (0, b'\'') => quote = b,
+                (q, b) if q == b => quote = 0,
+                (0, b'>') => {
+                    gt = Some(i + j);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(gt) = gt else { break };
+        let tag = &s[i..=gt];
+        if tag.ends_with("/>") {
+            // Self-closing: opens nothing. At depth 0 it is the connection's own opener.
+            if depth == 0 {
+                return Some(gt + 1);
+            }
+        } else if tag.starts_with("</") {
+            // A closing tag: at depth 1 it closes the connection itself.
+            depth -= 1;
+            if depth == 0 {
+                return Some(gt + 1);
+            }
+        } else {
+            depth += 1;
+        }
+        i = gt + 1;
+    }
+    None
+}
+
+/// The kept `xl/connections.xml` with the model's current From Web connections merged in:
+/// every foreign `<connection>` (no GridCraft extension) is copied verbatim, and the
+/// GridCraft ones (with the extension) are replaced by `wb.web_queries` in order. `None`
+/// when the part does not parse: it is kept exactly as the file held it.
+fn merge_connections(data: &[u8], wb: &Workbook) -> Option<String> {
+    let raw = std::str::from_utf8(data).ok()?;
+    // Nothing of ours in the part and nothing to write: leave the file's part alone (a
+    // foreign-only connections.xml is never rewritten, byte for byte).
+    if wb.web_queries.is_empty() && !raw.contains(crate::write::GC_URI) {
+        return None;
+    }
+    // Foreign connections are kept as the exact bytes the file held: each <connection> block
+    // (self-closing or a whole tree) is scanned out of the raw XML with a depth count \—
+    // a child's `/>` is not the connection's end, and a later block's `</connection>` is not
+    // an earlier self-closing one's \— and the ones without GridCraft's extension uri
+    // are copied verbatim.
+    let mut foreign = String::new();
+    let mut rest = raw;
+    // The element name may be followed by any XML whitespace, not only a space: a tab or a
+    // newline between `<connection` and its first attribute is valid, and a flat search for
+    // "<connection " would skip such a block (and drop it from the merge).
+    loop {
+        // The element may carry a namespace prefix (`<xel:connection`, Power Query's style)
+        // and its name may be followed by any XML whitespace, not only a space. `<connection`
+        // also prefixes `<connections` (the root), so every occurrence is checked until one
+        // is an element of its own.
+        let unprefixed = rest.match_indices("<connection").map(|(s, _)| s).find(|&s| {
+            rest.as_bytes().get(s + "<connection".len()).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        });
+        // A prefixed element (`<xel:connection`, Power Query's style) is found by its
+        // `:connection` tail: each occurrence walks back to its `<`, and the text between
+        // must be a prefix name. The block scan itself starts at the `<`, prefix included.
+        let prefixed = rest.match_indices(":connection").map(|(s, _)| s).find(|&s| {
+            let Some(lt) = rest[..s].rfind('<') else { return false };
+            let prefix = &rest[lt + 1..s];
+            !prefix.is_empty() && prefix.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+                // `s` is the colon's index, so the element name ends one past it plus its length.
+                && matches!(rest.as_bytes().get(s + 1 + "connection".len()), Some(b' ' | b'\t' | b'\r' | b'\n'))
+        });
+        // The block starts at the `<` before the prefix (`<xel:connection`), not at the name.
+        // Whichever element comes first in the part, prefixed or not: scanning by one form
+        // and jumping past the other would drop it (an unprefixed match further right must
+        // not shadow an earlier prefixed one).
+        let prefixed_start = prefixed.map(|c| rest[..c].rfind('<').unwrap_or(c));
+        let start = match (unprefixed, prefixed_start) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        let after = &rest[start..];
+        let end = block_end(after)?;
+        let block = &after[..end];
+        if !block.contains(crate::write::GC_URI) {
+            foreign.push_str(block);
+        }
+        rest = &after[end..];
+    }
+    // The rebuilt root keeps the original's namespace declarations exactly as the file held
+    // them: a foreign connection block may rely on one (Power Query's `xel:`, say) declared
+    // on the root, and copying the block under a root without it would not be XML it parses
+    // from. The parser drops xmlns:* from its attribute list, so the raw start tag is scanned
+    // instead; GridCraft's own `xmlns:gc` is dropped from the kept set (it is written anew),
+    // and every other declaration is copied verbatim between the element name and its `>`.
+    let tag_start = raw.find("<connections")?;
+    let tag_end = raw[tag_start..].find('>').map(|e| tag_start + e)?;
+    // The raw start tag's attributes, one by one (quote-aware, so a value with spaces in it
+    // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
+    let kept_decls: String = raw_attributes(&raw[tag_start..=tag_end])
+        .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
+        .filter(|a| !a.starts_with("xmlns:gc=") && a.trim_end_matches(['\"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
+        .map(|a| format!(" {a}"))
+        .collect();
+    let mut w = String::from(crate::write::XML_DECL);
+    let _ = write!(w, "<connections{kept_decls} xmlns:gc=\"{}\">",
+        crate::write::GC_NS);
+    w.push_str(&foreign);
+    // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
+    // start past the highest id the part holds, never at a count that could collide.
+    let x = crate::xml::parse(data).ok()?;
+    let mut id = x.kids("connection").filter_map(|c| c.attr_u32("id")).max().unwrap_or(0) + 1;
+    for q in &wb.web_queries {
+        let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
+        let tid = q.table_id.unwrap_or(0);
+        let synced = q.last_synced.unwrap_or(0);
+        let _ = write!(w,
+            "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+            id,
+            crate::xml::esc_attr(&q.name),
+            crate::xml::esc_attr(&q.url),
+            crate::write::GC_URI,
+            crate::xml::esc_attr(&q.table),
+            q.occurrence,
+            crate::xml::esc_attr(&q.sheet),
+            tid,
+            synced);
+        id += 1;
+    }
+    w.push_str("</connections>");
+    Some(w)
+}
+
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
 /// (see [`chart_sheet_usable`]) are left out with the parts only they reach.
 pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> WorkbookKept {
@@ -285,8 +476,21 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             gone.remove(&n);
         }
     }
-    let parts: Vec<PreservedPart> = p.parts.iter().filter(|q| !gone.contains(&normalize(&q.name))).cloned().collect();
+    let mut parts: Vec<PreservedPart> = p.parts.iter().filter(|q| !gone.contains(&normalize(&q.name))).cloned().collect();
     let rels: Vec<PreservedRel> = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).cloned().collect();
+    // The kept connections part gets the model's current From Web connections merged in: the
+    // user may have changed a refresh setting, imported another table or removed a connection
+    // since the open, and a save must write the current state, not the file's. Foreign
+    // connections (a database query) are kept verbatim; GridCraft's (the ones with the
+    // extension element) are replaced wholesale by the model's.
+    if let Some(q) = parts.iter_mut().find(|q| normalize(&q.name) == "xl/connections.xml") {
+        // Runs even when the model holds no connections now: the part's stale GridCraft
+        // connections (removed since the open) must not survive the save, while foreign ones
+        // stay whatever the model does.
+        if let Some(merged) = merge_connections(&q.data, wb) {
+            q.data = merged.into_bytes().into();
+        }
+    }
     let names = write_parts(out, &parts);
     let ids = attach(wb_rels, &rels, &names);
     for r in &p.package_rels {

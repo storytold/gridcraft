@@ -22,6 +22,7 @@ pub mod solver;
 pub mod spelling;
 pub mod stash;
 pub mod view;
+pub mod web;
 pub mod whatif;
 
 use gridcraft_calc::Key;
@@ -80,12 +81,21 @@ pub fn is_secret_param(key: &str) -> bool {
     key == "password" || key.ends_with("Password")
 }
 
+/// Params too large for the journal: a background worker's downloaded page tables. Replaying
+/// the entry re-fetches the page instead (the commands fall back to the fetch source without
+/// the param).
+fn is_bulk_param(key: &str) -> bool {
+    key == "prefetched" || key == "prefetchedByUrl"
+}
+
 /// The params as the journal records them: secret params are left out, so a password never
 /// reaches the journal dialog, `engine.journal` or a recorded script (saved in the workbook).
 /// Replaying such an entry runs the command without that param.
 pub fn journal_params(params: &Json) -> Json {
     match params {
-        Json::Object(o) => Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Json::Object(o) => {
+            Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k) && !is_bulk_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
         other => other.clone(),
     }
 }
@@ -129,6 +139,7 @@ macro_rules! cmd {
 }
 pub(crate) use cmd;
 
+/// Every command the engine holds, in menu order, built once.
 pub fn command_specs() -> &'static [CommandSpec] {
     static SPECS: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
     SPECS.get_or_init(|| {
@@ -139,6 +150,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(sheet::specs());
         v.extend(insert::specs());
         v.extend(data::specs());
+        v.extend(web::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
@@ -411,6 +423,14 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
+    }
+    // A saved From Web connection whose table is gone goes with it, whatever deleted the table
+    // (deleted rows or columns collapsing its range, Convert to Range, a deleted sheet): a
+    // dangling id could later match a new table that reuses the id. A set, not a sparse vector:
+    // ids come from opened files, so the allocation must depend on the table count, not the id.
+    if !wb.web_queries.is_empty() {
+        let live: std::collections::HashSet<u32> = wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.id)).collect();
+        wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.contains(&id)));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;

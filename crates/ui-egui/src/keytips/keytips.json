@@ -1881,9 +1881,8 @@
    "seq": "AFW",
    "kind": "command",
    "target": "data.fromWeb",
-   "pending": true,
    "excel": "Get External Data: From Web",
-   "note": "reserved until the command lands"
+   "note": "From Web Navigator dialog"
   },
   {
    "seq": "AG",

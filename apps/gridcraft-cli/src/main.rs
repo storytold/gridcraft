@@ -35,16 +35,19 @@ use gridcraft_engine::Session;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
-  gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
-  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
+  gridcraft-cli info <file> [--json] [--refresh]          sheets, used ranges, tables, charts, names
+  gridcraft-cli convert <in> <out> [--sheet NAME] [--refresh]
+                                                          xlsx/csv/tsv/json/html/pdf by extension
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json] [--refresh]
+  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv] [--refresh]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--quiet] [--refresh]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
+  --refresh: refresh the file's saved web connections with \"refresh on open\" set (off
+                     without it; failures are warned on stderr, the command continues)
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
@@ -165,14 +168,30 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// A session wired for web imports.
+fn session() -> Session {
     let mut s = Session::new();
+    s.web_source = Some(gridcraft_webquery::provider());
+    s
+}
+
+/// A session with the file at `path` open, wired for web imports. A file from the command
+/// line is not vouched for by default (it is someone else's content until the user says so):
+/// `--refresh` opts its saved connections' "refresh on open" in, and any refresh failure
+/// goes to stderr so a convert never silently writes stale data.
+fn open(path: &str, refresh: bool) -> Result<Session, String> {
+    let mut s = session();
     exec(&mut s, "file.open", json!({"path": path}))?;
+    let r = gridcraft_engine::cmd::web::refresh_connections_on_open(&mut s, refresh);
+    for e in r["errors"].as_array().into_iter().flatten() {
+        eprintln!("Warning: refresh on open: {}", e["error"].as_str().unwrap_or_default());
+    }
     Ok(s)
 }
 
+/// A session with a fresh workbook, wired for web imports.
 fn blank() -> Session {
-    let mut s = Session::new();
+    let mut s = session();
     s.new_workbook();
     s
 }
@@ -239,10 +258,10 @@ fn csv_field(s: &str, delim: char) -> String {
 // ---------------------------------------------------------------- subcommands
 
 fn info(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &[], &["json"])?;
+    let a = Args::parse(args, &[], &["json", "refresh"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, a.has("refresh"))?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -280,7 +299,7 @@ fn info(args: &[String]) -> Result<(), String> {
 }
 
 fn convert(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["sheet"], &[])?;
+    let a = Args::parse(args, &["sheet"], &["refresh"])?;
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -288,7 +307,7 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
-    let mut s = open(input)?;
+    let mut s = open(input, a.has("refresh"))?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
@@ -303,11 +322,11 @@ fn convert(args: &[String]) -> Result<(), String> {
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    let a = Args::parse(args, &["in", "sheet", "cell"], &["json", "refresh"])?;
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
+        Some(p) => open(p, a.has("refresh"))?,
         None => blank(),
     };
     activate_sheet(&mut s, a.opt("sheet"))?;
@@ -373,10 +392,10 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
 }
 
 fn cat(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
+    let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv", "refresh"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, a.has("refresh"))?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -412,13 +431,14 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas", "refresh"])?;
     a.no_extra(0)?;
+    let refresh = a.has("refresh");
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
-        (Some(p), None) => open(p)?,
+        (Some(p), None) => open(p, refresh)?,
         (None, Some(name)) => {
-            let mut s = Session::new();
+            let mut s = session();
             exec(&mut s, "file.new", json!({"sample": name}))?;
             s
         }
@@ -538,9 +558,9 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+                (Some(p), _) => open(p, false)?,
                 (None, Some(name)) => {
-                    let mut s = Session::new();
+                    let mut s = session();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
                     s
                 }

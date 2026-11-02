@@ -63,6 +63,36 @@ pub struct TableColumn {
     pub xml: Option<XmlColumnPr>,
 }
 
+/// A saved From Web connection (Data ▸ Get Data ▸ From Web): one table imported from one page,
+/// which `data.webRefresh` re-fetches into the same sheet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WebQuery {
+    /// The connection's name: the worksheet table it fills, kept current when it's renamed.
+    pub name: String,
+    /// The imported table's stable id: refresh finds the table by it, so a rename never
+    /// points the connection at a different table that took the former name.
+    #[serde(default)]
+    pub table_id: Option<u32>,
+    /// The page the table came from.
+    pub url: String,
+    /// The page table's name, as the import saw it.
+    pub table: String,
+    /// Which same-named page table the import took, zero-based: a page can hold duplicates.
+    #[serde(default)]
+    pub occurrence: usize,
+    /// The sheet the import wrote.
+    pub sheet: String,
+    /// When the connection last synced, in ms since the epoch; `None` until the first sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_synced: Option<u64>,
+    /// Excel's "Refresh data when opening the file": the connection syncs on open. Off by
+    /// default, and a workbook opened from a file or bytes (not this session's own save)
+    /// never auto-refreshes regardless \u{2014} a stranger's workbook must not make the
+    /// recipient's machine fetch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_on_open: bool,
+}
+
 /// A table column's binding to an XML map (`<xmlColumnPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct XmlColumnPr {

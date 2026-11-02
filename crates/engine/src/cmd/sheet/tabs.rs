@@ -140,6 +140,8 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
             }
         }
+        // Saved From Web connections on the sheet follow its rename.
+        crate::cmd::web::rename_connection_sheet(&mut cx.wb, &old, &name);
         cx.structural = true;
         Ok(Json::Null)
     })

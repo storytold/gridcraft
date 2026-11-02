@@ -14,7 +14,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 24 | 28 | 86% |
 | Review | 15 | 18 | 83% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
@@ -237,12 +237,13 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (24 / 28, 86%)
 
 Implemented:
 
 - `data.getData` Get Data (Get & Transform Data)
 - `data.fromTextCsv` From Text/CSV (Get & Transform Data)
+- `data.fromWeb` From Web (Get & Transform Data)
 - `data.fromTableRange` From Table/Range (Get & Transform Data)
 - `data.refreshAll` Refresh All (Queries & Connections)
 - `data.queriesConnections` Queries & Connections (Queries & Connections)
@@ -267,7 +268,6 @@ Implemented:
 
 Missing:
 
-- `data.fromWeb` From Web (Get & Transform Data)
 - `data.stocks` Stocks (Data Types)
 - `data.geography` Geography (Data Types)
 - `data.relationships` Relationships (Data Tools)

@@ -74,3 +74,4 @@ pub fn minimal(sheet_body: &str, extra_parts: &[(&str, &str)], wb_extra_rels: &s
     }
     make_zip(&parts)
 }
+mod web_conn;

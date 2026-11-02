@@ -125,8 +125,9 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 
 Excel's Get Data reaches files (Excel, CSV, XML, JSON, PDF, Parquet, folders), databases (SQL
 Server, Access, ODBC, …), web pages, SharePoint and online services, through Power Query.
-GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
-refresh. Counted under features (Get & Transform, ~10% ready), not here.
+GridCraft imports CSV/TSV, JSON and HTML tables, and one detected table from an https web page
+(Data ▸ From Web, desktop and CLI), with no query editor and no From Database/folder sources.
+Counted under features (Get & Transform, ~15% ready), not here.
 
 ## Work (76–114 h)
 
@@ -160,9 +161,9 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-19 | minor | .xls import skips dialog sheets (WsBool `fDialog`), which share the worksheet BOF type and were read as empty worksheets |
 | 2026-10-19 | minor | `.xls` import reads WINDOW2: right-to-left sheets (common in older Arabic and Hebrew files) open right-to-left, and hidden gridlines, headings and zero values and Show Formulas carry over |
 | 2026-10-19 | trivial | XLSX text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`, ECMA-376 Part 1 §21.1.2.2.7): read from the first paragraph and written on every paragraph; output without it is unchanged |
+| 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-18 | trivial | `file.open {csvAsText: true}` keeps every CSV/TSV/TXT field as the text the file holds, so identifiers (GTINs, SKUs, ZIP codes) keep their digits and leading zeros (#1808; a preference and a CLI flag are separate work) |
 | 2026-10-18 | trivial | XLSX PivotTables: `rowGrandTotals` is the Grand Total row and `colGrandTotals` the Grand Total column. Both were read and written the other way round, which a GridCraft round trip hid, so an Excel file with only one grand total opened showing the other |
-| 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-16 | trivial | XLSX charts: `[0]!Name` (a workbook-scoped defined name) in series references is read as the name, so the series resolve instead of showing `#NAME?`. Names in chart references are written qualified (`[0]!Name`, or `Sheet!Name` for a sheet-scoped name): Excel draws a chart with a bare name blank (#1686) |
 | 2026-10-16 | trivial | XLSX reads and writes the workbook's show-objects setting (`workbookPr showObjects`: all, placeholders, none), which Ctrl+6 switches; a file without it is saved without it |
 | 2026-10-16 | trivial | XLSX: pictures in headers and footers (`&G`, the VML drawing `<legacyDrawingHF>` names and its images) are kept on save; they are still not shown (#1257) |
@@ -173,6 +174,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-15 | minor | XLSX: formulas and PivotTable sources quote sheet names like Excel (a leading `.`, R1C1-like and cell-like names), so `'.x'!A1` no longer saves as `.x!A1`, which Excel could not open (#1458) |
 | 2026-10-15 | minor | XLSX text preserves CR and CRLF across save/reopen; shared strings use `_x000D_` and other XML text uses `&#13;` (#1488) |
 | 2026-10-15 | minor | XLSX save keeps legacy `INDEX`/`MATCH` formulas scalar instead of marking them as dynamic arrays (#1505) |
+| 2026-10-15 | trivial | Import sources: From Web (one page table, with refresh) |
 | 2026-10-14 | minor | `.xls` import reads cell formatting from the Font, XF, Palette and Style records: fonts, fills, borders, alignment, protection, the custom palette, the Normal font and user cell styles |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |

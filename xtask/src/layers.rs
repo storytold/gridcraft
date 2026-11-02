@@ -15,6 +15,7 @@ pub enum Class {
 }
 
 impl Class {
+    /// The layer a crate sits at; exempt crates have none.
     fn layer(self) -> Option<u8> {
         match self {
             Class::Layer(l) => Some(l),
@@ -38,6 +39,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
+    ("webquery", Class::Layer(6)),
     // L7 apps (exempt) and tooling (unchecked)
     ("gridcraft", Class::Layer(7)),
     ("cli", Class::Layer(7)),

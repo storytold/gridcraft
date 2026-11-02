@@ -45,6 +45,10 @@ impl SheetApp {
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            fetch: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            reaped: std::collections::VecDeque::new(),
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -237,6 +241,61 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        // A From Web background fetch the open dialog did not consume (ribbon Refresh All,
+        // or a dialog closed while its fetch ran): a refresh is applied and reported here; a
+        // preview or import whose dialog is gone is dropped — its result has nowhere to land.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.reap_fetches();
+            // A reaped worker still running needs a pass when it ends: without one, its
+            // result can sit retained until some later UI activity happens to run. A delayed
+            // repaint rather than a continuous one (a canceled Refresh All fetches its URLs
+            // one after another, and idle windows must not repaint every frame for minutes).
+            if self.reaped.iter().any(|h| h.as_ref().is_none_or(|h| !h.is_finished())) {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            // This block runs in every window's pass; a fetch belongs to the window that
+            // started it, so only that window polls or discards it \u{2014} another window drawing
+            // first must not consume a result the owning window's dialog still expects. The
+            // owning window gone (closed while its fetch ran), the result has nowhere to
+            // land: join the worker to free it, then drop it.
+            let fetch_window = self.fetch.as_ref().map(|f| f.window);
+            let owner_alive = fetch_window.is_some_and(|w| self.session.window(w.unwrap_or_default()).is_some());
+            let mine = fetch_window.is_none_or(|w| w == self.ui_window());
+            if !mine {
+                // Another window owns it; nothing here touches it, except freeing it when
+                // that window closed while its fetch ran.
+                if !owner_alive {
+                    self.discard_fetch();
+                }
+            } else if self.fetching() {
+                ctx.request_repaint();
+            } else if !owner_alive {
+                self.discard_fetch();
+            } else if self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh") {
+                if let Some((_, r)) = self.poll_fetch() {
+                    match r {
+                        Ok(res) => dialogs::report_refresh_all(self, &res),
+                        Err(e) => self.message = Some(("From Web".into(), crate::clean_error(&e))),
+                    }
+                }
+            } else if self.fetch.is_some() {
+                // Only the From Web dialog polls a finished preview or import into place;
+                // Queries & Connections polls its own refreshes too (routed by command in
+                // `poll_refresh_fetch`). Any other state joins the finished worker so its
+                // result is freed, then drops it.
+                let polls = self.dialog.as_ref().is_some_and(|d| {
+                    d.name == "fromWeb" || (d.name == "queriesConnections" && self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh"))
+                });
+                if polls {
+                    ctx.request_repaint();
+                } else {
+                    // Discard, don't run: a canceled import (Load, then the dialog closed)
+                    // must not create its sheet and connection behind the user's back.
+                    self.discard_fetch();
+                }
+            }
+        }
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);

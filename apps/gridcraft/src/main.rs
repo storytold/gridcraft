@@ -233,6 +233,7 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// The desktop app: logging, the window, the session with its web source, and the event loop.
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -306,6 +307,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    session.web_source = Some(gridcraft_webquery::provider());
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
