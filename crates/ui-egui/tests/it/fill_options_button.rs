@@ -91,6 +91,94 @@ fn n(x: f64) -> Value {
     Value::Number(x)
 }
 
+fn collapsed_refedit() -> Harness {
+    let mut h = harness(one_two);
+    h.state_mut().open_dialog("goalSeek", json!({}));
+    h.run_steps(4);
+    h.get_all_by_label("Collapse dialog").nth(1).unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), Some("changing"));
+    h
+}
+
+#[test]
+fn collapsed_refedit_arrows_keep_the_fill_source_until_release() {
+    for button in [PointerButton::Primary, PointerButton::Secondary] {
+        for modifiers in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::COMMAND] {
+            let mut h = collapsed_refedit();
+            let before = h.state().session.active().unwrap();
+            let (workbook, revision, undo) = (before.wb.clone(), before.revision, before.undo.len());
+            let reference = h.state().dialog.as_ref().unwrap().values["changing"].clone();
+            let (start, end) = (corner(&h, "B2"), center(&h, "B6"));
+            press(&mut h, start, button);
+            move_to(&mut h, start, end);
+            assert!(matches!(h.state().grid.drag, gridcraft_ui_egui::grid::Drag::Fill { .. }));
+            h.input_mut().events.extend([
+                Event::ModifiersChanged(modifiers),
+                Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers },
+                Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: false, repeat: false, modifiers },
+            ]);
+            h.run_steps(3);
+            assert_eq!(selection(&h), "B1:B2", "{button:?}, {modifiers:?}: the fill keeps its source");
+            assert_eq!(h.state().dialog.as_ref().unwrap().values["changing"], reference);
+            let during = h.state().session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&workbook, &during.wb));
+            assert_eq!((during.revision, during.undo.len()), (revision, undo));
+            if button == PointerButton::Primary {
+                let label = if modifiers.command { "2" } else { "6" };
+                assert!(h.query_by_label(label).is_some(), "the preview still uses B1:B2");
+                if modifiers.is_none()
+                    && let Ok(path) = std::env::var("GRIDCRAFT_FILL_REFEDIT_SCREENSHOT")
+                {
+                    h.render().unwrap().save(path).unwrap();
+                }
+            }
+            h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+            release(&mut h, end, button);
+            if button == PointerButton::Secondary {
+                let (source, target, _) = h.state().grid.fill_menu.unwrap();
+                assert_eq!((source.a1(), target.a1()), ("B1:B2".into(), "B1:B6".into()));
+                h.get_by_label("Fill Series").click();
+                h.run_steps(3);
+            }
+            assert_eq!(values(&h, &["B3", "B4", "B5", "B6"]), [n(3.0), n(4.0), n(5.0), n(6.0)]);
+            assert_eq!(h.state().session.active().unwrap().undo.len(), undo + 1);
+            assert_eq!(h.state().dialog.as_ref().unwrap().values["changing"], "$B$1:$B$6");
+            assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), Some("changing"));
+            h.key_press(egui::Key::ArrowDown);
+            h.run_steps(3);
+            assert_ne!(selection(&h), "B1:B6", "the picker gets its arrows back after release");
+        }
+    }
+}
+
+#[test]
+fn collapsed_refedit_escape_cancels_the_fill_before_expanding_the_picker() {
+    for button in [PointerButton::Primary, PointerButton::Secondary] {
+        let mut h = collapsed_refedit();
+        let before = h.state().session.active().unwrap();
+        let (workbook, revision, undo) = (before.wb.clone(), before.revision, before.undo.len());
+        let reference = h.state().dialog.as_ref().unwrap().values["changing"].clone();
+        let (start, end) = (corner(&h, "B2"), center(&h, "B6"));
+        press(&mut h, start, button);
+        move_to(&mut h, start, end);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        release(&mut h, end, button);
+        assert_eq!(h.state().grid.drag, gridcraft_ui_egui::grid::Drag::None);
+        assert!(h.state().grid.fill_menu.is_none());
+        assert_eq!(selection(&h), "B1:B2");
+        let after = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&workbook, &after.wb));
+        assert_eq!((after.revision, after.undo.len()), (revision, undo));
+        assert_eq!(h.state().dialog.as_ref().unwrap().values["changing"], reference);
+        assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), Some("changing"));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), None, "a fresh Escape expands the picker");
+    }
+}
+
 #[test]
 fn fill_drag_previews_endpoint_without_changing_the_workbook() {
     let mut h = harness(|s| {
