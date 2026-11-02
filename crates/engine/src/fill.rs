@@ -540,8 +540,19 @@ fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     Some((prefix, n, suffix, width))
 }
 
+/// Options for filling a numeric or date series.
+pub struct SeriesOptions<'a> {
+    pub range: RangeRef,
+    pub rows: bool,
+    pub kind: &'a str,
+    pub step: f64,
+    pub stop: Option<f64>,
+    pub unit: &'a str,
+}
+
 /// Home › Fill › Series.
-pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, step: f64, stop: Option<f64>, unit: &str) -> Result<()> {
+pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<()> {
+    let SeriesOptions { range: r, rows, kind, step, stop, unit } = options;
     let sys = cx.wb.date_system;
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let lanes: Vec<u32> = if rows { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };
@@ -582,7 +593,7 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
             };
             // The stop value bounds the series in the direction it runs (a growth by 0.5 falls).
             if let Some(s) = stop
-                && ((v >= prev && v > s) || (v < prev && v < s))
+                && ((v >= prev && round15(v) > s) || (v < prev && round15(v) < s))
             {
                 break;
             }
@@ -793,6 +804,21 @@ mod tests {
         s.execute("data.flashFill", serde_json::json!({})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
+    fn series_keeps_value_equal_to_stop_after_float_drift() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "A1:A6", "type": "linear", "step": 0.1, "stop": 1.3})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "0.1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "B1:B4", "type": "growth", "step": 3, "stop": 0.3})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let col = |c: u32, n: u32| (0..n).map(|r| sh.value(CellRef::new(r, c))).collect::<Vec<_>>();
+        let n = Value::number;
+        assert_eq!(col(0, 6), vec![n(1.0), n(1.1), n(1.2), n(1.3), Value::Empty, Value::Empty]);
+        assert_eq!(col(1, 4), vec![n(0.1), n(0.3), Value::Empty, Value::Empty]);
     }
 
     #[test]

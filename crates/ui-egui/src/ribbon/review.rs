@@ -1,5 +1,5 @@
 use super::controls::{act, anchor_keytip, control_keytip, menu_items, sep};
-use super::*;
+use super::{Icon, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, json, small_button};
 
 pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
