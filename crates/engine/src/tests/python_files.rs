@@ -354,6 +354,53 @@ fn a_python_spill_range_larger_than_a_result_keeps_its_values_as_plain_values() 
 }
 
 #[test]
+fn python_spills_read_past_the_scan_budget_keep_their_values_as_plain_values() {
+    // A1's result spills over A1:A5000. Four thousand ordinary dynamic arrays on row 1 make each
+    // later plain cell's range lookup cost 4,001 checks, so the reader's scan budget runs out
+    // part way down column A, and the rest of the spill is read as plain cells.
+    let arrays: String = (1..=4_000u32)
+        .map(|c| {
+            let at = CellRef::new(0, c).a1();
+            let below = CellRef::new(1, c).a1();
+            format!("<c r=\"{at}\" cm=\"1\"><f t=\"array\" ref=\"{at}:{below}\">SEQUENCE(2)</f><v>1</v></c>")
+        })
+        .collect();
+    let rows: String = (2..=5_000u32).map(|r| format!("<row r=\"{r}\"><c r=\"A{r}\"><v>{r}</v></c></row>")).collect();
+    let data = format!(
+        "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A5000\">_xlfn._xlws.PY(0,0)</f><v>1</v></c>{arrays}</row>{rows}</sheetData>"
+    );
+    let mut s = s();
+    open(&mut s, "budget.xlsx", &excel_shaped(&data, Some(&["list(range(1, 5001))"])));
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.spill_ranges.contains_key(&CellRef::new(0, 0)), "no live spill");
+    assert!(code(&s, "A1").is_some_and(|p| p.output.is_none()), "no result is rebuilt");
+    assert_eq!((v(&s, "A2"), v(&s, "A5000")), (Value::Number(2.0), Value::Number(5000.0)), "the values stay");
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0), "the cell keeps its value, not #SPILL!");
+}
+
+#[test]
+fn deleting_the_data_python_code_reads_drops_its_kept_result() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    py(&mut s, "C5", "xl(\"A1:A2\") * 2");
+    cache(&mut s, "C5", array(2, 1, vec![2.0.into(), 4.0.into()]), "list");
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "C6"), Value::Number(4.0));
+    // A move keeps the result: the reference still names the same data.
+    s.execute("home.insertRows", json!({"rows": "1"})).unwrap();
+    assert!(code(&s, "C6").is_some_and(|p| p.output.is_some() && !p.code.contains("A1:A2")), "{:?}", code(&s, "C6"));
+    assert_eq!(v(&s, "C7"), Value::Number(4.0));
+    // Deleting the rows it reads leaves `#REF!`: the kept result no longer belongs to the code.
+    s.execute("home.deleteRows", json!({"rows": "2:3"})).unwrap();
+    let c4 = code(&s, "C4").expect("the Python cell moved up to C4");
+    assert!(c4.code.contains("#REF!") && c4.output.is_none(), "{c4:?}");
+    assert_eq!(v(&s, "C4"), Value::Error(CellError::Blocked));
+    assert_eq!(v(&s, "C5"), Value::Empty, "its spill is gone");
+}
+
+#[test]
 fn a_script_is_measured_after_its_escapes_are_decoded() {
     let max = gridcraft_model::python::MAX_FORMULA_CHARS;
     // 2,000 tabs written as `_x0009_`: 14,000 characters in the file, 2,004 as code, which fits.

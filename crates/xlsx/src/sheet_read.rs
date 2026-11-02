@@ -107,6 +107,19 @@ fn record_python_spill(st: &mut RowState, sheet: &mut Sheet, pos: CellRef) {
     }
 }
 
+/// Past the scan budget, the cells of a Python spill read afterwards were kept as plain cells, not
+/// as its spilled values, and a result rebuilt over them would block itself. Every Python spill of
+/// such a sheet keeps its values as plain values instead, with no live spill.
+fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
+    if st.dynamic_checks <= MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    let anchors: Vec<CellRef> = sheet.spill_ranges.keys().copied().filter(|a| sheet.cells.get(*a).is_some_and(|c| c.py.is_some())).collect();
+    for anchor in anchors {
+        sheet.settle_spill(anchor);
+    }
+}
+
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
@@ -163,6 +176,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
     let mut fit_to_page = false;
