@@ -1,5 +1,4 @@
 use super::geo::Geo;
-use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
@@ -10,6 +9,14 @@ fn other_ui_owns_keys(app: &SheetApp) -> bool {
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
+}
+
+fn handle_object_key(app: &mut SheetApp, key: egui::Key) -> bool {
+    match key {
+        egui::Key::Delete | egui::Key::Backspace => app.delete_selected_object(),
+        egui::Key::Escape => app.selected_object.take().is_some(),
+        _ => false,
+    }
 }
 
 fn fill_owns_navigation(ctx: &egui::Context, key: egui::Key, physical: Option<egui::Key>, modifiers: egui::Modifiers) -> bool {
@@ -149,9 +156,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    key if handle_object_key(app, key) => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
