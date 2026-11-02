@@ -521,6 +521,17 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_reference_keeps_a_sheet_name_with_bang_and_quotes() {
+        // `!` and a doubled quote inside the name, multi-byte characters before and in it.
+        let mut edit = EditState::new(0, 0, CellRef::new(0, 0), "=\"é\"&'Q1!It''s ñ'!$B$2:C3".into(), false, false);
+        let refs = formula_refs(&edit.text);
+        assert_eq!(refs.len(), 1);
+        edit.replace_ref((refs[0].0, refs[0].1), RangeRef::new(CellRef::new(4, 3), CellRef::new(5, 5)));
+        assert_eq!(edit.text, "=\"é\"&'Q1!It''s ñ'!$D$5:F6");
+        assert_eq!(edit.caret, edit.text.chars().count(), "caret counts chars, not bytes");
+    }
+
+    #[test]
     fn dragging_a_trim_reference_keeps_its_operator() {
         for (formula, moved) in [("=SUM($A$1.:.$B2)", "=SUM($C$3.:.$D4)"), ("=SUM(A1.:B2)", "=SUM(C3.:D4)"), ("=SUM(A1:.$B$2)", "=SUM(C3:.$D$4)")] {
             let mut edit = EditState::new(0, 0, CellRef::new(0, 0), formula.into(), false, false);
