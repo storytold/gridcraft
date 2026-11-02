@@ -47,7 +47,7 @@ pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
 fn tip_text(ui: &Ui, tip: &str) -> String {
     // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
     let name = tr(ui, tip).replace('\n', " ");
-    let text = match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+    let text = match tooltip_shortcut(tip, ui.ctx().os() == egui::os::OperatingSystem::Mac) {
         Some(keys) => format!("{name} ({keys})"),
         None => name,
     };
@@ -183,6 +183,12 @@ fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], 
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    small_button_accent(ui, icon, None, label, tip, dropdown)
+}
+
+/// Small ribbon button whose icon takes an accent colour (see [`icons::paint_accent`]); `None`
+/// draws it like [`small_button`]. A labelled button reports its label to accessibility.
+pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let label = tr(ui, label);
@@ -194,7 +200,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text, accent);
     if !label.is_empty() {
         ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
     }
@@ -746,6 +752,25 @@ mod tooltip_shortcut_tests {
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
             assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
             assert!(mac.starts_with('⌘') || mac.starts_with('⌃'), "{name}: {mac}");
+        }
+    }
+
+    #[test]
+    fn ribbon_tip_text_obeys_runtime_os() {
+        use egui::os::OperatingSystem;
+
+        for (os, expected) in [(OperatingSystem::Windows, "Flash Fill (Ctrl+E)"), (OperatingSystem::Mac, "Flash Fill (⌘E)")] {
+            let ctx = egui::Context::default();
+            ctx.set_os(os);
+
+            let mut actual = String::new();
+
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                actual = super::tip_text(ui, "Flash Fill");
+            });
+            output.textures_delta.clear();
+
+            assert_eq!(actual, expected, "{os:?}");
         }
     }
 }
