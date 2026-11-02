@@ -483,3 +483,36 @@ fn a_single_quoted_default_namespace_is_not_doubled() {
     assert!(text.contains("name=\"prices\""), "our connection is merged in");
     assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
 }
+
+#[test]
+/// A foreign root-level `xmlns:gc` binding (another add-in's own gc prefix) is preserved,
+/// and GridCraft's generated elements declare their namespace inline: the foreign `gc:`
+/// elements keep their original XML identity, and ours never hijack the root's prefix.
+fn a_foreign_gc_prefix_binding_is_preserved() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:gc="http://foreign-addin.example/ns"><gc:connection id="4" name="Theirs" type="4"><gc:parameter/></gc:connection><connection id="2" name="Old" type="5"><extLst><ext uri="{b7f3a1d2-6c5e-4a8b-9d0f-gridcraftwebq}"><gc:webQuery/></ext></extLst></connection></connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("xmlns:gc=\"http://foreign-addin.example/ns\""), "the foreign gc binding is preserved on the root: {text}");
+    assert!(text.contains("<gc:connection "), "the foreign gc-prefixed connection is kept");
+    assert!(text.contains("xmlns:gc=\"https://gridcraft.app/ns/webquery\""), "GridCraft's namespace is declared inline on its own ext");
+    assert_eq!(text.matches("http://foreign-addin.example/ns").count(), 1, "the foreign binding appears exactly once");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+    // The merged part reads back: our connection is ours, the foreign one not claimed.
+    let (back, _) = crate::read_xlsx(&bytes).expect("reopens");
+    assert!(back.web_queries.iter().any(|q| q.name == "prices"), "our connection reads back through the inline declaration");
+}

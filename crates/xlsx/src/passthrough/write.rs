@@ -465,7 +465,11 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // stays whole); the xmlns declarations are copied verbatim except GridCraft's own.
     let kept: Vec<String> = raw_attributes(&raw[tag_start..=tag_end])
         .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
-        .filter(|a| !a.starts_with("xmlns:gc=") && a.trim_end_matches(['\"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
+        // Nothing is filtered by name shape: a foreign `xmlns:gc` binding (another add-in's
+        // own gc prefix) is KEPT - the preserved `gc:` elements it binds must keep their
+        // identity. GridCraft never reuses the root's gc prefix; it declares its own
+        // nonconflicting one locally on the elements it writes.
+        .filter(|a| a.trim_end_matches(['"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
         .collect();
     let kept_decls: String = kept.iter().map(|a| format!(" {a}")).collect();
     // The rebuilt root keeps the SpreadsheetML namespace one way or another: an unprefixed
@@ -481,9 +485,12 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
     // SpreadsheetML default (checking the raw tag would see the dropped one and skip it).
     let has_default_ns = kept.iter().any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
     let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
+    // GridCraft's namespace rides on its OWN generated elements (the prefix declared
+    // inline), never on the root: a foreign root-level `xmlns:gc` binding belongs to the
+    // foreign elements and stays theirs.
+    let gc = format!(" xmlns:gc=\"{}\"", crate::write::GC_NS);
     let mut w = String::from(crate::write::XML_DECL);
-    let _ = write!(w, "<connections{kept_decls}{default_ns} xmlns:gc=\"{}\">",
-        crate::write::GC_NS);
+    let _ = write!(w, "<connections{kept_decls}{default_ns}>");
     w.push_str(&foreign);
     // Sparse foreign ids (Excel's own files reuse numbers freely): the new connections
     // start past the highest id the part holds, never at a count that could collide.
@@ -501,7 +508,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         let tid = q.table_id.unwrap_or(0);
         let synced = q.last_synced.unwrap_or(0);
         let _ = write!(w,
-            "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
+            "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"{gc}><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
             id,
             crate::xml::esc_attr(&q.name),
             crate::xml::esc_attr(&q.url),
