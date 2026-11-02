@@ -1,6 +1,8 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, menu_items, popup_command, sep};
-use super::home::autosum_menu;
-use super::{Icon, SheetApp, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
+use super::{Cat, Icon, SheetApp, Tokens, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
+use crate::function_library;
+use crate::icons::FnGlyph;
+use crate::widgets::small_button_accent;
 
 /// How many cells Formulas › Error Checking › Circular References lists.
 const CIRCULAR_MENU_LIMIT: usize = 100;
@@ -19,6 +21,57 @@ fn circular_references(app: &SheetApp) -> Vec<(usize, String, String)> {
         .collect()
 }
 
+/// What a Function Library button's menu lists.
+#[derive(Clone, Copy, Debug)]
+enum LibraryMenu {
+    Recent,
+    Category(&'static str),
+    More,
+}
+
+/// One Function Library category button: its label, its menu, the glyph and colour of its book,
+/// and the control id its keytip sequence targets in `keytips.json`.
+struct LibraryItem {
+    label: &'static str,
+    menu: LibraryMenu,
+    book: (FnGlyph, Cat),
+    keytip: &'static str,
+}
+
+impl LibraryItem {
+    const fn new(label: &'static str, menu: LibraryMenu, book: (FnGlyph, Cat), keytip: &'static str) -> LibraryItem {
+        LibraryItem { label, menu, book, keytip }
+    }
+}
+
+/// The Function Library categories after AutoSum, column by column (three rows each). Every
+/// category has its own colour.
+const LIBRARY: [LibraryItem; 8] = [
+    LibraryItem::new("Recently Used", LibraryMenu::Recent, (FnGlyph::Star, Cat::Amber), "formulas.recentlyUsed"),
+    LibraryItem::new("Financial", LibraryMenu::Category("Financial"), (FnGlyph::Coins, Cat::Green), "formulas.financial"),
+    LibraryItem::new("Logical", LibraryMenu::Category("Logical"), (FnGlyph::Question, Cat::Purple), "formulas.logical"),
+    LibraryItem::new("Text", LibraryMenu::Category("Text"), (FnGlyph::Letter, Cat::Blue), "formulas.text"),
+    LibraryItem::new("Date & Time", LibraryMenu::Category("DateTime"), (FnGlyph::Clock, Cat::Orange), "formulas.dateTime"),
+    LibraryItem::new("Lookup & Reference", LibraryMenu::Category("Lookup"), (FnGlyph::Magnifier, Cat::Teal), "formulas.lookup"),
+    LibraryItem::new("Math & Trig", LibraryMenu::Category("MathTrig"), (FnGlyph::Theta, Cat::Red), "formulas.mathTrig"),
+    LibraryItem::new("More Functions", LibraryMenu::More, (FnGlyph::Dots, Cat::Slate), "formulas.moreFunctions"),
+];
+
+/// One Function Library category button: a book in the category's colour that opens the
+/// category's menu.
+fn library_button(app: &mut SheetApp, ui: &mut Ui, item: &LibraryItem) {
+    let (glyph, cat) = item.book;
+    let accent = Some(Tokens::get(ui.ctx()).cat(cat));
+    let anchor = small_button_accent(ui, Icon::FnBook(glyph), accent, item.label, item.label, true);
+    control_keytip(app, ui, &anchor, item.keytip);
+    let forced = invoke(app, item.keytip);
+    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| match item.menu {
+        LibraryMenu::Recent => function_library::recent_menu(app, ui),
+        LibraryMenu::Category(id) => function_library::category_menu(app, ui, id),
+        LibraryMenu::More => function_library::more_menu(app, ui),
+    });
+}
+
 /// The Formulas tab: Insert Function, AutoSum, the function-category menus (names in the formula
 /// language, descriptions in the interface language), defined names, auditing and calculation.
 pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
@@ -27,42 +80,21 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
-    let (s, sa) = big_split_button(ui, Icon::Sum, "AutoSum", "AutoSum");
-    control_keytip(app, ui, &sa, "formulas.autoSum");
-    if s.clicked() {
+    // Function Library: AutoSum as a big split button, then the categories in columns of three
+    // labelled small buttons, as Excel lays the group out when the window is not wide enough for
+    // a big button per category.
+    let (sum, sum_arrow) = big_split_button(ui, Icon::Sum, "AutoSum", "AutoSum");
+    control_keytip(app, ui, &sum_arrow, "formulas.autoSum");
+    if sum.clicked() {
         act(app, "formulas.autoSum", json!({}));
     }
-    egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
-    for (label, cat, cid) in [
-        ("Financial", "Financial", "formulas.financial"),
-        ("Logical", "Logical", "formulas.logical"),
-        ("Text", "Text", "formulas.text"),
-        ("Date &\nTime", "DateTime", "formulas.dateTime"),
-        ("Lookup &\nReference", "Lookup", "formulas.lookup"),
-        ("Math &\nTrig", "MathTrig", "formulas.mathTrig"),
-        ("More\nFunctions", "Statistical", "formulas.moreFunctions"),
-    ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
-        control_keytip(app, ui, &r, cid);
-        let forced_c = invoke(app, cid);
-        egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
-            ui.set_max_height(420.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for f in gridcraft_engine::cmd::formulas::function_list() {
-                    if f["category"].as_str() == Some(cat)
-                        && let Some(n) = f["name"].as_str()
-                    {
-                        let locale = app.ui.language.formula_locale();
-                        let name =
-                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet())).unwrap_or(n);
-                        let desc = crate::formula_locale::description(n, locale, app.ui.language).unwrap_or_default();
-                        if ui.button(name).on_hover_text(desc).clicked() {
-                            app.run_or_alert("formulas.insertFunction", json!({"name": n}));
-                            ui.close();
-                        }
-                    }
-                }
-            });
+    let forced = invoke(app, "formulas.autoSum");
+    egui::Popup::menu(&sum_arrow).open_memory(popup_command(forced, sum_arrow.clicked())).show(|ui| function_library::auto_sum_menu(app, ui));
+    for column in LIBRARY.chunks(3) {
+        ui.vertical(|ui| {
+            for item in column {
+                library_button(app, ui, item);
+            }
         });
     }
     sep(ui);
@@ -148,6 +180,14 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
                 app.open_dialog("errorChecking", json!({}));
             }
+            // A cell without an error, or one its error starts in without references, has no
+            // arrows: the ones shown stay.
+            if ui.button(lang.tr("Trace Error")).clicked()
+                && let Ok(r) = app.run("formulas.traceError", json!({}))
+                && r["arrows"].as_array().is_some_and(|a| !a.is_empty())
+            {
+                app.grid.trace = crate::grid::Trace::new(app, r);
+            }
             let circular = circular_references(app);
             ui.add_enabled_ui(!circular.is_empty(), |ui| {
                 ui.menu_button(lang.tr("Circular References"), |ui| {
@@ -199,4 +239,22 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "formulas.calculateSheet", json!({}));
         }
     });
+}
+
+#[cfg(test)]
+mod function_library_tests {
+    use super::*;
+
+    #[test]
+    fn every_function_library_book_has_its_own_glyph_and_colour() {
+        let books: Vec<(FnGlyph, Cat)> = LIBRARY.iter().map(|i| i.book).collect();
+        assert_eq!(books.len(), 8, "every category is a coloured book");
+        for (i, (glyph, cat)) in books.iter().enumerate() {
+            assert!(books.iter().skip(i + 1).all(|(g, c)| g != glyph && c != cat), "{glyph:?} / {cat:?} is used twice");
+        }
+        assert!(matches!(LIBRARY.first().map(|i| i.menu), Some(LibraryMenu::Recent)));
+        for item in &LIBRARY {
+            assert!(!keytip_table::sequences_for(item.keytip).is_empty(), "{} has a keytip sequence", item.label);
+        }
+    }
 }

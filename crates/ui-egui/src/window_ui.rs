@@ -26,15 +26,19 @@ pub struct WindowUi {
     selected_chart: Option<u32>,
     tab_run: Option<(u64, usize, u32, CellRef)>,
     open_switch_windows: bool,
+    /// The ribbon tab this window shows. A contextual tab depends on this window's selection, so
+    /// another window's frame must not reset it.
+    ribbon_tab: String,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
 }
 
 impl WindowUi {
     /// A new window's state. The last border, fill and font colour picked carry over, as they are
-    /// the user's recent choices rather than the window's.
-    fn fresh(like: &grid::GridState) -> WindowUi {
+    /// the user's recent choices rather than the window's; so does the ribbon tab.
+    fn fresh(like: &grid::GridState, ribbon_tab: &str) -> WindowUi {
         WindowUi {
+            ribbon_tab: ribbon_tab.to_string(),
             grid: grid::GridState {
                 last_border: like.last_border.clone(),
                 last_fill: like.last_fill.clone(),
@@ -64,6 +68,7 @@ impl SheetApp {
             selected_chart,
             tab_run,
             open_switch_windows,
+            ribbon_tab,
             mode,
         } = w;
         std::mem::swap(&mut self.editor, editor);
@@ -79,6 +84,7 @@ impl SheetApp {
         std::mem::swap(&mut self.selected_chart, selected_chart);
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
+        std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
         std::mem::swap(&mut self.session.mode, mode);
     }
 
@@ -100,7 +106,7 @@ impl SheetApp {
             self.ui_window = active;
             return;
         };
-        let mut outgoing = WindowUi::fresh(&self.grid);
+        let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab);
         self.swap_window_ui(&mut outgoing);
         if self.session.window(previous).is_some() {
             self.parked.insert(previous, outgoing);
