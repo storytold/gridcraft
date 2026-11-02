@@ -2,16 +2,14 @@
 
 use super::graph::{Graph, HashMap, HashSet, Key};
 use super::pass_host::{finish_formula, spill_cells_in_range};
-use crate::eval::{Evaluator, Host, MAX_CELLS};
-use gridcraft_core::{Array, CellRef, RangeRef, Value};
-use gridcraft_formula::Expr;
+use crate::eval::{Evaluator, Host, MAX_CELLS, binary_values};
+use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
+use gridcraft_formula::{BinOp, Expr, SheetSel, UnOp};
 use gridcraft_model::Workbook;
 use std::thread::ThreadId;
 
-const CHUNK: usize = 32;
-
 pub(super) struct EvalLevelOut {
-    pub values: HashMap<Key, Value>,
+    pub values: Vec<(Key, Value)>,
     pub spills: HashMap<Key, std::sync::Arc<Array>>,
     pub deferred: Vec<Key>,
     pub threads: HashMap<Key, ThreadId>,
@@ -250,27 +248,220 @@ impl Host for FrozenHost<'_> {
 #[cfg(not(target_arch = "wasm32"))]
 struct FrozenIn<'a> {
     wb: &'a Workbook,
-    exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+    graph: &'a Graph,
     prior: &'a HashMap<Key, Value>,
     spills: &'a HashMap<Key, std::sync::Arc<Array>>,
     spill_index: &'a SpillIndex,
     now: f64,
     pending_parallel: &'a HashSet<Key>,
+    in_pass: &'a HashSet<Key>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct WorkerOut {
-    values: HashMap<Key, Value>,
+    values: Vec<(Key, Value)>,
     spills: HashMap<Key, std::sync::Arc<Array>>,
     deferred: Vec<Key>,
     threads: HashMap<Key, ThreadId>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn eval_flat_scalar(wb: &Workbook, sheet: usize, expr: &Expr, prior: &HashMap<Key, Value>, pending_parallel: &HashSet<Key>) -> Option<Value> {
+    eval_flat_scalar_at(wb, sheet, expr, 0, prior, pending_parallel)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn eval_flat_scalar_at(
+    wb: &Workbook,
+    sheet: usize,
+    expr: &Expr,
+    depth: u32,
+    prior: &HashMap<Key, Value>,
+    pending_parallel: &HashSet<Key>,
+) -> Option<Value> {
+    if depth > 64 {
+        return None;
+    }
+    let next = depth + 1;
+    match expr {
+        Expr::Paren(e) => eval_flat_scalar_at(wb, sheet, e, next, prior, pending_parallel),
+        Expr::Number(n) => Some(Value::number(*n)),
+        Expr::Bool(b) => Some(Value::Bool(*b)),
+        Expr::Text(t) => Some(Value::Text(std::sync::Arc::clone(t))),
+        Expr::Error(e) => Some(Value::Error(*e)),
+        Expr::Unary(op, e) => {
+            let Value::Number(n) = eval_flat_scalar_at(wb, sheet, e, next, prior, pending_parallel)? else {
+                return None;
+            };
+            match op {
+                UnOp::Neg => Some(Value::number(-n)),
+                UnOp::Plus => Some(Value::number(n)),
+                UnOp::Percent => Some(Value::number(n / 100.0)),
+                UnOp::At | UnOp::Spill | UnOp::Trim(_) => None,
+            }
+        }
+        Expr::Ref(r) => {
+            if !matches!(r.sheet, SheetSel::Current) {
+                return None;
+            }
+            let range = r.range();
+            if !range.is_single() {
+                return None;
+            }
+            let key = (sheet, range.start);
+            if pending_parallel.contains(&key) && !prior.contains_key(&key) {
+                return None;
+            }
+            if let Some(v) = prior.get(&key) {
+                return Some(v.clone());
+            }
+            Some(wb.sheet(sheet)?.value(range.start))
+        }
+        Expr::Binary(op, a, b) if !matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect) => {
+            let x = eval_flat_scalar_at(wb, sheet, a, next, prior, pending_parallel)?;
+            let y = eval_flat_scalar_at(wb, sheet, b, next, prior, pending_parallel)?;
+            Some(binary_values(*op, &x, &y, wb.date_system))
+        }
+        Expr::Call(name, args) if matches!(name.as_str(), "SUM" | "COUNT" | "AVERAGE") => {
+            eval_flat_agg(wb, sheet, name, args, next, prior, pending_parallel)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn fold_stored_ref(
+    wb: &Workbook,
+    sheet: usize,
+    range: RangeRef,
+    sum: &mut f64,
+    count: &mut u64,
+    error: &mut Option<CellError>,
+    prior: &HashMap<Key, Value>,
+    pending_parallel: &HashSet<Key>,
+) -> bool {
+    let Some(sh) = wb.sheet(sheet) else { return false };
+    if !sh.spill.is_empty() || !sh.spill_ranges.is_empty() {
+        return false;
+    }
+    let mut accept = |cell: &gridcraft_model::Cell, c: CellRef| -> bool {
+        if cell.formula.is_some() && (prior.contains_key(&(sheet, c)) || pending_parallel.contains(&(sheet, c))) {
+            return false;
+        }
+        match &cell.value {
+            Value::Number(n) => {
+                *sum += *n;
+                *count = count.saturating_add(1);
+                true
+            }
+            Value::Error(e) => {
+                if error.is_none() {
+                    *error = Some(*e);
+                }
+                true
+            }
+            Value::Array(_) => false,
+            _ => true,
+        }
+    };
+    if range.height() == 1 {
+        let row = range.start.row;
+        for (col, cell) in sh.cells.row(row, range.start.col, range.end.col) {
+            if !accept(cell, CellRef::new(row, col)) {
+                return false;
+            }
+        }
+    } else {
+        for (c, cell) in sh.cells.iter_range(range) {
+            if !accept(cell, c) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn eval_flat_agg(
+    wb: &Workbook,
+    sheet: usize,
+    name: &str,
+    args: &[Expr],
+    depth: u32,
+    prior: &HashMap<Key, Value>,
+    pending_parallel: &HashSet<Key>,
+) -> Option<Value> {
+    if depth > 64 {
+        return None;
+    }
+    if args.is_empty() {
+        return Some(Value::Error(CellError::Value));
+    }
+    let mut sum = 0.0;
+    let mut count = 0u64;
+    let mut error: Option<CellError> = None;
+    for a in args {
+        match a {
+            Expr::Paren(e) => match eval_flat_scalar_at(wb, sheet, e, depth + 1, prior, pending_parallel)? {
+                Value::Number(n) => {
+                    sum += n;
+                    count = count.saturating_add(1);
+                }
+                Value::Error(e) => {
+                    if error.is_none() {
+                        error = Some(e);
+                    }
+                }
+                Value::Bool(_) | Value::Text(_) | Value::Empty | Value::Array(_) => return None,
+            },
+            Expr::Number(n) => match Value::number(*n) {
+                Value::Number(n) => {
+                    sum += n;
+                    count = count.saturating_add(1);
+                }
+                Value::Error(e) => {
+                    if error.is_none() {
+                        error = Some(e);
+                    }
+                }
+                _ => return None,
+            },
+            Expr::Ref(r) if matches!(r.sheet, SheetSel::Current) => {
+                if !fold_stored_ref(wb, sheet, r.range(), &mut sum, &mut count, &mut error, prior, pending_parallel) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let value = if name != "COUNT"
+        && let Some(e) = error
+    {
+        Value::Error(e)
+    } else if name == "COUNT" {
+        Value::number(count as f64)
+    } else if name == "AVERAGE" {
+        if count == 0 { Value::Error(CellError::Div0) } else { Value::number(sum / count as f64) }
+    } else {
+        Value::number(sum)
+    };
+    Some(value)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn eval_frozen(inp: &FrozenIn<'_>, k: Key, legacy: Option<RangeRef>) -> Result<(Value, Option<std::sync::Arc<Array>>), ()> {
-    let Some(expr) = inp.exprs.get(&k) else {
+    let Some(expr) = inp.graph.nodes.get(&k).and_then(|n| n.expr.as_ref()) else {
         return Ok((inp.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default(), None));
     };
+    if legacy.is_none()
+        && let Some(v) = eval_flat_scalar(inp.wb, k.0, expr, inp.prior, inp.pending_parallel)
+        && !v.is_empty()
+        && !matches!(v, Value::Array(_))
+    {
+        return Ok((v, None));
+    }
     let mut host = FrozenHost {
         wb: inp.wb,
         prior: inp.prior,
@@ -289,29 +480,29 @@ fn eval_frozen(inp: &FrozenIn<'_>, k: Key, legacy: Option<RangeRef>) -> Result<(
     if host.deferred {
         return Err(());
     }
-    Ok(finish_formula(inp.wb, inp.exprs, k, expr, v, legacy, true))
+    Ok(finish_formula(inp.wb, inp.in_pass, k, expr, v, legacy, true))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn eval_level(
     wb: &Workbook,
     graph: &Graph,
-    exprs: &HashMap<Key, std::sync::Arc<Expr>>,
     keys: &[Key],
     prior: &HashMap<Key, Value>,
     spills: &HashMap<Key, std::sync::Arc<Array>>,
     now: f64,
     threads: usize,
     pending: &HashSet<Key>,
+    in_pass: &HashSet<Key>,
 ) -> Option<EvalLevelOut> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (wb, graph, exprs, keys, prior, spills, now, threads, pending);
+        let _ = (wb, graph, keys, prior, spills, now, threads, pending, in_pass);
         None
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        eval_level_native(wb, graph, exprs, keys, prior, spills, now, threads, pending)
+        eval_level_native(wb, graph, keys, prior, spills, now, threads, pending, in_pass)
     }
 }
 
@@ -320,50 +511,46 @@ pub(super) fn eval_level(
 fn eval_level_native(
     wb: &Workbook,
     graph: &Graph,
-    exprs: &HashMap<Key, std::sync::Arc<Expr>>,
     keys: &[Key],
     prior: &HashMap<Key, Value>,
     spills: &HashMap<Key, std::sync::Arc<Array>>,
     now: f64,
     threads: usize,
     pending: &HashSet<Key>,
+    in_pass: &HashSet<Key>,
 ) -> Option<EvalLevelOut> {
     if keys.is_empty() {
-        return Some(EvalLevelOut { values: HashMap::default(), spills: HashMap::default(), deferred: Vec::new(), threads: HashMap::default() });
+        return Some(EvalLevelOut { values: Vec::new(), spills: HashMap::default(), deferred: Vec::new(), threads: HashMap::default() });
     }
     let spill_index = SpillIndex::build(spills);
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let work = || {
-        let mut out = WorkerOut { values: HashMap::default(), spills: HashMap::default(), deferred: Vec::new(), threads: HashMap::default() };
-        let inp = FrozenIn { wb, exprs, prior, spills, spill_index: &spill_index, now, pending_parallel: pending };
-        loop {
-            let i = next.fetch_add(CHUNK, std::sync::atomic::Ordering::Relaxed);
-            let Some(chunk) = keys.get(i..keys.len().min(i.saturating_add(CHUNK))) else { break };
-            if chunk.is_empty() {
-                break;
-            }
-            for &k in chunk {
-                let legacy = graph.nodes.get(&k).and_then(|n| n.legacy);
-                match eval_frozen(&inp, k, legacy) {
-                    Ok((v, sp)) => {
-                        if let Some(a) = sp {
-                            out.spills.insert(k, a);
-                        }
-                        out.values.insert(k, v);
-                        out.threads.insert(k, std::thread::current().id());
-                    }
-                    Err(()) => out.deferred.push(k),
-                }
-            }
-        }
-        out
-    };
+    let spill_ref = &spill_index;
+    let pieces = threads.clamp(1, keys.len());
+    let width = keys.len().div_ceil(pieces);
+    let slices: Vec<&[Key]> = keys.chunks(width).collect();
     let mut outs: Vec<WorkerOut> = Vec::new();
     let mut failed = false;
     std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(threads);
-        for _ in 0..threads.min(keys.len().div_ceil(CHUNK)) {
-            match std::thread::Builder::new().name("gridcraft-calc".into()).spawn_scoped(scope, work) {
+        let mut handles = Vec::new();
+        for chunk in slices {
+            match std::thread::Builder::new().name("gridcraft-calc".into()).spawn_scoped(scope, move || {
+                let mut out = WorkerOut { values: Vec::new(), spills: HashMap::default(), deferred: Vec::new(), threads: HashMap::default() };
+                let inp = FrozenIn { wb, graph, prior, spills, spill_index: spill_ref, now, pending_parallel: pending, in_pass };
+                for &k in chunk {
+                    let legacy = graph.nodes.get(&k).and_then(|n| n.legacy);
+                    match eval_frozen(&inp, k, legacy) {
+                        Ok((v, sp)) => {
+                            if let Some(a) = sp {
+                                out.spills.insert(k, a);
+                            }
+                            out.values.push((k, v));
+                            #[cfg(test)]
+                            out.threads.insert(k, std::thread::current().id());
+                        }
+                        Err(()) => out.deferred.push(k),
+                    }
+                }
+                out
+            }) {
                 Ok(h) => handles.push(h),
                 Err(_) => break,
             }
@@ -379,7 +566,7 @@ fn eval_level_native(
     if failed {
         return None;
     }
-    let mut values = HashMap::default();
+    let mut values = Vec::new();
     let mut spill_out = HashMap::default();
     let mut deferred = Vec::new();
     let mut thread_map = HashMap::default();

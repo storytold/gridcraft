@@ -1,4 +1,4 @@
-use super::graph::{HashMap, HashSet, Key};
+use super::graph::{Graph, HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
@@ -19,7 +19,8 @@ type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
-    exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+    graph: &'a Graph,
+    in_pass: &'a HashSet<Key>,
     pub(super) results: HashMap<Key, Value>,
     pub(super) pending: HashSet<Key>,
     in_progress: HashSet<Key>,
@@ -89,15 +90,18 @@ pub(super) struct PassHost<'a> {
     python: HashMap<Key, Value>,
     /// Thread that evaluated each formula finished in this pass (merged into [`Calc::last_formula_thread`]).
     pub(super) thread_log: Vec<(Key, std::thread::ThreadId)>,
+    /// Parallel results not yet folded into `results`, in level order.
+    pub(super) direct: Vec<(Key, Value)>,
 }
 
 impl<'a> PassHost<'a> {
-    pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+    pub(super) fn new(wb: &'a Workbook, graph: &'a Graph, in_pass: &'a HashSet<Key>, rng: &'a mut u64, now: f64) -> Self {
         PassHost {
             wb,
-            exprs,
-            results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
-            pending: exprs.keys().copied().collect(),
+            graph,
+            in_pass,
+            results: HashMap::with_capacity_and_hasher(in_pass.len(), Default::default()),
+            pending: in_pass.iter().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
@@ -129,6 +133,7 @@ impl<'a> PassHost<'a> {
             sums: HashMap::default(),
             python: HashMap::default(),
             thread_log: Vec::new(),
+            direct: Vec::new(),
         }
     }
 
@@ -146,6 +151,10 @@ impl<'a> PassHost<'a> {
 
     pub(super) fn now_value(&self) -> f64 {
         self.now
+    }
+
+    pub(super) fn in_pass(&self) -> &HashSet<Key> {
+        self.in_pass
     }
 }
 
@@ -191,7 +200,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
                 // A formula or Python cell recalculated in this pass lays its array out again.
                 *o != anchor
                     && r.contains(c)
-                    && !host.exprs.contains_key(&(sheet, *o))
+                    && !host.in_pass.contains(&(sheet, *o))
                     && !host.python.contains_key(&(sheet, *o))
                     && standing.outranks((sheet, *o), (sheet, anchor))
             })
@@ -250,15 +259,15 @@ pub(super) fn spill_cells_in_range(
 }
 
 /// [`spill_blocked`] for a worker that has no [`PassHost`]: no `Standing`, and a Python spill is
-/// not in `exprs`. The calling thread finishes formulas that need those.
-fn spill_blocked_wave(wb: &Workbook, exprs: &HashMap<Key, std::sync::Arc<Expr>>, (sheet, anchor): Key, a: &Array) -> bool {
+/// not in `in_pass` unless that cell is dirty. The calling thread finishes formulas that need those.
+fn spill_blocked_wave(wb: &Workbook, in_pass: &HashSet<Key>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = wb.sheet(sheet) else { return false };
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
     let own = sh.spill_ranges.get(&anchor);
     let spilled_over = |c: CellRef| {
-        !own.is_some_and(|o| o.contains(c)) && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !exprs.contains_key(&(sheet, *o)))
+        !own.is_some_and(|o| o.contains(c)) && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !in_pass.contains(&(sheet, *o)))
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
@@ -274,7 +283,7 @@ pub(super) fn stored_legacy(wb: &Workbook, k: Key) -> Option<RangeRef> {
 
 pub(super) fn finish_formula(
     wb: &Workbook,
-    exprs: &HashMap<Key, std::sync::Arc<Expr>>,
+    in_pass: &HashSet<Key>,
     k: Key,
     expr: &Expr,
     v: Value,
@@ -308,7 +317,7 @@ pub(super) fn finish_formula(
         return (v, spill);
     }
     match spill {
-        Some(a) if spill_blocked_wave(wb, exprs, k, &a) => (Value::Error(CellError::Spill), None),
+        Some(a) if spill_blocked_wave(wb, in_pass, k, &a) => (Value::Error(CellError::Spill), None),
         other => (v, other),
     }
 }
@@ -412,7 +421,7 @@ impl PassHost<'_> {
         if let Some(result) = self.python.get(&k).cloned() {
             return self.python_result(k, result);
         }
-        let Some(expr) = self.exprs.get(&k) else {
+        let Some(expr) = self.graph.nodes.get(&k).and_then(|n| n.expr.as_ref()) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
         if self.suspend.is_some() {
@@ -448,10 +457,11 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        let expr_ref: &Expr = &expr;
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
-            ev.value(&expr)
+            ev.value(expr_ref)
         };
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
@@ -549,6 +559,7 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        self.thread_log.push((k, std::thread::current().id()));
         v
     }
 
