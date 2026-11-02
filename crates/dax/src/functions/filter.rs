@@ -33,8 +33,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         EXCEL,
         "Returns a table ignoring any filters on it, or every value of a column ignoring the \
          filters on that column. As a table expression it materialises all rows (or all distinct \
-         values of one or more columns); without arguments it is only valid as a CALCULATE or \
-         CALCULATETABLE modifier and removes every filter from the filter context.",
+         values of one or more columns). Without arguments it works only inside \
+         CALCULATE/CALCULATETABLE and clears the whole filter context.",
         &["ALL ( Sales )", "ALL ( Sales[Region] )", "ALL ( Sales, Sales[Region], Sales[Country] )", "ALL ( )"],
     ),
     spec(
@@ -130,9 +130,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Table])],
         ReturnType::Table,
         INTERNAL,
-        "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, forces a filter table to affect the measures \
-         even when it does not change the current filter context, such as an empty table. Used \
-         internally by Power BI composite models.",
+        "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, forces a filter table to influence the \
+         measures even if the current filter context is unchanged, for example when the table is \
+         empty. Used internally by Power BI composite models.",
         &["ALWAYSAPPLY ( FILTER ( VALUES ( Product[Color] ), FALSE ) )"],
     ),
     spec(
@@ -159,10 +159,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Table]), variadic(&[ParamKind::Table, ParamKind::Any])],
         ReturnType::Table,
         EXCEL,
-        "Evaluates a table expression in a filter context modified by its filter arguments, using \
+        "Runs a table expression under the filter context built by its filter arguments, with \
          the same filter semantics and context transition as CALCULATE but returning a table \
          instead of a scalar.",
-        &["CALCULATETABLE ( VALUES ( Product[Color] ), Product[Brand] = \"Contoso\" )"],
+        &["CALCULATETABLE ( VALUES ( Product[Color] ), Product[Brand] = \"GridCraft\" )"],
     ),
     spec(
         "DEPENDON",
@@ -173,9 +173,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[variadic(&[ParamKind::Table, ParamKind::Column])],
         ReturnType::Table,
         INTERNAL,
-        "Makes a table expression depend on outer columns: its first columns are matched, in \
-         order, against the current values of the listed outer columns, acting as an inner join \
-         and hiding the matched columns from the result. Used internally by Power BI composite \
+        "Anchors a table expression to outer columns: its first columns are matched, in order, \
+         against the current values of the listed outer columns, acting as an inner join and \
+         hiding the matched columns from the result. Used internally by Power BI composite \
          models.",
         &["DEPENDON ( Sales, Sales[OrderDate] )", "DEPENDON ( FILTER ( Sales, Sales[Amount] > 0 ), Sales[OrderDate] )"],
     ),
@@ -207,10 +207,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[variadic(&[ParamKind::Column, ParamKind::Any, ParamKind::Text, ParamKind::Any])],
         ReturnType::Table,
         INTERNAL,
-        "Builds a correlated join table over a set of groups for GROUPCROSSAPPLY or \
-         GROUPCROSSAPPLYTABLE: the group-by columns, the filter tables and the table scans are \
-         combined with autoexist semantics, and the literal separator only marks where the table \
-         scans begin. Used internally by Power BI composite models.",
+        "Internal helper for GROUPCROSSAPPLY and GROUPCROSSAPPLYTABLE that assembles the \
+         correlated join over a set of groups: group-by columns, filter tables and table scans \
+         are combined with autoexist semantics, and the literal separator only marks where the \
+         table scans begin. Used internally by Power BI composite models.",
         &["FILTERCLUSTER ( Product[Category], ALL ( Product ), \"\", ALL ( Sales ) )"],
     ),
     spec(
@@ -227,10 +227,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Column, ParamKind::Table]), variadic(&[ParamKind::Column, ParamKind::Any, ParamKind::Any])],
         ReturnType::Table,
         INTERNAL,
-        "Builds a summary table over a set of groups, cross-joining the filter tables into the \
-         filter context of the group-by columns without implicit autoexist. Each name/expression \
-         pair adds a column, and rows whose expressions are all blank are dropped. Used \
-         internally by Power BI composite models.",
+        "Aggregates by the group-by columns across cross-joined filter tables, with no implicit \
+         autoexist. Each name/expression pair adds a column, and rows whose expressions are all \
+         blank are dropped. Used internally by Power BI composite models.",
         &["GROUPCROSSAPPLY ( 'Date'[Year], ALL ( 'Date' ) )", "GROUPCROSSAPPLY ( 'Date'[Year], ALL ( 'Date' ), \"Sales\", [Sales Amount] )"],
     ),
     spec(
@@ -247,9 +246,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Column, ParamKind::Table]), variadic(&[ParamKind::Column, ParamKind::Any, ParamKind::Any])],
         ReturnType::Table,
         INTERNAL,
-        "Like GROUPCROSSAPPLY, builds a summary table over a set of groups, but the trailing \
-         name/table-expression pairs add whole tables evaluated under the filter tables' context \
-         instead of scalar expressions. Used internally by Power BI composite models.",
+        "Like GROUPCROSSAPPLY, but the trailing name/table-expression pairs add whole tables \
+         evaluated under the filter tables' context instead of scalar expressions. Used \
+         internally by Power BI composite models.",
         &["GROUPCROSSAPPLYTABLE ( 'Date'[Year], ALL ( 'Date' ), \"Colors\", VALUES ( 'Product'[Color] ) )"],
     ),
     spec(
@@ -389,8 +388,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Table])],
         ReturnType::Table,
         INTERNAL,
-        "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, keeps a table expression permanently hidden \
-         from the filter context even when its columns carry lineage, as if they were extension \
+        "In GROUPCROSSAPPLY or GROUPCROSSAPPLYTABLE, keeps a table expression out of the filter \
+         context permanently, even when its columns carry lineage, as if they were extension \
          columns. Used internally by Power BI composite models.",
         &["NONFILTER ( VALUES ( Product[Color] ) )"],
     ),

@@ -99,9 +99,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Text])],
         ReturnType::Integer,
         FLAGS,
-        "Returns the number of items in a delimited path, including the current item, so the path \
-         of a root node has length 1. The path is normally the result of PATH, but any text with \
-         vertical-bar separators (including a literal such as \"123|456|789|764\") is accepted.",
+        "Counts the items in a delimited path, the current item included, so a root node's path \
+         has length 1. The path is normally the result of PATH, but any text with vertical-bar \
+         separators (including a literal such as \"123|456|789|764\") is accepted.",
         &["PATHLENGTH ( Account[AccountPath] )", "PATHLENGTH ( \"123|456|789|764\" )"],
     ),
 ];

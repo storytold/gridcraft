@@ -81,7 +81,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          filter context before evaluating the table, making it a shortcut for CALCULATETABLE \
          with no additional filters; unlike CALCULATETABLE it accepts only a table reference, \
          not an arbitrary table expression.",
-        &["AVERAGEX ( Customer, COUNTROWS ( RELATEDTABLE ( Sales ) ) )", "RELATEDTABLE ( Sales )", "COUNTROWS ( RELATEDTABLE ( InternetSales ) )"],
+        &["AVERAGEX ( Customer, COUNTROWS ( RELATEDTABLE ( Sales ) ) )", "RELATEDTABLE ( Sales )", "COUNTROWS ( RELATEDTABLE ( OrderLines ) )"],
     ),
     spec(
         "USERELATIONSHIP",

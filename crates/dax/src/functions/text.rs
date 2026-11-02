@@ -43,7 +43,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          predicate, assuming without validating that different input combinations produce \
          different output strings. Choose a delimiter that cannot occur ambiguously in the \
          values, and remember that the delimiter itself is not escaped.",
-        &["COMBINEVALUES ( \" | \", Customer[Customer Name], Customer[Customer Code] )", "COMBINEVALUES ( \"-\", \"Contoso\", \"2020\", \"Q1\" )"],
+        &["COMBINEVALUES ( \" | \", Customer[Customer Name], Customer[Customer Code] )", "COMBINEVALUES ( \"-\", \"GridCraft\", \"2024\", \"Q1\" )"],
     ),
     spec(
         "CONCATENATE",
@@ -58,7 +58,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          performs the same concatenation and accepts any number of operands, so CONCATENATE is \
          only convenient for two. Non-text arguments are converted to text using the model's \
          locale rather than the caller's culture.",
-        &["CONCATENATE ( \"Contoso\", \" 2020\" )", "CONCATENATE ( Customer[Customer Name], Customer[Customer Code] )"],
+        &["CONCATENATE ( \"GridCraft\", \" 2024\" )", "CONCATENATE ( Customer[Customer Name], Customer[Customer Code] )"],
     ),
     spec(
         "CONCATENATEX",
@@ -98,9 +98,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         STANDARD,
         "Compares two text values and returns TRUE when they are exactly the same, including \
          case. The ordinary `=` comparison is case-insensitive, so EXACT is the way to force a \
-         case-sensitive and accent-sensitive test. An empty string and BLANK are considered the \
-         same value.",
-        &["EXACT ( \"SQLBI\", \"sqlbi\" )", "EXACT ( Sales[Code], \"A-100\" )"],
+         case-sensitive and accent-sensitive test. BLANK and an empty string compare equal here.",
+        &["EXACT ( \"GridCraft\", \"gridcraft\" )", "EXACT ( Sales[Code], \"A-100\" )"],
     ),
     spec(
         "FIND",
@@ -125,7 +124,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          wildcards are not interpreted; use SEARCH for case-insensitive or wildcard matching. If \
          the text is absent the function returns NotFoundValue when it is supplied, otherwise it \
          raises an error.",
-        &["FIND ( \"Red\", \"Contoso 2G MP3 Player E200 Red\" )", "FIND ( \"Red\", \"Contoso 2G MP3 Player E200 Red\", 1, BLANK () )"],
+        &["FIND ( \"Red\", \"GridCraft Cell S100 Red\" )", "FIND ( \"Red\", \"GridCraft Cell S100 Red\", 1, BLANK () )"],
     ),
     spec(
         "FIXED",
@@ -142,8 +141,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         DQ_RESTRICTED,
         "Rounds a number to the requested number of decimals and returns it as text, grouping the \
          integer part with commas unless NoCommas is TRUE. Decimals defaults to 2, and a negative \
-         value rounds to the left of the decimal point. The decimal and grouping separators come \
-         from the model locale, not from the caller's culture.",
+         value rounds to the left of the decimal separator. The decimal and grouping separators \
+         come from the model locale, not from the caller's culture.",
         &["FIXED ( 384518.16, 2, FALSE )", "FIXED ( 4392768.29, 0, TRUE )", "FIXED ( 6741548.73, -2 )"],
     ),
     spec(
@@ -185,9 +184,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Text])],
         ReturnType::Integer,
         STANDARD,
-        "Returns the number of characters in a text value as an integer, counting spaces. The \
-         length is measured in UTF-16 code units, so a character outside the Basic Multilingual \
-         Plane counts as two.",
+        "Character count of a text value, spaces included. Characters are UTF-16 code units, so \
+         a character outside the Basic Multilingual Plane counts as two.",
         &["LEN ( \"DAX is so cool!\" )", "LEN ( Customer[Customer Name] )"],
     ),
     spec(
@@ -291,7 +289,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          the search text treats `?` and `*` as wildcards with `~` as the escape character. If the \
          text is absent the function returns NotFoundValue when supplied, otherwise it raises an \
          error.",
-        &["SEARCH ( \"red\", \"Contoso 2G MP3 Player E200 Red\" )", "SEARCH ( \"player*blue\", \"Contoso 2G MP3 Player E200 Blue\", 1, BLANK () )"],
+        &["SEARCH ( \"red\", \"GridCraft Cell S100 Red\" )", "SEARCH ( \"cell*s100\", \"GridCraft Cell S100 Blue\", 1, BLANK () )"],
     ),
     spec(
         "SUBSTITUTE",
@@ -314,10 +312,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          every occurrence is replaced; otherwise only that occurrence is. Matching is \
          case-sensitive and accent-sensitive, so a difference in case leaves the text untouched, \
          and the search text is a literal substring rather than a pattern.",
-        &[
-            "SUBSTITUTE ( \"Contoso 2G MP3 Player E200 Red\", \"MP3 Player\", \"Zune-like player\" )",
-            "SUBSTITUTE ( \"Contoso 2G MP3 Player E200 Red\", \"2\", \"?\", 1 )",
-        ],
+        &["SUBSTITUTE ( \"GridCraft Cell S100 Red\", \"Cell\", \"Tablet\" )", "SUBSTITUTE ( \"GridCraft Cell S100 Red\", \"S\", \"X\", 1 )"],
     ),
     spec(
         "TOCSV",

@@ -36,7 +36,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          contiguous Date table covering whole fiscal years. FiscalYearEndMonth is 1-12 and \
          defaults to 12 (December); calculated tables and calculated columns are ignored, and \
          the model must contain at least one imported datetime column or the call fails.",
-        &["CALENDARAUTO ()", "CALENDARAUTO ( 3 )"],
+        &["CALENDARAUTO ()", "CALENDARAUTO ( 6 )"],
     ),
     spec(
         "DATE",
@@ -132,9 +132,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "HOUR ( <Datetime> ) returns the hour as an integer from 0 to 23. The argument may be a \
-         DateTime or text in time format such as \"16:48:00\"; text is parsed with the locale and \
-         time settings of the client computer.",
+        "HOUR ( <Datetime> ) gives the hour as an integer from 0 to 23. A string that holds only \
+         a time, such as \"16:48:00\", is accepted and parsed using the client computer's locale \
+         and time settings.",
         &["HOUR ( TIME ( 16, 48, 23 ) )", "HOUR ( Sales[Order Time] )"],
     ),
     spec(
@@ -146,9 +146,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "MINUTE ( <Datetime> ) returns the minute as an integer from 0 to 59. The argument may be \
-         a DateTime or text in time format such as \"16:48:00\"; text is parsed with the locale \
-         and time settings of the client computer.",
+        "MINUTE ( <Datetime> ) gives the minute as an integer from 0 to 59. A string that holds \
+         only a time, such as \"16:48:00\", is accepted and parsed using the client computer's \
+         locale and time settings.",
         &["MINUTE ( TIME ( 16, 48, 23 ) )", "MINUTE ( Sales[Order Time] )"],
     ),
     spec(
@@ -160,8 +160,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "MONTH ( <Date> ) returns the month as an integer from 1 (January) to 12 (December). A \
-         text argument is converted with the same rules as DATEVALUE.",
+        "MONTH ( <Date> ) gives 1 for January through 12 for December. Text arguments are read \
+         with the same rules as DATEVALUE.",
         &["MONTH ( DATE ( 2024, 1, 15 ) )", "MONTH ( Sales[Order Date] )"],
     ),
     spec(
@@ -201,8 +201,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::DateTime,
         FunctionFlags::new(false, true, false, true, true),
-        "NOW () returns the current date and time. Volatile: it is evaluated once per query and \
-         only changes when the model or the containing calculated column is refreshed, not \
+        "Date and time at the moment of evaluation. Volatile: it is evaluated once per query and \
+         moves only when the model or the containing calculated column is refreshed, not \
          continuously.",
         &["NOW ()", "YEAR ( NOW () )"],
     ),
@@ -215,9 +215,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "QUARTER ( <Date> ) returns the calendar quarter as an integer from 1 (January-March) to \
-         4 (October-December); it does not follow fiscal periods. A text argument is converted \
-         with the same rules as DATEVALUE.",
+        "QUARTER ( <Date> ) gives the calendar quarter number, 1 for January-March through 4 for \
+         October-December; fiscal periods are not followed. Text arguments are read with the \
+         same rules as DATEVALUE.",
         &["QUARTER ( DATE ( 2024, 5, 15 ) )", "QUARTER ( Sales[Order Date] )"],
     ),
     spec(
@@ -229,9 +229,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "SECOND ( <Datetime> ) returns the second as an integer from 0 to 59. The argument may be \
-         a DateTime or text in time format such as \"16:48:23\"; text is parsed with the locale \
-         and time settings of the client computer.",
+        "SECOND ( <Datetime> ) gives the second as an integer from 0 to 59. A string that holds \
+         only a time, such as \"16:48:23\", is accepted and parsed using the client computer's \
+         locale and time settings.",
         &["SECOND ( TIME ( 16, 48, 23 ) )", "SECOND ( Sales[Order Time] )"],
     ),
     spec(
@@ -258,8 +258,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::DateTime,
         standard(false),
         "TIMEVALUE ( <TimeText> ) converts a text time to a DateTime, ignoring any date portion \
-         of the string. Parsing depends on the locale and date/time settings of the client \
-         computer, so the same text can fail or mean a different time on another machine.",
+         of the string. Parsing uses the client computer's locale, date and time settings, so the \
+         same text can fail or mean a different time on another machine.",
         &["TIMEVALUE ( \"16:48:23\" )", "TIMEVALUE ( \"4:48:47 PM\" )"],
     ),
     spec(
@@ -285,9 +285,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::DateTime,
         FunctionFlags::new(false, true, false, true, true),
-        "UTCNOW () returns the current date and time expressed in Coordinated Universal Time. \
-         Volatile: it is evaluated once per query. The Power BI Service always runs on UTC and \
-         applies no daylight saving, so NOW and UTCNOW agree there.",
+        "UTCNOW () gives the date and time at the moment of evaluation, expressed in Coordinated \
+         Universal Time. Volatile: it is evaluated once per query. The Power BI Service always \
+         runs on UTC and applies no daylight saving, so NOW and UTCNOW agree there.",
         &["UTCNOW ()", "NOW () - UTCNOW ()"],
     ),
     spec(
@@ -327,10 +327,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date]), overload(&[ParamKind::Date, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "WEEKNUM ( <Date> [, <ReturnType>] ) returns the week number in the year. ReturnType 1 \
+        "WEEKNUM ( <Date> [, <ReturnType>] ) gives the week number within the year. ReturnType 1 \
          (default) and 2-17 use system 1, where the week containing January 1 is week 1; \
          ReturnType 21 uses ISO 8601 system 2, where the week containing the first Thursday is \
-         week 1. A text argument is converted with the same rules as DATEVALUE.",
+         week 1. Text arguments are read with the same rules as DATEVALUE.",
         &["WEEKNUM ( DATE ( 2024, 1, 15 ) )", "WEEKNUM ( Sales[Order Date], 21 )"],
     ),
     spec(
@@ -342,8 +342,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Integer,
         standard(false),
-        "YEAR ( <Date> ) returns the year as a four-digit integer in the range 1900-9999. A text \
-         argument is converted with the same rules as DATEVALUE.",
+        "YEAR ( <Date> ) gives the calendar year as a four-digit integer between 1900 and 9999. \
+         Text arguments are read with the same rules as DATEVALUE.",
         &["YEAR ( DATE ( 2024, 1, 1 ) )", "YEAR ( Sales[Order Date] )"],
     ),
     spec(

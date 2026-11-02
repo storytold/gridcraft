@@ -157,10 +157,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the month-to-date window: dates from the first day of the month through the last \
-         date visible in the filter context, restricted to dates present in the column. This is \
-         syntax sugar for DATESBETWEEN over the current month and requires a marked, contiguous \
-         date table.",
+        "Month-to-date window: from the first day of the month up to whatever latest date the \
+         filter context exposes, restricted to dates present in the column. This is syntax sugar \
+         for DATESBETWEEN over the current month and requires a marked, contiguous date table.",
         &["DATESMTD ( 'Date'[Date] )"],
     ),
     spec(
@@ -172,9 +171,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the quarter-to-date window: dates from the first day of the current quarter \
-         through the last date visible in the filter context. Quarter boundaries come from the \
-         marked date table, so an incomplete or unmarked date table breaks the window.",
+        "Quarter-to-date window: from the first day of the current quarter up to whatever latest \
+         date the filter context exposes. Quarter boundaries come from the marked date table, so \
+         an incomplete or unmarked date table breaks the window.",
         &["DATESQTD ( 'Date'[Date] )"],
     ),
     spec(
@@ -201,10 +200,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date]), overload(&[ParamKind::Date, ParamKind::Text])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the year-to-date window: dates from the start of the year through the last date \
-         visible in the filter context, keeping only dates present in the column. YearEndDate \
-         selects a fiscal year end (for example \"6/30\"); the date table must cover whole fiscal \
-         years and be marked as a date table for the window to be correct.",
+        "Year-to-date window: from the start of the year up to whatever latest date the filter \
+         context exposes, keeping only dates present in the column. YearEndDate selects a fiscal \
+         year end (for example \"6/30\"); the date table must cover whole fiscal years and be \
+         marked as a date table for the window to be correct.",
         &["DATESYTD ( 'Date'[Date] )", "DATESYTD ( 'Date'[Date], \"6/30/2008\" )"],
     ),
     spec(
@@ -273,8 +272,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
         "Returns the first date visible in the filter context, as a single-row table, restricted \
-         to dates that exist in the date column. It considers blanks, unlike FIRSTNONBLANK; the \
-         table must be marked as a date table for time intelligence windows to behave correctly.",
+         to dates that exist in the date column. Blanks are considered, unlike FIRSTNONBLANK; \
+         the column's table needs the date table marking so that time intelligence windows \
+         behave correctly.",
         &["FIRSTDATE ( 'Date'[Date] )"],
     ),
     spec(
@@ -430,7 +430,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Expression, ParamKind::Date]), overload(&[ParamKind::Expression, ParamKind::Date, ParamKind::Any])],
         ReturnType::Any,
         FunctionFlags::new(false, false, false, true, true),
-        "Evaluates the expression at the last date of the previous month, after applying the \
+        "Evaluates the expression on the final date of the preceding month, after applying the \
          optional filter. The opening balance uses the marked date table's month boundaries, so \
          the relationship and date coverage must be valid or the window slides on partial data.",
         &["OPENINGBALANCEMONTH ( [Sales Amount], 'Date'[Date] )"],
@@ -444,7 +444,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Expression, ParamKind::Date]), overload(&[ParamKind::Expression, ParamKind::Date, ParamKind::Any])],
         ReturnType::Any,
         FunctionFlags::new(false, false, false, true, true),
-        "Evaluates the expression at the last date of the previous quarter, after applying the \
+        "Evaluates the expression on the final date of the preceding quarter, after applying the \
          optional filter. Quarter boundaries come from the marked date table; an unmarked table \
          or a relationship not based on the date column changes the opening period.",
         &["OPENINGBALANCEQUARTER ( [Sales Amount], 'Date'[Date] )"],
@@ -458,7 +458,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Expression, ParamKind::Table]), overload(&[ParamKind::Expression, ParamKind::Table, ParamKind::Any])],
         ReturnType::Any,
         FunctionFlags::new(false, false, false, false, true),
-        "Evaluates the expression at the last date of the previous week of a model calendar, \
+        "Evaluates the expression on the final date of the preceding week of a model calendar, \
          after applying the optional filter. The calendar defines the week, so a date column is \
          not accepted and the function is unavailable to Excel's DAX engine.",
         &["OPENINGBALANCEWEEK ( [Sales Amount], Gregorian )"],
@@ -481,7 +481,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Any,
         FunctionFlags::new(false, false, false, true, true),
-        "Evaluates the expression at the last date of the previous year, after applying the \
+        "Evaluates the expression on the final date of the preceding year, after applying the \
          optional filter. YearEndDate aligns the opening balance with a fiscal year; the date \
          table must cover entire fiscal years and be marked as a date table.",
         &["OPENINGBALANCEYEAR ( [Sales Amount], 'Date'[Date] )", "OPENINGBALANCEYEAR ( [Sales Amount], 'Date'[Date], ALL ( Sales ), \"6/30/2008\" )"],
@@ -495,10 +495,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date, ParamKind::Number, ParamKind::Text])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Shifts the first and last dates visible in the filter context by NumberOfIntervals units \
-         of MONTH, QUARTER or YEAR, then returns all contiguous dates between the shifted \
-         boundaries, expanding partial periods to complete ones. The result contains only dates \
-         in the marked date column, so a discontinuous calendar leaves gaps.",
+        "Moves the visible first and last dates by NumberOfIntervals units of MONTH, QUARTER or \
+         YEAR, then returns the contiguous dates between the moved boundaries, expanding partial \
+         periods to complete ones. Only dates in the marked date column appear, so a \
+         discontinuous calendar leaves gaps.",
         &["PARALLELPERIOD ( 'Date'[Date], -1, YEAR )", "PARALLELPERIOD ( 'Date'[Date], 0, MONTH )"],
     ),
     spec(

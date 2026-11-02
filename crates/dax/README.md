@@ -287,6 +287,11 @@ markers), exact `overloads` (fixed or variadic), `return_type`, `flags` (`iterat
 `not_recommended`, `excel_compatible`, `direct_query_limited`), `sugar_of`, `blank_policy`,
 `description` and `examples`. Every example in the catalog parses with `parse_expression`.
 
+Descriptions and examples are original summaries written for GridCraft. Microsoft's DAX function
+documentation is a behavioural reference only: no sentence, definition or sample argument list is
+copied from it (or from dax.guide, which republishes Microsoft's wording). Write what the function
+returns, what its arguments mean and which edge case it handles, in the project's own voice.
+
 | Category | Functions |
 | --- | ---: |
 | Aggregation | 22 |

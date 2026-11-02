@@ -15,9 +15,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Numeric,
         standard(false),
-        "Returns the absolute value of a number, preserving its numeric type (Currency, Decimal \
-         or Integer) and removing only the sign. Infinite values are supported; no rounding is \
-         performed.",
+        "Absolute value of Number with the sign stripped and the numeric type kept (Currency, \
+         Decimal or Integer). Infinite values are accepted and nothing is rounded.",
         &["ABS ( -1 )", "ABS ( [Amount] )"],
     ),
     spec(
@@ -57,8 +56,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the principal value of the arccotangent of a real number, in radians in the \
-         range 0 to pi. The result is an approximate Decimal value.",
+        "Principal arccotangent of a real number, in radians between 0 and pi, as an approximate \
+         Decimal.",
         &["ACOT ( 1 )"],
     ),
     spec(
@@ -70,8 +69,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the inverse hyperbolic cotangent of a number whose absolute value is greater \
-         than 1. The result is an approximate Decimal value.",
+        "Inverse hyperbolic cotangent of a number whose absolute value exceeds 1, as an \
+         approximate Decimal.",
         &["ACOTH ( 2 )"],
     ),
     spec(
@@ -83,7 +82,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the arcsine of a number in radians, in the range -pi/2 to pi/2. The argument is \
+        "Returns the arcsine of a number, in radians, between -pi/2 and pi/2. The argument is \
          the sine of the angle and must be between -1 and 1; multiply by 180/PI() or use DEGREES \
          for degrees. Results are approximate Decimal values.",
         &["ASIN ( 0.5 )"],
@@ -110,9 +109,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the arctangent of a number in radians, in the range -pi/2 to pi/2. Multiply by \
+        "Returns the arctangent of a number, in radians, between -pi/2 and pi/2. Multiply by \
          180/PI() or use DEGREES for degrees; the result is an approximate Decimal value.",
-        &["ATAN ( 1 )"],
+        &["ATAN ( 0.5 )"],
     ),
     spec(
         "ATANH",
@@ -123,9 +122,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the inverse hyperbolic tangent of a number strictly between -1 and 1. A value \
-         of -1, 1 or outside that range produces an error; the result is an approximate Decimal \
-         value.",
+        "Inverse hyperbolic tangent of a value strictly between -1 and 1, as an approximate \
+         Decimal. The endpoints -1 and 1, and anything outside that range, are errors.",
         &["ATANH ( 0.5 )"],
     ),
     spec(
@@ -137,7 +135,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Numeric,
         standard(false),
-        "Rounds a number up to the nearest multiple of significance. Unlike ISO.CEILING, a \
+        "Moves Number up to the closest multiple of Significance. Unlike ISO.CEILING, a \
          negative significance makes CEILING round negative numbers toward negative infinity. \
          The result usually follows the type of Significance, but a Currency Number stays \
          Currency, a Boolean Significance yields Integer and a non-numeric Significance yields \
@@ -181,8 +179,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the hyperbolic cosine of a real number. The result is an approximate Decimal \
-         value and grows quickly for large arguments.",
+        "Hyperbolic cosine of a real argument, as an approximate Decimal; it grows quickly as \
+         the argument rises.",
         &["COSH ( 1 )"],
     ),
     spec(
@@ -207,8 +205,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the hyperbolic cotangent of a hyperbolic angle given in radians, computed as \
-         1/TANH(angle). The result is an approximate Decimal value and is undefined at zero.",
+        "Hyperbolic cotangent of a hyperbolic angle in radians, computed as 1/TANH(angle); \
+         undefined at zero and returned as an approximate Decimal.",
         &["COTH ( 1 )"],
     ),
     spec(
@@ -237,7 +235,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         standard(false),
         "Converts an angle from radians to degrees by multiplying by 180/pi. The result is an \
          approximate Decimal value; RADIANS performs the inverse conversion.",
-        &["DEGREES ( PI () )"],
+        &["DEGREES ( PI () / 2 )"],
     ),
     spec(
         "DIVIDE",
@@ -304,9 +302,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Rounds a number down, toward zero, to the nearest multiple of significance. Number and \
-         Significance must have the same sign, and the function always returns a Decimal \
-         regardless of the argument types.",
+        "Moves Number toward zero to the closest multiple of Significance; both must share a \
+         sign. The result is always Decimal regardless of the argument types.",
         &["FLOOR ( 2.7, 1 )", "FLOOR ( -2.7, 1 )"],
     ),
     spec(
@@ -318,9 +315,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "Returns the greatest common divisor of two integers. Non-integer arguments are \
-         truncated before the calculation; the result is an exact Integer.",
-        &["GCD ( 24, 36 )"],
+        "Greatest common divisor of two integers. Non-integer arguments are truncated before the \
+         calculation; the result is an exact Integer.",
+        &["GCD ( 36, 48 )"],
     ),
     spec(
         "INT",
@@ -345,7 +342,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number]), overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Numeric,
         standard(false),
-        "Rounds a number up to the nearest multiple of significance using ISO rules. When \
+        "Moves Number up to the closest multiple of Significance using ISO rules. When \
          Significance is omitted it defaults to 1; negative numbers and negative significance \
          can round differently from CEILING. The result keeps the numeric type of Number, with \
          Decimal precision when required by the multiple.",
@@ -360,9 +357,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "Returns the least common multiple of two integers, the smallest positive integer that \
-         both arguments divide without a remainder. Non-integer arguments are truncated; the \
-         result is an exact Integer.",
+        "Least common multiple of two integers: the smallest positive value that both arguments \
+         divide without a remainder. Non-integer arguments are truncated; the result is an exact \
+         Integer.",
         &["LCM ( 4, 6 )"],
     ),
     spec(
@@ -390,7 +387,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Returns the logarithm of a positive number in the given base; omitting the base uses \
          10. The result is an approximate Decimal value, and LOG10 is the fixed base-10 \
          shortcut.",
-        &["LOG ( 100 )", "LOG ( 8, 2 )"],
+        &["LOG ( 1000 )", "LOG ( 8, 2 )"],
     ),
     spec(
         "LOG10",
@@ -401,9 +398,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the base-10 logarithm of a positive number. The result is an approximate \
-         Decimal value; it is equivalent to LOG(number, 10).",
-        &["LOG10 ( 1000 )"],
+        "Base-10 logarithm of a positive number, as an approximate Decimal; the same value as \
+         LOG(number, 10).",
+        &["LOG10 ( 10000 )"],
     ),
     spec(
         "MOD",
@@ -456,8 +453,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the constant pi, 3.14159265358979, accurate to 15 digits as an approximate \
-         Decimal value. It takes no arguments.",
+        "The constant pi (3.14159265358979) as an approximate Decimal, accurate to 15 digits. \
+         Takes no arguments.",
         &["PI ()"],
     ),
     spec(
@@ -482,9 +479,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "Returns the integer portion of a division, truncating the fractional part toward zero. \
-         The result is an exact Integer; a zero denominator produces an error. MOD returns the \
-         matching remainder.",
+        "Whole-number part of dividing Numerator by Denominator, with the fraction cut toward \
+         zero. The result is an exact Integer and a zero denominator is an error; MOD gives the \
+         remainder.",
         &["QUOTIENT ( 7, 2 )", "QUOTIENT ( -7, 2 )"],
     ),
     spec(
@@ -509,9 +506,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Decimal,
         FunctionFlags::new(false, true, false, true, true),
-        "Returns a random Decimal value greater than or equal to 0 and less than 1, uniformly \
-         distributed. RAND is volatile: it may return a different value on every evaluation and \
-         changes on recalculation, so it cannot be used where a stable result is required.",
+        "Returns a random Decimal value in [0, 1), uniformly distributed. RAND is volatile: it \
+         may return a different value on every evaluation and changes on recalculation, so it \
+         cannot be used where a stable result is required.",
         &["RAND ()"],
     ),
     spec(
@@ -526,7 +523,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Returns a random Integer between Bottom and Top inclusive. Both bounds are integers; \
          if Bottom is greater than Top the function raises an error. RANDBETWEEN is volatile, so \
          it recalculates to a different value and is unsuitable for stable results.",
-        &["RANDBETWEEN ( 1, 10 )"],
+        &["RANDBETWEEN ( 5, 50 )"],
     ),
     spec(
         "ROUND",
@@ -552,10 +549,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Rounds a number down toward zero to the specified number of digits. Positive counts \
-         work right of the decimal point, zero rounds to an integer and negative counts work \
-         left of it. The result is a Decimal; ROUNDDOWN differs from FLOOR for negative numbers.",
-        &["ROUNDDOWN ( 3.14159, 2 )", "ROUNDDOWN ( -3.14159, 2 )"],
+        "Moves Number toward zero to the requested digit. Positive counts work right of the \
+         decimal point, zero rounds to an integer and negative counts work left of it; the \
+         result is Decimal and differs from FLOOR for negative numbers.",
+        &["ROUNDDOWN ( 2.71828, 3 )", "ROUNDDOWN ( -3.14159, 2 )"],
     ),
     spec(
         "ROUNDUP",
@@ -566,9 +563,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Rounds a number up away from zero to the specified number of digits. Positive counts \
-         work right of the decimal point, zero rounds to an integer and negative counts work \
-         left of it. The result is a Decimal.",
+        "Moves Number away from zero to the requested digit, so 2.31 at one digit becomes 2.4. \
+         Positive counts work right of the decimal point, zero rounds to an integer and negative \
+         counts work left of it; the result is Decimal.",
         &["ROUNDUP ( 3.14159, 2 )", "ROUNDUP ( -3.14159, 2 )"],
     ),
     spec(
@@ -595,7 +592,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         standard(false),
         "Returns the sine of an angle given in radians. Convert degrees with RADIANS or by \
          multiplying by PI()/180; the result is an approximate Decimal value.",
-        &["SIN ( PI () / 2 )"],
+        &["SIN ( PI () / 6 )"],
     ),
     spec(
         "SINH",
@@ -606,8 +603,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the hyperbolic sine of a real number. The result is an approximate Decimal \
-         value; ASINH is its inverse.",
+        "Hyperbolic sine of a real argument, as an approximate Decimal; ASINH is its inverse.",
         &["SINH ( 1 )"],
     ),
     spec(
@@ -619,8 +615,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the square root of a non-negative number as an approximate Decimal value. A \
-         negative argument raises an error; SQRTPI multiplies by pi before taking the root.",
+        "Square root of a non-negative number, as an approximate Decimal; a negative argument is \
+         an error. SQRTPI multiplies by pi before taking the root.",
         &["SQRT ( 16 )"],
     ),
     spec(
@@ -632,9 +628,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the square root of Number multiplied by pi, as an approximate Decimal value. \
-         Negative arguments produce an error; SQRTPI(n) equals SQRT(n * PI()).",
-        &["SQRTPI ( 2 )"],
+        "Square root of Number multiplied by pi, as an approximate Decimal; negative input is an \
+         error, and SQRTPI(n) equals SQRT(n * PI()).",
+        &["SQRTPI ( 3 )"],
     ),
     spec(
         "TAN",
@@ -659,8 +655,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Returns the hyperbolic tangent of a real number, computed as SINH(number)/COSH(number). \
-         The result is an approximate Decimal value between -1 and 1.",
+        "Hyperbolic tangent of a real argument, computed as SINH(number)/COSH(number); the value \
+         lies between -1 and 1.",
         &["TANH ( 1 )"],
     ),
     spec(

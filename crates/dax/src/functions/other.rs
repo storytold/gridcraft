@@ -20,9 +20,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the integer in the first argument shifted left by the number of bits in the \
-         second argument; a negative shift amount shifts right. The result follows two's \
-         complement integer semantics and can overflow or underflow.",
+        "Shifts the first argument's integer left by ShiftAmount bits; a negative amount shifts \
+         right. Two's-complement semantics, so the result can overflow or underflow.",
         &["BITLSHIFT ( 4, 2 )", "BITLSHIFT ( Sales[Quantity], 1 )"],
     ),
     spec(
@@ -34,9 +33,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Integer,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the integer in the first argument shifted right by the number of bits in the \
-         second argument; a negative shift amount shifts left. The result follows two's \
-         complement integer semantics and can overflow or underflow.",
+        "Shifts the first argument's integer right by ShiftAmount bits; a negative amount shifts \
+         left. Two's-complement semantics, so the result can overflow or underflow.",
         &["BITRSHIFT ( 8, 2 )", "BITRSHIFT ( Sales[Quantity], 1 )"],
     ),
     spec(
@@ -122,8 +120,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[variadic(&[ParamKind::Any])],
         ReturnType::Integer,
         FunctionFlags::new(false, false, false, false, false),
-        "Computes a hash over a variable number of input expressions and returns an integer. The \
-         function appears in the engine metadata but is not documented by Microsoft, so its \
+        "Fingerprints a variable number of input expressions with a hash and returns an integer. \
+         The function appears in the engine metadata but is not documented by Microsoft, so its \
          exact hash algorithm and stability across versions are unspecified.",
         &["HASH ( Sales[Amount] )", "HASH ( Sales[OrderNumber], Sales[LineNumber] )"],
     ),
@@ -152,8 +150,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Column])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, false, false),
-        "Reports whether the given column is present at the current level of the visual \
-         calculation data grid. Use it to apply different formatting or logic per hierarchy level.",
+        "TRUE when the given column appears at the current level of the visual calculation data \
+         grid. Use it to apply different formatting or logic per hierarchy level.",
         &["ISATLEVEL ( 'Date'[Year] )", "ISATLEVEL ( Product[Category] )"],
     ),
     spec(
@@ -165,8 +163,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, false, true),
-        "Checks whether a value is a fixed-precision decimal number (currency) and returns TRUE \
-         or FALSE. It is an alias of ISDECIMAL.",
+        "TRUE for a fixed-precision decimal (Currency) value. Alias of ISDECIMAL.",
         &["ISCURRENCY ( Sales[Amount] )", "ISCURRENCY ( 1.5 )"],
     ),
     spec(
@@ -178,8 +175,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, false, true),
-        "Checks whether a value is an integer and returns TRUE or FALSE. It is an alias of \
-         ISINT64.",
+        "TRUE for an integer Value. Alias of ISINT64.",
         &["ISINTEGER ( Sales[Quantity] )", "ISINTEGER ( 2.5 )"],
     ),
     spec(

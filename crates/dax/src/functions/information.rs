@@ -159,16 +159,24 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.ANNOTATIONS",
-        "Returns a list of all annotations in the current model with columns matching the schema \
-         rowset for annotation objects."
+        "One row per annotation in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.ATTRIBUTEHIERARCHIES", "Represents the TMSCHEMA_ATTRIBUTE_HIERARCHIES DMV query function."),
+    info!(
+        "INFO.ATTRIBUTEHIERARCHIES",
+        "Exposes the TMSCHEMA_ATTRIBUTE_HIERARCHIES schema rowset as a table; optional \
+         restriction name/value pairs filter its rows."
+    ),
     info!(
         "INFO.ATTRIBUTEHIERARCHYSTORAGES",
         "Exposes the TMSCHEMA_ATTRIBUTE_HIERARCHY_STORAGES data management view as a table; the \
          optional restriction name/value pairs filter its rows."
     ),
-    info!("INFO.CALCDEPENDENCY", "Returns information about the calculation dependency for a DAX query."),
+    info!(
+        "INFO.CALCDEPENDENCY",
+        "Reports which objects a DAX query depends on, so tools can inspect the dependency graph \
+         without parsing formulas."
+    ),
     info!(
         "INFO.CALCULATIONGROUPS",
         "Exposes the TMSCHEMA_CALCULATIONGROUPS data management view as a table; the optional \
@@ -179,11 +187,31 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Exposes the TMSCHEMA_CALCULATIONITEMS data management view as a table; the optional \
          restriction name/value pairs filter its rows."
     ),
-    info!("INFO.CALENDARCOLUMNGROUPS", "Represents the TMSCHEMA_CALENDAR_COLUMN_GROUPS DMV query function."),
-    info!("INFO.CALENDARCOLUMNREFERENCES", "Represents the TMSCHEMA_CALENDAR_COLUMN_REFERENCES DMV query function."),
-    info!("INFO.CALENDARS", "Represents the TMSCHEMA_CALENDARS DMV query function."),
-    info!("INFO.CATALOGS", "Represents the DBSCHEMA_CATALOGS DMV query function."),
-    info!("INFO.CHANGEDPROPERTIES", "Represents the TMSCHEMA_CHANGED_PROPERTIES DMV query function."),
+    info!(
+        "INFO.CALENDARCOLUMNGROUPS",
+        "Exposes the TMSCHEMA_CALENDAR_COLUMN_GROUPS schema rowset as a table; optional \
+         restriction name/value pairs filter its rows."
+    ),
+    info!(
+        "INFO.CALENDARCOLUMNREFERENCES",
+        "Exposes the TMSCHEMA_CALENDAR_COLUMN_REFERENCES schema rowset as a table; optional \
+         restriction name/value pairs filter its rows."
+    ),
+    info!(
+        "INFO.CALENDARS",
+        "Exposes the TMSCHEMA_CALENDARS schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
+    info!(
+        "INFO.CATALOGS",
+        "Exposes the DBSCHEMA_CATALOGS schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
+    info!(
+        "INFO.CHANGEDPROPERTIES",
+        "Exposes the TMSCHEMA_CHANGED_PROPERTIES schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.COLUMNPARTITIONSTORAGES",
         "Exposes the TMSCHEMA_COLUMN_PARTITION_STORAGES data management view as a table; the \
@@ -191,57 +219,73 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.COLUMNPERMISSIONS",
-        "Returns a list of all column permissions in the current model with columns matching the \
-         schema rowset for column permissions objects."
+        "One row per column permission in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.COLUMNS",
-        "Returns a list of all columns in the current model with columns matching the schema \
-         rowset for column objects."
+        "One row per column in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.COLUMNSTORAGES",
-        "Returns a list of all column storages in the current model with columns matching the \
-         schema rowset for column storage objects."
+        "One row per column storage in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.CSDLMETADATA", "Returns information about database metadata in XML format."),
+    info!(
+        "INFO.CSDLMETADATA",
+        "Provides the model metadata serialized as CSDL XML text, so a tool can read the \
+         conceptual schema without a client library."
+    ),
     info!(
         "INFO.CULTURES",
-        "Returns a list of all cultures in the current model with columns matching the schema \
-         rowset for culture objects."
+        "One row per culture in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.DATACOVERAGEDEFINITIONS",
         "Exposes the TMSCHEMA_DATACOVERAGEDEFINITIONS data management view as a table; the \
          optional restriction name/value pairs filter its rows."
     ),
-    info!("INFO.DATASOURCES", "Represents the TMSCHEMA_DATASOURCES DMV query function."),
+    info!(
+        "INFO.DATASOURCES",
+        "Exposes the TMSCHEMA_DATASOURCES schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.DELTATABLEMETADATASTORAGES",
         "Exposes the TMSCHEMA_DELTA_TABLE_METADATA_STORAGES data management view as a table; the \
          optional restriction name/value pairs filter its rows."
     ),
-    info!("INFO.DEPENDENCIES", "Returns information about the calculation dependency for a DAX query."),
+    info!(
+        "INFO.DEPENDENCIES",
+        "Returns the dependency records of a DAX query, describing what the query reads from the \
+         model."
+    ),
     info!(
         "INFO.DETAILROWSDEFINITIONS",
-        "Returns a list of all detail rows definitions in the current model with columns matching \
-         the schema rowset for detail rows definitions objects."
+        "One row per detail-rows definition in the model, with the columns of the matching \
+         schema rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.DICTIONARYSTORAGES",
         "Exposes the TMSCHEMA_DICTIONARY_STORAGES data management view as a table; the optional \
          restriction name/value pairs filter its rows."
     ),
-    info!("INFO.EXCLUDEDARTIFACTS", "Represents the TMSCHEMA_EXCLUDED_ARTIFACTS DMV query function."),
+    info!(
+        "INFO.EXCLUDEDARTIFACTS",
+        "Exposes the TMSCHEMA_EXCLUDED_ARTIFACTS schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.EXPRESSIONS",
-        "Returns a list of all expressions in the current model with columns matching the schema \
-         rowset for expressions objects."
+        "One row per expression in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.EXTENDEDPROPERTIES",
-        "Returns a list of all extended properties in the current model with columns matching the \
-         schema rowset for extended properties objects."
+        "One row per extended property in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.FORMATSTRINGDEFINITIONS",
@@ -250,8 +294,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.FUNCTIONS",
-        "Returns information about the functions that are currently available for use in the DAX \
-         programming language."
+        "Lists the DAX functions the engine makes available, one row per function. Optional \
+         restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.GENERALSEGMENTMAPSEGMENTMETADATASTORAGES",
@@ -263,7 +307,11 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Exposes the TMSCHEMA_GROUP_BY_COLUMNS data management view as a table; the optional \
          restriction name/value pairs filter its rows."
     ),
-    info!("INFO.HIERARCHIES", "Represents the TMSCHEMA_HIERARCHIES DMV query function."),
+    info!(
+        "INFO.HIERARCHIES",
+        "Exposes the TMSCHEMA_HIERARCHIES schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.HIERARCHYSTORAGES",
         "Exposes the TMSCHEMA_HIERARCHY_STORAGES data management view as a table; the optional \
@@ -271,63 +319,79 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.KPIS",
-        "Returns a list of all KPIs in the current model with columns matching the schema rowset \
-         for KPI objects."
+        "One row per KPI in the model, with the columns of the matching schema rowset. Optional \
+         restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.LEVELS",
-        "Returns a list of all levels in the current model with columns matching the schema \
-         rowset for level objects."
+        "One row per level in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.LINGUISTICMETADATA", "Represents the TMSCHEMA_LINGUISTIC_METADATA DMV query function."),
+    info!(
+        "INFO.LINGUISTICMETADATA",
+        "Exposes the TMSCHEMA_LINGUISTIC_METADATA schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.MEASURES",
-        "Returns a list of all measures in the current model with columns matching the schema \
-         rowset for measure objects."
+        "One row per measure in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.MODEL", "Represents the TMSCHEMA_MODEL DMV query function."),
+    info!(
+        "INFO.MODEL",
+        "Exposes the TMSCHEMA_MODEL schema rowset as a table; optional restriction name/value \
+         pairs filter its rows."
+    ),
     info!(
         "INFO.OBJECTTRANSLATIONS",
-        "Returns a list of all object translations in the current model with columns matching the \
-         schema rowset for object translation objects."
+        "One row per object translation in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PARQUETFILESTORAGES",
         "Exposes the TMSCHEMA_PARQUET_FILE_STORAGES data management view as a table; the optional \
          restriction name/value pairs filter its rows."
     ),
-    info!("INFO.PARTITIONS", "Represents the TMSCHEMA_PARTITIONS DMV query function."),
+    info!(
+        "INFO.PARTITIONS",
+        "Exposes the TMSCHEMA_PARTITIONS schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.PARTITIONSTORAGES",
-        "Returns a list of all partition storages in the current model with columns matching the \
-         schema rowset for partition storage objects."
+        "One row per partition storage in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PERSPECTIVECOLUMNS",
-        "Returns a list of all perspective columns in the current model with columns matching the \
-         schema rowset for perspective columns objects."
+        "One row per perspective column in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PERSPECTIVEHIERARCHIES",
-        "Returns a list of all perspective hierarchies in the current model with columns matching \
-         the schema rowset for perspective hierarchies objects."
+        "One row per perspective hierarchy in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PERSPECTIVEMEASURES",
-        "Returns a list of all perspective measures in the current model with columns matching the \
-         schema rowset for perspective measures objects."
+        "One row per perspective measure in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PERSPECTIVES",
-        "Returns a list of all perspectives in the current model with columns matching the schema \
-         rowset for perspectives objects."
+        "One row per perspective in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.PERSPECTIVETABLES",
-        "Returns a list of all perspective tables in the current model with columns matching the \
-         schema rowset for perspective tables objects."
+        "One row per perspective table in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.PROPERTIES", "Represents the DISCOVER_PROPERTIES DMV query function."),
+    info!(
+        "INFO.PROPERTIES",
+        "Exposes the DISCOVER_PROPERTIES schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.QUERYGROUPS",
         "Exposes the TMSCHEMA_QUERY_GROUPS data management view as a table; the optional \
@@ -348,7 +412,11 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Exposes the TMSCHEMA_RELATIONSHIP_INDEX_STORAGES data management view as a table; the \
          optional restriction name/value pairs filter its rows."
     ),
-    info!("INFO.RELATIONSHIPS", "Represents the TMSCHEMA_RELATIONSHIPS DMV query function."),
+    info!(
+        "INFO.RELATIONSHIPS",
+        "Exposes the TMSCHEMA_RELATIONSHIPS schema rowset as a table; optional restriction \
+         name/value pairs filter its rows."
+    ),
     info!(
         "INFO.RELATIONSHIPSTORAGES",
         "Exposes the TMSCHEMA_RELATIONSHIP_STORAGES data management view as a table; the optional \
@@ -356,18 +424,18 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.ROLEMEMBERSHIPS",
-        "Returns a list of all role memberships in the current model with columns matching the \
-         schema rowset for role memberships objects."
+        "One row per role membership in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.ROLES",
-        "Returns a list of all roles in the current model with columns matching the schema rowset \
-         for roles objects."
+        "One row per role in the model, with the columns of the matching schema rowset. Optional \
+         restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.SEGMENTMAPSTORAGES",
-        "Returns a list of all segment map storages in the current model with columns matching the \
-         schema rowset for segment map storage objects."
+        "One row per segment map storage in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.SEGMENTSTORAGES",
@@ -376,36 +444,48 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
     ),
     info!(
         "INFO.STORAGEFILES",
-        "Returns a list of all storage files in the current model with columns matching the schema \
-         rowset for storage file objects."
+        "One row per storage file in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.STORAGEFOLDERS",
-        "Returns a list of all storage folders in the current model with columns matching the \
-         schema rowset for storage folder objects."
+        "One row per storage folder in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.STORAGETABLECOLUMNS", "Returns statistics about the columns of in-memory tables."),
-    info!("INFO.STORAGETABLECOLUMNSEGMENTS", "Returns information about the column segments used for storing data for in-memory tables."),
+    info!(
+        "INFO.STORAGETABLECOLUMNS",
+        "Reports storage statistics for each column of the in-memory tables, so a tool can see \
+         how the model is packed."
+    ),
+    info!(
+        "INFO.STORAGETABLECOLUMNSEGMENTS",
+        "Describes the column segments that hold data for the in-memory tables, one row per \
+         segment."
+    ),
     info!(
         "INFO.TABLEPERMISSIONS",
-        "Returns a list of all table permissions in the current model with columns matching the \
-         schema rowset for table permissions objects."
+        "One row per table permission in the model, with the columns of the matching schema \
+         rowset. Optional restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.TABLES",
-        "Returns a list of all tables in the current model with columns matching the schema rowset \
-         for table objects."
+        "One row per table in the model, with the columns of the matching schema rowset. Optional \
+         restriction name/value pairs filter the rows."
     ),
     info!(
         "INFO.TABLESTORAGES",
-        "Returns a list of all table storages in the current model with columns matching the \
-         schema rowset for table storage objects."
+        "One row per table storage in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
-    info!("INFO.USERDEFINEDFUNCTIONS", "Represents the TMSCHEMA_FUNCTIONS DMV query function."),
+    info!(
+        "INFO.USERDEFINEDFUNCTIONS",
+        "Exposes the TMSCHEMA_FUNCTIONS schema rowset as a table; optional restriction name/value \
+         pairs filter its rows."
+    ),
     info!(
         "INFO.VARIATIONS",
-        "Returns a list of all variations in the current model with columns matching the schema \
-         rowset for variations objects."
+        "One row per variation in the model, with the columns of the matching schema rowset. \
+         Optional restriction name/value pairs filter the rows."
     ),
     spec(
         "INFO.VIEW.COLUMNS",
@@ -416,8 +496,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
-        "Returns a list of all columns in the current model, decoded for direct use without joins \
-         to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
+        "Table of every column in the model, decoded so a query can use it without joins to \
+         other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
          calculated columns and calculated tables.",
         &["INFO.VIEW.COLUMNS ()"],
     ),
@@ -430,8 +510,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
-        "Returns a list of all measures in the current model, decoded for direct use without joins \
-         to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
+        "Table of every measure in the model, decoded so a query can use it without joins to \
+         other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
          calculated columns and calculated tables.",
         &["INFO.VIEW.MEASURES ()"],
     ),
@@ -444,8 +524,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
-        "Returns a list of all relationships in the current model, decoded for direct use without \
-         joins to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
+        "Table of every relationship in the model, decoded so a query can use it without joins \
+         to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
          calculated columns and calculated tables.",
         &["INFO.VIEW.RELATIONSHIPS ()"],
     ),
@@ -458,9 +538,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, false),
-        "Returns a list of all tables in the current model, decoded for direct use without joins \
-         to other DMV rowsets. Unlike the plain INFO functions it is allowed in measures, \
-         calculated columns and calculated tables.",
+        "Table of every table in the model, decoded so a query can use it without joins to other \
+         DMV rowsets. Unlike the plain INFO functions it is allowed in measures, calculated \
+         columns and calculated tables.",
         &["INFO.VIEW.TABLES ()"],
     ),
     spec(
@@ -499,8 +579,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when the value is a Boolean (TRUE or FALSE). This is the alias of \
-         ISLOGICAL.",
+        "TRUE for a Boolean value. Alias of ISLOGICAL.",
         &["ISBOOLEAN ( TRUE )", "ISBOOLEAN ( Sales[Amount] )"],
     ),
     spec(
@@ -537,8 +616,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when the value is a fixed-precision decimal number (Currency). This is the \
-         alias of ISCURRENCY.",
+        "TRUE for a fixed-precision decimal (Currency) value. Alias of ISCURRENCY.",
         &["ISDECIMAL ( 1.5 )", "ISDECIMAL ( Sales[Net Price] )"],
     ),
     spec(
@@ -550,7 +628,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when the value is a floating-point decimal number.",
+        "TRUE for a floating-point decimal value.",
         &["ISDOUBLE ( 1.5 )", "ISDOUBLE ( Sales[Amount] )"],
     ),
     spec(
@@ -601,8 +679,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Column])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when there are direct filters on the column. Filters propagated from a \
-         related table do not count; use ISCROSSFILTERED for those.",
+        "TRUE when the column carries direct filters in the current context; filters propagated \
+         from a related table do not count, so use ISCROSSFILTERED for those.",
         &["ISFILTERED ( Product[Color] )", "ISFILTERED ( Sales[Quantity] )"],
     ),
     spec(
@@ -639,8 +717,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when the value is a logical value (TRUE or FALSE). This is the alias of \
-         ISBOOLEAN.",
+        "TRUE for a logical value (TRUE or FALSE). Alias of ISBOOLEAN.",
         &["ISLOGICAL ( FALSE )", "ISLOGICAL ( Sales[Amount] )"],
     ),
     spec(
@@ -678,8 +755,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns TRUE when the value is an integer or decimal number, including currency and \
-         floating-point values.",
+        "TRUE for an integer or decimal number, including Currency and floating-point values.",
         &["ISNUMERIC ( 1.5 )", "ISNUMERIC ( Sales[Net Price] )"],
     ),
     spec(
@@ -775,9 +851,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::String,
         FunctionFlags::new(false, true, false, false, true),
-        "Returns the name of a table, column, measure or calendar as text. Component selects \
-         TABLE, COLUMN, MEASURE, CALENDAR, FULL, SELF or PARENT; Escaped selects ESCAPED, \
-         UNESCAPED or MINIMALLYESCAPED. Variables and dynamic expressions are not accepted.",
+        "Text name of a table, column, measure or calendar. Component selects TABLE, COLUMN, \
+         MEASURE, CALENDAR, FULL, SELF or PARENT; Escaped selects ESCAPED, UNESCAPED or \
+         MINIMALLYESCAPED. Variables and dynamic expressions are not accepted.",
         &["NAMEOF ( Sales[Amount] )", "NAMEOF ( [Sales Amount] )"],
     ),
     spec(
@@ -803,7 +879,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::String,
         FunctionFlags::new(false, false, false, false, true),
-        "Returns the format string of the measure currently evaluated in a calculation item.",
+        "Format string of the measure under evaluation in the current calculation item.",
         &["SELECTEDMEASUREFORMATSTRING ()"],
     ),
     spec(
@@ -815,8 +891,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::String,
         FunctionFlags::new(false, false, false, false, true),
-        "Returns the name of the measure currently evaluated in a calculation item, including a \
-         measure redefined in the DAX query.",
+        "Name of the measure under evaluation in the current calculation item, including one \
+         redefined in the DAX query.",
         &["SELECTEDMEASURENAME ()"],
     ),
     spec(
@@ -828,7 +904,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Reference])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, false, true),
-        "Returns the table that contains the specified column, measure or calendar reference.",
+        "Resolves a column, measure or calendar reference to the table that owns it.",
         &["TABLEOF ( Sales[Amount] )", "TABLEOF ( Product[Color] )"],
     ),
     spec(
@@ -840,8 +916,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Column, ParamKind::Text]), overload(&[ParamKind::Column, ParamKind::Text, ParamKind::Text])],
         ReturnType::Boolean,
         FunctionFlags::new(false, false, false, false, false),
-        "Returns TRUE when the text in the column matches the search text using full-text query \
-         semantics. MatchMode is TEXTMATCHING (the default), FUZZYMATCHING or PHRASEMATCHING.",
+        "TRUE when the column text matches SearchText under full-text query semantics. MatchMode \
+         is TEXTMATCHING (the default), FUZZYMATCHING or PHRASEMATCHING.",
         &["TEXTCONTAINS ( Product[Product Name], \"red\" )", "TEXTCONTAINS ( Product[Product Name], \"red\", \"FUZZYMATCHING\" )"],
     ),
     spec(
@@ -881,8 +957,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::String,
         FunctionFlags::new(false, true, false, true, false),
-        "Returns the domain name and user name of the current connection in domain\\user form, as \
-         supplied at connection time.",
+        "The connection identity in domain\\user form, as supplied when the connection was \
+         opened.",
         &["USERNAME ()"],
     ),
     spec(

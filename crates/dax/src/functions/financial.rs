@@ -60,13 +60,14 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Accrued interest of a security that pays periodic interest. Basis selects the day-count \
-         method; Calc_method chooses interest from issue (TRUE, the default) or from \
-         first_interest (FALSE) when settlement is after the first coupon date. Frequency must \
-         be 1, 2 or 4 and settlement must precede maturity.",
+        "Interest accrued on a periodically paying security, from issue or from the first coupon \
+         date to settlement. Basis selects the day-count method; Calc_method chooses interest \
+         from issue (TRUE, the default) or from first_interest (FALSE) when settlement is after \
+         the first coupon date. Frequency must be 1, 2 or 4 and settlement must precede \
+         maturity.",
         &[
-            "ACCRINT ( DATE ( 2007, 3, 1 ), DATE ( 2008, 8, 31 ), DATE ( 2008, 5, 1 ), 0.1, 1000, 2, 0 )",
-            "ACCRINT ( DATE ( 2007, 3, 1 ), DATE ( 2008, 8, 31 ), DATE ( 2008, 5, 1 ), 0.1, 1000, 2, 0, FALSE )",
+            "ACCRINT ( DATE ( 2021, 4, 1 ), DATE ( 2021, 10, 1 ), DATE ( 2022, 3, 15 ), 0.045, 5000, 2, 1 )",
+            "ACCRINT ( DATE ( 2021, 4, 1 ), DATE ( 2021, 10, 1 ), DATE ( 2022, 3, 15 ), 0.045, 5000, 2, 1, FALSE )",
         ],
     ),
     spec(
@@ -90,8 +91,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Accrued interest of a security that pays interest only at maturity. Basis selects the \
          day-count method (0 or omitted is US 30/360). Issue must be earlier than maturity.",
         &[
-            "ACCRINTM ( DATE ( 2008, 4, 1 ), DATE ( 2008, 6, 15 ), 0.1, 1000, 3 )",
-            "ACCRINTM ( DATE ( 2008, 4, 1 ), DATE ( 2008, 6, 15 ), 0.1, 1000 )",
+            "ACCRINTM ( DATE ( 2022, 1, 10 ), DATE ( 2022, 7, 10 ), 0.04, 2500, 3 )",
+            "ACCRINTM ( DATE ( 2022, 1, 10 ), DATE ( 2022, 7, 10 ), 0.04, 2500 )",
         ],
     ),
     spec(
@@ -127,8 +128,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          period is prorated. Basis accepts only 0, 1, 3 or 4; period 0 is the first, prorated \
          period.",
         &[
-            "AMORDEGRC ( 2400, DATE ( 2008, 8, 19 ), DATE ( 2008, 12, 31 ), 300, 0, 0.15, 1 )",
-            "AMORDEGRC ( 2400, DATE ( 2008, 8, 19 ), DATE ( 2008, 12, 31 ), 300, 1, 0.15 )",
+            "AMORDEGRC ( 12500, DATE ( 2022, 9, 14 ), DATE ( 2022, 12, 31 ), 1500, 0, 0.12, 1 )",
+            "AMORDEGRC ( 12500, DATE ( 2022, 9, 14 ), DATE ( 2022, 12, 31 ), 1500, 1, 0.12 )",
         ],
     ),
     spec(
@@ -163,8 +164,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          prorating the period of purchase. Unlike AMORDEGRC it applies no life-dependent \
          coefficient. Basis selects the day-count method.",
         &[
-            "AMORLINC ( 2400, DATE ( 2008, 8, 19 ), DATE ( 2008, 12, 31 ), 300, 0, 0.15, 1 )",
-            "AMORLINC ( 2400, DATE ( 2008, 8, 19 ), DATE ( 2008, 12, 31 ), 300, 1, 0.15 )",
+            "AMORLINC ( 12500, DATE ( 2022, 9, 14 ), DATE ( 2022, 12, 31 ), 1500, 0, 0.12, 1 )",
+            "AMORLINC ( 12500, DATE ( 2022, 9, 14 ), DATE ( 2022, 12, 31 ), 1500, 1, 0.12 )",
         ],
     ),
     spec(
@@ -184,10 +185,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Integer,
         FINANCIAL,
-        "Number of days from the beginning of the coupon period to the settlement date. \
-         Frequency must be 1, 2 or 4; Basis selects the day-count method, so the result depends \
-         on the convention rather than on the calendar alone.",
-        &["COUPDAYBS ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPDAYBS ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Days elapsed since the coupon period opened, up to settlement. Frequency must be 1, 2 \
+         or 4; Basis selects the day-count method, so the result depends on the convention rather \
+         than on the calendar alone.",
+        &["COUPDAYBS ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPDAYBS ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "COUPDAYS",
@@ -206,9 +207,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Number of days in the coupon period that contains the settlement date. The result can be \
-         fractional because it follows the Basis day-count convention, not a fixed calendar.",
-        &["COUPDAYS ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPDAYS ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Length of the coupon period around settlement, counted in days under the Basis \
+         convention; the result may be fractional rather than a calendar count.",
+        &["COUPDAYS ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPDAYS ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "COUPDAYSNC",
@@ -227,9 +228,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Integer,
         FINANCIAL,
-        "Number of days from the settlement date to the next coupon date. Frequency must be 1, 2 \
-         or 4; Basis selects the day-count method.",
-        &["COUPDAYSNC ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPDAYSNC ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Days left from settlement to the following coupon date. Frequency must be 1, 2 or 4 and \
+         Basis picks the day-count method.",
+        &["COUPDAYSNC ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPDAYSNC ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "COUPNCD",
@@ -248,9 +249,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::DateTime,
         FINANCIAL,
-        "Next coupon date after the settlement date. The date is derived from the maturity date \
-         and the coupon frequency; Basis affects only the day-count arithmetic used to locate it.",
-        &["COUPNCD ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPNCD ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Date of the coupon that follows settlement, derived from maturity and frequency; Basis \
+         affects only the day-count arithmetic that locates it.",
+        &["COUPNCD ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPNCD ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "COUPNUM",
@@ -269,9 +270,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Integer,
         FINANCIAL,
-        "Number of coupons payable between settlement and maturity, rounded up to the nearest \
-         whole coupon. Frequency must be 1, 2 or 4; Basis selects the day-count method.",
-        &["COUPNUM ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPNUM ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Coupon payments remaining between settlement and maturity, rounded up to a whole \
+         coupon. Frequency must be 1, 2 or 4 and Basis selects the day-count method.",
+        &["COUPNUM ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPNUM ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "COUPPCD",
@@ -290,9 +291,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::DateTime,
         FINANCIAL,
-        "Previous coupon date before the settlement date. The date follows from the maturity date \
-         and coupon frequency; Basis selects the day-count method used in the arithmetic.",
-        &["COUPPCD ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2, 1 )", "COUPPCD ( DATE ( 2011, 1, 25 ), DATE ( 2011, 11, 15 ), 2 )"],
+        "Date of the coupon immediately before settlement, derived from maturity and frequency; \
+         Basis selects the day-count method used in the arithmetic.",
+        &["COUPPCD ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2, 1 )", "COUPPCD ( DATE ( 2023, 2, 20 ), DATE ( 2028, 9, 30 ), 2 )"],
     ),
     spec(
         "CUMIPMT",
@@ -313,7 +314,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Cumulative interest paid between Start_period and End_period of a loan with constant \
          payments and a constant interest rate. Periods are 1-based, Type is 0 (end) or 1 \
          (beginning) and every argument is required.",
-        &["CUMIPMT ( 0.09 / 12, 30 * 12, 125000, 13, 24, 0 )"],
+        &["CUMIPMT ( 0.045 / 12, 15 * 12, 250000, 13, 24, 0 )"],
     ),
     spec(
         "CUMPRINC",
@@ -334,7 +335,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Cumulative principal paid between Start_period and End_period of a loan with constant \
          payments and a constant interest rate. Periods are 1-based, Type is 0 (end) or 1 \
          (beginning) and every argument is required.",
-        &["CUMPRINC ( 0.09 / 12, 30 * 12, 125000, 13, 24, 0 )"],
+        &["CUMPRINC ( 0.045 / 12, 15 * 12, 250000, 13, 24, 0 )"],
     ),
     spec(
         "DB",
@@ -354,10 +355,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Depreciation for one period using the fixed-declining balance method. Month is the \
-         number of months in the first year (12 when omitted), so a partial first year changes \
-         every subsequent period's depreciation.",
-        &["DB ( 1000000, 100000, 6, 1, 7 )", "DB ( 1000000, 100000, 6, 2 )"],
+        "Depreciation for one period under fixed-declining balance. Month sets how many months \
+         the first year holds (12 when omitted), so a partial first year changes every later \
+         period's depreciation.",
+        &["DB ( 45000, 5000, 8, 1, 9 )", "DB ( 45000, 5000, 8, 2 )"],
     ),
     spec(
         "DDB",
@@ -377,10 +378,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Depreciation for one period using the double-declining balance method, or another \
+        "Depreciation for one period under double-declining balance, or under another \
          accelerating factor when Factor is supplied (2 when omitted). Depreciation stops at the \
          salvage value.",
-        &["DDB ( 2400, 300, 10, 1, 2 )", "DDB ( 2400, 300, 10, 2 )"],
+        &["DDB ( 45000, 5000, 8, 1, 2 )", "DDB ( 45000, 5000, 8, 2 )"],
     ),
     spec(
         "DISC",
@@ -402,7 +403,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Discount rate of a security bought at Pr per 100 of face value and redeemed at \
          Redemption. Basis selects the day-count method used to annualise the discount.",
-        &["DISC ( DATE ( 2007, 1, 25 ), DATE ( 2007, 6, 15 ), 97.975, 100, 1 )", "DISC ( DATE ( 2007, 1, 25 ), DATE ( 2007, 6, 15 ), 97.975, 100 )"],
+        &["DISC ( DATE ( 2022, 2, 10 ), DATE ( 2022, 8, 20 ), 97.5, 100, 1 )", "DISC ( DATE ( 2022, 2, 10 ), DATE ( 2022, 8, 20 ), 97.5, 100 )"],
     ),
     spec(
         "DOLLARDE",
@@ -416,7 +417,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Converts a price quoted with a fractional part, such as 1.02 for 1 and 2/16, into a \
          decimal price. Fraction is the denominator of the fractional part and is truncated to \
          an integer; a fraction below 1 returns an error.",
-        &["DOLLARDE ( 1.02, 16 )", "DOLLARDE ( 1.1, 32 )"],
+        &["DOLLARDE ( 1.05, 8 )", "DOLLARDE ( 1.25, 16 )"],
     ),
     spec(
         "DOLLARFR",
@@ -430,7 +431,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Converts a decimal price into a price quoted with a fractional part, the inverse of \
          DOLLARDE. Fraction is the denominator of the fractional part and is truncated to an \
          integer; a fraction below 1 returns an error.",
-        &["DOLLARFR ( 1.125, 16 )", "DOLLARFR ( 1.0625, 32 )"],
+        &["DOLLARFR ( 1.375, 8 )", "DOLLARFR ( 1.1875, 16 )"],
     ),
     spec(
         "DURATION",
@@ -455,8 +456,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          weighted average time of its cash flows, in years. Frequency must be 1, 2 or 4 and \
          Basis selects the day-count method.",
         &[
-            "DURATION ( DATE ( 2018, 1, 1 ), DATE ( 2028, 1, 1 ), 0.08, 0.09, 2, 1 )",
-            "DURATION ( DATE ( 2018, 1, 1 ), DATE ( 2028, 1, 1 ), 0.08, 0.09, 2 )",
+            "DURATION ( DATE ( 2023, 3, 1 ), DATE ( 2033, 3, 1 ), 0.06, 0.065, 2, 1 )",
+            "DURATION ( DATE ( 2023, 3, 1 ), DATE ( 2033, 3, 1 ), 0.06, 0.065, 2 )",
         ],
     ),
     spec(
@@ -470,7 +471,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Effective annual interest rate for a nominal annual rate compounded Npery times per \
          year. Npery is truncated to an integer; both arguments must be positive.",
-        &["EFFECT ( 0.0525, 4 )", "EFFECT ( 0.1, 12 )"],
+        &["EFFECT ( 0.045, 12 )", "EFFECT ( 0.08, 4 )"],
     ),
     spec(
         "FV",
@@ -494,7 +495,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Future value of an investment with constant periodic payments at a constant rate. Pv is \
          the present value (0 when omitted) and Type is 0 for payments at the end of the period \
          or 1 for payments at the beginning.",
-        &["FV ( 0.06 / 12, 10, -200, -500, 1 )", "FV ( 0.06 / 12, 10, -200 )"],
+        &["FV ( 0.05 / 12, 36, -150, -1200, 1 )", "FV ( 0.05 / 12, 36, -150 )"],
     ),
     spec(
         "INTRATE",
@@ -517,8 +518,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Interest rate earned by a fully invested security bought at Investment and redeemed at \
          Redemption. The rate is annualised with the Basis day-count convention.",
         &[
-            "INTRATE ( DATE ( 2008, 2, 15 ), DATE ( 2008, 5, 15 ), 1000000, 1014420, 2 )",
-            "INTRATE ( DATE ( 2008, 2, 15 ), DATE ( 2008, 5, 15 ), 1000000, 1014420 )",
+            "INTRATE ( DATE ( 2022, 3, 1 ), DATE ( 2022, 6, 1 ), 250000, 253500, 2 )",
+            "INTRATE ( DATE ( 2022, 3, 1 ), DATE ( 2022, 6, 1 ), 250000, 253500 )",
         ],
     ),
     spec(
@@ -541,10 +542,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Interest payment in a single period Per of an investment or loan with constant payments \
-         and a constant interest rate. Per is 1-based and must not exceed Nper; Type is 0 (end) \
-         or 1 (beginning).",
-        &["IPMT ( 0.1 / 12, 1, 36, 8000, 0, 1 )", "IPMT ( 0.1 / 12, 1, 36, 8000 )"],
+        "Interest portion of the payment in a single period Per of a loan or investment with \
+         level payments at a fixed rate. Per is 1-based and must not exceed Nper; Type is 0 \
+         (end) or 1 (beginning).",
+        &["IPMT ( 0.06 / 12, 1, 60, 25000, 0, 1 )", "IPMT ( 0.06 / 12, 1, 60, 25000 )"],
     ),
     spec(
         "ISPMT",
@@ -560,10 +561,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         FINANCIAL,
-        "Interest paid or received in period Per of a loan or investment with even principal \
-         payments rather than constant total payments. Per and Nper use the same period unit, \
-         and Per is limited by Nper.",
-        &["ISPMT ( 0.1 / 12, 1, 36, 8000000 )"],
+        "Interest paid or received in period Per for a schedule whose principal repayments are \
+         equal, rather than one with constant total payments. Per and Nper use the same period \
+         unit, and Per is limited by Nper.",
+        &["ISPMT ( 0.06 / 12, 1, 60, 25000 )"],
     ),
     spec(
         "MDURATION",
@@ -584,12 +585,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Modified Macaulay duration of a bond with an assumed par value of 100, the Macaulay \
-         duration divided by 1 + Yld/Frequency. Frequency must be 1, 2 or 4 and Basis selects \
-         the day-count method.",
+        "Modified Macaulay duration of a bond priced at par 100: the Macaulay duration divided \
+         by 1 + Yld/Frequency. Frequency must be 1, 2 or 4 and Basis selects the day-count \
+         method.",
         &[
-            "MDURATION ( DATE ( 2018, 1, 1 ), DATE ( 2028, 1, 1 ), 0.08, 0.09, 2, 1 )",
-            "MDURATION ( DATE ( 2018, 1, 1 ), DATE ( 2028, 1, 1 ), 0.08, 0.09, 2 )",
+            "MDURATION ( DATE ( 2023, 3, 1 ), DATE ( 2033, 3, 1 ), 0.06, 0.065, 2, 1 )",
+            "MDURATION ( DATE ( 2023, 3, 1 ), DATE ( 2033, 3, 1 ), 0.06, 0.065, 2 )",
         ],
     ),
     spec(
@@ -603,7 +604,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Nominal annual interest rate that produces the given effective rate when compounded \
          Npery times per year. Npery is truncated to an integer; both arguments must be positive.",
-        &["NOMINAL ( 0.053543, 4 )", "NOMINAL ( 0.1, 12 )"],
+        &["NOMINAL ( 0.046, 12 )", "NOMINAL ( 0.08, 4 )"],
     ),
     spec(
         "NPER",
@@ -627,7 +628,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Number of periods required for an investment with constant payments at a constant rate \
          to reach Fv. Pv and Fv use opposite signs by convention; Type is 0 (end) or 1 \
          (beginning) and defaults to 0.",
-        &["NPER ( 0.12 / 12, -100, -1000, 10000, 1 )", "NPER ( 0.12 / 12, -100, -1000 )"],
+        &["NPER ( 0.06 / 12, -250, -8000, 20000, 1 )", "NPER ( 0.06 / 12, -250, -8000 )"],
     ),
     spec(
         "ODDFPRICE",
@@ -670,12 +671,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Price per 100 of face value of a security with an odd, short or long, first coupon \
-         period. Issue and First_coupon define that period; Frequency must be 1, 2 or 4 and \
-         Basis selects the day-count method.",
+        "Price per 100 of face value for a security whose first coupon period is irregular, \
+         whether short, long or odd. Issue and First_coupon define that period; Frequency must \
+         be 1, 2 or 4 and Basis selects the day-count method.",
         &[
-            "ODDFPRICE ( DATE ( 2008, 11, 11 ), DATE ( 2021, 3, 1 ), DATE ( 2008, 10, 15 ), DATE ( 2009, 3, 1 ), 0.0785, 0.0625, 100, 2, 1 )",
-            "ODDFPRICE ( DATE ( 2008, 11, 11 ), DATE ( 2021, 3, 1 ), DATE ( 2008, 10, 15 ), DATE ( 2009, 3, 1 ), 0.0785, 0.0625, 100, 2 )",
+            "ODDFPRICE ( DATE ( 2022, 7, 15 ), DATE ( 2030, 5, 1 ), DATE ( 2022, 6, 1 ), DATE ( 2022, 11, 1 ), 0.045, 0.05, 100, 2, 1 )",
+            "ODDFPRICE ( DATE ( 2022, 7, 15 ), DATE ( 2030, 5, 1 ), DATE ( 2022, 6, 1 ), DATE ( 2022, 11, 1 ), 0.045, 0.05, 100, 2 )",
         ],
     ),
     spec(
@@ -719,11 +720,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Yield of a security with an odd, short or long, first coupon period. Pr is the price per \
-         100 of face value; the calculation is iterative, and Basis selects the day-count method.",
+        "Yield of a security whose first coupon period is irregular, whether short, long or odd. \
+         Pr is the price per 100 of face value; the calculation is iterative, and Basis selects \
+         the day-count method.",
         &[
-            "ODDFYIELD ( DATE ( 2008, 11, 11 ), DATE ( 2021, 3, 1 ), DATE ( 2008, 10, 15 ), DATE ( 2009, 3, 1 ), 0.0575, 84.5, 100, 2, 0 )",
-            "ODDFYIELD ( DATE ( 2008, 11, 11 ), DATE ( 2021, 3, 1 ), DATE ( 2008, 10, 15 ), DATE ( 2009, 3, 1 ), 0.0575, 84.5, 100, 2 )",
+            "ODDFYIELD ( DATE ( 2022, 7, 15 ), DATE ( 2030, 5, 1 ), DATE ( 2022, 6, 1 ), DATE ( 2022, 11, 1 ), 0.04, 96.5, 100, 2, 0 )",
+            "ODDFYIELD ( DATE ( 2022, 7, 15 ), DATE ( 2030, 5, 1 ), DATE ( 2022, 6, 1 ), DATE ( 2022, 11, 1 ), 0.04, 96.5, 100, 2 )",
         ],
     ),
     spec(
@@ -764,12 +766,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Price per 100 of face value of a security with an odd, short or long, last coupon \
-         period. Last_interest starts that period; Frequency must be 1, 2 or 4 and Basis selects \
-         the day-count method.",
+        "Price per 100 of face value for a security whose last coupon period is irregular, \
+         whether short, long or odd. Last_interest starts that period; Frequency must be 1, 2 or \
+         4 and Basis selects the day-count method.",
         &[
-            "ODDLPRICE ( DATE ( 2008, 2, 7 ), DATE ( 2008, 6, 15 ), DATE ( 2007, 10, 15 ), 0.0375, 0.0405, 100, 2, 0 )",
-            "ODDLPRICE ( DATE ( 2008, 2, 7 ), DATE ( 2008, 6, 15 ), DATE ( 2007, 10, 15 ), 0.0375, 0.0405, 100, 2 )",
+            "ODDLPRICE ( DATE ( 2022, 3, 10 ), DATE ( 2022, 7, 31 ), DATE ( 2021, 11, 30 ), 0.035, 0.038, 100, 2, 0 )",
+            "ODDLPRICE ( DATE ( 2022, 3, 10 ), DATE ( 2022, 7, 31 ), DATE ( 2021, 11, 30 ), 0.035, 0.038, 100, 2 )",
         ],
     ),
     spec(
@@ -810,11 +812,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Yield of a security with an odd, short or long, last coupon period. Pr is the price per \
-         100 of face value; Frequency must be 1, 2 or 4 and Basis selects the day-count method.",
+        "Yield of a security whose last coupon period is irregular, whether short, long or odd. \
+         Pr is the price per 100 of face value; Frequency must be 1, 2 or 4 and Basis selects the \
+         day-count method.",
         &[
-            "ODDLYIELD ( DATE ( 2008, 4, 20 ), DATE ( 2008, 6, 15 ), DATE ( 2007, 12, 24 ), 0.0375, 99.875, 100, 2, 0 )",
-            "ODDLYIELD ( DATE ( 2008, 4, 20 ), DATE ( 2008, 6, 15 ), DATE ( 2007, 12, 24 ), 0.0375, 99.875, 100, 2 )",
+            "ODDLYIELD ( DATE ( 2022, 4, 12 ), DATE ( 2022, 7, 31 ), DATE ( 2021, 12, 31 ), 0.035, 98.75, 100, 2, 0 )",
+            "ODDLYIELD ( DATE ( 2022, 4, 12 ), DATE ( 2022, 7, 31 ), DATE ( 2021, 12, 31 ), 0.035, 98.75, 100, 2 )",
         ],
     ),
     spec(
@@ -828,7 +831,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Number of periods an investment at a constant Rate needs to grow from Pv to Fv. Rate, \
          Pv and Fv must be positive; the result is not rounded to whole periods.",
-        &["PDURATION ( 0.025, 2000, 2200 )", "PDURATION ( 0.1, 1000, 2000 )"],
+        &["PDURATION ( 0.03, 1500, 1800 )", "PDURATION ( 0.08, 500, 1500 )"],
     ),
     spec(
         "PMT",
@@ -852,7 +855,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Constant payment for a loan or investment at a constant Rate over Nper periods. Fv is \
          the balance after the last payment (0 when omitted) and Type is 0 (end) or 1 \
          (beginning).",
-        &["PMT ( 0.08 / 12, 10, 10000, 0, 1 )", "PMT ( 0.08 / 12, 10, 10000 )"],
+        &["PMT ( 0.06 / 12, 12, 12000, 0, 1 )", "PMT ( 0.06 / 12, 12, 12000 )"],
     ),
     spec(
         "PPMT",
@@ -874,10 +877,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Principal payment in a single period Per of an investment or loan with constant payments \
-         and a constant interest rate. Per is 1-based and must not exceed Nper; Type is 0 (end) \
-         or 1 (beginning).",
-        &["PPMT ( 0.1 / 12, 1, 24, 2000, 0, 1 )", "PPMT ( 0.1 / 12, 1, 24, 2000 )"],
+        "Principal portion of the payment in a single period Per of a loan or investment with \
+         level payments at a fixed rate. Per is 1-based and must not exceed Nper; Type is 0 \
+         (end) or 1 (beginning).",
+        &["PPMT ( 0.06 / 12, 1, 48, 18000, 0, 1 )", "PPMT ( 0.06 / 12, 1, 48, 18000 )"],
     ),
     spec(
         "PRICE",
@@ -907,12 +910,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Price per 100 of face value of a security that pays periodic interest, given the yield \
+        "Clean price per 100 of face value for a periodically paying security quoted from yield \
          Yld. Frequency must be 1, 2 or 4 and Basis selects the day-count method used to accrue \
          the first coupon.",
         &[
-            "PRICE ( DATE ( 2008, 2, 15 ), DATE ( 2017, 11, 15 ), 0.0575, 0.065, 100, 2, 0 )",
-            "PRICE ( DATE ( 2008, 2, 15 ), DATE ( 2017, 11, 15 ), 0.0575, 0.065, 100, 2 )",
+            "PRICE ( DATE ( 2022, 3, 10 ), DATE ( 2031, 10, 25 ), 0.0425, 0.05, 100, 2, 0 )",
+            "PRICE ( DATE ( 2022, 3, 10 ), DATE ( 2031, 10, 25 ), 0.0425, 0.05, 100, 2 )",
         ],
     ),
     spec(
@@ -933,11 +936,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Price per 100 of face value of a discounted security, such as a Treasury bill, from its \
-         annual Discount rate. Basis selects the day-count method used to prorate the discount.",
+        "Price per 100 of face value for a discount instrument such as a Treasury bill, derived \
+         from its annual Discount rate. Basis selects the day-count method used to prorate the \
+         discount.",
         &[
-            "PRICEDISC ( DATE ( 2008, 2, 16 ), DATE ( 2008, 3, 1 ), 0.0525, 100, 2 )",
-            "PRICEDISC ( DATE ( 2008, 2, 16 ), DATE ( 2008, 3, 1 ), 0.0525, 100 )",
+            "PRICEDISC ( DATE ( 2022, 3, 1 ), DATE ( 2022, 4, 15 ), 0.04, 100, 2 )",
+            "PRICEDISC ( DATE ( 2022, 3, 1 ), DATE ( 2022, 4, 15 ), 0.04, 100 )",
         ],
     ),
     spec(
@@ -959,11 +963,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Price per 100 of face value of a security that pays interest only at maturity. Issue, \
-         Rate and the yield Yld determine the price; Basis selects the day-count method.",
+        "Price per 100 of face value for a security whose only interest payment falls at \
+         maturity. Issue, Rate and the yield Yld determine the price; Basis selects the \
+         day-count method.",
         &[
-            "PRICEMAT ( DATE ( 2008, 2, 15 ), DATE ( 2008, 4, 13 ), DATE ( 2007, 11, 11 ), 0.061, 0.061, 0 )",
-            "PRICEMAT ( DATE ( 2008, 2, 15 ), DATE ( 2008, 4, 13 ), DATE ( 2007, 11, 11 ), 0.061, 0.061 )",
+            "PRICEMAT ( DATE ( 2022, 2, 15 ), DATE ( 2022, 5, 12 ), DATE ( 2021, 10, 9 ), 0.05, 0.052, 0 )",
+            "PRICEMAT ( DATE ( 2022, 2, 15 ), DATE ( 2022, 5, 12 ), DATE ( 2021, 10, 9 ), 0.05, 0.052 )",
         ],
     ),
     spec(
@@ -988,7 +993,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Present value of a loan or investment with constant payments at a constant Rate. Fv is \
          the cash balance after the last payment (0 when omitted) and Type is 0 (end) or 1 \
          (beginning).",
-        &["PV ( 0.08 / 12, 20 * 12, 500, 0, 1 )", "PV ( 0.08 / 12, 20 * 12, 500 )"],
+        &["PV ( 0.06 / 12, 15 * 12, 350, 0, 1 )", "PV ( 0.06 / 12, 15 * 12, 350 )"],
     ),
     spec(
         "RATE",
@@ -1011,10 +1016,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Interest rate per period of an annuity. RATE solves iteratively from Guess (0.1 when \
+        "Per-period interest rate of an annuity. RATE solves iteratively from Guess (0.1 when \
          omitted) and returns an error when it does not converge within 20 iterations to \
          0.0000001; several rates can satisfy the same cash flows.",
-        &["RATE ( 4 * 12, -200, 8000, 0, 1, 0.01 )", "RATE ( 4 * 12, -200, 8000 )"],
+        &["RATE ( 6 * 12, -300, 20000, 0, 1, 0.02 )", "RATE ( 6 * 12, -300, 20000 )"],
     ),
     spec(
         "RECEIVED",
@@ -1034,11 +1039,11 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Amount received at maturity for a fully invested security bought at Investment with an \
-         annual Discount rate. Basis selects the day-count method used to prorate the discount.",
+        "Cash paid at maturity by a fully invested security bought at Investment with an annual \
+         Discount rate. Basis selects the day-count method used to prorate the discount.",
         &[
-            "RECEIVED ( DATE ( 2008, 2, 15 ), DATE ( 2008, 5, 15 ), 1000000, 0.0575, 2 )",
-            "RECEIVED ( DATE ( 2008, 2, 15 ), DATE ( 2008, 5, 15 ), 1000000, 0.0575 )",
+            "RECEIVED ( DATE ( 2022, 4, 1 ), DATE ( 2022, 7, 1 ), 500000, 0.045, 2 )",
+            "RECEIVED ( DATE ( 2022, 4, 1 ), DATE ( 2022, 7, 1 ), 500000, 0.045 )",
         ],
     ),
     spec(
@@ -1052,7 +1057,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Equivalent compound interest rate per period for an investment growing from Pv to Fv over \
          Nper periods. Pv and Fv must be positive and Nper must be at least 1.",
-        &["RRI ( 96, 10000, 11000 )", "RRI ( 10, 1000, 2000 )"],
+        &["RRI ( 60, 5000, 7500 )", "RRI ( 8, 800, 1600 )"],
     ),
     spec(
         "SLN",
@@ -1065,7 +1070,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Straight-line depreciation for a single period: (Cost - Salvage) / Life. Life is the \
          number of periods, not a date; the function performs no day-count adjustment.",
-        &["SLN ( 30000, 7500, 10 )", "SLN ( 1000, 100, 5 )"],
+        &["SLN ( 45000, 9000, 8 )", "SLN ( 2000, 200, 4 )"],
     ),
     spec(
         "SYD",
@@ -1083,7 +1088,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Sum-of-years' digits depreciation for period Per. Life and Per must be expressed in the \
          same periods and Per must not exceed Life; there is no day-count argument.",
-        &["SYD ( 30000, 7500, 10, 1 )", "SYD ( 30000, 7500, 10, 10 )"],
+        &["SYD ( 45000, 9000, 8, 1 )", "SYD ( 45000, 9000, 8, 8 )"],
     ),
     spec(
         "TBILLEQ",
@@ -1096,7 +1101,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Bond-equivalent yield of a Treasury bill from its Discount rate. The function uses the \
          actual/360 day count and requires maturity within one year of settlement.",
-        &["TBILLEQ ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 0.0914 )", "TBILLEQ ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 0.09 )"],
+        &["TBILLEQ ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 0.085 )", "TBILLEQ ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 0.08 )"],
     ),
     spec(
         "TBILLPRICE",
@@ -1109,7 +1114,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Price per 100 of face value of a Treasury bill from its Discount rate. The function uses \
          the actual/360 day count and requires maturity within one year of settlement.",
-        &["TBILLPRICE ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 0.09 )", "TBILLPRICE ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 0.0914 )"],
+        &["TBILLPRICE ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 0.08 )", "TBILLPRICE ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 0.085 )"],
     ),
     spec(
         "TBILLYIELD",
@@ -1122,7 +1127,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FINANCIAL,
         "Yield of a Treasury bill from its price Pr per 100 of face value. The function uses the \
          actual/360 day count and requires maturity within one year of settlement.",
-        &["TBILLYIELD ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 98.45 )", "TBILLYIELD ( DATE ( 2008, 3, 31 ), DATE ( 2008, 6, 1 ), 98.75 )"],
+        &["TBILLYIELD ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 97.85 )", "TBILLYIELD ( DATE ( 2022, 4, 1 ), DATE ( 2022, 6, 15 ), 97.9 )"],
     ),
     spec(
         "VDB",
@@ -1156,7 +1161,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Variable declining-balance depreciation between Start_period and End_period, including \
          partial periods. Factor defaults to 2; No_switch TRUE prevents the switch to \
          straight-line depreciation when that becomes larger.",
-        &["VDB ( 2400, 300, 10, 0, 0.875, 1.5 )", "VDB ( 2400, 300, 10, 0, 1 )"],
+        &["VDB ( 4800, 600, 8, 0, 1.75, 1.5 )", "VDB ( 4800, 600, 8, 0, 2 )"],
     ),
     spec(
         "XIRR",
@@ -1177,10 +1182,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL_ITERATOR,
-        "Internal rate of return for a schedule of cash flows that need not be periodic. Values \
-         and Dates are evaluated once per Table row; the first date anchors the calculation and \
-         the result is annualised. Solved iteratively from Guess, so it can fail to converge. \
-         AlternateResult is returned instead of an error when supplied.",
+        "Discount rate that drives an irregular schedule of cash flows to zero present value. \
+         Values and Dates are paired once per Table row, the first date anchors the schedule and \
+         the result is annualised. The rate is found iteratively from Guess, so it can fail to \
+         converge; AlternateResult replaces the error when supplied.",
         &["XIRR ( CashFlows, CashFlows[Amount], CashFlows[Date], 0.1 )", "XIRR ( CashFlows, CashFlows[Amount], CashFlows[Date] )"],
     ),
     spec(
@@ -1197,9 +1202,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Table, ParamKind::Expression, ParamKind::Expression, ParamKind::Number])],
         ReturnType::Decimal,
         FINANCIAL_ITERATOR,
-        "Net present value for a schedule of cash flows that need not be periodic. Values and \
-         Dates are evaluated once per Table row and discounted with actual/365 day counts from \
-         the earliest date, so the Rate is an annual effective rate.",
+        "Present value of an irregular schedule of cash flows discounted at Rate. Values and \
+         Dates are paired once per Table row and discounted with actual/365 day counts from the \
+         earliest date, so Rate is an annual effective rate.",
         &["XNPV ( CashFlows, CashFlows[Amount], CashFlows[Date], 0.09 )", "XNPV ( CashFlows, CashFlows[Amount], CashFlows[Date], 0.1 )"],
     ),
     spec(
@@ -1234,8 +1239,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
          The calculation is iterative; Frequency must be 1, 2 or 4 and Basis selects the \
          day-count method.",
         &[
-            "YIELD ( DATE ( 2008, 2, 15 ), DATE ( 2016, 11, 15 ), 0.0575, 95.04287, 100, 2, 0 )",
-            "YIELD ( DATE ( 2008, 2, 15 ), DATE ( 2016, 11, 15 ), 0.0575, 95.04287, 100, 2 )",
+            "YIELD ( DATE ( 2022, 3, 1 ), DATE ( 2030, 12, 15 ), 0.045, 92.15, 100, 2, 0 )",
+            "YIELD ( DATE ( 2022, 3, 1 ), DATE ( 2030, 12, 15 ), 0.045, 92.15, 100, 2 )",
         ],
     ),
     spec(
@@ -1259,8 +1264,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Annual yield of a discounted security bought at Pr and redeemed at Redemption. Basis \
          selects the day-count method used to annualise the return.",
         &[
-            "YIELDDISC ( DATE ( 2008, 2, 16 ), DATE ( 2008, 3, 1 ), 99.795, 100, 2 )",
-            "YIELDDISC ( DATE ( 2008, 2, 16 ), DATE ( 2008, 3, 1 ), 99.795, 100 )",
+            "YIELDDISC ( DATE ( 2022, 3, 1 ), DATE ( 2022, 4, 20 ), 98.75, 100, 2 )",
+            "YIELDDISC ( DATE ( 2022, 3, 1 ), DATE ( 2022, 4, 20 ), 98.75, 100 )",
         ],
     ),
     spec(
@@ -1282,11 +1287,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ],
         ReturnType::Decimal,
         FINANCIAL,
-        "Annual yield of a security that pays interest only at maturity, bought at Pr per 100 of \
-         face value. Issue and Rate define the interest; Basis selects the day-count method.",
+        "Annual yield of a security whose only interest payment falls at maturity, bought at Pr \
+         per 100 of face value. Issue and Rate define the interest; Basis selects the day-count \
+         method.",
         &[
-            "YIELDMAT ( DATE ( 2008, 3, 15 ), DATE ( 2008, 11, 3 ), DATE ( 2007, 11, 8 ), 0.0625, 100.0123, 0 )",
-            "YIELDMAT ( DATE ( 2008, 3, 15 ), DATE ( 2008, 11, 3 ), DATE ( 2007, 11, 8 ), 0.0625, 100.0123 )",
+            "YIELDMAT ( DATE ( 2022, 3, 1 ), DATE ( 2022, 10, 20 ), DATE ( 2021, 9, 15 ), 0.055, 101.25, 0 )",
+            "YIELDMAT ( DATE ( 2022, 3, 1 ), DATE ( 2022, 10, 20 ), DATE ( 2021, 9, 15 ), 0.055, 101.25 )",
         ],
     ),
 ];

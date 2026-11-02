@@ -91,10 +91,10 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[variadic(&[ParamKind::Any, ParamKind::Any])],
         ReturnType::Any,
         ENGINE_ONLY,
-        "Returns the first argument that does not evaluate to BLANK; when every argument is \
-         blank the result is BLANK. At least two arguments are required, and later arguments are \
-         not evaluated once a non-blank value is found. Unlike a chain of IF/ISBLANK checks, the \
-         result type follows the first non-blank argument.",
+        "The first argument whose value is not BLANK; when every argument is blank the result is \
+         BLANK. At least two arguments are required, and later arguments are not evaluated once \
+         a non-blank value is found. Unlike a chain of IF/ISBLANK checks, the result type follows \
+         the first non-blank argument.",
         &[
             "COALESCE ( Sales[Discount], 0 )",
             "COALESCE ( Store[Area Manager], \"** Not Assigned **\" )",
@@ -153,8 +153,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Any, ParamKind::Any])],
         ReturnType::Any,
         DISCOURAGED,
-        "Returns `ValueIfError` when the first argument raises an error and the value of the \
-         first argument otherwise; it is the faster equivalent of \
+        "Yields `ValueIfError` when the first argument raises an error, and otherwise repeats the \
+         first argument's value; faster than the equivalent \
          `IF ( ISERROR ( Value ), ValueIfError, Value )`. Neither IFERROR nor ISERROR catches \
          every runtime error, because block-mode execution can bypass the check, so both are \
          discouraged.",

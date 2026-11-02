@@ -77,7 +77,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Right-tailed probability of the chi-squared distribution with Deg_freedom degrees of freedom, used to compare observed and expected values in a chi-squared test. A non-integer Deg_freedom is truncated.",
+        "Probability in the right tail of the chi-squared distribution with Deg_freedom degrees of freedom, used to compare observed and expected values in a chi-squared test. A non-integer Deg_freedom is truncated.",
         &["CHISQ.DIST.RT ( 2.5, 10 )"],
     ),
     spec(
@@ -137,7 +137,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Half-width of the confidence interval for a population mean, using the normal distribution. Alpha is the significance level (0.05 gives a 95% interval), Standard_dev is the known population standard deviation and Size is the sample size.",
+        "Half-width around the sample mean for a normal-distribution confidence interval. Alpha \
+         is the significance level (0.05 gives a 95% interval), Standard_dev is the known \
+         population standard deviation and Size is the sample size.",
         &["CONFIDENCE.NORM ( 0.05, 2.5, 50 )"],
     ),
     spec(
@@ -149,7 +151,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Half-width of the confidence interval for a population mean, using the Student's t distribution with Size - 1 degrees of freedom. Alpha is the significance level and Standard_dev is the sample standard deviation.",
+        "Half-width around the sample mean when the population standard deviation is unknown, \
+         using Student's t with Size - 1 degrees of freedom. Alpha is the significance level and \
+         Standard_dev is the sample standard deviation.",
         &["CONFIDENCE.T ( 0.05, 2.5, 50 )"],
     ),
     spec(
@@ -259,7 +263,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Decimal,
         standard(false),
         "Normal distribution for the given Mean and Standard_dev. Cumulative TRUE returns the cumulative distribution function, FALSE the probability mass function; Standard_dev must be positive.",
-        &["NORM.DIST ( 42, 40, 1.5, TRUE )", "NORM.DIST ( 42, 40, 1.5, FALSE )"],
+        &["NORM.DIST ( 45, 40, 2, TRUE )", "NORM.DIST ( 45, 40, 2, FALSE )"],
     ),
     spec(
         "NORM.INV",
@@ -270,7 +274,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Inverse of the normal cumulative distribution: returns the x for which the cumulative probability equals Probability, for the given Mean and Standard_dev. Probability must lie in (0, 1) and Standard_dev must be positive.",
+        "The x for which the normal cumulative probability equals Probability, given Mean and Standard_dev. Probability must lie in (0, 1) and Standard_dev must be positive.",
         &["NORM.INV ( 0.95, 40, 1.5 )"],
     ),
     spec(
@@ -294,7 +298,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Inverse of the standard normal cumulative distribution (mean 0, standard deviation 1). Probability must lie strictly between 0 and 1.",
+        "The x for which the standard normal cumulative probability equals Probability (mean 0, standard deviation 1). Probability must lie strictly between 0 and 1.",
         &["NORM.S.INV ( 0.975 )"],
     ),
     spec(
@@ -418,7 +422,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[variadic(&[ParamKind::Number, ParamKind::Table, ParamKind::Expression])],
         ReturnType::Table,
         standard(true),
-        "Deterministic sample of Size rows from Table, ordered by one or more OrderBy expressions with optional Order values. The sample always contains the first row, the last row and evenly distributed rows between them; Size 0 or less returns an empty table. Group the input by the sort column to avoid duplicate rows.",
+        "Deterministic sample of Size rows from Table, ordered by one or more OrderBy expressions with optional Order values. The result is fixed: it includes the first and final rows plus the rows spaced evenly between them; Size 0 or less returns an empty table. Group the input by the sort column to avoid duplicate rows.",
         &["SAMPLE ( 10, Sales, Sales[Amount] )", "SAMPLE ( 10, Sales, Sales[Amount], 0 )"],
     ),
     spec(
@@ -514,7 +518,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Left-tailed inverse of the Student's t distribution: returns the t value whose cumulative probability equals Probability. Probability must lie between 0 and 1 and Deg_freedom cannot be negative.",
+        "Solves for the t value whose cumulative probability equals Probability, on the left tail of Student's t. Probability must lie between 0 and 1 and Deg_freedom cannot be negative.",
         &["T.INV ( 0.95, 10 )"],
     ),
     spec(
@@ -526,7 +530,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Two-tailed inverse of the Student's t distribution: returns the t value for which the two-tailed probability equals Probability. Neither argument can be negative.",
+        "Solves for the t value whose two-tailed probability equals Probability. Neither argument can be negative.",
         &["T.INV.2T ( 0.05, 10 )"],
     ),
     spec(

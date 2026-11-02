@@ -407,8 +407,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Table,
         STANDARD,
         "Returns a single-row table with the named columns. Arguments come in `Name, \
-         Expression` pairs; ROW does not preserve the data lineage of column references used as \
-         expressions.",
+         Expression` pairs; column references used as expressions lose their data lineage rather \
+         than keeping it.",
         &["ROW ( \"Product\", \"Bike\", \"Price\", 1500 )", "ROW ( \"Value\", 1 )"],
     ),
     spec(
@@ -447,8 +447,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Table]), variadic(&[ParamKind::Table, ParamKind::Any])],
         ReturnType::Table,
         ITERATOR,
-        "Returns a table with the same number of rows as the input and one column per \
-         `Name, Expression` pair, evaluated in row context. Unlike ADDCOLUMNS it starts from an \
+        "Projects the input to one column per `Name, Expression` pair, keeping the same row \
+         count; each expression is evaluated in row context. Unlike ADDCOLUMNS it starts from an \
          empty table; the name may be omitted when the expression is a simple column reference, \
          and simple references keep their data lineage.",
         &[
@@ -472,9 +472,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Table,
         ITERATOR,
         "Semijoins two tables and replaces the common columns with a zero-based index column. \
-         The index follows the row order of the second table sorted by the supplied order \
-         expressions; matching uses the same lineage rules as the natural joins and raises an \
-         error when no column matches.",
+         The index follows the row order obtained by sorting the second table with the supplied \
+         order expressions; matching uses the same lineage rules as the natural joins and raises \
+         an error when no column matches.",
         &["SUBSTITUTEWITHINDEX ( Sales, \"ProductIndex\", DISTINCT ( Sales[ProductKey] ), Sales[ProductKey] )"],
     ),
     spec(
@@ -589,7 +589,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Retrieves Rows rows from a table after skipping Skip rows, ordered by the order-by \
          expressions. Ties can be handled as Skip (ranking skips tied elements) or Dense (all \
          tied elements count as one); the result has no guaranteed sort order. With a non-zero \
-         skip the table must reference physical columns with lineage and no context transition.",
+         skip the table has to reference physical columns that carry lineage, and context \
+         transition cannot occur.",
         &["TOPNSKIP ( 10, 20, Sales, Sales[Amount], DESC )"],
     ),
     spec(
@@ -603,8 +604,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         STANDARD,
         "Applies the data lineage of the output columns to the table returned by the first \
          argument, so that its values filter the model columns as if they came from those \
-         columns. The first argument must be a table expression; unused values are filtered out \
-         and the result can be stored in a variable.",
+         columns. Only a table expression is accepted there; unused values are filtered out and \
+         the result can be stored in a variable.",
         &["TREATAS ( { \"North America\" }, Sales[Region] )", "TREATAS ( { 2008, 2009 }, 'Date'[Calendar Year] )"],
     ),
     spec(
@@ -632,9 +633,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Table,
         STANDARD,
         "With a column, returns its unique values as a single-column table, including the blank \
-         row produced by an invalid relationship. With a table name it returns the table with \
-         the same columns and all rows, without removing duplicates. VALUES needs a model table \
-         or column, so it cannot be applied to a variable.",
+         row produced by an invalid relationship. With a table name it returns every row of that \
+         table with its columns unchanged, without removing duplicates. VALUES needs a model \
+         table or column, so it cannot be applied to a variable.",
         &["VALUES ( Sales[Region] )", "VALUES ( Store )"],
     ),
 ];
