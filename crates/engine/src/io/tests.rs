@@ -604,3 +604,35 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }
+
+#[test]
+fn a_web_page_saved_as_xls_opens_its_table() {
+    // #3166: a web app's "Export to Excel" is an HTML table saved as .xls; it opened as lines of
+    // markup. Excel opens the table: values read as typed, <th> bold and centred, <x:Name> names
+    // the sheet.
+    let page = "\u{feff}<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><head><meta charset=\"UTF-8\">\
+        <!--[if gte mso 9]><xml><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Orders</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></xml><![endif]-->\
+        </head><body><table><thead><tr><th>Item</th><th>Qty</th><th>Code</th></tr></thead><tbody>\
+        <tr><td>Kiwi &amp;\n Lime</td><td>12</td><td>007</td></tr><tr><td>Plum</td><td x:num=\"4.5\">4,50</td><td>042</td></tr>\
+        </tbody></table></body></html>";
+    let (wb, warnings) = open_bytes("orders.xls", page.as_bytes()).unwrap();
+    assert!(warnings.first().is_some_and(|w| w.contains("is a web page (HTML)")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.name, "Orders");
+    let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!(v("A1"), gridcraft_core::Value::text("Item"));
+    assert_eq!(v("A2"), gridcraft_core::Value::text("Kiwi & Lime"));
+    assert_eq!(v("B2"), gridcraft_core::Value::number(12.0));
+    assert_eq!(v("C2"), gridcraft_core::Value::number(7.0), "read like typed input, as Excel does");
+    assert_eq!(v("B3"), gridcraft_core::Value::number(4.5), "the number the page recorded");
+    let style = |a: &str| wb.styles.get(sh.style_id(CellRef::parse(a).unwrap())).clone();
+    assert!(style("A1").font.bold && style("A1").align.h == gridcraft_model::HAlign::Center);
+    assert!(!style("A2").font.bold);
+    // Opened as text, codes keep their zeros; a page named .html gets no warning.
+    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C2").unwrap()), gridcraft_core::Value::text("007"));
+    // Plain text that merely starts with a tag-like word is still read as CSV.
+    let (wb, _) = open_bytes("notes.csv", b"<b>,1\nx,2\n").unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(2.0));
+}
