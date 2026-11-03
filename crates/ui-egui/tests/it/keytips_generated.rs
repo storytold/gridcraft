@@ -2772,7 +2772,7 @@ fn keytip_ic_() {
 fn keytip_ie_() {
     let mut h = harness(blank());
     sequence(&mut h, "IE", false);
-    assert!(h.state().dialog.is_some(), "IE must open the insertCells dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("insertCells"), "IE must open the insertCells dialog");
 }
 
 #[test]
@@ -2786,14 +2786,14 @@ fn keytip_iw_() {
 fn keytip_if_() {
     let mut h = harness(blank());
     sequence(&mut h, "IF", false);
-    assert!(h.state().dialog.is_some(), "IF must open the insertFunction dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("insertFunction"), "IF must open the insertFunction dialog");
 }
 
 #[test]
 fn keytip_ind_() {
     let mut h = harness(blank());
     sequence(&mut h, "IND", false);
-    assert!(h.state().dialog.is_some(), "IND must open the defineName dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("defineName"), "IND must open the defineName dialog");
 }
 
 #[test]
@@ -2808,14 +2808,14 @@ fn keytip_is_() {
 fn keytip_ed_() {
     let mut h = harness(blank());
     sequence(&mut h, "ED", false);
-    assert!(h.state().dialog.is_some(), "ED must open the deleteCells dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("deleteCells"), "ED must open the deleteCells dialog");
 }
 
 #[test]
 fn keytip_em_() {
     let mut h = harness(blank());
     sequence(&mut h, "EM", false);
-    assert!(h.state().dialog.is_some(), "EM must open the moveSheet dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("moveSheet"), "EM must open the moveSheet dialog");
 }
 
 #[test]
@@ -2850,14 +2850,14 @@ fn keytip_eam_() {
 fn keytip_ef_() {
     let mut h = harness(blank());
     sequence(&mut h, "EF", false);
-    assert!(h.state().dialog.is_some(), "EF must open the find dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("find"), "EF must open the find dialog");
 }
 
 #[test]
 fn keytip_eg_() {
     let mut h = harness(blank());
     sequence(&mut h, "EG", false);
-    assert!(h.state().dialog.is_some(), "EG must open the goTo dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goTo"), "EG must open the goTo dialog");
 }
 
 #[test]
@@ -2871,7 +2871,7 @@ fn keytip_ora_() {
 fn keytip_ore_() {
     let mut h = harness(blank());
     sequence(&mut h, "ORE", false);
-    assert!(h.state().dialog.is_some(), "ORE must open the rowHeight dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("rowHeight"), "ORE must open the rowHeight dialog");
 }
 
 #[test]
@@ -2892,7 +2892,7 @@ fn keytip_oru_() {
 fn keytip_ocw_() {
     let mut h = harness(blank());
     sequence(&mut h, "OCW", false);
-    assert!(h.state().dialog.is_some(), "OCW must open the columnWidth dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("columnWidth"), "OCW must open the columnWidth dialog");
 }
 
 #[test]
@@ -2913,7 +2913,7 @@ fn keytip_ocu_() {
 fn keytip_ohr_() {
     let mut h = harness(blank());
     sequence(&mut h, "OHR", false);
-    assert!(h.state().dialog.is_some(), "OHR must open the renameSheet dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("renameSheet"), "OHR must open the renameSheet dialog");
 }
 
 #[test]
@@ -2955,7 +2955,7 @@ fn keytip_dff_() {
 fn keytip_ds_() {
     let mut h = harness(blank());
     sequence(&mut h, "DS", false);
-    assert!(h.state().dialog.is_some(), "DS must open the sort dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("sort"), "DS must open the sort dialog");
 }
 
 #[test]
@@ -3018,7 +3018,7 @@ fn keytip_vp_() {
 fn keytip_vz_() {
     let mut h = harness(blank());
     sequence(&mut h, "VZ", false);
-    assert!(h.state().dialog.is_some(), "VZ must open the zoom dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("zoom"), "VZ must open the zoom dialog");
 }
 
 #[test]
@@ -3053,7 +3053,7 @@ fn keytip_tut_() {
 fn keytip_fu_() {
     let mut h = harness(blank());
     sequence(&mut h, "FU", false);
-    assert!(h.state().dialog.is_some(), "FU must open the pageSetup dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pageSetup"), "FU must open the pageSetup dialog");
 }
 
 #[test]
@@ -3090,7 +3090,7 @@ fn sample_sequences_work_with_text_before_key() {
     assert!(h.state().dialog.is_none() && h.state().message.is_none() && h.state().toast.is_none());
     reset(&mut h);
     sequence(&mut h, "HVS", true);
-    assert!(h.state().dialog.is_some(), "HVS must open the paste-special dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteSpecial"), "HVS must open the pasteSpecial dialog");
 }
 
 fn reset(h: &mut Harness) {
