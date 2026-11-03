@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (linear PDF wrapping retains explicit and whole-line fallback font metrics; Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -12,6 +12,7 @@ including tests, 2026-10-10.
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|
+| 2026-11-03 | minor | PDF wrapping composes font measurements instead of remeasuring growing lines; explicit faces and whole-line Unicode fallback selection retain matching widths, and long words stop at the line limit |
 | L0 | `core` | ~1.3k | Cell and range addresses (A1, R1C1, sheet-qualified; 1,048,576 × 16,384), `Value`, `CellError`, Excel coercion, 1900/1904 date serials, typed-input parsing |
 | L0 | `numfmt` | ~2.1k | Excel number-format codes (sections, conditions, colours, dates, elapsed time, fractions, scientific, fill), General, `TEXT()`; en-US only |
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
@@ -57,6 +58,8 @@ same document-local font set for rendering and measurement. PDF drawing uses the
 provider and shared cell-font candidates live in `pdf/system_fonts.rs`, using bounded file reads. Desktop font setup and the headless CLI share
 this dependency-free provider; the CLI does not depend on `ui-egui` or a windowing toolkit.
 Header/footer expansion retains ordered font/style runs (up to 40,000 UTF-8 bytes per section).
+PDF line wrapping uses composable `TextMeasurement` summaries from the PDF crate: running widths retain coverage and advances for both whole-line fallback candidates and mixed fallback runs, so appending Unicode text can change the selected face without rescanning the growing line. Explicit global and named faces use their own advances. Splitting a long word stops at the line limit.
+
 PDF fallback loading retains up to four faces: primary and alternate regular/bold pairs.
 A face covering both Greek and Cyrillic wins; otherwise text is split into covered runs,
 and measurement and rotated drawing use the same faces and advances.

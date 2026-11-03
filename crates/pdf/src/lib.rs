@@ -105,6 +105,38 @@ pub struct TextFonts {
     families: BTreeMap<String, usize>,
 }
 
+/// A composable width measurement, including whole-run Unicode fallback selection.
+/// Combine only measurements made with the same font and document font set.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TextMeasurement {
+    units: [u64; 3],
+    uncovered: [bool; 2],
+    unicode: bool,
+}
+
+impl TextMeasurement {
+    /// Measurement of this text followed by `other`, without reading either text again.
+    pub fn then(self, other: Self) -> Self {
+        Self {
+            units: std::array::from_fn(|i| self.units[i].saturating_add(other.units[i])),
+            uncovered: std::array::from_fn(|i| self.uncovered[i] || other.uncovered[i]),
+            unicode: self.unicode || other.unicode,
+        }
+    }
+
+    /// Width in points using the same face selection as [`TextFonts::text_width`].
+    pub fn width(self, size: f32) -> f32 {
+        let index = if self.unicode && !self.uncovered[0] {
+            1
+        } else if self.unicode && !self.uncovered[1] {
+            2
+        } else {
+            0
+        };
+        self.units[index] as f32 * size / 1000.0
+    }
+}
+
 impl Default for TextFonts {
     fn default() -> Self {
         Self { faces: vec![None; 4], custom: false, families: BTreeMap::new() }
@@ -223,19 +255,44 @@ impl TextFonts {
         }
     }
 
+    /// Measures text once for running line widths. Concatenation can change the selected
+    /// fallback face, so retain its coverage and widths rather than adding point widths.
+    pub fn measure_text(&self, font: Font, text: &str) -> TextMeasurement {
+        if self.custom || matches!(font, Font::Embedded(_) | Font::Symbol) || self.faces.iter().all(Option::is_none) {
+            return TextMeasurement { units: [self.run_units(font, text, self.slot(font, text)), 0, 0], ..Default::default() };
+        }
+        let want = usize::from(font.is_bold());
+        let candidates = [want, want + 2].map(|i| self.faces.get(i).and_then(Option::as_deref));
+        let mut measured = TextMeasurement { uncovered: candidates.map(|f| f.is_none()), ..Default::default() };
+        for c in text.chars() {
+            let mut bytes = [0; 4];
+            let shown = c.encode_utf8(&mut bytes);
+            measured.unicode |= needs_unicode(shown);
+            measured.units[0] = measured.units[0].saturating_add(self.run_units(font, shown, self.fallback_slot(font, c)));
+            for (i, face) in candidates.iter().enumerate() {
+                if let Some(face) = face {
+                    measured.uncovered[i] |= !c.is_control() && !face.has(c);
+                    measured.units[i + 1] = measured.units[i + 1].saturating_add(u64::from(face.char_width(if c == '\t' { ' ' } else { c })));
+                }
+            }
+        }
+        measured
+    }
+
+    fn fallback_slot(&self, font: Font, c: char) -> Option<usize> {
+        let mut bytes = [0; 4];
+        if !needs_unicode(c.encode_utf8(&mut bytes)) {
+            return None;
+        }
+        let want = usize::from(font.is_bold());
+        [want, want + 2, 1 - want, 3 - want]
+            .into_iter()
+            .find(|i| self.faces.get(*i).and_then(Option::as_ref).is_some_and(|face| c.is_control() || face.has(c)))
+    }
+
     /// The next contiguous fallback run when no single face covers the complete text.
     fn fallback_run<'a>(&self, font: Font, text: &'a str) -> Option<(Option<usize>, &'a str)> {
-        let slot_for = |c: char| {
-            let mut bytes = [0; 4];
-            let text = c.encode_utf8(&mut bytes);
-            if !needs_unicode(text) {
-                return None;
-            }
-            let want = usize::from(font.is_bold());
-            [want, want + 2, 1 - want, 3 - want]
-                .into_iter()
-                .find(|i| self.faces.get(*i).and_then(Option::as_ref).is_some_and(|face| c.is_control() || face.has(c)))
-        };
+        let slot_for = |c: char| self.fallback_slot(font, c);
         let slot = slot_for(text.chars().next()?);
         let end = text.char_indices().find(|(_, c)| slot_for(*c) != slot).map_or(text.len(), |(i, _)| i);
         Some((slot, text.get(..end)?))

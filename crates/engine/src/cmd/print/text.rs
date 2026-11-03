@@ -3,42 +3,56 @@ use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet
 
 const PAD_PX: f32 = 2.0;
 
+/// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
+const MAX_WRAP_LINES: usize = 2000;
+
 /// Word-wraps `text` to `width` points.
+///
+/// Running font-aware measurements keep wrapping linear. Re-measuring the line for every
+/// word, or the rest of a long word for every piece, made paragraphs and words quadratic.
 pub(super) fn wrap_lines(fonts: &TextFonts, text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let units_of = |s: &str| fonts.measure_text(font, s);
+    let fits = |units: gridcraft_pdf::TextMeasurement| units.width(size) <= width;
+    let space = units_of(" ");
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
+        let mut line_units = gridcraft_pdf::TextMeasurement::default();
         for word in para.split(' ') {
-            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || fonts.text_width(font, size, &cand) <= width {
-                line = cand;
+            let word_units = units_of(word);
+            if line.is_empty() {
+                line.push_str(word);
+                line_units = word_units;
+            } else if fits(line_units.then(space).then(word_units)) {
+                line.push(' ');
+                line.push_str(word);
+                line_units = line_units.then(space).then(word_units);
             } else {
                 out.push(std::mem::take(&mut line));
-                line = word.to_string();
+                line.push_str(word);
+                line_units = word_units;
             }
-            // Break a single over-long word by characters. The cut that fits is found by binary
-            // search (each try measures one candidate prefix), so an over-long word costs
-            // O(n log n) measurements instead of re-measuring the whole cut per character for
-            // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while fonts.text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let chars: Vec<char> = line.chars().collect();
-                let (mut lo, mut hi) = (1usize, chars.len());
-                while lo < hi {
-                    let mid = lo + (hi - lo).div_ceil(2);
-                    let cut: String = chars[..mid].iter().collect();
-                    if fonts.text_width(font, size, &cut) <= width {
-                        lo = mid;
-                    } else {
-                        hi = mid - 1;
+            // Break a single over-long word by characters, keeping at least one per piece.
+            if !fits(line_units) && line.chars().nth(1).is_some() {
+                let mut piece = String::new();
+                let mut units = gridcraft_pdf::TextMeasurement::default();
+                for c in line.chars() {
+                    let mut bytes = [0; 4];
+                    let w = units_of(c.encode_utf8(&mut bytes));
+                    if !piece.is_empty() && !fits(units.then(w)) {
+                        out.push(std::mem::take(&mut piece));
+                        units = gridcraft_pdf::TextMeasurement::default();
+                        if out.len() > MAX_WRAP_LINES {
+                            return out;
+                        }
                     }
+                    piece.push(c);
+                    units = units.then(w);
                 }
-                if lo == chars.len() {
-                    break;
-                }
-                out.push(chars[..lo].iter().collect());
-                line = chars[lo..].iter().collect();
+                line = piece;
+                line_units = units;
             }
-            if out.len() > 2000 {
+            if out.len() > MAX_WRAP_LINES {
                 return out;
             }
         }

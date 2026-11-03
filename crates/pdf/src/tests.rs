@@ -2,6 +2,37 @@ use super::*;
 use std::error::Error;
 use std::io;
 
+#[test]
+fn incremental_measurements_keep_whole_run_font_selection() {
+    let face = |chars: &[char], width| Arc::new(UnicodeFont::parse(tiny_ttf(chars, width, 0)).unwrap());
+    let primary = face(&[' ', '?', 'A', 'Ω'], 900);
+    let alternate = face(&[' ', '?', 'A', 'Ω', 'Ж'], 300);
+    let fallback = TextFonts::fallback([Some(primary.clone()), None, Some(alternate.clone()), None]);
+    assert_eq!(fallback.measure_text(Font::Helvetica, "A").then(fallback.measure_text(Font::Helvetica, "Ω")).width(10.0), 18.0);
+    assert_eq!(fallback.measure_text(Font::Helvetica, "AΩ").then(fallback.measure_text(Font::Helvetica, "Ж")).width(10.0), 9.0);
+    let mut named = TextFonts::default();
+    named.add_family("Body", primary.clone(), None, None, None).unwrap();
+    let handle = named.font("Body", false, false);
+    let sets = [
+        TextFonts::default(),
+        TextFonts::custom(primary.clone(), Some(alternate.clone()), None, None),
+        named,
+        fallback,
+        TextFonts::fallback([Some(primary), None, Some(face(&['Ж'], 600)), Some(alternate)]),
+    ];
+    for fonts in sets {
+        for font in [Font::Helvetica, Font::HelveticaBold, Font::TimesItalic, Font::Symbol, handle, Font::Embedded(999)] {
+            for text in ["", "A A", "AΩ", "AΩЖ", "Ω Ж Ω", "A\tΩ\rЖ", "ΩΨЖ😀", "?A\0Ω"] {
+                for split in text.char_indices().map(|(i, _)| i).chain(std::iter::once(text.len())) {
+                    let (left, right) = text.split_at(split);
+                    let combined = fonts.measure_text(font, left).then(fonts.measure_text(font, right));
+                    assert_eq!(combined.width(11.0), fonts.text_width(font, 11.0, text), "{font:?} {text:?} split {split}");
+                }
+            }
+        }
+    }
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
