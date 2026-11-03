@@ -416,6 +416,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Include this many sheets" => "Includi questo numero di fogli",
         "The number of sheets must be a whole number from 1 to 255." => "Il numero di fogli deve essere un numero intero compreso tra 1 e 255.",
         "These settings apply to workbooks created from now on." => "Queste impostazioni si applicano alle cartelle di lavoro create da ora in poi.",
+        "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",
@@ -1003,6 +1004,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Registrazione",
         "New Macro" => "Nuova macro",
         "Show" => "Mostra",
+        "Collapse dialog" => "Comprimi finestra di dialogo",
+        "Expand dialog" => "Espandi finestra di dialogo",
         _ => return None,
     })
 }
