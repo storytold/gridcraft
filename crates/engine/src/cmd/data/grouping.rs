@@ -1,6 +1,6 @@
 use super::{
     CellRef, EngineError, Json, LineInfo, RangeRef, Result, Session, bad, bool_param, col_param, data_target, edit, json, outline, parse_lines,
-    str_param, target_range, target_sheet,
+    str_param, target_sheet,
 };
 use gridcraft_core::{MAX_COLS, MAX_ROWS};
 
@@ -104,27 +104,62 @@ pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
 }
 
 /// Data › Outline › Ungroup › Clear Outline: removes every outline level from the rows and the
-/// columns of `range` (the selection), or from the whole sheet when it is one cell. Lines the outline
-/// had hidden are shown again (a zero size gets its default back) and collapsed marks go; a line
-/// hidden on its own, outside any group, stays hidden. Nothing to clear is no error and no undo step.
+/// columns of `range` (the selection, every area of it), or from the whole sheet when that is one
+/// cell. Lines the outline had hidden are shown again (a zero size gets its default back) and
+/// collapsed marks go, also on a summary line just outside the range whose group is gone; a line
+/// hidden on its own, outside any group, stays hidden. Nothing to clear is no error and no undo
+/// step. A protected sheet is refused: the outline isn't cell contents, so the check after an
+/// edit wouldn't see it change.
 pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "data.clearOutline";
     let si = target_sheet(s, p)?;
-    let r = target_range(s, p)?;
-    let (rows, cols) = if r.is_single() { ((0, MAX_ROWS - 1), (0, MAX_COLS - 1)) } else { ((r.start.row, r.end.row), (r.start.col, r.end.col)) };
+    {
+        let d = s.doc()?;
+        if let Some(t) = str_param(p, "range")
+            && let (Some(name), _) = super::split_sheet(t)
+            && d.wb.sheet_index(&name) != Some(si)
+        {
+            return Err(bad(CMD, format!("`{t}` names a sheet other than `sheet`")));
+        }
+        if si != d.wb.active_sheet() && p.get("range").is_none() {
+            return Err(bad(CMD, "missing `range`: the selection is on the active sheet"));
+        }
+    }
+    let ranges = super::target_ranges(s, p)?;
+    let spans: Vec<((u32, u32), (u32, u32))> = match ranges.as_slice() {
+        [one] if one.is_single() => vec![((0, MAX_ROWS - 1), (0, MAX_COLS - 1))],
+        _ => ranges.iter().map(|r| ((r.start.row, r.end.row), (r.start.col, r.end.col))).collect(),
+    };
     let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let outlined = |map: &std::collections::BTreeMap<u32, LineInfo>, (a, b): (u32, u32)| map.range(a..=b).any(|(_, e)| e.outline > 0 || e.collapsed);
-    if !outlined(&sh.rows, rows) && !outlined(&sh.cols, cols) {
+    if !spans.iter().any(|(rows, cols)| outlined(&sh.rows, *rows) || outlined(&sh.cols, *cols)) {
         return Ok(Json::Null);
     }
+    if sh.is_protected() {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
+    let before = (outline::summary_before(sh, true), outline::summary_before(sh, false));
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
-        for (map, (a, b)) in [(&mut sh.rows, rows), (&mut sh.cols, cols)] {
-            for (_, e) in map.range_mut(a..=b) {
-                if e.outline > 0 && e.hidden {
-                    set_hidden(e, false);
+        for (rows, cols) in &spans {
+            for (map, (a, b)) in [(&mut sh.rows, *rows), (&mut sh.cols, *cols)] {
+                for (_, e) in map.range_mut(a..=b) {
+                    if e.outline > 0 && e.hidden {
+                        set_hidden(e, false);
+                    }
+                    e.outline = 0;
+                    e.collapsed = false;
                 }
-                e.outline = 0;
-                e.collapsed = false;
+            }
+        }
+        // A summary line outside the range keeps its mark only while a group still ends there.
+        for (map, before) in [(&mut sh.rows, before.0), (&mut sh.cols, before.1)] {
+            let summaries: std::collections::BTreeSet<u32> =
+                outline::groups_with(map, before).into_iter().filter(|g| g.has_summary()).map(|g| g.summary()).collect();
+            for (line, e) in map.iter_mut() {
+                if e.collapsed && !summaries.contains(line) {
+                    e.collapsed = false;
+                }
             }
         }
         cx.structural = true; // shown rows count again in SUBTOTAL(10x)

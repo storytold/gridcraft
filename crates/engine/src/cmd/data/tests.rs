@@ -594,3 +594,64 @@ fn clear_outline_removes_every_level_and_shows_the_detail_again() {
     s.execute("data.clearOutline", json!({})).unwrap();
     assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"], json!([]));
 }
+
+fn outline_sheet(s: &Session, i: usize) -> crate::model::Sheet {
+    s.doc().unwrap().wb.sheet(i).unwrap().clone()
+}
+
+#[test]
+fn clear_outline_refuses_a_range_on_another_sheet() {
+    // A sheet that isn't the active one needs its range, and a range naming another sheet than
+    // `sheet` is refused: neither may clear the wrong sheet's outline.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:4", "sheet": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1})).is_err(), "no range on another sheet");
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1, "range": "Sheet1!A1"})).is_err(), "range on another sheet");
+    assert_eq!(outline_sheet(&s, 1).rows.get(&1).map(|e| e.outline), Some(1), "Sheet2 keeps its outline");
+    s.execute("data.clearOutline", json!({"sheet": 1, "range": "Sheet2!A1"})).unwrap();
+    assert!(outline_sheet(&s, 1).rows.values().all(|e| e.outline == 0));
+}
+
+#[test]
+fn clear_outline_treats_several_areas_as_a_range() {
+    // A selection of several areas is not "one cell", even when its first area is.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.group", json!({"rows": "8:10"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1,A2:A4"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert_eq!(sh.rows.get(&2).map(|e| e.outline), Some(0), "the selected rows are cleared");
+    assert_eq!(sh.rows.get(&8).map(|e| e.outline), Some(1), "rows outside the selection keep theirs");
+}
+
+#[test]
+fn clear_outline_refuses_a_protected_sheet() {
+    // A protected sheet keeps its outline.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({})).is_err());
+    assert_eq!(outline_sheet(&s, 0).rows.get(&1).map(|e| e.outline), Some(1));
+}
+
+#[test]
+fn clear_outline_clears_the_mark_on_a_summary_line_outside_the_range() {
+    // Clearing a collapsed group's lines also clears the mark on its summary line just outside
+    // the range, so nothing is left for a later Clear Outline to undo.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    assert!(outline_sheet(&s, 0).rows.get(&4).is_some_and(|e| e.collapsed), "row 5 summarises rows 2:4");
+    s.execute("data.clearOutline", json!({"range": "A2:B4"})).unwrap();
+    assert!(outline_sheet(&s, 0).rows.values().all(|e| e.outline == 0 && !e.collapsed), "{:?}", outline_sheet(&s, 0).rows);
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len);
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing left to clear");
+}
