@@ -218,7 +218,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm && let Some(style) = d.values.get("style").cloned() {
-        app.run_or_alert("home.formatCells", json!({"style": style}));
+        app.run_or_alert("home.formatCells", json!({"style": style, "borderEdges": true}));
     }
     if !open {
         app.dialog = None;
