@@ -17,7 +17,9 @@ fn local_name(name: &str) -> &str {
 }
 
 /// `(element local name, attributes)` for every start/empty element of an XML part.
-fn xml_elements(xml: &[u8]) -> Result<Vec<(String, Vec<(String, String)>)>, String> {
+type XmlElement = (String, Vec<(String, String)>);
+
+fn xml_elements(xml: &[u8]) -> Result<Vec<XmlElement>, String> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut buf = Vec::new();
