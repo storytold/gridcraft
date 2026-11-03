@@ -1,5 +1,8 @@
 use super::sort::sort_key;
-use super::*;
+use super::{
+    AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
+    current_region, data_target, edit, json,
+};
 
 // ---------------------------------------------------------------- filter
 
