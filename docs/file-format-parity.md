@@ -106,7 +106,8 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 | `.csv` UTF-8 / Windows / Mac / MS-DOS | R/W | yes (UTF-8 and UTF-16 BOMs, UTF-8, likely Windows-1256 Arabic detection, otherwise Windows-1252 fallback; delimiter detection; per-column day/month date-order detection for `/` and `-` dates) | yes (UTF-8 without BOM, CRLF) | Writes the **displayed** values like Excel (number formats applied, formula results, never column-width `#####`); `file.exportCsv {values: true}` writes raw values instead. No encoding choice on save. Re-import of a single-column export splits text (#127) A used range that would write more than 512 MiB (two far-apart cells span the whole rectangle) is refused with an error instead of being expanded (#528). |
 | `.txt` tab-delimited, Unicode text | R/W | yes (`.txt`, `.tsv`, `.tab`; likely Windows-1256 Arabic detection for invalid UTF-8; per-column day/month date-order detection for `/` and `-` dates) | yes (displayed values) | Text Import Wizard options partly via Text to Columns |
 | `.prn` formatted text (space-delimited) | R/W | no | no | |
-| `.dif`, `.slk` (SYLK) | R/W | no | no | Small, legacy |
+| `.slk` SYLK | R/W | **yes, partial** (#1481) | no (Save As `.xlsx`) | Values (numbers, text, booleans, errors), formulas converted from R1C1 to A1 as Excel does (relative and absolute references, ranges, whole rows and columns, shared formulas) with their cached results, number formats (`P`/`F;P`), column widths (`F;W`); the sheet is named after the file. Not read: fonts and cell styles, row heights, names, comments. Non-UTF-8 files are read as Latin-1 | engine `io/tests.rs` (`sylk_*`) |
+| `.dif` Data Interchange Format | R/W | no | no | Small, legacy |
 | `.htm` / `.html` web page | R/W (Windows) | yes, via Get Data ▸ From HTML | yes (one sheet as a table; a used range taller than 100,001 rows fails with an error instead of being cut short) | Formatting not exported. A sheet with pictures or charts is written with the sheet's own column widths and row heights, a picture as a `data:` URI `<img>` and a chart as inline SVG, each placed at its anchor; shapes, text boxes and comments are not exported |
 | `.mht` / `.mhtml` single-file web page | R/W (Windows) | no | no | |
 | `.json` | via Power Query | GridCraft's own workbook JSON (debug) and JSON import | GridCraft JSON | Not Power Query's JSON shaping; notes and hyperlinks break export (#126) |
@@ -148,13 +149,14 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Legacy `.xls` (BIFF8): exact theme colours (XFExt), comments, CF, validation, pictures and charts on import; corpus run; then write | 10–15 |
 | Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
-| CSV/text: encoding choice, `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003 | 4–7 |
+| CSV/text: encoding choice, `.prn`, `.dif`, XML Spreadsheet 2003 | 4–7 |
 | PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-02 | minor | Python cells: `.xlsx` reads and writes `_xlfn._xlws.PY(i,0 or 1)` with the code in the Python part (and reads the string-literal form) with cached values and spills, other formats adopt PY formulas, GridCraft JSON keeps the whole cell, and opening limits code size, result size and spill ranges |
 | 2026-11-02 | trivial | An equation without Office Math takes its stored source only while its text, paragraphs included, is what the writer wrote for it; a paragraph split that changes no character reads back as a text box with the split text |
 | 2026-11-02 | trivial | Each equation box carries the marker of its own body in its description, the Office Math box and the plain-text fallback alike, and the reader takes the stored source only while the body it reads matches the marker: the text of an equation without Office Math that another application edited reads back as a text box with the edited text instead of the stale source |

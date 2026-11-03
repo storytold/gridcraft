@@ -1,4 +1,4 @@
-//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, SYLK import, CSV/TSV, JSON (debug), HTML export.
 
 use std::fmt::Write as _;
 
@@ -6,6 +6,8 @@ use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{Sheet, Workbook};
 
 use crate::{EngineError, Result};
+
+mod sylk;
 
 /// File formats GridCraft reads or writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +21,8 @@ pub enum FileKind {
     Tsv,
     Json,
     Html,
+    /// SYLK symbolic link text (import only).
+    Sylk,
 }
 
 impl FileKind {
@@ -33,6 +37,7 @@ impl FileKind {
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
             "html" | "htm" => FileKind::Html,
+            "slk" => FileKind::Sylk,
             _ => return None,
         })
     }
@@ -310,6 +315,11 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             }
             Ok((wb, warnings))
         }
+        Some(FileKind::Sylk) => {
+            let (mut wb, warnings) = sylk::read(name, bytes)?;
+            rename_first_sheet(&mut wb, name);
+            Ok((wb, warnings))
+        }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
             let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -389,6 +399,9 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Sylk => {
+            Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
+        }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
