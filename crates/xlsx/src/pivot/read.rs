@@ -166,7 +166,13 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
         let Some(cache) = cache else { continue };
         if let Some(mut pt) = read_table(cx, &x, &cache, caches.next_id) {
             caches.next_id = caches.next_id.saturating_add(1);
-            pt.refresh_on_load = cache.refresh_on_load;
+            // Rebuilt without the label/value filters or calculated items it can't read, the
+            // report would show other totals than the file's, so it keeps the saved cells.
+            let lossy = x.child("calculatedItems").is_some() || x.path(&["filters", "filter"]).is_some();
+            if cache.refresh_on_load && lossy {
+                cx.warn(format!("PivotTable \"{}\" isn't refreshed on open, so it shows the values saved in the file", pt.name));
+            }
+            pt.refresh_on_load = cache.refresh_on_load && !lossy;
             out.push(pt);
         }
     }
@@ -381,7 +387,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     }
 
     pt.anchor = loc.start;
-    let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
+    // The report filters above the report, then a blank row. Excel stacks them one per row, or
+    // (`pageOverThenDown`) across a row, starting a new column or row after `pageWrap` of them.
+    let n = pages.len() as u32;
+    let wrap = x.attr_u32("pageWrap").unwrap_or(0);
+    let filter_rows = match (x.flag("pageOverThenDown", false), wrap) {
+        (false, 0) => n,
+        (false, w) => n.min(w),
+        (true, 0) => n.min(1),
+        (true, w) => n.div_ceil(w),
+    };
+    let above = if pages.is_empty() { 0 } else { filter_rows + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));
     Some(pt)
 }

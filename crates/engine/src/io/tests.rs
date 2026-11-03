@@ -782,3 +782,74 @@ fn pivots_that_ask_for_a_refresh_on_open_are_rebuilt() {
     let text = |a: &str| sh.value(CellRef::parse(a).unwrap()).display();
     assert_eq!([text("D4"), text("E4"), text("D5"), text("E5"), text("D6"), text("E6")], ["East", "15", "West", "20", "Grand Total", "35"]);
 }
+
+/// `bytes` with every PivotTable definition part passed through `edit`.
+fn edit_pivot_tables(bytes: &[u8], edit: impl Fn(&str) -> String) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        if name.starts_with("xl/pivotTables/pivotTable") {
+            data = edit(&String::from_utf8(data).unwrap()).into_bytes();
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+/// A workbook with a PivotTable at F8 over A1:C4 (rows Region, Sum of Sales, report filters
+/// Channel and Year), saved as xlsx, and the top-left cell of its report as GridCraft laid it out.
+fn pivot_with_two_filters() -> (Vec<u8>, CellRef) {
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    let rows =
+        serde_json::json!([["Region", "Channel", "Year", "Sales"], ["East", "Web", 2024, 10], ["West", "Shop", 2025, 20], ["East", "Shop", 2025, 5]]);
+    s.execute("range.setValues", serde_json::json!({"range": "A1", "values": rows})).unwrap();
+    let p = serde_json::json!({"source": "Sheet1!$A$1:$D$4", "destination": "Sheet1!F8", "rows": ["Region"], "values": ["Sales"], "filters": ["Channel", "Year"]});
+    s.execute("insert.pivotTable", p).unwrap();
+    let wb = (*s.doc().unwrap().wb).clone();
+    let top = wb.sheet(0).and_then(|sh| sh.pivots.first()).and_then(|pt| pt.last_range).unwrap().start;
+    (gridcraft_xlsx::write_xlsx(&wb).unwrap(), top)
+}
+
+#[test]
+fn refresh_on_open_keeps_cells_above_wrapped_report_filters() {
+    // Excel can lay report filters out across a row (`pageOverThenDown`) or wrap them after
+    // `pageWrap` fields, so two filters can take one row above the report, not two. The row
+    // above that is the user's: a refresh on open must not take it for old report cells.
+    let (bytes, top) = pivot_with_two_filters();
+    for attr in [r#" pageOverThenDown="1""#, r#" pageWrap="1""#] {
+        let mut wb = open_bytes("report.xlsx", &bytes).unwrap().0;
+        wb.sheet_mut(0).unwrap().set_value(top, gridcraft_core::Value::text("Keep"));
+        let saved = edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
+            xml.replacen("<pivotTableDefinition ", &format!("<pivotTableDefinition{attr} "), 1)
+        });
+        let (back, warnings) = open_bytes("report.xlsx", &saved).unwrap();
+        assert_eq!(back.sheet(0).unwrap().value(top).display(), "Keep", "{attr}");
+        assert!(warnings.iter().any(|w| w.contains("couldn't be refreshed on open")), "{attr}: {warnings:?}");
+    }
+}
+
+#[test]
+fn refresh_on_open_skips_pivots_with_filters_it_cannot_read() {
+    // A label or value filter (or a calculated item) is dropped when the file is read, so a
+    // rebuild would replace the report Excel saved with different totals: it keeps the saved cells.
+    let (bytes, _) = pivot_with_two_filters();
+    let mut wb = open_bytes("report.xlsx", &bytes).unwrap().0;
+    let sales = wb.sheet(0).unwrap().pivots.first().and_then(|pt| pt.last_range).unwrap().end;
+    wb.sheet_mut(0).unwrap().set_value(sales, gridcraft_core::Value::Number(99.0));
+    let filter = r#"<filters count="1"><filter fld="0" type="captionEqual" evalOrder="-1" id="1"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter val="East"/></customFilters></filterColumn></autoFilter></filter></filters>"#;
+    let saved = edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
+        xml.replacen("</pivotTableDefinition>", &format!("{filter}</pivotTableDefinition>"), 1)
+    });
+    let (back, warnings) = open_bytes("report.xlsx", &saved).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.value(sales), gridcraft_core::Value::Number(99.0), "the saved report stays");
+    assert!(sh.pivots.first().is_some_and(|pt| !pt.refresh_on_load));
+    assert!(warnings.iter().any(|w| w.contains("isn't refreshed on open")), "{warnings:?}");
+}
