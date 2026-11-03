@@ -1,7 +1,9 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::Arc;
+use super::FontDefinitions;
 use super::font_setup::HanOrder;
 #[cfg(not(target_arch = "wasm32"))]
 use super::font_setup::{in_dirs, try_load};
-use super::*;
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
 /// every family can carry them as fallback. egui's bundled fonts have no coverage beyond Latin, so
