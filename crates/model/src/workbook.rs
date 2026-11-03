@@ -95,6 +95,10 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// R1C1 reference style (`<calcPr refMode="R1C1"/>`): kept with the file and written back;
+    /// GridCraft itself shows and takes A1 references.
+    #[serde(default)]
+    pub r1c1: bool,
 }
 
 impl Default for CalcSettings {
@@ -105,6 +109,7 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
+            r1c1: false,
         }
     }
 }
