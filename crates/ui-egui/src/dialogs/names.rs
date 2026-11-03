@@ -7,10 +7,10 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     let selected = names.get(d.list_index).cloned();
     let field = |n: &Json, k: &str| n.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        if ui.button("New…").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("New…")).clicked() {
             app.open_dialog("defineName", json!({}));
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Edit…")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Edit…"))).clicked()
             && let Some(n) = &selected
         {
             app.open_dialog(
@@ -21,7 +21,7 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 }),
             );
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Delete")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Delete"))).clicked()
             && let Some(n) = &selected
         {
             app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": field(n, "scope")}));
@@ -32,11 +32,11 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         egui::Grid::new("names").striped(true).num_columns(4).show(ui, |ui| {
             ui.strong("Name");
             ui.strong("Value");
-            ui.strong("Refers To");
+            ui.strong(crate::i18n::current(ui.ctx()).tr("Refers To"));
             ui.strong("Scope");
             ui.end_row();
             if names.is_empty() {
-                ui.label(egui::RichText::new("No names defined").italics());
+                ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No names defined")).italics());
                 ui.end_row();
             }
             for (i, n) in names.iter().enumerate() {
@@ -52,7 +52,7 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     });
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(" Close ").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr(" Close ")).clicked() {
             *open = false;
         }
     });

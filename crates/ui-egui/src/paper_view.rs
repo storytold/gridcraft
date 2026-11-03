@@ -884,12 +884,12 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         egui::Popup::menu(&r).show(|ui| {
             let presets: [(String, &str); 7] = [
                 (tr(app, "(none)").to_string(), ""),
-                ("Page 1".into(), "&CPage &P"),
-                ("Page 1 of ?".into(), "&CPage &P of &N"),
+                (tr(app, "Page 1").to_string(), "&CPage &P"),
+                (tr(app, "Page 1 of ?").to_string(), "&CPage &P of &N"),
                 (sheet_name.clone(), "&C&A"),
                 (file.clone(), "&C&F"),
-                (format!("{sheet_name}, Page 1"), "&C&A, Page &P"),
-                (format!("{file}, Page 1"), "&C&F, Page &P"),
+                (tr(app, "{sheet}, Page 1").replace("{sheet}", &sheet_name), "&C&A, Page &P"),
+                (tr(app, "{file}, Page 1").replace("{file}", &file), "&C&F, Page &P"),
             ];
             for (text, spec) in presets {
                 if ui.button(text).clicked() {

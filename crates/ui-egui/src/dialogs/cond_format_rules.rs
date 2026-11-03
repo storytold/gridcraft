@@ -4,7 +4,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     let list = app.session.run("home.manageRules", json!({})).unwrap_or(Json::Null);
     let rules = list["rules"].as_array().cloned().unwrap_or_default();
     if rules.is_empty() {
-        ui.label("There are no conditional formatting rules on this sheet.");
+        ui.label(crate::i18n::current(ui.ctx()).tr("There are no conditional formatting rules on this sheet."));
     }
     for (i, r) in rules.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -20,7 +20,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
             if ui.small_button("▼").clicked() {
                 app.run_or_alert("home.manageRules", json!({"moveDown": i}));
             }
-            if ui.small_button("Delete").clicked() {
+            if ui.small_button(crate::i18n::current(ui.ctx()).tr("Delete")).clicked() {
                 app.run_or_alert("home.manageRules", json!({"delete": i}));
             }
         });
