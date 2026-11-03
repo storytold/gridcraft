@@ -128,6 +128,8 @@ fn language_reorders_only_the_han_faces() {
         ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
+    assert_eq!(HanOrder::of(Language::ZhTw), HanOrder::TraditionalChinese);
+    assert_eq!(keys(HanOrder::TraditionalChinese).first(), Some(&"sys-cjk-han-tc"));
     for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
         assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
     }
