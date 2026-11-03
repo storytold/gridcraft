@@ -2384,6 +2384,43 @@ fn deleting_or_shrinking_a_legacy_array_too_large_to_lay_out_unblocks_a_spill() 
 }
 
 #[test]
+fn a_legacy_array_entered_over_formulas_recalculates_what_they_fed() {
+    // #2949 review: the formulas the array overwrote (other than its own top-left cell) weren't
+    // marked as changed. An overwritten dynamic array was evaluated again as if still there and
+    // emptied its old spill area, the array's value included, and an overwritten legacy array
+    // kept its range, which blocked a spill there until Calculate Now.
+    let array = |s: &mut Session, range: &str, input: &str| {
+        s.execute("selection.set", json!({"range": range})).unwrap();
+        let at = range.split(':').next().unwrap();
+        s.execute("cell.set", json!({"cell": at, "input": input, "array": true})).unwrap();
+    };
+
+    // What read a formula or a value there reads the array's value (this already worked).
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "6"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=B1*10+C1"})).unwrap();
+    array(&mut s, "A1:C1", "={1,2,3}");
+    assert_eq!([v(&s, "B1"), v(&s, "C1"), v(&s, "E1")], [Value::Number(2.0), Value::Number(3.0), Value::Number(23.0)]);
+
+    // A dynamic array's spill goes with its formula, and the array's value is shown in its place.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SUM(B1:B3)"})).unwrap();
+    array(&mut s, "A1:B1", "=1");
+    assert_eq!([v(&s, "B1"), v(&s, "B2"), v(&s, "B3"), v(&s, "D1")], [Value::Number(1.0), Value::Empty, Value::Empty, Value::Number(1.0)]);
+    assert!(!s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.contains_key(&CellRef::parse("B1").unwrap()));
+
+    // A legacy array's range is freed: once the new array goes too, a dynamic array spills there.
+    let mut s = self::s();
+    array(&mut s, "B1:B2", "=7");
+    array(&mut s, "A1:B3", "=1");
+    s.execute("cell.set", json!({"cell": "A1", "input": "0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=SEQUENCE(1,2)"})).unwrap();
+    assert_eq!([v(&s, "A2"), v(&s, "B2"), v(&s, "B1")], [Value::Number(1.0), Value::Number(2.0), Value::Empty]);
+}
+
+#[test]
 fn clearing_or_overwriting_a_dynamic_array_unblocks_the_one_it_blocked() {
     // #2340: F13's area overlaps C14's spill, and stayed #SPILL! after C14 was cleared (or a value
     // typed over it) until Calculate Now, because F13 is to the right of C14.
