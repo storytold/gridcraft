@@ -509,13 +509,15 @@ fn resolve_pending(
 ) -> usize {
     let mut failed: HashSet<CellRef> = HashSet::new();
     let mut shared_attaches = 0usize;
+    // once the text allowance is spent no more shared formulas expand, but array anchors still do
+    let mut text_spent = false;
     for p in pending {
         if let Some((range, f)) = arrays.get(&p.anchor) {
             if p.pos == p.anchor {
                 st.attach(p.pos, f, Mode::Cell, Some(*range));
             }
         } else if let Some(f) = shared.get(&p.anchor) {
-            if failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
+            if text_spent || failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
                 continue;
             }
             shared_attaches += 1;
@@ -530,7 +532,8 @@ fn resolve_pending(
                     cell.formula = None;
                 }
                 st.unsupported("more shared-formula text than the import allows");
-                break;
+                text_spent = true;
+                continue;
             }
             let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
             if !imported {

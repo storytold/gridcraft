@@ -664,6 +664,8 @@ fn shared_formula_text_counts_against_the_text_allowance() {
     assert_eq!(ftext(&wb, "B6"), None);
     assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
     assert!(report.warnings.iter().any(|w| w.contains("shared-formula text")), "{:?}", report.warnings);
+    // an array anchor after the cut-off still gets its formula
+    assert!(ftext(&wb, "C5").is_some());
     // With room, the followers keep their formulas.
     let (wb, _) = crate::xls::read_xls_with(&file, crate::xls::Budget::default()).unwrap();
     assert!(ftext(&wb, "B6").is_some());
