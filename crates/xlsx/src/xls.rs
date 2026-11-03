@@ -206,7 +206,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Charts and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
