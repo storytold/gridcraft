@@ -848,3 +848,17 @@ fn a_refused_draft_stays_in_edit_mode_once_the_question_is_gone() {
     assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"));
     assert!(h.state().editor.as_ref().is_some_and(|e| !e.enter_mode), "the arrows move the caret");
 }
+
+#[test]
+fn the_save_question_is_in_the_interface_language() {
+    let mut h = harness(Services::default());
+    h.state_mut().ui.language = Language::It;
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.run_steps(2);
+    let title = h.state().session.active().unwrap().display_title();
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    h.get_by_label(&format!("Vuoi salvare le modifiche apportate a {title}?"));
+    let sent = click_commands(&mut h, "Non salvare");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
