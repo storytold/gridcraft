@@ -23,8 +23,8 @@ use crate::xml::{self, El};
 mod parts;
 mod rules;
 
+use parts::{HyperlinkUse, read_comments, read_hyperlinks, read_note_shapes, read_threaded};
 pub use parts::{read_autofilter, read_table};
-use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
 use rules::{read_cf, read_validation};
 
 struct Shared {
@@ -44,6 +44,9 @@ struct RowState {
     dynamic_cells: u64,
     /// Row-membership checks served so far, for the work cap above.
     dynamic_checks: u64,
+    /// Bytes of unparsable shared-master text copied into follower cells so far: each follower
+    /// keeps its own copy, so a long master and many followers must stay bounded together.
+    shared_fallback_bytes: u64,
     dropped: u64,
     rows: u64,
 }
@@ -138,6 +141,9 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// Most conditional-format range cells one sheet keeps, over all rules of an element: every
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
+/// Most bytes of an unparsable shared master's text one sheet copies into follower cells; past
+/// it, followers keep their cached values.
+const MAX_SHARED_FALLBACK_BYTES: u64 = 64 * 1024 * 1024;
 
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
@@ -181,6 +187,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
 
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
+    let mut hyperlinks_used = HyperlinkUse::default();
     cx.cf_ext_ids.clear();
     for e in &root.children {
         match e.name.as_str() {
@@ -214,7 +221,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet, &mut hyperlinks_used),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -635,14 +642,22 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
-                Some(match &sh.expr {
+                match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
                         let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
+                        Some(Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc)))
                     }
-                    None => Formula::new(&sh.text),
-                })
+                    None => {
+                        let total = st.shared_fallback_bytes.saturating_add(sh.text.len() as u64);
+                        if total > MAX_SHARED_FALLBACK_BYTES {
+                            cx.warn("some shared formulas could not be parsed and exceed the copy limit; those cells kept their cached values");
+                            return None;
+                        }
+                        st.shared_fallback_bytes = total;
+                        Some(Formula::new(&sh.text))
+                    }
+                }
             }
         }
         "array" => {
