@@ -268,33 +268,77 @@ const HF_DECODE_BUDGET: usize = 128 * 1024 * 1024;
 pub(super) struct HfImageCache {
     /// Decoded bytes left for the export.
     budget: usize,
-    /// Images decoded so far: their encoded bytes, the size they were decoded for, and their PDF
-    /// image (`None` when they couldn't be decoded within the limits or the budget).
+    /// What became of each image asked for: its encoded bytes, the size in pixels it was asked
+    /// for, and the outcome.
     decoded: Vec<Decoded>,
 }
 
-/// A decoded header/footer image: its encoded bytes, the size in pixels it was decoded for, and
-/// its PDF image.
-type Decoded = (std::sync::Arc<[u8]>, (u32, u32), Option<gridcraft_pdf::ImageId>);
+/// A header/footer image asked for: its encoded bytes, the size in pixels, and the outcome.
+type Decoded = (std::sync::Arc<[u8]>, (u32, u32), Outcome);
+
+/// What decoding a header/footer image for a size gave.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Outcome {
+    /// Decoded and added to the PDF.
+    Image(gridcraft_pdf::ImageId),
+    /// It can't be decoded within the limits at any size: not tried again.
+    Unreadable,
+    /// Decoded, but it didn't fit the budget left: a smaller size may still fit.
+    OverBudget,
+}
 
 impl HfImageCache {
     pub(super) fn new() -> HfImageCache {
-        HfImageCache { budget: HF_DECODE_BUDGET, decoded: vec![] }
+        HfImageCache::with_budget(HF_DECODE_BUDGET)
+    }
+
+    pub(super) fn with_budget(budget: usize) -> HfImageCache {
+        HfImageCache { budget, decoded: vec![] }
     }
 
     /// The PDF image of `data` decoded for at least `size` pixels: one already decoded that
     /// large (the same bytes, from this sheet or another), or a new decode within the budget.
-    fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<[u8]>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
+    /// An image that can't be decoded is tried once; one that didn't fit the budget is tried
+    /// again only for a smaller size (the budget only shrinks).
+    pub(super) fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<[u8]>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
         let same = |d: &std::sync::Arc<[u8]>| std::sync::Arc::ptr_eq(d, data) || (d.len() == data.len() && d[..] == data[..]);
-        if let Some((_, _, id)) = self.decoded.iter().find(|(d, (w, h), _)| same(d) && *w >= size.0 && *h >= size.1) {
-            return *id;
+        let covers = |(w, h): (u32, u32)| w >= size.0 && h >= size.1;
+        for (d, at, outcome) in &self.decoded {
+            if !same(d) {
+                continue;
+            }
+            match outcome {
+                Outcome::Image(id) if covers(*at) => return Some(*id),
+                Outcome::Unreadable => return None,
+                // Asked for at most this size before and it didn't fit: neither will this.
+                Outcome::OverBudget if at.0 <= size.0 && at.1 <= size.1 => return None,
+                _ => {}
+            }
         }
-        let id = decode_limited(data, size.0, size.1).and_then(|(rgba, pw, ph)| {
-            self.budget = self.budget.checked_sub(rgba.len())?;
-            doc.add_image(&rgba, [pw, ph])
-        });
-        self.decoded.push((data.clone(), size, id));
-        id
+        let outcome = match decode_limited(data, size.0, size.1) {
+            None => Outcome::Unreadable,
+            Some((rgba, pw, ph)) => match self.budget.checked_sub(rgba.len()) {
+                None => Outcome::OverBudget,
+                Some(left) => match doc.add_image(&rgba, [pw, ph]) {
+                    Some(id) => {
+                        self.budget = left;
+                        Outcome::Image(id)
+                    }
+                    None => Outcome::Unreadable,
+                },
+            },
+        };
+        self.decoded.push((data.clone(), size, outcome));
+        match outcome {
+            Outcome::Image(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// How many decodes it has tried.
+    #[cfg(test)]
+    pub(super) fn tries(&self) -> usize {
+        self.decoded.len()
     }
 }
 
