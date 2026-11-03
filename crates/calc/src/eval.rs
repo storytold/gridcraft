@@ -224,6 +224,9 @@ impl Ctx for FnCtx<'_, '_> {
         self.ev.active_criteria = active;
         Some(v)
     }
+    fn exhausted(&self) -> bool {
+        self.ev.exhausted
+    }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
     }
