@@ -238,3 +238,149 @@ fn synthetic_sylk_keeps_literal_dates_after_xlsx_export() {
         }
     }
 }
+
+/// The interactive boundary reads Romanian numbers/dates without changing command conventions
+/// or stored values across XLSX export, in either Excel date system.
+#[test]
+fn interactive_romanian_entry_survives_xlsx_in_both_date_systems() {
+    let loc = Locale::from_tag("ro-RO");
+    for sys in [DateSystem::D1900, DateSystem::D1904] {
+        let mut s = Session::new();
+        s.new_workbook();
+        Arc::make_mut(&mut s.active_mut().unwrap().wb).date_system = sys;
+        let date = gridcraft_engine::core::parse::parse_input("2026-03-04", sys).value.as_f64().unwrap();
+        let cases = [
+            ("1,234", Value::Number(1.234)),
+            ("1.234,56", Value::Number(1234.56)),
+            ("-1.234,56", Value::Number(-1234.56)),
+            ("12,5%", Value::Number(0.125)),
+            ("1,2E3", Value::Number(1200.0)),
+            ("04.03.2026", Value::Number(date)),
+            ("04.03.2026 12:30", Value::Number(date + 12.5 / 24.0)),
+            ("2026-03-04", Value::Number(date)),
+            ("1.234.567", Value::Number(1234567.0)),
+            ("1.002.024", Value::Number(1002024.0)),
+            ("1.23", Value::text("1.23")),
+            ("11.13.2026", Value::text("11.13.2026")),
+        ];
+        for (row, (input, expected)) in cases.iter().enumerate() {
+            let cell = CellRef::new(row as u32, 0);
+            s.run_interactive("cell.set", json!({"cell":cell.a1(),"input":input}), &loc).unwrap();
+            assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(cell), *expected, "{input}");
+        }
+        let mut wb = (*s.active().unwrap().wb).clone();
+        for _ in 0..3 {
+            let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+            let (back, report) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+            assert!(report.warnings.is_empty());
+            assert_eq!(back.date_system, sys);
+            for (row, (_, expected)) in cases.iter().enumerate() {
+                assert_eq!(back.sheet(0).unwrap().value(CellRef::new(row as u32, 0)), *expected);
+            }
+            wb = back;
+        }
+    }
+}
+
+/// Region is explicit and per command: CLI/headless entry, formulas and calls after a failed
+/// interactive command retain their invariant parsing.
+#[test]
+fn interactive_region_never_leaks_into_headless_commands_or_formulas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let ro = Locale::from_tag("ro-RO");
+    s.display_locale = ro.clone();
+    s.run_interactive("cell.set", json!({"cell":"A1","input":"1,234"}), &ro).unwrap();
+    s.execute_headless("cell.set", json!({"cell":"A2","input":"1,234"})).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::Number(1234.0));
+    s.run_interactive("cell.set", json!({"cell":"A3","input":"=SUM(1.5,2.25)"}), &ro).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(2, 0)), Value::Number(3.75));
+    assert!(s.run_interactive("cell.set", json!({"cell":"A4","input":"=1+"}), &ro).is_err());
+    s.execute("cell.set", json!({"cell":"A4","input":"1,234"})).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(3, 0)), Value::Number(1234.0));
+    let (csv, _) = gridcraft_engine::io::open_bytes("Synthetic.csv", b"1.234\n").unwrap();
+    assert_eq!(csv.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
+}
+
+/// Ctrl+Enter respects each destination's Text format and remains one undoable edit.
+#[test]
+fn interactive_fill_and_external_paste_keep_text_and_numeric_destinations() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let ro = Locale::from_tag("ro-RO");
+    s.execute("home.formatCells", json!({"range":"A1","style":{"num_fmt":"@"}})).unwrap();
+    s.execute("selection.set", json!({"range":"A1:B2"})).unwrap();
+    s.run_interactive("range.fill", json!({"input":"1,234"}), &ro).unwrap();
+    let sh = s.active().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("1,234"));
+    assert_eq!(sh.value(CellRef::new(0, 1)), Value::Number(1.234));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+    s.run_interactive("edit.paste", json!({"at":"A1","text":"1,234\t04.03.2026\n1.234,56\t12,5%"}), &ro).unwrap();
+    let sh = s.active().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("1,234"));
+    assert_eq!(sh.value(CellRef::new(0, 1)), Value::Number(46085.0));
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::Number(1234.56));
+    assert_eq!(sh.value(CellRef::new(1, 1)), Value::Number(0.125));
+    s.execute("selection.set", json!({"range":"A2"})).unwrap();
+    let copy = s.execute("edit.copy", json!({})).unwrap();
+    s.run_interactive("edit.paste", json!({"at":"D1","text":copy["text"]}), &ro).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 3)), Value::Number(1234.56));
+}
+
+/// F2 text uses full regional precision and preserves the order of explicit custom dates.
+#[test]
+fn interactive_editor_roundtrips_builtin_and_literal_date_formats() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let ro = Locale::from_tag("ro-RO");
+    {
+        let wb = Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let custom = wb.styles.derive(Default::default(), |st| st.num_fmt = NumFmt::custom("m/d/yyyy"));
+        wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), custom);
+    }
+    s.run_interactive("cell.set", json!({"cell":"A1","input":"3/4/2026"}), &ro).unwrap();
+    s.run_interactive("cell.set", json!({"cell":"A2","input":"04.03.2026"}), &ro).unwrap();
+    s.execute("cell.set", json!({"cell":"A3","input":"1.2345678901234"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A4","input":"'1,23"})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(gridcraft_engine::entry::editing_text(wb, 0, CellRef::new(0, 0), &ro), "3/4/2026");
+    assert_eq!(gridcraft_engine::entry::editing_text(wb, 0, CellRef::new(1, 0), &ro), "04.03.2026");
+    assert_eq!(gridcraft_engine::entry::editing_text(wb, 0, CellRef::new(2, 0), &ro), "1,2345678901234");
+    assert_eq!(gridcraft_engine::entry::editing_text(wb, 0, CellRef::new(3, 0), &ro), "'1,23");
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), wb.sheet(0).unwrap().value(CellRef::new(1, 0)));
+}
+
+/// A recorded interactive command is self-contained: headless replay retains its numeric region.
+#[test]
+fn recorded_interactive_entry_replays_with_its_explicit_numeric_region() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.start_recording();
+    s.run_interactive("cell.set", json!({"cell":"A1","input":"1,234"}), &Locale::from_tag("ro-RO")).unwrap();
+    let recording = s.stop_recording().unwrap();
+    let step = recording.steps.iter().find(|step| step.id == "cell.set").unwrap();
+    assert_eq!(step.params["inputLocale"]["decimal"], ",");
+    s.execute("cell.set", json!({"cell":"A1","input":"0"})).unwrap();
+    s.execute_headless(&step.id, step.params.clone()).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
+}
+
+/// Malformed explicit numeric conventions are refused before they can change a cell.
+#[test]
+fn invalid_interactive_snapshots_leave_values_unchanged() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell":"A1","input":"7"})).unwrap();
+    for locale in [
+        json!(null),
+        json!({"decimal":",","group":",","shortDate":"dd.mm.yyyy"}),
+        json!({"decimal":"..","group":",","shortDate":"dd.mm.yyyy"}),
+        json!({"decimal":",","group":".","shortDate":"d".repeat(256)}),
+        json!({"decimal":",","group":"\n","shortDate":"dd.mm.yyyy"}),
+    ] {
+        assert!(s.execute("cell.set", json!({"cell":"A1","input":"1,234","inputLocale":locale})).is_err());
+        assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
+    }
+}

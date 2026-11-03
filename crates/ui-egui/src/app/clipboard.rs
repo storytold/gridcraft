@@ -44,7 +44,10 @@ impl SheetApp {
             Some(html) => json!({"text": text, "html": html}),
             None => json!({"text": text}),
         };
-        self.run_or_alert("edit.paste", params);
+        let locale = self.session.display_locale.clone();
+        if let Err(error) = self.run_command_in("edit.paste", params, Some(&locale)) {
+            self.alert(error);
+        }
     }
 
     /// Ribbon and menu Paste: paste the text on the system clipboard, as Cmd/Ctrl+V does. With no

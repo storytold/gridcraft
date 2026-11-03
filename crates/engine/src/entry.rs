@@ -1,0 +1,91 @@
+//! Interactive scalar entry. Commands and files use the invariant parser unless a front end
+//! explicitly supplies a region for the one command being entered.
+use gridcraft_core::{CellRef, Value};
+use gridcraft_model::Workbook;
+use gridcraft_numfmt::Locale;
+
+/// Read an explicit command-entry snapshot; absent means invariant parsing. The small schema
+/// is bounded and validated, independently of any saved document or front-end preferences.
+pub(crate) fn locale_from_params(params: &serde_json::Value) -> crate::Result<Option<Locale>> {
+    let Some(value) = params.get("inputLocale") else { return Ok(None) };
+    let invalid =
+        || crate::EngineError::Other("inputLocale requires distinct decimal/group separators and a numeric shortDate (up to 255 characters).".into());
+    let character = |key| {
+        let mut chars = value.get(key).and_then(serde_json::Value::as_str)?.chars();
+        let c = chars.next()?;
+        (chars.next().is_none()
+            && !c.is_alphanumeric()
+            && !c.is_control()
+            && !matches!(c, '\'' | '"' | '=' | '+' | '-' | '/' | ':' | ';' | '[' | ']' | '%' | '$' | '(' | ')'))
+        .then_some(c)
+    };
+    let decimal = character("decimal").ok_or_else(invalid)?;
+    // Apostrophes are valid Swiss digit grouping characters.
+    let group = match value.get("group").and_then(serde_json::Value::as_str) {
+        Some("'") => '\'',
+        Some("’") => '’',
+        _ => character("group").ok_or_else(invalid)?,
+    };
+    let date = value.get("shortDate").and_then(serde_json::Value::as_str).ok_or_else(invalid)?;
+    if decimal == group || date.chars().take(256).count() > 255 || date.is_empty() || !crate::display::number_format(date).is_date() {
+        return Err(invalid());
+    }
+    Ok(Some(Locale { decimal, group, short_date: std::borrow::Cow::Owned(date.to_string()) }))
+}
+
+/// Canonical input for one destination, keeping Text cells and formulas untouched.
+pub fn canonical_input(wb: &Workbook, sheet: usize, at: CellRef, text: &str, loc: &Locale) -> String {
+    let Some(sh) = wb.sheet(sheet) else { return text.to_string() };
+    let fmt = &wb.styles.get(sh.style_id(at)).num_fmt;
+    if crate::display::number_format(fmt.as_str()).is_text() || crate::cmd::edit::is_formula_input(text) {
+        return text.to_string();
+    }
+    let code = if !fmt.is_literal_short_date() && matches!(fmt.as_str(), "m/d/yyyy" | "m/d/yyyy h:mm") {
+        loc.short_date.as_ref()
+    } else if crate::display::number_format(fmt.as_str()).is_date() {
+        fmt.as_str()
+    } else {
+        loc.short_date.as_ref()
+    };
+    loc.canonical_input(text, wb.date_system, code)
+}
+
+/// Editable regional text with full numeric precision. Use a formatted date only when the
+/// regional entry path reads it back exactly; otherwise retain the existing safe ISO fallback.
+pub fn editing_text(wb: &Workbook, sheet: usize, at: CellRef, loc: &Locale) -> String {
+    let Some(sh) = wb.sheet(sheet) else { return String::new() };
+    let raw = crate::display::edit_text(wb, sh, at);
+    if loc == &Locale::EN_US {
+        return raw;
+    }
+    let Some(cell) = sh.cell(at) else { return raw };
+    if cell.formula.is_some() || cell.py.is_some() {
+        return raw;
+    }
+    let fmt = &wb.styles.get(sh.style_id(at)).num_fmt;
+    match &cell.value {
+        Value::Text(text) if !crate::display::number_format(fmt.as_str()).is_text() => {
+            let input = canonical_input(wb, sheet, at, &raw, loc);
+            match gridcraft_core::parse::parse_input(&input, wb.date_system).value {
+                Value::Text(ref t) if t.as_ref() == text.as_ref() => raw,
+                _ => format!("'{raw}"),
+            }
+        }
+        Value::Number(n) => {
+            let reads_back = |text: &str| {
+                let input = canonical_input(wb, sheet, at, text, loc);
+                matches!(gridcraft_core::parse::parse_input(&input, wb.date_system).value, Value::Number(m) if m == *n)
+            };
+            if crate::display::number_format(fmt.as_str()).is_date() {
+                let shown = crate::display::format_num_fmt_in(&cell.value, fmt, wb, loc).text;
+                if reads_back(&shown) {
+                    return shown;
+                }
+            }
+            // ISO dates are already unambiguous. Ordinary numeric editor text has no grouping.
+            let localized = if raw.parse::<f64>().is_ok() { raw.replace('.', &loc.decimal.to_string()) } else { raw.clone() };
+            if reads_back(&localized) { localized } else { raw }
+        }
+        _ => raw,
+    }
+}

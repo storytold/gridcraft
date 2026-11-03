@@ -5,6 +5,7 @@
 
 mod builtin;
 mod decimal;
+mod entry;
 mod locale;
 mod parse;
 mod render;
@@ -205,6 +206,24 @@ impl NumberFormat {
             return None;
         }
         Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
+    }
+
+    /// Calendar field order from the parsed format; weekday labels and time minutes are excluded.
+    pub(crate) fn calendar_order(&self) -> Option<[char; 3]> {
+        let section = self.num_sections().iter().find(|s| s.kind == SecKind::Date)?;
+        let mut order = Vec::new();
+        for token in &section.toks {
+            let part = match token {
+                Tok::Date(DatePart::Year(_)) => 'y',
+                Tok::Date(DatePart::Month(_)) => 'm',
+                Tok::Date(DatePart::Day(1 | 2)) => 'd',
+                _ => continue,
+            };
+            if !order.contains(&part) {
+                order.push(part);
+            }
+        }
+        order.try_into().ok()
     }
 
     pub fn is_percent(&self) -> bool {

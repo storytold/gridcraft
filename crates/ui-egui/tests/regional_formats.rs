@@ -1,6 +1,6 @@
 //! Cells show numbers and dates in the display region (`Session::display_locale`): its
 //! separators for a format's `.` and `,`, its short date for the built-in date format. The
-//! values, codes and everything outside the grid stay en-US.
+//! values and codes stay invariant; interactive scalar entry follows the same numeric region.
 
 use egui::Shape;
 use egui_kittest::kittest::Queryable as _;
@@ -183,4 +183,60 @@ fn intentional_number_format_edits_can_replace_custom_date_identity() {
         confirm_custom_date(&mut h, false, false);
         assert!(painted(&h, "01.01.2024"));
     }
+}
+
+/// Enter and F2 share regional text without changing an untouched cell or its undo history.
+#[test]
+fn romanian_enter_and_unchanged_f2_keep_the_same_number() {
+    let mut h = harness(Some("ro-RO"));
+    let app = h.state_mut();
+    app.session.execute("selection.set", json!({"range":"A4"})).unwrap();
+    app.begin_edit(Some("1,234".into()), false);
+    assert!(app.commit_edit(0, 0, false, false));
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "1,234");
+    assert!(app.commit_edit(0, 0, false, false));
+    app.session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(
+        app.session.active().unwrap().wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(3, 0)),
+        gridcraft_engine::core::Value::Empty
+    );
+}
+
+/// Validation sees the canonical number; a region switch while a draft is open cannot reinterpret it.
+#[test]
+fn romanian_drafts_capture_the_region_and_validate_the_stored_number() {
+    let mut h = harness(Some("ro-RO"));
+    let app = h.state_mut();
+    app.session.execute("data.validation", json!({"range":"A4","type":"decimal","operator":"between","formula1":"0","formula2":"2"})).unwrap();
+    app.session.execute("selection.set", json!({"range":"A4"})).unwrap();
+    app.begin_edit(Some("1,234".into()), false);
+    app.session.display_locale = Locale::EN_US;
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(
+        app.session.active().unwrap().wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(3, 0)),
+        gridcraft_engine::core::Value::Number(1.234)
+    );
+    app.session.display_locale = Locale::from_tag("ro-RO");
+    app.begin_edit(Some("3,5".into()), false);
+    assert!(!app.commit_edit(0, 0, false, false));
+    assert_eq!(app.editor.as_ref().unwrap().text, "3,5");
+}
+
+/// The actual UI clipboard path is regional; direct programmatic app commands stay invariant.
+#[test]
+fn romanian_external_text_paste_and_programmatic_calls_are_distinct() {
+    let mut h = harness(Some("ro-RO"));
+    let app = h.state_mut();
+    app.session.execute("selection.set", json!({"range":"D1"})).unwrap();
+    app.paste_external("1,234\t04.03.2026\n1.234,56\t12,5%".into());
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.value(gridcraft_engine::core::CellRef::new(0, 3)), gridcraft_engine::core::Value::Number(1.234));
+    assert_eq!(sh.value(gridcraft_engine::core::CellRef::new(0, 4)), gridcraft_engine::core::Value::Number(46085.0));
+    app.run("cell.set", json!({"cell":"A4","input":"1,234"})).unwrap();
+    assert_eq!(
+        app.session.active().unwrap().wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(3, 0)),
+        gridcraft_engine::core::Value::Number(1234.0)
+    );
+    h.run_steps(3);
 }

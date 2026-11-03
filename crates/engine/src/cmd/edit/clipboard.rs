@@ -1,4 +1,3 @@
-use super::cell::input_to_cell;
 use super::paste_special::paste_special;
 use super::{
     Cell, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, bad, bool_param, cell_param_on, edit, json, ok, str_param, target_ranges,
@@ -199,6 +198,7 @@ pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
+    let locale = crate::entry::locale_from_params(p)?;
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
     let rows: Vec<Vec<String>> = parse_tsv(text);
@@ -211,7 +211,8 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, locale.as_ref())
+                    .unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 if let Some(cl) = cell.as_mut() {
                     numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
                 }

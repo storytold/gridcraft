@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (use the Windows format locale for regional display; no readiness reassessment) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (use the Windows format locale for regional display; no readiness reassessment) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -37,8 +37,10 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US formulas and input; regional display.** Function names, the `,` argument separator,
-  typed numbers and dates, the cell editor, files, commands, CSV and `TEXT()` are en-US. The
+- **Invariant formulas/commands; regional display and interactive numeric entry.** Function names,
+  the `,` argument separator, files, ordinary commands, CSV and `TEXT()` remain en-US. Explicit
+  front-end entry, F2/formula-bar text, Ctrl+Enter and external text paste use the numeric region;
+  draft validation uses the same canonical value that will be stored. The
   grid shows numbers and dates in the system's region (`numfmt::Locale`, from the Region setting
   on macOS, `LC_NUMERIC` / `LC_ALL` / `LANG` on Linux and the user locale on Windows, not the
   interface language: CH/LI, DE/AT/LU/RO, FR, GB/IE/SG, IT/ES/BR, NL, JP, CN): its decimal and digit-group
@@ -152,3 +154,6 @@ language (none so far) and of localized function names.
 | 2026-10-11 | minor | Czech (cs) ribbon table: 266 labels (~12%), menus only |
 | 2026-10-10 | minor | Re-measured after #31, #104, #82, #38 merged: ribbon translated into ja, zh, ko, pt-BR and ru (266–268 labels, ~12%), system-language default, CJK/Thai/Hebrew font fallback; ~10% ready, 100–165 h |
 | 2026-10-10 | major | Created: English only, no catalog, ~2,200 strings, script-support gaps, open language PRs |
+
+
+**#2933 interactive follow-up (2026-11-03):** Regional scalar entry and editor text share an explicit boundary; commands and imports remain invariant. Synthetic controls cover Romanian decimals/grouping, short dates, both date systems, mixed Text/numeric fills, validation, draft-region changes and XLSX saves. Full language-specific currency/month-name parsing and native Excel/Windows/Linux acceptance remain open.

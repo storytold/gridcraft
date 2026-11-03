@@ -56,7 +56,7 @@ impl SheetApp {
         } else {
             match sh.cell(at) {
                 Some(c) if c.formula.is_some() => formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet()),
-                _ => gridcraft_engine::display::edit_text(&d.wb, sh, at),
+                _ => gridcraft_engine::entry::editing_text(&d.wb, d.wb.active_sheet(), at, &self.session.display_locale),
             }
         };
         let (text, replace) = match text {
@@ -66,6 +66,7 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
+        ed.number_locale = self.session.display_locale.clone();
         if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
@@ -161,9 +162,14 @@ impl SheetApp {
             }
             None => text,
         };
+        // Validation sees the same canonical value the interactive command will store.
+        let validation_text = self
+            .session
+            .active()
+            .map_or_else(|| text.clone(), |d| gridcraft_engine::entry::canonical_input(&d.wb, ed.sheet, ed.cell, &text, &ed.number_locale));
         // Data validation.
         if let Some(d) = self.session.active()
-            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &validation_text)
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
@@ -194,9 +200,9 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.session.run_interactive("range.fill", json!({"input": text}), &ed.number_locale)
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.session.run_interactive("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}), &ed.number_locale)
         };
         match r {
             Ok(_) => {

@@ -323,3 +323,6 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+
+**#2933 interactive follow-up (2026-11-03):** Romanian-looking numeric input no longer reaches the invariant parser unchanged. Interactive entry, F2, validation, Ctrl+Enter and external text paste share regional normalization; direct commands and imports retain their existing conventions. Synthetic regression and XLSX coverage only; no readiness reassessment.

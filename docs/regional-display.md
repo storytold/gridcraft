@@ -46,8 +46,10 @@ format region and does not change operating-system settings.
 - Grid painting, Page Layout painting and column AutoFit use the same session locale.
   `snapshot --locale ro-RO` overrides the system locale before executing commands.
 - Stored numbers, date serials (both 1900 and 1904), formulas and number-format codes stay
-  invariant. Input parsing, the editor, command display text, CSV and `TEXT()` keep their existing
-  en-US behavior. Printed/exported PDF text also keeps the existing invariant behavior.
+  invariant. Interactive numeric entry, F2/formula-bar text, Ctrl+Enter and external text paste
+  use the captured region through an explicit front-end boundary. Ordinary engine/control/CLI
+  calls, imports, command display text, CSV and `TEXT()` keep their existing en-US behavior.
+  Printed/exported PDF text also keeps the existing invariant behavior.
 
 ## Model representation
 
@@ -77,8 +79,12 @@ Generated binary fixtures are not committed.
 
 ## Remaining limits
 
-This is regional display, not full locale support. No automatic currency-symbol substitution,
-localized input/parser or translated month/day names is added. Built-ins 15–21 retain their
+This adds regional display and numeric interactive entry, not full locale support. There is no
+new currency-symbol or translated month/day-name catalog. Numeric dates follow the effective
+cell format (the regional short date for built-ins 14/22 and General; explicit custom dates
+retain their order). ISO dates remain unambiguous. Malformed regional numbers that the en-US
+parser could misread remain text. The en-US entry boundary retains the existing behavior;
+comprehensive format-sensitive en-US date entry remains separate upstream work (#3106). Built-ins 15–21 retain their
 existing behavior. Unsupported ICU patterns (month names, eras, week-years or unsupported
 literals) fall back to the region table; Gregorian date rendering remains the existing renderer.
 Custom OS number separators and custom Windows/Linux short-date preferences are not queried.
@@ -97,3 +103,20 @@ without modifying the workstation settings. No Excel-produced fixtures or vendor
 
 - [Microsoft GetUserDefaultLocaleName](https://learn.microsoft.com/en-us/windows/win32/api/winnls/nf-winnls-getuserdefaultlocalename)
   specifies the user default locale-name API used by the Windows-only safe wrapper.
+
+
+## Interactive entry follow-up — 2026-11-03
+
+`1,234` entered in a Romanian region stores 1.234, not 1234; `04.03.2026` stores 4 March.
+The editor keeps full numeric precision and uses a date spelling only when it reads back to the
+same value. Drafts capture their numeric region independently of the interface/formula language.
+Validation sees the canonical value before commit. Ctrl+Enter respects each destination's Text
+format, and structured internal clipboard data keeps its original values. The regular command
+lifecycle still owns protection, undo, recalculation and error recovery; the numeric region is not a saved workbook setting. Recorded commands retain an explicit
+`inputLocale` snapshot so automation replay reads the same values.
+
+This small adapter does not copy or introduce the shared Region data/parser stack under review
+in [#3048](https://github.com/storytold/gridcraft/pull/3048), or the destination-format date changes
+in [#3106](https://github.com/storytold/gridcraft/pull/3106). Those remain separate work; a future
+accepted parser can replace this front-end normalization without changing invariant callers.
+Original #2263 credit to @pick2510 and its ancestry remain intact.

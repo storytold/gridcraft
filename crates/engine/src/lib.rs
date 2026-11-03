@@ -12,6 +12,7 @@ mod chart_svg;
 mod clip_html;
 pub mod cmd;
 pub mod display;
+pub mod entry;
 pub mod fill;
 pub mod io;
 pub mod links;
@@ -1095,6 +1096,20 @@ impl Session {
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Run one typed entry or external text paste through the regular command lifecycle. The
+    /// explicit input snapshot is recorded with the command, so replay cannot reinterpret it.
+    /// Ordinary `run`/`execute` calls without `inputLocale` remain invariant.
+    pub fn run_interactive(&mut self, id: &str, mut params: Json, locale: &gridcraft_numfmt::Locale) -> std::result::Result<Json, String> {
+        if matches!(id, "cell.set" | "range.fill" | "edit.paste") && locale != &gridcraft_numfmt::Locale::EN_US {
+            let object = params.as_object_mut().ok_or("Interactive input parameters must be an object.")?;
+            object.insert(
+                "inputLocale".into(),
+                serde_json::json!({"decimal":locale.decimal.to_string(),"group":locale.group.to_string(),"shortDate":locale.short_date}),
+            );
+        }
+        self.run(id, params)
     }
 
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {
