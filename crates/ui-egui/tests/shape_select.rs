@@ -34,7 +34,7 @@ fn fixture_of(kind: &str) -> (Harness, u32) {
         SheetApp::new(session, Default::default()),
     );
     h.run_steps(4);
-    h.state_mut().selected_chart = None;
+    h.state_mut().selected_object = None;
     h.run_steps(2);
     (h, id)
 }
@@ -74,7 +74,7 @@ fn clicking_a_shape_selects_it() {
     h.run_steps(2);
     button(&mut h, c, true);
     button(&mut h, c, false);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id));
     assert_eq!(h.state().session.active().unwrap().selection.current().start, CellRef::parse("A1").unwrap());
 }
 
@@ -202,7 +202,7 @@ fn a_turned_shape_is_hit_inside_its_turned_outline() {
     h.run_steps(2);
     button(&mut h, below, true);
     button(&mut h, below, false);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object.map(|o| o.id), Some(id));
 }
 
 fn key(h: &mut Harness, key: egui::Key, modifiers: Modifiers) {
@@ -229,7 +229,7 @@ fn escape_deselects_the_shape() {
     let (mut h, id) = fixture();
     select(&mut h, id);
     key(&mut h, egui::Key::Escape, Modifiers::NONE);
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_object, None);
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn arrow_keys_follow_the_screen_on_a_right_to_left_sheet() {
     let (mut h, id) = fixture();
     h.state_mut().session.execute("view.rightToLeft", json!({"on": true})).unwrap();
     h.run_steps(2);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Shape, id));
     h.run_steps(2);
     let x = |h: &Harness| {
         let a = anchor(h, id);

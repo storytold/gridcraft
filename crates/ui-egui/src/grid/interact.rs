@@ -1,3 +1,5 @@
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use super::editor::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
@@ -10,45 +12,6 @@ use super::{
 };
 
 // ------------------------------------------------------------------ interaction
-
-/// The selected floating object, if it is on this sheet.
-pub(super) struct Selected {
-    pub(super) kind: &'static str,
-    pub(super) id: u32,
-    /// Screen rect, before turning.
-    pub(super) rect: Rect,
-    /// Degrees clockwise.
-    pub(super) deg: f32,
-    /// Whether it shows a rotation handle.
-    rotates: bool,
-    /// Whether it shows resize handles (an ink stroke does not scale with its frame).
-    resizes: bool,
-    /// The cell area: handles act only inside it, not over the headers.
-    cells: Rect,
-}
-
-pub(super) fn selected_object(app: &SheetApp, geo: &Geo, sh: &Sheet) -> Option<Selected> {
-    let id = app.selected_chart?;
-    let kind = ["slicer", "chart", "image", "shape"].into_iter().find(|k| object_anchor(sh, k, id).is_some())?;
-    let a = object_anchor(sh, kind, id)?;
-    let shape = sh.shapes.iter().find(|s| kind == "shape" && s.id == id);
-    let deg = shape.map_or(0.0, |s| s.rotation);
-    let rotates = shape.is_some_and(|s| s.kind != gridcraft_engine::model::ShapeKind::Ink);
-    let rect = crate::chartview::anchor_rect(geo, sh, &a);
-    Some(Selected { kind, id, rect, deg, rotates, resizes: rotates || shape.is_none(), cells: geo.cells })
-}
-
-impl Selected {
-    pub(super) fn grab_at(&self, p: Pos2) -> Option<crate::frame::Grab> {
-        if !self.cells.contains(p) {
-            return None;
-        }
-        match crate::frame::grab_at(self.rect, self.deg, self.rotates, p) {
-            Some(crate::frame::Grab::Resize(_)) if !self.resizes => None,
-            g => g,
-        }
-    }
-}
 
 struct InteractionInput<'a> {
     ui: &'a mut egui::Ui,
@@ -143,7 +106,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         && let Some(p) = pos
         && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
-        app.selected_chart = Some(id);
+        app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
         match act {
             crate::chartview::SlicerAction::Toggle(value) => {
                 let _ = app.run("slicer.toggle", json!({"slicer": id, "value": value, "multi": mods.command || mods.ctrl}));
@@ -159,46 +122,46 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let primary_drag = resp.drag_started_by(egui::PointerButton::Primary);
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
-        let at = if primary_drag { pointer.press_origin().or(pos) } else { pos };
-        // The selected object's handles reach past its edge, so they win over a plain hit.
-        let on_handle = at.and_then(|p| selected_object(app, geo, sh).filter(|s| s.grab_at(p).is_some())).map(|s| (s.kind, s.id, s.rect));
-        if let Some(p) = at
-            && let Some((kind, id, _)) = on_handle.or_else(|| crate::chartview::hit(app, geo, sh, p))
+        let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
+        if primary_drag
+            && let Some(p) = at
+            && let Some((obj, rect)) = crate::chartview::selected_rotate(app, geo, sh, p)
         {
-            let was_selected = app.selected_chart == Some(id);
-            app.selected_chart = Some(id);
-            if kind == "shape"
-                && resp.double_clicked()
-                && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
-            {
-                app.begin_text_box_edit(id);
+            app.grid.drag = Drag::Rotate { obj, rect, stepped: false };
+            return;
+        }
+        // The selected object's handles reach a little outside it, so they win over hit-testing.
+        // Only they resize: a press anywhere on another object selects and moves it, as the
+        // hover cursor shows.
+        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
+        let handle = on_handle.map(|(.., h)| h);
+        if let Some(p) = at
+            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
+        {
+            app.selected_object = Some(obj);
+            if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
                 return;
             }
-            if kind == "chart" && resp.double_clicked() {
-                app.grid.pane = Some("formatChart".into());
-            }
-            if primary_drag {
-                let a = object_anchor(sh, kind, id);
-                let sel = selected_object(app, geo, sh);
-                let grab = sel.as_ref().filter(|_| was_selected).and_then(|s| s.grab_at(p)).unwrap_or(crate::frame::Grab::Move);
-                if let (Some(a), Some(s)) = (a, sel) {
-                    let orig = (a.cell, a.dx, a.dy, a.width, a.height);
-                    app.grid.drag = Drag::Object { kind, id, start: p, orig, grab, rect: s.rect, deg: s.deg };
+            if primary_drag && let Some(a) = sh.object_anchor(obj) {
+                app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle, stepped: false };
+                // The first recognised drag frame already holds movement away from the press.
+                if let Some(now) = pos {
+                    drag_object(app, geo, sh, now);
                 }
             }
             return;
         }
-        app.selected_chart = None;
+        app.selected_object = None;
     }
     // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
     // under it; a right press that wobbles into a drag counts too (#2067).
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
-        && let Some((kind, id, _)) = crate::chartview::hit(app, geo, sh, p)
+        && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
     {
-        app.selected_chart = Some(id);
-        app.grid.object_menu = Some((geo.mirror_pos(p), kind, id));
+        app.selected_object = Some(obj);
+        app.grid.object_menu = Some((geo.mirror_pos(p), obj.kind.name(), obj.id));
         return;
     }
 
@@ -269,10 +232,10 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                         ))
                     })
                     .collect();
-                input
-                    .ui
-                    .painter()
-                    .add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0 * geo.z, Color32::from_rgb(0x1F, 0x5F, 0xC9))));
+                // The line under the pointer is the ink the stroke will commit (#1786).
+                let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+                let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
+                input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
@@ -282,7 +245,7 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
             if let Some(p) = pos
-                && let Some(("shape", id, _)) = crate::chartview::hit(app, geo, sh, p)
+                && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
                 let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
@@ -291,6 +254,17 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         }
     }
     false
+}
+
+/// The colour and width (points) of the ink a pen stroke commits, as `draw.stroke` stores it (the
+/// pen's colour, pen blue by default; its width, 2 pt by default, kept to 0.5–40 pt and stored
+/// whole) and as Ink shapes paint it (a highlighter, over 8 pt, is translucent).
+pub(crate) fn pen_ink(color: &str, width: f32, theme: &gridcraft_engine::model::Theme) -> (Color32, f32) {
+    let pen_blue = gridcraft_engine::model::Color::rgb(0x1F, 0x5F, 0xC9);
+    let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
+    let width = if width <= 0.0 { 2.0 } else { width }.clamp(0.5, 40.0).round().max(1.0);
+    let color = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
+    (crate::chartview::ink_color(color, width), width)
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
@@ -351,6 +325,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         if point_header(app, wb, sh, RangeRef::cols(c, c), mods.shift, mods.command) {
+            point_header_first_move(app, input);
             return;
         }
         // An armed Format Painter paints the columns dragged over instead of moving them.
@@ -381,6 +356,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
         }
         let r = geo.row_at(sh, p.y);
         if point_header(app, wb, sh, RangeRef::rows(r, r), mods.shift, mods.command) {
+            point_header_first_move(app, input);
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
@@ -656,6 +632,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
+            drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
+                point_header_to(app, geo, sh, wb, &drag, p);
+                scroll_by(app, if matches!(drag, Drag::PointRows(_)) { vec2(0.0, auto.y) } else { vec2(auto.x, 0.0) });
+            }
             Drag::MoveCols { source, .. } => {
                 let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
                 let midpoint = geo.x(sh, col) + sh.col_width(col) * geo.z * 0.5;
@@ -710,36 +690,8 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
             }
-            Drag::Object { kind, id, grab: crate::frame::Grab::Rotate, rect, .. } => {
-                let deg = crate::frame::angle_to(rect, p, mods.shift);
-                let _ = app.session.run("object.move", json!({"kind": kind, "id": id, "rotation": deg}));
-                coalesce_last_undo(app);
-            }
-            Drag::Object { kind, id, start, orig, grab, deg, .. } => {
-                let d = (p - start) / geo.z;
-                let (cell, dx, dy, w, h) = orig;
-                // Sheet coordinates of the object as the drag began.
-                let r0 = Rect::from_min_size(pos2(sh.col_left(cell.col) as f32 + dx, sh.row_top(cell.row) as f32 + dy), vec2(w, h));
-                let r = match grab {
-                    crate::frame::Grab::Resize(h) => {
-                        // A line or arrow can be flat on one axis: keep that axis flat.
-                        let h = crate::frame::Handle { x: if r0.width() < 1.0 { 0 } else { h.x }, y: if r0.height() < 1.0 { 0 } else { h.y } };
-                        crate::frame::resized_turned(r0, deg, h, d, 20.0, mods.shift)
-                    }
-                    _ => r0.translate(d),
-                };
-                // Re-anchor at the cell under the new top-left.
-                let (x0, y0) = (r.min.x.max(0.0), r.min.y.max(0.0));
-                let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
-                let mut params =
-                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
-                if matches!(grab, crate::frame::Grab::Resize(_)) {
-                    params["width"] = json!(r.width());
-                    params["height"] = json!(r.height());
-                }
-                let _ = app.session.run("object.move", params);
-                coalesce_last_undo(app);
-            }
+            Drag::Object { .. } => drag_object(app, geo, sh, p),
+            Drag::Rotate { obj, rect, .. } => rotate_object(app, obj, rect, p, input.modifiers.shift),
             Drag::None => {}
         }
     }
@@ -761,6 +713,14 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             // Whole rows or columns clicked or dragged over by their headers.
             Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
+            // The release may be the first frame to report the pointer's last position.
+            drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    point_header_to(app, geo, sh, wb, &drag, p);
+                }
+            }
             // Esc mid-drag lands here too (egui ends the drag on Esc): no menu, and the key is
             // spent on the drag so the grid's Esc doesn't also drop the copy.
             Drag::Fill { target: Some(t), menu: true } => {
@@ -792,9 +752,9 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::Move { to: Some(to), .. } => {
                 let src = sel.current();
+                // Dropping on cells that hold data asks first, as in Excel.
                 if to != src.start {
-                    let _ = app.session.run("edit.cut", json!({"range": src.a1()}));
-                    let _ = app.run("edit.paste", json!({"at": to.a1()}));
+                    crate::macro_ui::call(app, "GridCraft", "range.move", json!({"range": src.a1(), "to": to.a1()}));
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {
@@ -824,11 +784,13 @@ fn format_painter_apply(app: &mut SheetApp) {
     }
 }
 
-/// Point mode on a header: inserts a whole-row or whole-column reference instead of selecting.
+/// Point mode on a header: inserts a whole-row or whole-column reference instead of selecting,
+/// and dragging on from there extends it.
 fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, extend: bool, add: bool) -> bool {
     let Some(ed) = app.editor.as_mut().filter(|ed| ed.can_point()) else { return false };
     let edit_sheet = ed.sheet;
     let active_sheet = wb.active_sheet();
+    let pressed = range;
     let range = if extend {
         ed.point
             .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
@@ -849,9 +811,7 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     } else {
         range
     };
-    let reference = range.a1();
-    let reference =
-        if ed.sheet != wb.active_sheet() { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference };
+    let reference = header_reference(ed, wb, sh, range);
     if add {
         ed.append_ref(&reference);
     } else {
@@ -860,7 +820,51 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     ed.point_anchor = None;
     ed.point_cell = Some(range.start);
     ed.request_focus = true;
+    // The drag keeps the end of the reference the press didn't land on.
+    app.grid.drag = if range.is_full_cols() {
+        Drag::PointCols(if range.start.col == pressed.start.col { range.end.col } else { range.start.col })
+    } else {
+        Drag::PointRows(if range.start.row == pressed.start.row { range.end.row } else { range.start.row })
+    };
     true
+}
+
+fn header_reference(ed: &EditState, wb: &Workbook, sh: &Sheet, range: RangeRef) -> String {
+    let reference = range.a1();
+    if ed.sheet != wb.active_sheet() { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference }
+}
+
+/// The frame that starts a drag reports no `dragged()`, so its movement is applied here.
+fn point_header_first_move(app: &mut SheetApp, input: &InteractionInput<'_>) {
+    if input.response.drag_started()
+        && let Some(p) = input.position
+    {
+        let drag = app.grid.drag.clone();
+        point_header_to(app, input.geo, input.sheet, input.workbook, &drag, p);
+    }
+}
+
+/// Point mode dragged over the headers: the pointed reference runs from the anchor to the pointer.
+fn point_header_to(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, drag: &Drag, p: Pos2) {
+    // The pointer's end moves with Shift+arrow next; the opposite corner keeps it a whole column or row.
+    let (range, pointer, opposite) = match *drag {
+        Drag::PointCols(anchor) => {
+            let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
+            let range = RangeRef::cols(anchor.min(col), anchor.max(col));
+            (range, CellRef::new(range.start.row, col), CellRef::new(range.end.row, anchor))
+        }
+        Drag::PointRows(anchor) => {
+            let row = geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+            let range = RangeRef::rows(anchor.min(row), anchor.max(row));
+            (range, CellRef::new(row, range.start.col), CellRef::new(anchor, range.end.col))
+        }
+        _ => return,
+    };
+    let Some(ed) = app.editor.as_mut().filter(|ed| ed.point_at_caret()) else { return };
+    let reference = header_reference(ed, wb, sh, range);
+    ed.insert_ref(&reference);
+    ed.point_cell = Some(pointer);
+    ed.point_anchor = Some((wb.active_sheet(), opposite));
 }
 
 fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p: Pos2) {
@@ -964,7 +968,7 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
             return 0;
         }
         let c = geo.col_at(sh, p.x);
-        let (l, r) = (geo.x(sh, c), geo.x(sh, c.saturating_add(1).min(MAX_COLS - 1)));
+        let (l, r) = (geo.x(sh, c), geo.x_end(sh, c));
         let b = if p.x - l > r - p.x { c.saturating_add(1) } else { c };
         let room = geo.ci.at((((geo.cells.width() - 40.0) / geo.z).max(0.0)) as f64);
         b.min(room).min(MAX_COLS - 1)
@@ -973,7 +977,7 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
             return 0;
         }
         let rr = geo.row_at(sh, p.y);
-        let (t, b2) = (geo.y(sh, rr), geo.y(sh, rr.saturating_add(1).min(MAX_ROWS - 1)));
+        let (t, b2) = (geo.y(sh, rr), geo.y_end(sh, rr));
         let b = if p.y - t > b2 - p.y { rr.saturating_add(1) } else { rr };
         let room = geo.ri.at((((geo.cells.height() - 40.0) / geo.z).max(0.0)) as f64);
         b.min(room).min(MAX_ROWS - 1)
@@ -1030,24 +1034,13 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
 }
 
-fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::model::Anchor> {
-    match kind {
-        "chart" => sh.charts.iter().find(|c| c.id == id).map(|c| c.anchor),
-        "image" => sh.images.iter().find(|c| c.id == id).map(|c| c.anchor),
-        "slicer" => sh.slicers.iter().find(|c| c.id == id).map(|c| c.anchor),
-        "shape" => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
-        _ => None,
-    }
-}
-
 /// Arrow-key nudge of a selected object, sheet points (Ctrl/Alt: fine).
 const NUDGE: f32 = 6.0;
 
-/// Keys aimed at the selected object rather than the cells: arrows nudge it, Escape deselects
-/// it, Enter/F2 edits a text box's text.
-pub(super) fn object_key(app: &mut SheetApp, geo: &Geo, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
+/// Arrow keys aimed at the selected object rather than the cells: they nudge it.
+pub(super) fn object_key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
     use egui::Key;
-    let Some(s) = selected_object(app, geo, sh) else { return false };
+    let Some(o) = app.selected_object else { return false };
     let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
     // Arrows follow the screen: a right-to-left sheet is mirrored.
     let sx = if sh.right_to_left { -step } else { step };
@@ -1056,43 +1049,85 @@ pub(super) fn object_key(app: &mut SheetApp, geo: &Geo, sh: &Sheet, key: egui::K
         Key::ArrowRight => vec2(sx, 0.0),
         Key::ArrowUp => vec2(0.0, -step),
         Key::ArrowDown => vec2(0.0, step),
-        Key::Escape => {
-            app.selected_chart = None;
-            return true;
-        }
-        Key::Enter | Key::F2 if sh.shapes.iter().any(|x| x.id == s.id && x.kind == gridcraft_engine::model::ShapeKind::TextBox) => {
-            app.begin_text_box_edit(s.id);
-            return true;
-        }
         _ => return false,
     };
     // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
     if m.shift || m.mac_cmd {
         return false;
     }
-    let Some(a) = object_anchor(sh, s.kind, s.id) else { return false };
+    let Some(a) = sh.object_anchor(o) else { return false };
     let x0 = (sh.col_left(a.cell.col) as f32 + a.dx + d.x).max(0.0);
     let y0 = (sh.row_top(a.cell.row) as f32 + a.dy + d.y).max(0.0);
     let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
-    let params = json!({"kind": s.kind, "id": s.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+    let params =
+        json!({"kind": o.kind.name(), "id": o.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
     app.run_or_alert("object.move", params);
     true
 }
 
-pub(super) fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
-    let Some(id) = app.selected_chart else { return false };
-    let kind = if sh.charts.iter().any(|object| object.id == id) {
-        "chart"
-    } else if sh.images.iter().any(|object| object.id == id) {
-        "image"
-    } else if sh.shapes.iter().any(|object| object.id == id) {
-        "shape"
-    } else {
-        return false;
+/// Turns the dragged shape so its rotation handle points at `p`; the drag is one undo step.
+fn rotate_object(app: &mut SheetApp, obj: ObjRef, rect: Rect, p: Pos2, snap: bool) {
+    let deg = crate::frame::angle_to(rect, p, snap);
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", json!({"kind": obj.kind.name(), "id": obj.id, "rotation": deg}));
+    let Drag::Rotate { stepped, .. } = app.grid.drag else { return };
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Rotate { stepped, .. } = &mut app.grid.drag
+    {
+        *stepped = true;
+    }
+}
+
+/// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
+/// (logical coordinates). The whole drag coalesces into one undo step of its own.
+fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let Drag::Object { obj, start, orig, handle, stepped } = app.grid.drag.clone() else { return };
+    let d = (p - start) / geo.z;
+    let (cell, dx, dy, w, h) = orig;
+    let x0 = sh.col_left(cell.col) as f32 + dx;
+    let y0 = sh.row_top(cell.row) as f32 + dy;
+    let frame_deg = crate::chartview::frame_of(sh, obj).0;
+    let [x0, y0, x1, y1] = match handle {
+        Some(hd) if frame_deg != 0.0 => {
+            let fh = crate::frame::Handle { x: hd.sides().0, y: hd.sides().1 };
+            let r0 = Rect::from_min_max(pos2(x0, y0), pos2(x0 + w, y0 + h));
+            let r = crate::frame::resized_turned(r0, frame_deg, fh, d, 8.0, false);
+            let (nx, ny) = (r.min.x.max(0.0), r.min.y.max(0.0));
+            [nx, ny, r.max.x.max(nx + 8.0), r.max.y.max(ny + 8.0)]
+        }
+        Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
+        None => {
+            let (x0, y0) = ((x0 + d.x).max(0.0), (y0 + d.y).max(0.0));
+            [x0, y0, x0 + w, y0 + h]
+        }
     };
-    app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-    app.selected_chart = None;
-    true
+    // Re-anchor at the cell under the new top-left.
+    let nc = CellRef::new(sh.row_at(y0 as f64), sh.col_at(x0 as f64));
+    let mut params = json!({
+        "kind": obj.kind.name(), "id": obj.id, "at": nc.a1(),
+        "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32,
+    });
+    // Only a handle changes the size. A body move sends none, so the engine keeps whatever the
+    // object has: a file can make it larger than `object.move` accepts for a new size, and
+    // moving it must not shrink it to that limit.
+    if handle.is_some()
+        && let Some(p) = params.as_object_mut()
+    {
+        p.insert("width".into(), json!(x1 - x0));
+        p.insert("height".into(), json!(y1 - y0));
+    }
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", params);
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Object { stepped, .. } = &mut app.grid.drag
+    {
+        // The first step of this drag stays apart from an earlier drag's step of the same name.
+        *stepped = true;
+    }
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
@@ -1110,11 +1145,13 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
     }
 }
 
-/// Used by `EditState` users to keep the active cell visible while pointing.
-pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
+/// Moves the pointed cell one step, or with `jump` (Ctrl+arrow) to the edge of its data region;
+/// `extend` (Shift) moves the far end of the pointed range instead. Keeps the pointed cell visible.
+pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool, jump: bool) {
     let Some(d) = app.session.active() else { return };
+    let Some(sheet) = d.wb.active() else { return };
     let from = ed.point_cell.unwrap_or(ed.cell);
-    let to = from.offset_clamped(dr, dc);
+    let to = if jump { gridcraft_engine::selection::jump(sheet, from, dr.signum(), dc.signum()) } else { from.offset_clamped(dr, dc) };
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
@@ -1132,9 +1169,27 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    let text = if ed.sheet != d.wb.active_sheet() { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sheet.name)) } else { text };
     let sheet = d.wb.active_sheet();
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pen_preview_is_the_ink_the_stroke_commits() {
+        // #1786: the preview was always blue at 2 pt, whatever the pen.
+        let theme = gridcraft_engine::model::Theme::default();
+        assert_eq!(pen_ink("#C00000", 3.0, &theme), (Color32::from_rgb(0xC0, 0, 0), 3.0));
+        assert_eq!(pen_ink("", 0.0, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 2.0), "no pen chosen yet: pen blue, 2 pt");
+        assert_eq!(pen_ink("not a colour", 0.2, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 1.0));
+        // A highlighter is wide and translucent, as the committed ink is painted.
+        let (c, w) = pen_ink("#FFFF00", 12.0, &theme);
+        assert_eq!((c, w), (Color32::from_rgb(0xFF, 0xFF, 0).gamma_multiply(0.45), 12.0));
+    }
 }

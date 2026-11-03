@@ -63,6 +63,7 @@ fn exported_ink_has_a_visible_unfilled_path_and_correct_stroke() {
             text: "-10.0,5.0;50.0,40.0;90.0,10.0".into(),
             format: Default::default(),
             rotation: 0.0,
+            math: Default::default(),
         });
     }
     let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };

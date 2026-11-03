@@ -1,5 +1,5 @@
 use super::geo::Geo;
-use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge, selected_object};
+use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
@@ -30,7 +30,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     // has Drag::None and uses hover. A click can briefly leave a drag state after release.
     if resp.dragged()
         && pointer.primary_down()
-        && let Some(cursor) = drag_cursor(&app.grid.drag)
+        && let Some(cursor) = drag_cursor(&app.grid.drag, geo.rtl)
     {
         ctx.set_cursor_icon(cursor);
         return;
@@ -42,18 +42,20 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
 }
 
-/// The cursor a held drag shows, or `None` when the drag leaves it to hover.
-fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
+/// The cursor a held drag shows, or `None` when the drag leaves it to hover. `rtl` swaps the
+/// diagonal resize cursors of an object's corner handles on a mirrored sheet.
+fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
     match drag {
         Drag::None => None,
         Drag::Select => Some(CursorIcon::Cell),
-        Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+        Drag::Rows(_) | Drag::Cols(_) | Drag::PointRows(_) | Drag::PointCols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-        Drag::Move { .. } | Drag::MoveCols { .. } => Some(CursorIcon::Move),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-        Drag::Object { grab, deg, .. } => Some(grab.cursor(*deg)),
+        Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
+        Drag::Rotate { .. } => Some(CursorIcon::Crosshair),
     }
 }
 
@@ -75,16 +77,19 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let border_panes = geo.range_panes(sel.current());
     let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
     let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
-    let grabbed = match app.grid.drag {
-        Drag::None => selected_object(app, geo, sh).and_then(|s| Some((s.grab_at(p)?, s.deg))),
-        _ => None,
-    };
-    if let Some((grab, deg)) = grabbed {
-        ctx.set_cursor_icon(grab.cursor(deg));
-    } else if in_cells && crate::chartview::hit(app, geo, sh, p).is_some() {
+    // The selected object's handles resize it; any object's body moves it.
+    let idle = app.grid.drag == Drag::None && app.editor.is_none();
+    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p) } else { None };
+    let on_object = idle && crate::chartview::hit(app, geo, sh, p).is_some();
+    let on_rotate = idle && crate::chartview::selected_rotate(app, geo, sh, p).is_some();
+    if on_rotate {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+    } else if let Some((o, _, h)) = object_handle {
+        let deg = crate::chartview::frame_of(sh, o).0;
+        ctx.set_cursor_icon(if deg == 0.0 { h.cursor(geo.rtl) } else { crate::frame::Handle { x: h.sides().0, y: h.sides().1 }.cursor(deg) });
+    } else if on_object {
         ctx.set_cursor_icon(CursorIcon::Move);
     } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
-        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
         header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);

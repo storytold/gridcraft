@@ -1,10 +1,10 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures and shapes.
+//! we paint with egui), pictures, shapes, equations and slicers.
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -264,6 +264,23 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     if objects_hidden(wb) {
         return painted;
     }
+    // Source outlines stay in cell space beneath every floating object.
+    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
+        && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
+    {
+        for s in &ch.series {
+            if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
+                && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
+            {
+                let rr = geo.range_rect(sh, rf.range());
+                let color = Tokens::get(p.ctx()).ref_color(0, true);
+                for pane in geo.range_panes(rf.range()) {
+                    let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
+                    pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
+                }
+            }
+        }
+    }
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
@@ -299,11 +316,12 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
             ShapeKind::Ink => {
-                let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
+                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                let w = pt * geo.z;
                 let pts: Vec<Pos2> =
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
-                    let col = if w > 8.0 { line.gamma_multiply(0.45) } else { line };
+                    let col = ink_color(line, pt);
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
                 }
                 label = false;
@@ -313,6 +331,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     let t = Tokens::get(p.ctx());
                     crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
+                label = false;
+            }
+            ShapeKind::Equation => {
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
                 label = false;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
@@ -331,9 +353,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if sp.rotation != 0.0 {
             turn_painted(p, start, r.center(), sp.rotation);
         }
-        if app.selected_chart == Some(sp.id) {
-            crate::frame::paint(p, r, sp.rotation, sp.kind != ShapeKind::Ink, sp.kind != ShapeKind::Ink);
-        }
         done(start, r);
     }
     for im in &sh.images {
@@ -346,9 +365,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
-        }
-        if app.selected_chart == Some(im.id) {
-            selection_frame(p, r);
         }
         done(start, r);
     }
@@ -365,28 +381,20 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
-        if app.selected_chart == Some(ch.id) {
-            selection_frame(p, r);
-        }
-        // The source-data highlight below is in cell space: mirrored with the cells.
         done(start, r);
-        if app.selected_chart == Some(ch.id) {
-            // Highlight the source data like Excel does.
-            for s in &ch.series {
-                if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
-                    && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
-                {
-                    let rr = geo.range_rect(sh, rf.range());
-                    let color = Tokens::get(p.ctx()).ref_color(0, true);
-                    for pane in geo.range_panes(rf.range()) {
-                        let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
-                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
-                    }
-                }
-            }
-        }
     }
-    paint_slicers(app, p, geo, wb, si, sh);
+    paint_slicers(p, geo, wb, si, sh);
+    // The selected object's frame and handles go over every object, and move with it on a
+    // right-to-left sheet.
+    if let Some(o) = app.selected_object
+        && let Some(r) = object_rect(geo, sh, o)
+        && r.intersects(p.clip_rect())
+    {
+        let start = p.add(egui::Shape::Noop);
+        let (deg, rotates, resizes) = frame_of(sh, o);
+        crate::frame::paint(p, r, deg, rotates, resizes);
+        done(start, r);
+    }
     painted
 }
 
@@ -423,7 +431,7 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
@@ -456,9 +464,6 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
-        }
-        if app.selected_chart == Some(sl.id) {
-            selection_frame(p, r);
         }
     }
 }
@@ -495,8 +500,87 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
     None
 }
 
-fn selection_frame(p: &Painter, r: Rect) {
-    crate::frame::paint(p, r, 0.0, false, true);
+/// The selected object's turn in degrees, and whether its frame shows a rotation handle and
+/// resize handles (an ink stroke shows neither).
+pub fn frame_of(sh: &Sheet, o: ObjRef) -> (f32, bool, bool) {
+    match sh.shapes.iter().find(|s| o.kind == ObjKind::Shape && s.id == o.id) {
+        Some(s) => (s.rotation, s.kind != ShapeKind::Ink, s.kind != ShapeKind::Ink),
+        None => (0.0, false, true),
+    }
+}
+
+/// Where object `o` sits on the sheet (logical coordinates), when it exists on `sh`.
+pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
+    sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
+}
+
+/// The resize handle of the selected object under `p`, with the object and its rect. Handles
+/// reach a little outside their object, so they win over [`hit`], but like it only over the cell
+/// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
+/// to them. Nothing while objects are hidden.
+pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let o = app.selected_object?;
+    let r = object_rect(geo, sh, o)?;
+    let (deg, _, resizes) = frame_of(sh, o);
+    if !resizes {
+        return None;
+    }
+    crate::objects::handle_at(r, crate::frame::turn(p, r.center(), -deg)).map(|h| (o, r, h))
+}
+
+/// The selected object and its rect when `p` is on its rotation handle.
+pub fn selected_rotate(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let o = app.selected_object?;
+    let r = object_rect(geo, sh, o)?;
+    let (deg, rotates, _) = frame_of(sh, o);
+    (rotates && matches!(crate::frame::grab_at(r, deg, true, p), Some(crate::frame::Grab::Rotate))).then_some((o, r))
+}
+
+/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
+/// charts, pictures and shapes (equations included), each from the top of its stack. Nothing is hit outside the cell
+/// area or while objects are hidden.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    for sl in sh.slicers.iter().rev() {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Slicer, sl.id), r));
+        }
+    }
+    for ch in sh.charts.iter().rev() {
+        let r = anchor_rect(geo, sh, &ch.anchor);
+        if r.expand(4.0).contains(p) {
+            return Some((ObjRef::new(ObjKind::Chart, ch.id), r));
+        }
+    }
+    for im in sh.images.iter().rev() {
+        let r = anchor_rect(geo, sh, &im.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Image, im.id), r));
+        }
+    }
+    for s in sh.shapes.iter().rev() {
+        let r = anchor_rect(geo, sh, &s.anchor);
+        if r.expand(3.0).contains(crate::frame::turn(p, r.center(), -s.rotation)) {
+            let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
+            return Some((ObjRef::new(kind, s.id), r));
+        }
+    }
+    None
+}
+
+/// The colour ink is painted in: a highlighter (a stroke over 8 pt wide) is translucent, by its
+/// width in points, so the live pen stroke and the committed ink agree at every zoom.
+pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
+    if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
 }
 
 /// Turn everything painted on `p`'s layer since `start` by `deg` clockwise about `c`.
@@ -563,37 +647,4 @@ fn rounded_rect_points(r: Rect, radius: f32) -> Vec<Pos2> {
         .into_iter()
         .flat_map(|(o, from)| (0..=8).map(move |i| (from + i as f32 * 90.0 / 8.0).to_radians()).map(move |a| o + vec2(a.cos(), a.sin()) * rad))
         .collect()
-}
-
-/// The topmost object under `p`: (kind, id, rect).
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
-        return None;
-    }
-    for sl in sh.slicers.iter().rev() {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("slicer", sl.id, r));
-        }
-    }
-    for ch in sh.charts.iter().rev() {
-        let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
-        }
-    }
-    for im in sh.images.iter().rev() {
-        let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
-        }
-    }
-    for s in sh.shapes.iter().rev() {
-        let r = anchor_rect(geo, sh, &s.anchor);
-        let local = crate::frame::turn(p, r.center(), -s.rotation);
-        if r.expand(3.0).contains(local) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
-        }
-    }
-    None
 }
