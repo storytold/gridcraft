@@ -12,6 +12,7 @@ mod it;
 mod pl;
 mod pt;
 mod ru;
+mod tr;
 
 use crate::{Expr, ParseError, parser};
 
@@ -28,6 +29,7 @@ pub enum FormulaLocale {
     It,
     PtBr,
     Ru,
+    Tr,
 }
 
 /// Per-locale data consumed by one parser/printer and one UI boundary.
@@ -69,6 +71,7 @@ impl FormulaLocale {
             Self::It => &it::DATA,
             Self::PtBr => &pt::DATA,
             Self::Ru => &ru::DATA,
+            Self::Tr => &tr::DATA,
         }
     }
 
