@@ -311,11 +311,15 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
-            // An index into the pivot field's items, whose `x` names the cache item (the same
-            // number when the field lists no items).
-            let items = pf(i).map(items_of).unwrap_or_default();
+            // An index into every item the pivot field lists, whose `x` names the cache item (the
+            // same number when the field lists no items).
+            let items: Vec<&El> = pf(i).and_then(|e| e.child("items")).map(|it| it.kids("item").collect()).unwrap_or_default();
             let x = if items.is_empty() { Some(k) } else { items.get(k as usize).and_then(|it| it.attr_u32("x")) };
-            x.and_then(|x| labels.get(x as usize)).map(|l| vec![l.clone()])
+            let label = x.and_then(|x| labels.get(x as usize));
+            if label.is_none() {
+                cx.warn(format!("PivotTable \"{}\": the item selected in the {name} filter isn't one of its values", pt.name));
+            }
+            label.map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
                 let items = items_of(e);

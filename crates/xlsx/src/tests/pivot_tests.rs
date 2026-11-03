@@ -786,6 +786,25 @@ fn page_filter_item_is_an_index_into_the_fields_items() {
     let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
     let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
     assert_eq!(pt.filters[0].selected, Some(vec!["b".to_string()]));
+    // The index counts every item the field lists, not only its data items.
+    let table = kv_table(
+        r#"<items count="3"><item t="default"/><item x="1"/><item x="0"/></items>"#,
+        r#"<pageField fld="0" item="1"/>"#,
+        r#"<dataField name="Sum of V" fld="1"/>"#,
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
+    let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert_eq!(pt.filters[0].selected, Some(vec!["b".to_string()]));
+    // An index on an item that isn't a data item names no value: read as no selection, with a
+    // warning, so the pivot isn't rebuilt on open.
+    let table = kv_table(
+        r#"<items count="3"><item t="default"/><item x="1"/><item x="0"/></items>"#,
+        r#"<pageField fld="0" item="0"/>"#,
+        r#"<dataField name="Sum of V" fld="1"/>"#,
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
+    let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert!(!pt.refresh_on_load, "{:?}", report.warnings);
 }
 
 #[test]
