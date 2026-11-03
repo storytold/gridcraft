@@ -99,7 +99,8 @@ fn select_data_is_translated_without_changing_series_data_or_actions() {
         assert_eq!(h.state().dialog.as_ref().unwrap().values["remove"], json!([]));
         h.get_all_by_role_and_label(Role::Button, remove).next().unwrap().click();
         h.run_steps(2);
-        h.get_by_role_and_label(Role::Button, "   OK   ").click();
+        let ok = if language == "tr" { "   Tamam   " } else { "   OK   " };
+        h.get_by_role_and_label(Role::Button, ok).click();
         h.run_steps(2);
         assert!(h.state().dialog.is_none());
         assert!(h.state().message.is_none());
