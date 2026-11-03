@@ -115,6 +115,14 @@ fn record_python_spill(st: &mut RowState, sheet: &mut Sheet, pos: CellRef) {
 /// Past the scan budget, the cells of a Python spill read afterwards were kept as plain cells, not
 /// as its spilled values, and a result rebuilt over them would block itself. Every Python spill of
 /// such a sheet keeps its values as plain values instead, with no live spill.
+/// The cells a damaged row element lost or replaced get one import warning per sheet (#2531).
+/// It is its own function so that `read_sheet` stays inside the workspace's complexity limit.
+fn warn_misplaced(cx: &mut Ctx<'_>, name: &str, misplaced: u64) {
+    if misplaced > 0 {
+        cx.warn(format!("sheet \"{name}\": {misplaced} cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"));
+    }
+}
+
 fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
     if st.dynamic_checks <= MAX_DYNAMIC_CHECKS {
         return;
@@ -181,9 +189,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
-    if st.misplaced > 0 {
-        cx.warn(format!("sheet \"{name}\": {} cells with a duplicate, out-of-order or wrong-row address were dropped or replaced", st.misplaced));
-    }
+    warn_misplaced(cx, name, st.misplaced);
     settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
