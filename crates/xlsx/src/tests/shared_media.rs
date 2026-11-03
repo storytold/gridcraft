@@ -25,7 +25,7 @@ fn sheet_with(name: &str, pictures: &[(u32, &[u8])]) -> Arc<Sheet> {
 
 fn names(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-    z.file_names().map(str::to_string).collect()
+    z.file_names().map(|n| n.unwrap().to_string()).collect()
 }
 
 fn text(bytes: &[u8], name: &str) -> String {

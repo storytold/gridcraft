@@ -60,7 +60,7 @@ fn edit_chart(bytes: &[u8], edit: impl Fn(String) -> String) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
         if name == "xl/charts/chart1.xml" {

@@ -26,7 +26,7 @@ fn package() -> Vec<u8> {
 /// The written VML part (GridCraft writes one per sheet with notes).
 fn written_vml(bytes: &[u8]) -> String {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let name = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).find(|n| n.ends_with(".vml")).expect("a VML part");
+    let name = (0..z.len()).map(|i| z.by_index(i).unwrap().name().unwrap().to_string()).find(|n| n.ends_with(".vml")).expect("a VML part");
     let mut s = String::new();
     z.by_name(&name).unwrap().read_to_string(&mut s).unwrap();
     s

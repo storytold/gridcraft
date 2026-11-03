@@ -163,7 +163,7 @@ fn hostile_threaded_comments_persons_and_note_vml() {
         let mut f = z.by_index(i).unwrap();
         let mut d = vec![];
         std::io::Read::read_to_end(&mut f, &mut d).unwrap();
-        parts.push((f.name().to_string(), d));
+        parts.push((f.name().unwrap().to_string(), d));
     }
     let ns = r#"xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments""#;
     let deep = "<v:group>".repeat(300) + &"</v:group>".repeat(300);

@@ -445,7 +445,7 @@ fn drawing_with_picture_and_chart() {
             let mut f = z.by_index(i).unwrap();
             let mut d = vec![];
             std::io::Read::read_to_end(&mut f, &mut d).unwrap();
-            parts.push((f.name().to_string(), d));
+            parts.push((f.name().unwrap().to_string(), d));
         }
         parts.push(("xl/media/image1.png".into(), png.to_vec()));
         let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
