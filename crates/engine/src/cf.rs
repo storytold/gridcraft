@@ -1,7 +1,7 @@
 //! Conditional formatting evaluation: what extra style, data bar, colour scale or icon a cell
 //! gets.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
 use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
@@ -70,15 +70,31 @@ thread_local! {
     static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Most cells one rule's statistics visit, across all of its ranges together: a rule repeating
+/// the same range many times must not multiply the scan.
+const STATS_SCAN_LIMIT: usize = 2_000_000;
+
 fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, HashMap<String, usize>) {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
+    let mut budget = STATS_SCAN_LIMIT;
+    let mut seen: HashSet<RangeRef> = HashSet::new();
+    let used = sh.used_range();
     for r in ranges {
-        let r = match sh.used_range().and_then(|u| r.intersection(&u)) {
+        if budget == 0 {
+            break;
+        }
+        let r = match used.and_then(|u| r.intersection(&u)) {
             Some(x) => x,
             None => continue,
         };
-        for c in r.iter().take(2_000_000) {
+        // The same range listed twice counts its cells once.
+        if !seen.insert(r) {
+            continue;
+        }
+        let cells = r.iter().take(budget);
+        for c in cells {
+            budget -= 1;
             #[cfg(test)]
             SCANNED.with(|n| n.set(n.get() + 1));
             let v = sh.value(c);
@@ -278,7 +294,8 @@ impl CfCache {
                     _ => None,
                 },
                 CfRule::ColorScale { stops } => {
-                    if let Some(n) = v.as_f64() {
+                    // Only two- and three-colour scales paint: evaluate no thresholds for others.
+                    if let Some(n) = v.as_f64().filter(|_| matches!(stops.len(), 2 | 3)) {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
                             .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
@@ -558,6 +575,50 @@ mod tests {
             cache.look(&d.wb, 0, CellRef::parse(&format!("A{r}")).unwrap());
         }
         assert_eq!(SCANNED.with(|n| n.get()), 10_000);
+    }
+
+    /// A rule listing the same range many times scans it once, and never more than the shared
+    /// limit however many ranges it holds.
+    #[test]
+    fn repeated_ranges_share_one_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "XFD1048576", "values": [[4]]})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        let dense = RangeRef::parse("A1:XFD1048576").unwrap();
+        let small = RangeRef::parse("A1:A3").unwrap();
+        SCANNED.with(|n| n.set(0));
+        let st = RuleStats::build(sh, &vec![small; 1000], StatsNeed::Numbers);
+        assert_eq!(st.sorted, vec![1.0, 2.0, 3.0]);
+        assert_eq!(SCANNED.with(|n| n.get()), 3);
+        let shifted: Vec<RangeRef> = (0..50).map(|i| RangeRef::new(CellRef::new(i, 0), dense.end)).collect();
+        SCANNED.with(|n| n.set(0));
+        RuleStats::build(sh, &shifted, StatsNeed::Numbers);
+        assert!(SCANNED.with(|n| n.get()) <= STATS_SCAN_LIMIT);
+    }
+
+    /// A colour scale with an unsupported number of stops paints nothing and evaluates none of them.
+    #[test]
+    fn colour_scales_with_other_stop_counts_paint_nothing() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [5]]})).unwrap();
+        let mut wb: Workbook = (*s.doc().unwrap().wb).clone();
+        let stop = (CfValueKind::Formula("=1".into()), Color::default());
+        let rule = |n: usize| CondFormat {
+            ranges: vec![RangeRef::parse("A1:A2").unwrap()],
+            rule: CfRule::ColorScale { stops: vec![stop.clone(); n] },
+            priority: 1,
+            stop_if_true: false,
+        };
+        wb.sheet_mut(0).unwrap().cond_formats.push(rule(4));
+        let mut cache = CfCache::new();
+        assert_eq!(cache.look(&wb, 0, CellRef::parse("A1").unwrap()).and_then(|l| l.scale_fill), None);
+        wb.sheet_mut(0).unwrap().cond_formats = vec![rule(2)];
+        let mut cache = CfCache::new();
+        assert!(cache.look(&wb, 0, CellRef::parse("A1").unwrap()).and_then(|l| l.scale_fill).is_some());
     }
 
     #[test]
