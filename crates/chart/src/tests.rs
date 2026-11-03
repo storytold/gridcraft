@@ -988,6 +988,32 @@ fn hidden_rows_and_columns_are_left_out_unless_shown() {
 }
 
 #[test]
+fn hidden_reference_keeps_literal_values_and_categories_aligned() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, label) in ["a", "b", "c", "d"].iter().enumerate() {
+            s.set_value(CellRef::new(r as u32, 0), Value::from(*label));
+            s.set_value(CellRef::new(r as u32, 1), Value::Number((r + 1) as f64 * 10.0));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "{10,20,30,40}".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    c.series[0].categories = Some("{\"a\",\"b\",\"c\",\"d\"}".into());
+    c.series[0].values = "Sheet1!$B$1:$B$4".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+}
+
+#[test]
 fn hidden_cells_leave_multi_level_categories() {
     use gridcraft_model::LineInfo;
     let mut wb = Workbook::new();

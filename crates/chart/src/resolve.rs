@@ -113,8 +113,12 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32, hide: bo
     let cells = if hide { parse_ref(wb, sheet, f) } else { None };
     match evaluate(wb, sheet, CellRef::default(), f) {
         Value::Array(a) => match cells {
-            Some((sh, r)) if a.data.len() == (r.width() as usize).saturating_mul(r.height() as usize) => {
-                a.iter().enumerate().filter(|(i, _)| is_visible(wb, sh, &r, *i)).map(|(_, v)| v.clone()).take(MAX_POINTS).collect()
+            Some((sh, r)) if a.rows <= r.height() as usize && a.cols <= r.width() as usize => {
+                let Some(end) = r.start.offset((a.rows.saturating_sub(1)) as i64, (a.cols.saturating_sub(1)) as i64) else {
+                    return a.iter().take(MAX_POINTS).cloned().collect();
+                };
+                let trimmed = RangeRef::new(r.start, end);
+                a.iter().enumerate().filter(|(i, _)| is_visible(wb, sh, &trimmed, *i)).map(|(_, v)| v.clone()).take(MAX_POINTS).collect()
             }
             _ => a.iter().take(MAX_POINTS).cloned().collect(),
         },
@@ -124,6 +128,10 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32, hide: bo
             _ => vec![v],
         },
     }
+}
+
+fn filter_by_visibility(wb: &Workbook, sh: usize, r: &RangeRef, values: Vec<Value>) -> Vec<Value> {
+    values.into_iter().enumerate().filter(|(i, _)| is_visible(wb, sh, r, *i)).map(|(_, v)| v).collect()
 }
 
 fn to_num(v: &Value) -> Option<f64> {
@@ -159,7 +167,14 @@ fn value_text(v: &Value) -> String {
 /// the outer levels of a multi-level axis: a category range wider than a column of values (or
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
-fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, hide: bool) -> (Vec<String>, Vec<Vec<String>>) {
+fn category_table(
+    wb: &Workbook,
+    sheet: usize,
+    formula: &str,
+    values: &str,
+    hide: bool,
+    alignment_ref: Option<(usize, RangeRef)>,
+) -> (Vec<String>, Vec<Vec<String>>) {
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     // A plain range is read whole and its hidden rows and columns dropped at the end, so the
     // number formats and multi-level groups still line up with the cells.
@@ -182,7 +197,15 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, hide
             value_text(v)
         })
         .collect();
-    let Some((sheet_ref, r)) = src else { return (texts, vec![]) };
+    let Some((sheet_ref, r)) = src else {
+        let aligned = if hide {
+            alignment_ref
+                .map_or(texts.clone(), |(sh, r)| texts.into_iter().enumerate().filter(|(i, _)| is_visible(wb, sh, &r, *i)).map(|(_, t)| t).collect())
+        } else {
+            texts
+        };
+        return (aligned, vec![]);
+    };
     let visible_row = |row: usize| !(hide && sheet_ref.is_row_hidden(r.start.row.saturating_add(row as u32)));
     let visible_col = |col: usize| !(hide && sheet_ref.is_col_hidden(r.start.col.saturating_add(col as u32)));
     let w = r.width().max(1) as usize;
@@ -264,7 +287,13 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut category_levels = Vec::new();
     let hide = !chart.show_hidden_data;
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
-        let values = nums(wb, sheet, &s.values, hide);
+        let mut values = nums(wb, sheet, &s.values, hide);
+        if hide
+            && parse_ref(wb, sheet, &s.values).is_none()
+            && let Some((category_sheet, category_range)) = s.categories.as_deref().and_then(|f| parse_ref(wb, sheet, f))
+        {
+            values = filter_by_visibility(wb, category_sheet, &category_range, values);
+        }
         // A series whose cells are all hidden (its column hidden) leaves the chart, legend included.
         if hide && values.is_empty() && !nums(wb, sheet, &s.values, false).is_empty() {
             continue;
@@ -283,7 +312,8 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let (c, outer) = category_table(wb, sheet, f, &s.values, hide);
+            let values_ref = parse_ref(wb, sheet, &s.values);
+            let (c, outer) = category_table(wb, sheet, f, &s.values, hide, values_ref);
             if !c.is_empty() {
                 categories = Some(c);
                 category_levels = outer;
