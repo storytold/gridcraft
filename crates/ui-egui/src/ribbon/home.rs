@@ -189,7 +189,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.separator();
-                let more = ui.button("More Borders…");
+                let more = ui.button(crate::i18n::current(ui.ctx()).tr("More Borders…"));
                 if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
                     keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
                 }

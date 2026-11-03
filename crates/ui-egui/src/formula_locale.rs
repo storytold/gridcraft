@@ -132,7 +132,12 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
 /// A function's argument hint. The name and separators follow the formula syntax; the argument
 /// names follow the interface language, all of them or none, so a hint never mixes two languages.
 pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_signature(locale.canonical_name(name))?;
+    canonical_signature(locale.canonical_name(name), locale, language)
+}
+
+/// Formats a hint for a function already identified by its engine name.
+pub(crate) fn canonical_signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_signature(name)?;
     let Some((head, args)) = split_signature(&english) else { return Some(english) };
     let separator = format!("{} ", locale.list_separator());
     let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
@@ -144,7 +149,12 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
 
 /// A function's description in the interface language (English while untranslated).
 pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
+    canonical_description(locale.canonical_name(name), language)
+}
+
+/// Translates the description of a function already identified by its engine name.
+pub(crate) fn canonical_description(name: &str, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_description(name)?;
     Some(language.function_description(&english).map_or(english, str::to_string))
 }
 
@@ -234,6 +244,10 @@ mod russian_help_tests {
         for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
             for (name, russian_name) in [("XLOOKUP", "ПРОСМОТРX"), ("COLUMN", "СТОЛБЕЦ"), ("RADIANS", "РАДИАНЫ")] {
                 let english = crate::formula_bar::function_description(name).unwrap();
+                if matches!(language, Language::Da | Language::Sv | Language::Ka | Language::Lt) {
+                    assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(english.as_str()));
+                    continue;
+                }
                 let expected = language.function_description(&english).unwrap();
                 assert_ne!(expected, english);
                 assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(expected));
@@ -273,21 +287,29 @@ mod russian_help_tests {
         assert_eq!(description("ЕСЛИ", FormulaLocale::Ru, Language::Ru).as_deref(), expected);
     }
 
-    /// SUM's reported hint is localized in every offered interface language.
+    /// SUM's hint follows each help catalog and falls back for interface-only languages.
     #[test]
     fn sum_hint_uses_each_language_catalog() {
         for language in Language::ALL {
             let locale = language.formula_locale();
             let hint = signature("SUM", locale, language).unwrap();
             let help = description("SUM", locale, language).unwrap();
-            let number = if language == Language::En { "number" } else { language.function_argument("number").unwrap() };
+            let fallback = matches!(language, Language::En | Language::Da | Language::Sv | Language::Ka | Language::Lt);
+            let number = if fallback { "number" } else { language.function_argument("number").unwrap() };
             let expected = match locale {
                 FormulaLocale::Ru => format!("СУММ({number}1; [{number}2]; ...)"),
-                FormulaLocale::Es => format!("SUMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::Es | FormulaLocale::Pl => format!("SUMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::Fr => format!("SOMME({number}1; [{number}2]; ...)"),
+                FormulaLocale::It => format!("SOMMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::PtBr => format!("SOMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::Tr => format!("TOPLA({number}1; [{number}2]; ...)"),
+                FormulaLocale::De => format!("SUMME({number}1; [{number}2]; ...)"),
                 FormulaLocale::En => format!("SUM({number}1, [{number}2], ...)"),
             };
             assert_eq!(hint, expected, "{language:?}");
-            if language != Language::En {
+            if fallback {
+                assert_eq!(help, "Adds all the numbers in the arguments.", "{language:?}");
+            } else {
                 assert_ne!(help, "Adds all the numbers in the arguments.", "{language:?}");
             }
         }
@@ -309,7 +331,7 @@ mod help_structure_tests {
             let (_, arguments) = split_signature(english).unwrap();
             for language in Language::ALL {
                 let locale = language.formula_locale();
-                let hint = signature(name, locale, language).unwrap();
+                let hint = canonical_signature(name, locale, language).unwrap();
                 let separators = arguments.len().saturating_sub(1);
                 assert_eq!(hint.matches(locale.list_separator()).count(), separators, "{language:?}: {name}: {hint}");
                 for punctuation in ['[', ']'] {

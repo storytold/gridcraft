@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod cs;
 mod cs_functions;
+mod da;
 mod de;
 mod de_functions;
 mod el;
@@ -24,8 +25,10 @@ mod it;
 mod it_functions;
 mod ja;
 mod ja_functions;
+mod ka;
 mod ko;
 mod ko_functions;
+mod lt;
 mod nl;
 mod nl_functions;
 mod pl;
@@ -39,6 +42,7 @@ mod ru_formats;
 mod ru_functions;
 mod sr;
 mod sr_functions;
+mod sv;
 mod tr;
 mod tr_functions;
 mod uk;
@@ -47,6 +51,8 @@ mod vi;
 mod vi_functions;
 mod zh;
 mod zh_functions;
+mod zh_tw;
+mod zh_tw_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,6 +62,8 @@ pub enum Language {
     Es,
     El,
     Zh,
+    #[serde(rename = "zh-tw")]
+    ZhTw,
     Ja,
     Ko,
     Ru,
@@ -72,6 +80,10 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Lt,
+    Ka,
+    Sv,
+    Da,
 }
 
 impl Language {
@@ -82,11 +94,12 @@ impl Language {
             _ => &crate::format_locale::EN,
         }
     }
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 24] = [
         Self::En,
         Self::Es,
         Self::El,
         Self::Zh,
+        Self::ZhTw,
         Self::Ja,
         Self::Ko,
         Self::Ru,
@@ -101,6 +114,10 @@ impl Language {
         Self::Vi,
         Self::Nl,
         Self::Ro,
+        Self::Lt,
+        Self::Ka,
+        Self::Sv,
+        Self::Da,
         Self::Tr,
     ];
 
@@ -117,9 +134,14 @@ impl Language {
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Lt => "Lietuvių",
+            Self::Ka => "ქართული",
+            Self::Sv => "Svenska",
+            Self::Da => "Dansk",
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
+            Self::ZhTw => "繁體中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
             Self::Ru => "Русский",
@@ -142,9 +164,14 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Lt => "lt",
+            Self::Ka => "ka",
+            Self::Sv => "sv",
+            Self::Da => "da",
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
+            Self::ZhTw => "zh-tw",
             Self::Ja => "ja",
             Self::Ko => "ko",
             Self::Ru => "ru",
@@ -174,11 +201,19 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        let mut parts = tag.trim().split('.').next()?.split(['-', '_']);
+        match parts.next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "lt" => Some(Self::Lt),
+            "ka" => Some(Self::Ka),
+            "sv" => Some(Self::Sv),
+            "da" => Some(Self::Da),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
-            "zh" => Some(Self::Zh),
+            "zh" => {
+                let traditional = parts.any(|part| matches!(part.to_ascii_lowercase().as_str(), "tw" | "hk" | "mo" | "hant"));
+                Some(if traditional { Self::ZhTw } else { Self::Zh })
+            }
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
             "ru" => Some(Self::Ru),
@@ -215,7 +250,13 @@ impl Language {
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         match self {
             Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::De => gridcraft_engine::formula::FormulaLocale::De,
+            Self::Pl => gridcraft_engine::formula::FormulaLocale::Pl,
+            Self::Fr => gridcraft_engine::formula::FormulaLocale::Fr,
+            Self::It => gridcraft_engine::formula::FormulaLocale::It,
+            Self::PtBr => gridcraft_engine::formula::FormulaLocale::PtBr,
             Self::Ru => gridcraft_engine::formula::FormulaLocale::Ru,
+            Self::Tr => gridcraft_engine::formula::FormulaLocale::Tr,
             _ => gridcraft_engine::formula::FormulaLocale::En,
         }
     }
@@ -236,6 +277,11 @@ impl Language {
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
+            Self::ZhTw => zh_tw::translate(text),
+            Self::Lt => lt::translate(text),
+            Self::Ka => ka::translate(text),
+            Self::Sv => sv::translate(text),
+            Self::Da => da::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -251,6 +297,18 @@ impl Language {
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
         }
+    }
+
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        self.tr(warning).to_owned()
     }
 
     /// Ribbon tabs can be nouns while their corresponding commands are verbs.
@@ -310,8 +368,9 @@ impl Language {
             Self::Uk => Some((uk_functions::DESCRIPTIONS, uk_functions::ARGUMENTS)),
             Self::Vi => Some((vi_functions::DESCRIPTIONS, vi_functions::ARGUMENTS)),
             Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
+            Self::ZhTw => Some((zh_tw_functions::DESCRIPTIONS, zh_tw_functions::ARGUMENTS)),
             Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
-            Self::En => None,
+            Self::En | Self::Da | Self::Sv | Self::Ka | Self::Lt => None,
         }
     }
 }
@@ -506,6 +565,36 @@ mod tests {
     }
 
     #[test]
+    fn paste_special_add_and_text_to_columns_comma_have_their_own_keys() {
+        // "Add" is also the Solver button and "Comma" also the cell style (Spanish Excel: Sumar
+        // vs Agregar, Coma vs Millares), so the two dialog options are keyed by context. English
+        // shows the plain label, and a catalog that translates the plain label translates the
+        // keyed one too, so the dialog option doesn't fall back to English.
+        for (keyed, plain) in [("Paste Special|Add", "Add"), ("Text to Columns|Comma", "Comma")] {
+            assert_eq!(Language::En.tr(keyed), plain);
+            for language in Language::ALL {
+                let shown = language.tr(keyed);
+                assert!(!shown.contains('|'), "{} shows a context prefix for {keyed}: {shown}", language.code());
+                if language.tr(plain) != plain {
+                    assert_ne!(shown, plain, "{} translates {plain:?} but not {keyed:?}", language.code());
+                }
+            }
+        }
+    }
+
+    /// Generated names should follow the interface language even in smaller catalogs.
+    #[test]
+    fn generated_names_have_translations_in_every_catalog() {
+        for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
+            for key in ["Book", "Sheet", "Generated|Column", "Generated|Row", "Series{n}"] {
+                let fallback = Language::En.tr(key);
+                assert_ne!(language.tr(key), fallback, "{language:?}: {key}");
+            }
+            assert_eq!(language.tr("Series{n}").matches("{n}").count(), 1, "{language:?}");
+        }
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).
@@ -542,6 +631,8 @@ mod tests {
         assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
         assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant-TW"), Some(Language::ZhTw));
+        assert_eq!(Language::from_tag("zh_HK.UTF-8"), Some(Language::ZhTw));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));

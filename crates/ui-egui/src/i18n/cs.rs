@@ -3,6 +3,65 @@
 /// Returns the Czech translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Series{n}" => "Řada {n}",
+        "3 Arrows" => "3 šipky",
+        "3 Symbols" => "3 symboly",
+        "3 Traffic Lights" => "3 semafory",
+        "4 Ratings" => "4 hodnocení",
+        "5 Arrows" => "5 šipek",
+        "5 Quarters" => "5 čtvrtin",
+        "Applies to" => "Platí pro",
+        "Apply" => "Použít",
+        "Blanks" => "Prázdné",
+        "Conditional Formatting Rules Manager" => "Správce pravidel podmíněného formátování",
+        "Errors" => "Chyby",
+        "Format values where this formula is true:" => "Formátovat hodnoty, pro které platí tento vzorec:",
+        "Formula" => "Vzorec",
+        "Green Fill with Dark Green Text" => "Zelená výplň s tmavě zeleným textem",
+        "In the last 7 days" => "Za posledních 7 dní",
+        "Last month" => "Minulý měsíc",
+        "Last week" => "Minulý týden",
+        "Light Red Fill" => "Světle červená výplň",
+        "Light Red Fill with Dark Red Text" => "Světle červená výplň s tmavě červeným textem",
+        "Maximum" => "Maximum",
+        "Minimum" => "Minimum",
+        "New Formatting Rule" => "Nové pravidlo formátování",
+        "New Rule…" => "Nové pravidlo…",
+        "Next month" => "Příští měsíc",
+        "Next week" => "Příští týden",
+        "No Border" => "Bez ohraničení",
+        "Percent" => "Procento",
+        "Red Border" => "Červené ohraničení",
+        "Red Text" => "Červený text",
+        "This month" => "Tento měsíc",
+        "This week" => "Tento týden",
+        "Today" => "Dnes",
+        "Tomorrow" => "Zítra",
+        "Yellow Fill with Dark Yellow Text" => "Žlutá výplň s tmavě žlutým textem",
+        "and" => "a",
+        "Formula:" => "Vzorec:",
+        "OK" => "OK",
+        "There are no conditional formatting rules on this sheet." => "Na tomto listu nejsou žádná pravidla podmíněného formátování.",
+        "a linked (not embedded) picture was skipped" => "Propojený (nevložený) obrázek byl přeskočen.",
+        "missing picture {target}" => "Chybí obrázek {target}.",
+        "chart {target} has no supported plot and was skipped" => "Graf {target} nemá podporovaný typ vykreslení a byl přeskočen.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Vložený objekt (SmartArt, OLE…) byl přeskočen.",
+        "grouped shapes are not supported and were skipped" => "Seskupené obrazce nejsou podporovány a byly přeskočeny.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Import XLSB pouze s daty: vzorce se změní na uložené výsledky a nebudou se přepočítávat. Formátování, grafy, obrázky, makra a další funkce se neimportují; data, měna a procenta se mohou zobrazit jako čísla. Uložte nový soubor .xlsx; ukládání do XLSB není podporováno."
+        }
+        "XLSB module sheets were skipped." => "Listy modulů XLSB byly přeskočeny.",
+        "XLSB non-worksheet sheets were skipped." => "Listy XLSB, které nejsou listy sešitu, byly přeskočeny.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Nepodporované budoucí záznamy a bloky alternativního obsahu XLSB byly přeskočeny."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Neplatné sloučené oblasti XLSB byly přeskočeny.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} položek v tomto souboru bylo zpracováno jinak. První: {warning}"
+        }
         "Paste" => "Vložit",
         "Paste Values" => "Vložit hodnoty",
         "Paste Formulas" => "Vložit vzorce",
@@ -321,6 +380,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Vytisknout celý sešit",
         "Fit Sheet on One Page" => "Přizpůsobit list na jednu stránku",
         "Page Setup…" => "Vzhled stránky…",
+        "Page {page}" => "Stránka {page}",
         "Page {page} of {pages}" => "Stránka {page} z {pages}",
         "Nothing to print." => "Není co tisknout.",
         "Previous page" => "Předchozí stránka",

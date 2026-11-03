@@ -4,6 +4,84 @@
 /// Returns `None` for unknown keys so the shared lookup can apply its English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Applies to" => "Применяется к",
+        "Formula" => "Формула",
+        "Maximum" => "Максимальное значение",
+        "Minimum" => "Минимальное значение",
+        "and" => "и",
+        "Agent Control (MCP)…" => "Управление агентами (MCP)…",
+        "Cells…" => "Ячейки…",
+        "Collapse Ribbon" => "Свернуть ленту",
+        "Command Palette…" => "Палитра команд…",
+        "Conditional Formatting…" => "Условное форматирование…",
+        "Contributors…" => "Участники…",
+        "Display Theme" => "Тема оформления",
+        "Error Checking…" => "Проверка ошибок…",
+        "Evaluate Formula…" => "Вычислить формулу…",
+        "Fill Down" => "Заполнить вниз",
+        "Fill Right" => "Заполнить вправо",
+        "Function…" => "Функция…",
+        "Help" => "Справка",
+        "Hide GridCraft" => "Скрыть GridCraft",
+        "Hide Others" => "Скрыть остальные",
+        "Name…" => "Имя…",
+        "New from Sample…" => "Создать из образца…",
+        "Next Sheet" => "Следующий лист",
+        "Picture…" => "Изображение…",
+        "Previous Sheet" => "Предыдущий лист",
+        "Properties…" => "Свойства…",
+        "Quit GridCraft" => "Выйти из GridCraft",
+        "Record Actions" => "Запись действий",
+        "Remove Duplicates…" => "Удалить дубликаты…",
+        "Rename Sheet…" => "Переименовать лист…",
+        "Save as Web Page…" => "Сохранить как веб-страницу…",
+        "Services" => "Службы",
+        "Show All" => "Показать все",
+        "Sort…" => "Сортировка…",
+        "Sparklines…" => "Спарклайны…",
+        "Spelling…" => "Орфография…",
+        "Subtotal…" => "Промежуточные итоги…",
+        "Text to Columns…" => "Текст по столбцам…",
+        "Window" => "Окно",
+        "menu|Tools" => "Инструменты",
+        "v{from} to {to}" => "С версии {from} до {to}",
+        "{app} {version} is available with the latest features and bug fixes." => "Доступен {app} {version} с новыми возможностями и исправлениями.",
+        "What's new" => "Что нового",
+        "Later" => "Позже",
+        "Update" => "Обновление",
+        "Update and Restart" => "Обновить и перезапустить",
+        "by {developer}" => "от {developer}",
+        "Downloading and installing update…" => "Загрузка и установка обновления…",
+        "The update is installed. Close {app} to finish; it restarts by itself." => {
+            "Обновление установлено. Закройте {app}, чтобы завершить установку. Программа перезапустится автоматически."
+        }
+        "Save or close your open work first; the update restarts the app." => {
+            "Сохраните или закройте открытые книги. Обновление перезапустит программу."
+        }
+        "Cannot auto-update this installation type. Please download manually." => {
+            "Этот тип установки нельзя обновить автоматически. Скачайте обновление вручную."
+        }
+        "Couldn't start the update ({error})" => "Не удалось запустить обновление ({error})",
+        "a linked (not embedded) picture was skipped" => "Связанное (не встроенное) изображение пропущено.",
+        "missing picture {target}" => "Изображение {target} отсутствует.",
+        "chart {target} has no supported plot and was skipped" => "У диаграммы {target} нет поддерживаемого типа построения; она пропущена.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Гистограмма, каскадная диаграмма, древовидная карта… без своей части диаграммы пропущена."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Встроенный объект (SmartArt, OLE…) пропущен.",
+        "grouped shapes are not supported and were skipped" => "Группировка фигур не поддерживается; фигуры пропущены.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Импорт XLSB только с данными: формулы заменяются сохранёнными результатами и не пересчитываются. Форматирование, диаграммы, изображения, макросы и другие функции не импортируются; даты, денежные значения и проценты могут отображаться как числа. Сохраните новый файл .xlsx; сохранение в XLSB не поддерживается."
+        }
+        "XLSB module sheets were skipped." => "Листы модулей XLSB пропущены.",
+        "XLSB non-worksheet sheets were skipped." => "Листы XLSB, не являющиеся рабочими листами, пропущены.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Неподдерживаемые будущие записи и блоки альтернативного содержимого XLSB пропущены."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Недопустимые объединённые диапазоны XLSB пропущены.",
+        "{count} items in this file were handled differently. First: {warning}" => "Элементов файла, обработанных иначе: {count}. Первый: {warning}",
+        "Paste Special|Add" => "Сложить",
+        "Text to Columns|Comma" => "Запятая",
         "Paste" => "Вставить",
         "Paste Values" => "Вставить значения",
         "Paste Formulas" => "Вставить формулы",
@@ -410,6 +488,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Напечатать всю книгу",
         "Fit Sheet on One Page" => "Вписать лист на одну страницу",
         "Page Setup…" => "Параметры страницы…",
+        "Page {page}" => "Страница {page}",
         "Page {page} of {pages}" => "Страница {page} из {pages}",
         "Nothing to print." => "Нечего печатать.",
         "Previous page" => "Предыдущая страница",

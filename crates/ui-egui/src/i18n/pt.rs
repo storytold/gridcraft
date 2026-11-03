@@ -4,6 +4,44 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "3 Arrows" => "3 setas",
+        "3 Symbols" => "3 símbolos",
+        "3 Traffic Lights" => "3 semáforos",
+        "4 Ratings" => "4 classificações",
+        "5 Arrows" => "5 setas",
+        "5 Quarters" => "5 quartos",
+        "Applies to" => "Aplica-se a",
+        "Apply" => "Aplicar",
+        "Formula" => "Fórmula",
+        "Maximum" => "Máximo",
+        "Minimum" => "Mínimo",
+        "New Formatting Rule" => "Nova regra de formatação",
+        "New Rule…" => "Nova regra…",
+        "No Border" => "Sem borda",
+        "Percent" => "Percentual",
+        "and" => "e",
+        "Borders|None" => "Nenhum",
+        "Report Layout|Outline" => "Contorno",
+        "a linked (not embedded) picture was skipped" => "A imagem vinculada (não incorporada) foi ignorada.",
+        "missing picture {target}" => "Imagem ausente: {target}.",
+        "chart {target} has no supported plot and was skipped" => "O gráfico {target} não tem um tipo de gráfico compatível e foi ignorado.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "O gráfico de histograma, cascata, mapa de árvore… sem a parte de gráfico foi ignorado."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "O objeto incorporado (SmartArt, OLE…) foi ignorado.",
+        "grouped shapes are not supported and were skipped" => "Formas agrupadas não têm suporte e foram ignoradas.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Importação XLSB somente dos dados: as fórmulas se tornam os resultados salvos e não serão recalculadas. A formatação, os gráficos, as imagens, as macros e outros recursos não são importados; datas, moeda e porcentagens podem ser exibidas como números. Salve um novo arquivo .xlsx; não há suporte para salvar como XLSB."
+        }
+        "XLSB module sheets were skipped." => "As planilhas de módulo XLSB foram ignoradas.",
+        "XLSB non-worksheet sheets were skipped." => "As planilhas XLSB que não são planilhas de cálculo foram ignoradas.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Os blocos de registros futuros e de conteúdo alternativo não compatíveis do XLSB foram ignorados."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Os intervalos mesclados inválidos do XLSB foram ignorados.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} itens deste arquivo foram processados de forma diferente. Primeiro: {warning}"
+        }
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",
@@ -402,6 +440,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Imprimir toda a pasta de trabalho",
         "Fit Sheet on One Page" => "Ajustar planilha em uma página",
         "Page Setup…" => "Configurar página…",
+        "Page {page}" => "Página {page}",
         "Page {page} of {pages}" => "Página {page} de {pages}",
         "Nothing to print." => "Nada para imprimir.",
         "Previous page" => "Página anterior",
@@ -553,6 +592,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values and number formats" => "Valores e formatos de número",
         "Operation" => "Operação",
         "Add" => "Adicionar",
+        "Paste Special|Add" => "Adicionar",
         "Subtract" => "Subtrair",
         "Multiply" => "Multiplicar",
         "Divide" => "Dividir",
@@ -592,6 +632,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tab" => "Tabulação",
         "Semicolon" => "Ponto e vírgula",
         "Comma" => "Vírgula",
+        "Text to Columns|Comma" => "Vírgula",
         "Space" => "Espaço",
         "Other:" => "Outros:",
         "Treat consecutive delimiters as one" => "Considerar delimitadores consecutivos como um só",

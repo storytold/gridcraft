@@ -8,6 +8,9 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Borders|None" => "Niciunul",
+        "Report Layout|Outline" => "Contur",
+        "Page {page}" => "Pagina {page}",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",
@@ -527,6 +530,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values and number formats" => "Valori și formate de număr",
         "Operation" => "Operație",
         "Add" => "Adăugare",
+        "Paste Special|Add" => "Adăugare",
         "Subtract" => "Scădere",
         "Multiply" => "Înmulțire",
         "Divide" => "Împărțire",
@@ -566,6 +570,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tab" => "Tab",
         "Semicolon" => "Punct și virgulă",
         "Comma" => "Virgulă",
+        "Text to Columns|Comma" => "Virgulă",
         "Space" => "Spațiu",
         "Other:" => "Altele:",
         "Treat consecutive delimiters as one" => "Delimitatorii consecutivi se tratează ca unul singur",

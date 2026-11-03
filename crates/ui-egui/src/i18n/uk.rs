@@ -3,6 +3,9 @@
 /// Returns the Ukrainian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Borders|None" => "None",
+        "Report Layout|Outline" => "Outline",
+        "Page {page}" => "Сторінка {page}",
         "Paste" => "Вставити",
         "Paste Values" => "Вставити значення",
         "Paste Formulas" => "Вставити формули",
@@ -525,6 +528,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values and number formats" => "Values and number formats",
         "Operation" => "Operation",
         "Add" => "Add",
+        "Paste Special|Add" => "Add",
         "Subtract" => "Subtract",
         "Multiply" => "Multiply",
         "Divide" => "Divide",
@@ -564,6 +568,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tab" => "Tab",
         "Semicolon" => "Semicolon",
         "Comma" => "Comma",
+        "Text to Columns|Comma" => "Comma",
         "Space" => "Space",
         "Other:" => "Other:",
         "Treat consecutive delimiters as one" => "Treat consecutive delimiters as one",
@@ -779,7 +784,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Combo" => "Combo",
         "Chart data range:" => "Chart data range:",
         "Legend Entries (Series)" => "Legend Entries (Series)",
-        "Series{n}" => "Series{n}",
+        "Series{n}" => "Ряд {n}",
         "Keep" => "Keep",
         "Remove" => "Remove",
         "Horizontal (Category) Axis Labels:" => "Horizontal (Category) Axis Labels:",

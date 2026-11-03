@@ -331,17 +331,50 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
     }
 }
 
+/// Localized formula syntax is reversible through the canonical XLSX writer and reader.
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn french_german_italian_portuguese_and_turkish_formulas_round_trip_through_xlsx() {
+    for (language, ui_language, localized) in [
+        ("fr", Language::Fr, "=SIERREUR(SOMME(1,5;2,25);#VALEUR!)"),
+        ("de", Language::De, "=WENNFEHLER(SUMME(1,5;2,25);#WERT!)"),
+        ("it", Language::It, "=SE.ERRORE(SOMMA(1,5;2,25);#VALORE!)"),
+        ("pt-BR", Language::PtBr, "=SEERRO(SOMA(1,5;2,25);#VALOR!)"),
+        ("tr", Language::Tr, "=EĞERHATA(TOPLA(1,5;2,25);#DEĞER!)"),
+    ] {
+        let mut app = app();
+        app.run("app.language.set", json!({"code":language})).unwrap();
+        assert_eq!(app.ui.language, ui_language);
+        assert!(enter(&mut app, &localized.to_lowercase()), "{language}");
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+        app.run("file.open", json!({"name":"localized.xlsx","base64":saved["base64"]})).unwrap();
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        app.begin_edit(None, false);
+        assert_eq!(app.editor.as_ref().unwrap().text, localized);
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+        let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+        assert_eq!(restored.language, ui_language);
+    }
+}
+
+/// Structured-reference keywords are local in the editor and canonical on disk.
+#[test]
+fn spanish_structured_references_round_trip_through_xlsx() {
     let mut app = app();
-    app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
-    assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
-    app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
-    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-    assert_eq!(restored.language, Language::PtBr);
+    app.run("cell.set", json!({"cell":"D1","input":"Importe"})).unwrap();
+    app.run("cell.set", json!({"cell":"D2","input":"7"})).unwrap();
+    app.run("insert.table", json!({"range":"D1:D2","header":true,"name":"Ventas"})).unwrap();
+    app.run("app.language.set", json!({"code":"es"})).unwrap();
+    let localized = "=SUMA(Ventas[[#Datos];[Importe]])";
+    let canonical = "SUM(Ventas[[#Data],[Importe]])";
+    assert!(enter(&mut app, localized));
+    assert_eq!(formula(&app), canonical);
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"table.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), canonical);
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, localized);
 }
 
 #[test]
@@ -378,14 +411,14 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_localizes_formula_entry_and_display() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=topla(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=TOPLA(1,5;2,25)");
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
@@ -464,4 +497,19 @@ fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
             assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(format!("{text}!")));
         }
     }
+}
+
+/// Polish input stays canonical in XLSX and displays in Polish after reopening.
+#[test]
+fn polish_formula_round_trips_through_xlsx() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"pl"})).unwrap();
+    assert!(enter(&mut app, "=jeżeli.błąd(suma(1,5;2,25);#DZIEL/0!)"));
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"polish.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=JEŻELI.BŁĄD(SUMA(1,5;2,25);#DZIEL/0!)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
 }

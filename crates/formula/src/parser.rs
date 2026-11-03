@@ -344,11 +344,11 @@ impl Parser {
                 {
                     let pos = self.pos();
                     let Tok::Struct(body) = self.next() else { return Err(self.err("internal")) };
-                    return parse_struct(&w, &body).map(Expr::Struct).map_err(|msg| ParseError { msg, pos });
+                    return parse_struct(&w, &self.locale.canonical_struct_body(&body)).map(Expr::Struct).map_err(|msg| ParseError { msg, pos });
                 }
                 self.reference_from_word(SheetSel::Current, &w)
             }
-            Tok::Struct(body) => parse_struct("", &body).map(Expr::Struct).map_err(|msg| self.err(msg)),
+            Tok::Struct(body) => parse_struct("", &self.locale.canonical_struct_body(&body)).map(Expr::Struct).map_err(|msg| self.err(msg)),
             t => Err(self.err(format!("unexpected {}", describe(&t)))),
         }
     }

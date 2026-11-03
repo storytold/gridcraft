@@ -407,7 +407,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {

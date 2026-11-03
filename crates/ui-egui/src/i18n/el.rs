@@ -5,6 +5,9 @@
 /// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Report Layout|Outline" => "Διάρθρωση",
+        "Borders|None" => "Κανένα",
+        "Page {page}" => "Σελίδα {page}",
         "Paste" => "Επικόλληση",
         "Paste Values" => "Επικόλληση τιμών",
         "Paste Formulas" => "Επικόλληση τύπων",
@@ -648,6 +651,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values and number formats" => "Τιμές και μορφές αριθμών",
         "Operation" => "Πράξη",
         "Add" => "Πρόσθεση",
+        "Paste Special|Add" => "Πρόσθεση",
         "Subtract" => "Αφαίρεση",
         "Multiply" => "Πολλαπλασιασμός",
         "Divide" => "Διαίρεση",
@@ -685,6 +689,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tab" => "Στηλοθέτης",
         "Semicolon" => "Ερωτηματικό (;)",
         "Comma" => "Κόμμα",
+        "Text to Columns|Comma" => "Κόμμα",
         "Space" => "Διάστημα",
         "Other:" => "Άλλο:",
         "Treat consecutive delimiters as one" => "Αντιμετώπιση διαδοχικών διαχωριστικών ως ενός",
