@@ -356,10 +356,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button(app.ui.language.tr("Edit the Cell")).clicked() {
+                            app.run_or_alert("ui.editRefusedDraft", json!({}));
                             open = false;
                         }
                         if ui.button(app.ui.language.tr("Exit Anyway")).clicked() {
-                            app.exit_anyway(window, ui.ctx());
+                            app.run_or_alert("ui.exitAnyway", json!({"window": window}));
                             open = false;
                         }
                     });

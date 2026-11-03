@@ -589,10 +589,8 @@ fn closing_a_window_with_a_bad_formula_asks_and_exit_anyway_closes_without_a_sav
     assert_eq!(desk.app.session.documents().len(), 1);
 
     // Only the draft was touched: the workbook has nothing to save.
-    let sent = desk.frame_with(|app, ctx| {
-        app.dialog = None;
-        app.exit_anyway(Some(w), ctx);
-    });
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    let sent = desk.frames(2);
     assert!(desk.app.dialog.is_none(), "no Save Changes question");
     assert!(desk.app.session.documents().is_empty());
     assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "the last window closed: the app quits: {sent:?}");
@@ -607,10 +605,8 @@ fn exit_anyway_on_a_window_with_other_changes_still_asks_about_them() {
     let w = desk.window_of(0);
     desk.close(w);
     assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
-    desk.frame_with(|app, ctx| {
-        app.dialog = None;
-        app.exit_anyway(Some(w), ctx);
-    });
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    desk.frames(2);
     assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
     assert_eq!(desk.app.session.documents().len(), 1);
 }

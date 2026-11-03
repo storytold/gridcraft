@@ -1,4 +1,7 @@
 use super::{SaveAnswer, SheetApp, json};
+use serde_json::Value as Json;
+
+const NO_DRAFT: &str = "No cell is being edited.";
 
 impl SheetApp {
     /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
@@ -44,9 +47,40 @@ impl SheetApp {
         self.open_dialog("refusedDraft", json!({"reason": reason, "window": window}));
     }
 
+    /// `ui.editRefusedDraft`: the question closes and the draft stays open to fix.
+    pub(super) fn edit_refused_draft(&mut self) -> Result<Json, String> {
+        let Some(ed) = self.editor.as_mut() else { return Err(NO_DRAFT.into()) };
+        ed.request_focus = true;
+        if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
+            self.dialog = None;
+        }
+        Ok(Json::Null)
+    }
+
+    /// `ui.exitAnyway`: answers the question for its window (`window` when it isn't open, as while
+    /// its own button is drawn). Closing needs the frame's context, so the next `logic` goes on.
+    pub(super) fn request_exit_anyway(&mut self, p: &Json) -> Result<Json, String> {
+        if self.editor.is_none() {
+            return Err(NO_DRAFT.into());
+        }
+        let asked = self.dialog.as_ref().filter(|d| d.name() == "refusedDraft").and_then(|d| d.values.get("window")).and_then(Json::as_u64);
+        if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
+            self.dialog = None;
+        }
+        self.pending_exit_anyway = Some(asked.or_else(|| p.get("window").and_then(Json::as_u64)));
+        Ok(Json::Null)
+    }
+
+    /// Goes on with an Exit Anyway asked since the last frame.
+    pub(super) fn run_pending_exit_anyway(&mut self, ctx: &egui::Context) {
+        if let Some(window) = self.pending_exit_anyway.take() {
+            self.exit_anyway(window, ctx);
+        }
+    }
+
     /// Exit Anyway: drops the draft, leaving its cell as it was, and goes on closing. Unsaved
     /// workbooks are still asked about.
-    pub fn exit_anyway(&mut self, window: Option<u64>, ctx: &egui::Context) {
+    pub(crate) fn exit_anyway(&mut self, window: Option<u64>, ctx: &egui::Context) {
         self.cancel_edit();
         match window {
             Some(window) => self.run_or_alert("window.close", json!({"window": window})),

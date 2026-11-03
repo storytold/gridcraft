@@ -862,3 +862,24 @@ fn the_save_question_is_in_the_interface_language() {
     let sent = click_commands(&mut h, "Non salvare");
     assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
 }
+
+#[test]
+fn the_close_question_can_be_answered_by_command() {
+    let mut h = harness(Services::default());
+    assert!(h.state_mut().run("ui.editRefusedDraft", serde_json::json!({})).is_err(), "no draft");
+    assert!(h.state_mut().run("ui.exitAnyway", serde_json::json!({})).is_err(), "no draft");
+
+    close_with_a_bad_formula(&mut h);
+    h.state_mut().run("ui.editRefusedDraft", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"));
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    h.state_mut().run("ui.exitAnyway", serde_json::json!({})).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(h.state().editor.is_none());
+    assert!(h.state().dialog.is_none());
+}
