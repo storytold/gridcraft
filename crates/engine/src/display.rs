@@ -10,6 +10,11 @@ use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
     static CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    // A code of more bytes than 4 × the character limit can't be within it: it shows as General
+    // without being hashed or scanned again for every cell that shares it.
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse("General");
+    }
     let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(f) = lock().get(code) {
         return f.clone();
@@ -225,4 +230,21 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A format code far past Excel's 255 characters shows its values as General, for every cell
+    /// that shares it, without being hashed into the cache each time.
+    #[test]
+    fn an_overlong_code_formats_as_general() {
+        let wb = Workbook::new();
+        let code = format!("0.00{}", "\"x\"".repeat(400_000));
+        for _ in 0..1_000 {
+            assert_eq!(format(&Value::Number(1.5), &code, &wb).text, "1.5");
+        }
+        assert_eq!(format(&Value::Number(1.5), "0.00", &wb).text, "1.50");
+    }
 }
