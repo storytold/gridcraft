@@ -31,6 +31,7 @@ fn subtract_ranges(r: RangeRef, cuts: &[RangeRef]) -> Vec<RangeRef> {
     if events.is_empty() {
         return vec![r];
     }
+    events.entry(u64::from(r.end.row) + 1).or_default();
 
     let mut active = std::collections::BTreeMap::<(u32, u32), usize>::new();
     let mut out: Vec<RangeRef> = Vec::new();
