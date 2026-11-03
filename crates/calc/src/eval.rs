@@ -374,13 +374,14 @@ impl<'h> Evaluator<'h> {
             return v.clone();
         }
         let wb = self.host.workbook();
-        // Sheet-qualified `Sheet1!Name`.
+        // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
+        // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
         let (scope_sheet, bare) = match n.rsplit_once('!') {
             Some((s, _)) if s.contains('[') => {
                 self.linked.set(true);
                 return err(CellError::Name);
             }
-            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
+            Some((s, b)) => match wb.sheet_index(s) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
