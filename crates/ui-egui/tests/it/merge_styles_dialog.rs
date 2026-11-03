@@ -109,6 +109,27 @@ fn styles_with_the_same_names_ask_whether_to_replace_them() {
 }
 
 #[test]
+/// An answer set through the control channel reaches the command, which refuses one that isn't
+/// replace or keep instead of replacing the styles.
+fn a_bad_same_names_answer_is_refused_not_dropped() {
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    let mut h = two_books(true);
+    h.state_mut().open_dialog("mergeStyles", json!({}));
+    h.run_steps(3);
+    let ctx = egui::Context::default();
+    let call = |h: &mut Harness, method: &str, p: serde_json::Value| match handle(h.state_mut(), &ctx, method, &p) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => panic!("{method} took a screenshot"),
+    };
+    call(&mut h, "ui.dialog.set", json!({"field": "sameNames", "value": false}));
+    let r = call(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("replace or keep")), "{r}");
+    assert_eq!(styles(&h).len(), 1, "nothing merged");
+    assert_eq!(underline_of(&h, "Shared"), Underline::Double, "this workbook's Shared stays");
+}
+
+#[test]
 fn with_no_other_workbook_open_the_dialog_says_so() {
     let mut h = crate::support::blank_harness(6);
     h.state_mut().open_dialog("mergeStyles", json!({}));

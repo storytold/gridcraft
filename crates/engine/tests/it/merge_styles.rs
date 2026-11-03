@@ -234,6 +234,31 @@ fn the_source_is_named_by_its_title_or_id_and_bad_sources_are_refused() {
 }
 
 #[test]
+fn a_name_with_a_leading_space_is_its_own_workbook() {
+    let mut s = Session::new();
+    let target = s.new_workbook();
+    for (dir, style) in [("a", "Spaced"), ("b", "Plain")] {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        wb.cell_styles.push((style.into(), Style::default()));
+        let file = if style == "Spaced" { " Report.xlsx" } else { "Report.xlsx" };
+        s.add_document(DocState::new(wb, Some(format!("/tmp/{dir}/{file}")), "x".into(), Trust::Local));
+    }
+    let titles: Vec<String> = s.documents().iter().map(|d| d.display_title()).collect();
+    assert!(titles.iter().any(|t| t == " Report.xlsx") && titles.iter().any(|t| t == "Report.xlsx"), "{titles:?}");
+    s.set_active(target);
+    // Each title names its own workbook.
+    run(&mut s, "home.mergeStyles", json!({"from": " Report.xlsx"}));
+    assert_eq!(names(&s), ["Spaced"]);
+    s.execute("edit.undo", json!({})).unwrap();
+    run(&mut s, "home.mergeStyles", json!({"from": "report.xlsx"}));
+    assert_eq!(names(&s), ["Plain"]);
+    s.execute("edit.undo", json!({})).unwrap();
+    // Spaces around a name that no title has are still dropped.
+    run(&mut s, "home.mergeStyles", json!({"from": "  Report.xlsx  "}));
+    assert_eq!(names(&s), ["Plain"]);
+}
+
+#[test]
 fn with_one_workbook_open_there_is_nothing_to_merge_from() {
     let mut s = Session::new();
     s.new_workbook();

@@ -106,7 +106,8 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
             if let Some(from) = d.values.get("source").filter(|x| !x.is_null()).or(d.values.get("from")) {
                 m.insert("from".into(), from.clone());
             }
-            if let Some(answer) = d.values.get("sameNames").filter(|x| x.is_string()) {
+            // Any value set goes through: the command refuses one that isn't replace or keep.
+            if let Some(answer) = d.values.get("sameNames").filter(|x| !x.is_null()) {
                 m.insert("sameNames".into(), answer.clone());
             }
             v = Json::Object(m);

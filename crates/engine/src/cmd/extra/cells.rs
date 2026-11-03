@@ -135,13 +135,19 @@ fn source_workbook(s: &Session, from: Option<&Json>) -> Result<usize> {
     match from {
         None | Some(Json::Null) => Err(bad(ID, "missing `from` (the open workbook to merge styles from)")),
         Some(Json::Number(n)) => n.as_u64().and_then(|uid| s.document_index(uid)).ok_or_else(|| bad(ID, format!("no open workbook has id {n}"))),
-        Some(Json::String(name)) => {
-            let wanted = name.trim();
+        Some(Json::String(given)) => {
+            let wanted = given.trim();
             let name = wanted.to_lowercase();
             let find = |same: &dyn Fn(&str) -> bool| -> Vec<usize> {
                 docs.iter().enumerate().filter(|(_, d)| same(&d.display_title())).map(|(i, _)| i).collect()
             };
-            let mut hits = find(&|title| title.to_lowercase() == name);
+            // The title as given first, so a file name with a leading space names its own
+            // workbook, not one whose name is the same without the space.
+            let given = given.to_lowercase();
+            let mut hits = find(&|title| title.to_lowercase() == given);
+            if hits.is_empty() {
+                hits = find(&|title| title.to_lowercase() == name);
+            }
             if hits.is_empty() {
                 hits = find(&|title| std::path::Path::new(title).file_stem().and_then(|x| x.to_str()).is_some_and(|x| x.to_lowercase() == name));
             }
