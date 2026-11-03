@@ -48,7 +48,8 @@ fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             response.labelled_by(label.id);
         }
         if let Some(text) = committed {
-            let parsed = text.trim().parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w));
+            let normalized = text.trim().replace(lang.formula_locale().decimal_separator(), ".");
+            let parsed = normalized.parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w));
             match parsed {
                 Some(w) if w != width => {
                     app.run_or_alert("options.newWorkbookColumnWidth", json!({"width": w}));

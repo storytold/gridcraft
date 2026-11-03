@@ -3,11 +3,20 @@
 use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::{Services, SheetApp};
+use gridcraft_ui_egui::{Services, SheetApp, i18n::Language};
 use serde_json::json;
 
 #[test]
 fn options_width_field_applies_to_new_workbooks_only() {
+    check_options_width_input(Language::En, "112.5");
+}
+
+#[test]
+fn options_width_field_accepts_spanish_decimal_separator() {
+    check_options_width_input(Language::Es, "112,5");
+}
+
+fn check_options_width_input(language: Language, input: &str) {
     let mut session = Session::new();
     let original = session.new_workbook();
 
@@ -21,10 +30,12 @@ fn options_width_field_applies_to_new_workbooks_only() {
     );
 
     h.run_steps(4);
+    h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
+    h.run_steps(3);
     h.state_mut().run("file.options", json!({})).unwrap();
     h.run_steps(3);
 
-    let label = "Default column width for new workbooks (pixels)";
+    let label = language.tr("Default column width for new workbooks (pixels)");
 
     assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some("64"),);
 
@@ -34,7 +45,7 @@ fn options_width_field_applies_to_new_workbooks_only() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
 
-    for c in "112.5".chars() {
+    for c in input.chars() {
         h.input_mut().events.push(egui::Event::Text(c.to_string()));
         h.run_steps(2);
     }
