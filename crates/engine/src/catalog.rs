@@ -219,6 +219,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("data.forecastSheet", "Data", "Forecast", "Forecast Sheet"),
     ("data.group", "Data", "Outline", "Group"),
     ("data.ungroup", "Data", "Outline", "Ungroup"),
+    ("data.clearOutline", "Data", "Outline", "Clear Outline"),
     ("data.subtotal", "Data", "Outline", "Subtotal"),
     ("data.showDetail", "Data", "Outline", "Show Detail"),
     ("data.hideDetail", "Data", "Outline", "Hide Detail"),

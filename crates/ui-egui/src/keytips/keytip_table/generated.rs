@@ -306,10 +306,10 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("ASS", Entry::Finish(Action::Dialog("sort"))),                       // Excel: Sort
     ("AT", Entry::Finish(Action::Command("data.filter"))),                // Excel: Filter
     ("AU", Entry::Continue),                                              // Excel: Ungroup Menu; group level: containment(Ungroup)
-    ("AUC", Entry::Finish(Action::Pending("data.clearOutline"))), // pending; Excel: Clear Outline; feature gap; reserved until the command lands
-    ("AUU", Entry::Finish(Action::Command("data.ungroup"))),      // Excel: Ungroup
-    ("AV", Entry::Continue),                                      // Excel: Data Validation Menu; group level: containment(Data Validation)
-    ("AVI", Entry::Finish(Action::Command("data.circleInvalid"))), // Excel: Circle Invalid Data
+    ("AUC", Entry::Finish(Action::Command("data.clearOutline"))),         // Excel: Clear Outline
+    ("AUU", Entry::Finish(Action::Command("data.ungroup"))),              // Excel: Ungroup
+    ("AV", Entry::Continue),                                              // Excel: Data Validation Menu; group level: containment(Data Validation)
+    ("AVI", Entry::Finish(Action::Command("data.circleInvalid"))),        // Excel: Circle Invalid Data
     ("AVR", Entry::Finish(Action::Pending("data.clearValidationCircles"))), // pending; Excel: Clear Validation Circles; reserved until the command lands
     ("AVV", Entry::Finish(Action::Command("data.validation"))),             // Excel: Data Validation
     ("AW", Entry::Continue),                                                // group: group: What-If (goalSeek/scenarioManager/dataTable)

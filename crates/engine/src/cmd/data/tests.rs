@@ -546,3 +546,51 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn clear_outline_removes_every_level_and_shows_the_detail_again() {
+    // #3088: Data › Outline › Ungroup › Clear Outline, as Excel measured: one cell clears the
+    // sheet, a range clears its rows' and columns' levels, hidden detail is shown again.
+    let outlined = || {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+        s.execute("data.group", json!({"rows": "6:8"})).unwrap();
+        s.execute("data.group", json!({"rows": "2:9"})).unwrap();
+        s.execute("data.group", json!({"cols": "B:D"})).unwrap();
+        s.execute("data.showLevels", json!({"rows": 1, "cols": 1})).unwrap();
+        s
+    };
+    let sheet = |s: &Session| s.doc().unwrap().wb.active().unwrap().clone();
+    let mut s = outlined();
+    assert!(sheet(&s).rows.get(&2).is_some_and(|e| e.hidden && e.outline == 2));
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = sheet(&s);
+    assert!(
+        sh.rows.values().chain(sh.cols.values()).all(|e| e.outline == 0 && !e.collapsed && !e.hidden && e.size != Some(0.0)),
+        "{:?} {:?}",
+        sh.rows,
+        sh.cols
+    );
+    // One undo step brings the collapsed outline back; a second call has nothing to clear.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(sheet(&s).rows.get(&2).is_some_and(|e| e.hidden && e.outline == 2));
+    s.execute("edit.redo", json!({})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"][0], "Clear Outline");
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"][1], "Show Outline Levels");
+    // A range: A3:E3 clears row 3 and columns A:E, rows 2 and 4 keep their levels.
+    let mut s = outlined();
+    s.execute("data.clearOutline", json!({"range": "A3:E3"})).unwrap();
+    let sh = sheet(&s);
+    assert_eq!(sh.rows.get(&2).map(|e| e.outline), Some(0));
+    assert_eq!(sh.rows.get(&1).map(|e| e.outline), Some(2));
+    assert_eq!(sh.rows.get(&3).map(|e| e.outline), Some(2));
+    assert!(sh.cols.values().all(|e| e.outline == 0));
+    // No outline: no error, no undo step.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"], json!([]));
+}

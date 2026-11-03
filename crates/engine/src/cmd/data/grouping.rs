@@ -1,7 +1,8 @@
 use super::{
     CellRef, EngineError, Json, LineInfo, RangeRef, Result, Session, bad, bool_param, col_param, data_target, edit, json, outline, parse_lines,
-    str_param, target_sheet,
+    str_param, target_range, target_sheet,
 };
+use gridcraft_core::{MAX_COLS, MAX_ROWS};
 
 // ---------------------------------------------------------------- outline
 
@@ -98,6 +99,35 @@ pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
             }
         }
         cx.structural = true;
+        Ok(Json::Null)
+    })
+}
+
+/// Data › Outline › Ungroup › Clear Outline: removes every outline level from the rows and the
+/// columns of `range` (the selection), or from the whole sheet when it is one cell. Lines the outline
+/// had hidden are shown again (a zero size gets its default back) and collapsed marks go; a line
+/// hidden on its own, outside any group, stays hidden. Nothing to clear is no error and no undo step.
+pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
+    let r = target_range(s, p)?;
+    let (rows, cols) = if r.is_single() { ((0, MAX_ROWS - 1), (0, MAX_COLS - 1)) } else { ((r.start.row, r.end.row), (r.start.col, r.end.col)) };
+    let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let outlined = |map: &std::collections::BTreeMap<u32, LineInfo>, (a, b): (u32, u32)| map.range(a..=b).any(|(_, e)| e.outline > 0 || e.collapsed);
+    if !outlined(&sh.rows, rows) && !outlined(&sh.cols, cols) {
+        return Ok(Json::Null);
+    }
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        for (map, (a, b)) in [(&mut sh.rows, rows), (&mut sh.cols, cols)] {
+            for (_, e) in map.range_mut(a..=b) {
+                if e.outline > 0 && e.hidden {
+                    set_hidden(e, false);
+                }
+                e.outline = 0;
+                e.collapsed = false;
+            }
+        }
+        cx.structural = true; // shown rows count again in SUBTOTAL(10x)
         Ok(Json::Null)
     })
 }
