@@ -1014,6 +1014,44 @@ fn hidden_reference_keeps_literal_values_and_categories_aligned() {
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
     assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    // A union is evaluated without dropping hidden rows before applying its category mask.
+    c.series[0].categories = Some("Sheet1!$A$1:$A$4".into());
+    c.series[0].values = "(Sheet1!$B$1:$B$2,Sheet1!$B$3:$B$4)".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    // A category union uses the values reference's mask before it drops hidden positions.
+    c.series[0].categories = Some("(Sheet1!$A$1:$A$2,Sheet1!$A$3:$A$4)".into());
+    c.series[0].values = "Sheet1!$B$1:$B$4".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+}
+
+#[test]
+fn hidden_y_range_keeps_literal_scatter_and_bubble_data_aligned() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, value) in [10.0, 20.0, 30.0, 40.0].into_iter().enumerate() {
+            s.set_value(CellRef::new(r as u32, 1), Value::Number(value));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::Bubble);
+    c.series = vec![Series {
+        categories: Some("{1,2,3,4}".into()),
+        values: "Sheet1!$B$1:$B$4".into(),
+        bubble_sizes: Some("{100,200,300,400}".into()),
+        ..Series::default()
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.series[0].x, Some(vec![Some(1.0), Some(3.0), Some(4.0)]));
+    assert_eq!(d.series[0].sizes, Some(vec![Some(100.0), Some(300.0), Some(400.0)]));
 }
 
 #[test]

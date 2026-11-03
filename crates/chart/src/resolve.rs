@@ -134,6 +134,15 @@ fn filter_by_visibility<T>(wb: &Workbook, sh: usize, r: &RangeRef, values: Vec<T
     values.into_iter().enumerate().filter(|(i, _)| is_visible(wb, sh, r, *i)).map(|(_, v)| v).collect()
 }
 
+/// Evaluate unfiltered when another range supplies the row positions, then apply that range's
+/// visibility mask once. Otherwise, let the formula's own references determine visibility.
+fn eval_list_aligned(wb: &Workbook, sheet: usize, formula: &str, hide: bool, mask: Option<(usize, RangeRef)>) -> Vec<Value> {
+    if hide && let Some((sh, r)) = mask {
+        return filter_by_visibility(wb, sh, &r, eval_list_in(wb, sheet, formula, 0, false));
+    }
+    eval_list_in(wb, sheet, formula, 0, hide)
+}
+
 fn to_num(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) if n.is_finite() => Some(*n),
@@ -178,7 +187,7 @@ fn category_table(
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     // A plain range is read whole and its hidden rows and columns dropped at the end, so the
     // number formats and multi-level groups still line up with the cells.
-    let vals = eval_list_in(wb, sheet, formula, 0, hide && cells.is_none());
+    let vals = eval_list_aligned(wb, sheet, formula, hide && cells.is_none(), if cells.is_none() { alignment_ref } else { None });
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
     let texts: Vec<String> = vals
         .iter()
@@ -288,13 +297,10 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut category_levels = Vec::new();
     let hide = !chart.show_hidden_data;
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
-        let mut values = nums(wb, sheet, &s.values, hide);
-        if hide
-            && parse_ref(wb, sheet, &s.values).is_none()
-            && let Some((category_sheet, category_range)) = s.categories.as_deref().and_then(|f| parse_ref(wb, sheet, f))
-        {
-            values = filter_by_visibility(wb, category_sheet, &category_range, values);
-        }
+        let values_ref = parse_ref(wb, sheet, &s.values);
+        let category_ref = s.categories.as_deref().and_then(|f| parse_ref(wb, sheet, f));
+        let value_mask = if values_ref.is_none() { category_ref } else { None };
+        let values = eval_list_aligned(wb, sheet, &s.values, hide, value_mask).iter().map(to_num).collect();
         // A series whose cells are all hidden (its column hidden) leaves the chart, legend included.
         if hide && values.is_empty() && !nums(wb, sheet, &s.values, false).is_empty() {
             continue;
@@ -306,21 +312,20 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
-                Some(eval_list_in(wb, sheet, f, 0, hide)).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect())
+                Some(eval_list_aligned(wb, sheet, f, hide, values_ref).into_iter().filter(|v| !v.is_text()).map(|v| to_num(&v)).collect())
             }
             _ => None,
         };
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let values_ref = parse_ref(wb, sheet, &s.values);
             let (c, outer) = category_table(wb, sheet, f, &s.values, hide, values_ref);
             if !c.is_empty() {
                 categories = Some(c);
                 category_levels = outer;
             }
         }
-        let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f, hide));
+        let sizes = s.bubble_sizes.as_deref().map(|f| eval_list_aligned(wb, sheet, f, hide, values_ref).iter().map(to_num).collect());
         let trendlines = s
             .trendlines
             .iter()
