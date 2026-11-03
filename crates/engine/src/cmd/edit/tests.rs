@@ -354,6 +354,36 @@ fn cut_paste_that_overflows_the_grid_moves_nothing() {
 }
 
 #[test]
+fn replace_refuses_text_that_would_grow_past_a_cell() {
+    // 10,000 matches × a 1,000-character replacement would make a 10 MB cell (and a few such
+    // cells gigabytes); the replacement is refused before that text is built.
+    let mut s = Session::new();
+    s.new_workbook();
+    let long = "a".repeat(10_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[long.clone()], ["abc"]]})).unwrap();
+    for case in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "a", "with": "x".repeat(1_000), "matchCase": case})).expect_err("too long");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(long));
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!("abc"));
+    }
+    // A replacement that stays within a cell's limit still happens.
+    s.execute("edit.replace", json!({"what": "b", "with": "x".repeat(100)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], json!(format!("a{}c", "x".repeat(100))));
+}
+
+#[test]
+fn bounded_replace_stops_at_its_limit() {
+    use super::find::{replace_ci_within, replace_cs_within};
+    assert_eq!(replace_cs_within("abab", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_cs_within("abab", "a", "xy", 5), None);
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 6).as_deref(), Some("xybxyb"));
+    assert_eq!(replace_ci_within("AbAb", "a", "xy", 5), None);
+    assert_eq!(replace_cs_within("abc", "z", "", 3).as_deref(), Some("abc"));
+    assert_eq!(replace_cs_within("abc", "z", "", 2), None);
+}
+
+#[test]
 fn replace_case_insensitive() {
     assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
 }
