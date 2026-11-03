@@ -182,8 +182,22 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
-    let Some(sh) = wb.sheet(sheet) else { return };
-    let Some(af) = sh.autofilter.clone() else { return };
+    let hide = autofilter_rows(wb, sheet);
+    let Some(shm) = wb.sheet_mut(sheet) else { return };
+    for (row, h) in hide {
+        if h {
+            shm.rows.entry(row).or_default().hidden = true;
+        } else if let Some(e) = shm.rows.get_mut(&row) {
+            e.hidden = false;
+        }
+    }
+}
+
+/// The sheet's AutoFilter evaluated as it stands: each data row and whether its criteria hide it
+/// (empty without an AutoFilter).
+pub(crate) fn autofilter_rows(wb: &Workbook, sheet: usize) -> Vec<(u32, bool)> {
+    let Some(sh) = wb.sheet(sheet) else { return Vec::new() };
+    let Some(af) = sh.autofilter.clone() else { return Vec::new() };
     let r = af.range;
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
@@ -258,14 +272,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
         }
         hide.push((row, !visible));
     }
-    let Some(shm) = wb.sheet_mut(sheet) else { return };
-    for (row, h) in hide {
-        if h {
-            shm.rows.entry(row).or_default().hidden = true;
-        } else if let Some(e) = shm.rows.get_mut(&row) {
-            e.hidden = false;
-        }
-    }
+    hide
 }
 
 pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {

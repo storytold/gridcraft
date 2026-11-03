@@ -130,8 +130,16 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
         [one] if one.is_single() => vec![((0, MAX_ROWS - 1), (0, MAX_COLS - 1))],
         _ => ranges.iter().map(|r| ((r.start.row, r.end.row), (r.start.col, r.end.col))).collect(),
     };
-    let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true), |r| sh.is_row_filtered(r));
+    let wb = &s.doc()?.wb;
+    let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    // A row a filter hides stays hidden: the sheet's AutoFilter is evaluated, since a row a collapsed
+    // group hid inside its range is hidden too; a table's stored filter has no evaluator here, so
+    // its hidden rows stay hidden.
+    let failing: std::collections::BTreeSet<u32> =
+        super::filter::autofilter_rows(wb, si).into_iter().filter(|(_, hidden)| *hidden).map(|(r, _)| r).collect();
+    let in_table_filter =
+        |r: u32| sh.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|d| r >= d.start.row && r <= d.end.row));
+    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true), |r| failing.contains(&r) || in_table_filter(r));
     let cols = cleared(&sh.cols, spans.iter().map(|s| s.1), outline::summary_before(sh, false), |_| false);
     if rows == sh.rows && cols == sh.cols {
         return Ok(Json::Null);
@@ -160,15 +168,26 @@ fn cleared(
     summary_before: bool,
     filtered: impl Fn(u32) -> bool,
 ) -> std::collections::BTreeMap<u32, LineInfo> {
-    let folded: Vec<(u32, u32)> = outline::groups_with(lines, summary_before)
+    // The folded groups' lines as sorted, merged intervals, so each line is one binary search.
+    let mut folded: Vec<(u32, u32)> = outline::groups_with(lines, summary_before)
         .into_iter()
         .filter(|g| !g.has_summary() || lines.get(&g.summary()).is_some_and(|e| e.collapsed))
         .map(|g| (g.start, g.end))
         .collect();
+    folded.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(folded.len());
+    for (a, b) in folded {
+        match merged.last_mut() {
+            Some(last) if a <= last.1.saturating_add(1) => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let in_folded =
+        |line: u32| merged.partition_point(|(a, _)| *a <= line).checked_sub(1).and_then(|i| merged.get(i)).is_some_and(|(_, b)| line <= *b);
     let mut map = lines.clone();
     for (a, b) in spans {
         for (line, e) in map.range_mut(a..=b) {
-            if e.outline > 0 && e.hidden && folded.iter().any(|(s, t)| (*s..=*t).contains(line)) && !filtered(*line) {
+            if e.outline > 0 && e.hidden && in_folded(*line) && !filtered(*line) {
                 set_hidden(e, false);
             }
             e.outline = 0;
