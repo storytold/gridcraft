@@ -89,20 +89,20 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         }
         None => (d.wb.active_sheet(), d.selection.active),
     };
+    // Keys in first-seen order, each with its index: a lookup is one probe, not a scan.
     let mut row_keys: Vec<Key> = Vec::new();
     let mut col_keys: Vec<Key> = Vec::new();
+    let mut row_index: HashMap<Key, usize> = HashMap::new();
+    let mut col_index: HashMap<Key, usize> = HashMap::new();
     let mut row_label: HashMap<Key, String> = HashMap::new();
     let mut col_label: HashMap<Key, String> = HashMap::new();
     let mut aggs: HashMap<(usize, usize), Agg> = HashMap::new();
     let mut total: u64 = 0;
-    let index_of = |keys: &mut Vec<Key>, k: Key| -> usize {
-        match keys.iter().position(|x| *x == k) {
-            Some(i) => i,
-            None => {
-                keys.push(k);
-                keys.len() - 1
-            }
-        }
+    let index_of = |keys: &mut Vec<Key>, index: &mut HashMap<Key, usize>, k: Key| -> usize {
+        *index.entry(k).or_insert_with_key(|k| {
+            keys.push(k.clone());
+            keys.len() - 1
+        })
     };
     for t in &srcs {
         let (si, r) = parse_range(&d.wb, t, CMD)?;
@@ -131,7 +131,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 Key::Pos(col - c0)
             };
-            cols.push((col, index_of(&mut col_keys, k)));
+            cols.push((col, index_of(&mut col_keys, &mut col_index, k)));
         }
         for row in r0..=r.end.row {
             let k = if left {
@@ -145,7 +145,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 Key::Pos(row - r0)
             };
-            let ri = index_of(&mut row_keys, k);
+            let ri = index_of(&mut row_keys, &mut row_index, k);
             for (col, ci) in &cols {
                 aggs.entry((ri, *ci)).or_default().add(&sh.value(CellRef::new(row, *col)));
             }
@@ -156,6 +156,10 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         || out_c0 as u64 + col_keys.len() as u64 > gridcraft_core::MAX_COLS as u64
     {
         return Err(EngineError::Other("The consolidated data doesn't fit below and right of the destination.".into()));
+    }
+    // Every row key meets every column key in the output, so the product is what gets written.
+    if (row_keys.len() as u64).saturating_mul(col_keys.len() as u64) > MAX_CONSOLIDATE_CELLS {
+        return Err(bad(CMD, "the consolidated table would be too large"));
     }
     let mut cells: Vec<(CellRef, Value)> = Vec::new();
     if top {
