@@ -18,6 +18,9 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+#[cfg(test)]
+mod chart_font_tests;
+mod chart_tools;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
@@ -288,6 +291,7 @@ pub struct SheetApp {
     pub(crate) capture_geometry_from_raw: bool,
     /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
+    chart_context: Option<egui::Context>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.

@@ -16,6 +16,32 @@ fn editor_slack_fits_one_more_glyph_at_high_zoom() {
 }
 
 #[test]
+fn delete_chart_title_keeps_chart_and_axis_delete_is_guarded() {
+    use super::interact::delete_selected_object;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+    let result = session.execute("insert.chart", json!({"range":"A1","type":"column","title":"Title"})).unwrap();
+    let id = result["chart"].as_u64().unwrap() as u32;
+    let mut app = SheetApp::new(session, Default::default());
+    app.select_object_id(Some(id));
+    let ctx = egui::Context::default();
+    crate::chartview::select_element(&ctx, id, crate::chartview::ChartElement::Title);
+    let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+    assert!(delete_selected_object(&mut app, &ctx, &sh));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts[0].title.as_deref(), Some(""));
+    let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+    assert!(delete_selected_object(&mut app, &ctx, &sh));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+    crate::chartview::select_element(&ctx, id, crate::chartview::ChartElement::XAxis);
+    let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+    assert!(delete_selected_object(&mut app, &ctx, &sh));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+    assert!(app.message.is_some());
+}
+
+#[test]
 fn explicit_left_and_right_keep_their_side_on_a_right_to_left_sheet() {
     use super::{HAlign, painted_halign};
     // Painted before the mirror: swapped, so they land where the user put them.
