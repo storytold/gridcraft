@@ -366,12 +366,13 @@ fn is_ref(f: &str) -> bool {
 /// when it isn't a name, or names a sheet the workbook doesn't have.
 fn chart_name<'a>(wb: &'a Workbook, si: usize, f: &str) -> Option<(Option<usize>, String, Option<&'a DefinedName>)> {
     let Ok(Expr::Name(n)) = gridcraft_formula::parse(f.trim()) else { return None };
-    match n.split_once('!') {
-        Some((s, bare)) => {
-            let i = wb.sheet_index(s.trim_matches('\''))?;
+    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
+    match gridcraft_core::split_sheet(&n) {
+        (Some(s), bare) => {
+            let i = wb.sheet_index(&s)?;
             Some((Some(i), bare.to_string(), wb.name(bare, i)))
         }
-        None => {
+        (None, _) => {
             let def = wb.name(&n, si);
             Some((None, n, def))
         }
