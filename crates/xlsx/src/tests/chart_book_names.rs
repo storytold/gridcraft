@@ -163,6 +163,7 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         source: None,
         by_rows: false,
         pivot: None,
+        kept: None,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
     wb.names = vec![

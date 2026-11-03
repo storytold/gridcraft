@@ -981,6 +981,7 @@ fn chart(id: u32, kind: gridcraft_model::ChartKind) -> gridcraft_model::Chart {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
