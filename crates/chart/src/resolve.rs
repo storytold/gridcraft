@@ -187,8 +187,7 @@ fn category_table(
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     // A plain range is read whole and its hidden rows and columns dropped at the end, so the
     // number formats and multi-level groups still line up with the cells.
-    let align = cells.is_none() && union_parts(formula.trim()).is_none();
-    let vals = eval_list_aligned(wb, sheet, formula, hide && align, if align { alignment_ref } else { None });
+    let vals = eval_list_aligned(wb, sheet, formula, hide && cells.is_none(), if cells.is_none() { alignment_ref } else { None });
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
     let texts: Vec<String> = vals
         .iter()
