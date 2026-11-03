@@ -29,7 +29,7 @@ gridcraft-math = { path = "crates/math" }
 # storytold/craft-libs revision. craft-update is newer so a Windows update restarts with the
 # file that was opened.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "29362940bb4a21636f8f90381eb475317f1d9d8b", version = "=0.1.0", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "37c845c4343bdad45ce455118807a5b62a765e2c", version = "=0.1.0", features = ["egui"] }
 
 # foundation
 thiserror = "2"
