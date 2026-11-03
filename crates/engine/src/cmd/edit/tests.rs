@@ -424,3 +424,22 @@ fn next_corner_stops_once_on_a_merged_corner_at_its_top_left_cell() {
     s.execute("selection.set", json!({"range": "C2:D2", "active": "C2"})).unwrap();
     assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C2");
 }
+
+#[test]
+fn next_corner_skips_hidden_corners_and_stays_inside_the_selected_area() {
+    // A corner in a hidden column is passed over, as keyboard moves pass over hidden cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.hideColumns", json!({"cols": "D:D"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B3");
+    // Column C selected with B1:C1 merged: its top corner's merged cell starts in column B,
+    // outside the selection, so the active cell doesn't go there.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "B1:C1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "C5"})).unwrap();
+    s.execute("selection.column", json!({})).unwrap();
+    let r = s.execute("selection.nextCorner", json!({})).unwrap();
+    assert_eq!((r["active"].as_str(), r["selection"].as_str()), (Some("C1048576"), Some("C:C")));
+}
