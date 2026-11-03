@@ -62,15 +62,23 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     for ev in events {
         match ev {
             egui::Event::Copy => {
+                set_end_mode(app, ctx, false);
                 app.copy_to_clipboard(ctx, "edit.copy");
             }
             egui::Event::Cut => {
+                set_end_mode(app, ctx, false);
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
-            egui::Event::Paste(text) => app.paste_external(text),
+            egui::Event::Paste(text) => {
+                set_end_mode(app, ctx, false);
+                app.paste_external(text);
+            }
             // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
             // a floating picture at the active cell, as Excel does.
-            egui::Event::PasteImage(image) => app.paste_color_image(&image),
+            egui::Event::PasteImage(image) => {
+                set_end_mode(app, ctx, false);
+                app.paste_color_image(&image);
+            }
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}

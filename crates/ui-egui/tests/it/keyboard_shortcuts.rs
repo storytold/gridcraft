@@ -351,6 +351,19 @@ fn end_mode_ends_when_the_grid_loses_the_keyboard() {
 }
 
 #[test]
+fn clipboard_events_end_end_mode() {
+    for event in [Event::Copy, Event::Cut, Event::Paste("x".into())] {
+        let mut h = harness(book("A1"));
+        key(&mut h, Key::End, Modifiers::NONE);
+        h.input_mut().events.push(event);
+        h.run_steps(2);
+        assert!(!h.state().grid.end_mode);
+        key(&mut h, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    }
+}
+
+#[test]
 fn end_mode_leaves_shift_arrow_extending_one_cell() {
     let mut h = harness(book("A1"));
     key(&mut h, Key::End, Modifiers::NONE);
