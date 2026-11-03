@@ -507,7 +507,7 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Installed workbook fonts, so a cell's chosen font actually renders in it.
     if system {
         for family in crate::fonts::installed_among(used) {
-            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
+            bound.extend(crate::fonts::bind_family_with_fallback(&mut fonts, &family, &fallback));
         }
     }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the

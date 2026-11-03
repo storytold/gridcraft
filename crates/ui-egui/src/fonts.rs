@@ -317,9 +317,13 @@ fn face_key(face: &Face) -> String {
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
 /// binds nothing.
 ///
-/// Each role's chain ends with egui's default proportional fonts, so glyphs the installed font
-/// lacks (emoji, a stray script) still render.
+/// Each role's chain ends with the configured fallback and egui's default proportional fonts, so
+/// glyphs the installed font lacks (emoji, a stray script) still render.
 pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face]) -> Vec<String> {
+    bind_faces_with_fallback(fonts, family, faces, &[])
+}
+
+fn bind_faces_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face], fallback: &[String]) -> Vec<String> {
     if faces.is_empty() {
         return Vec::new();
     }
@@ -346,6 +350,7 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
             continue;
         }
         chain.extend(base.iter().cloned());
+        chain.extend(fallback.iter().cloned());
         let role = role_key(family, bold, italic);
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);
@@ -355,7 +360,11 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
 
 /// Bind every installed face of `family`, found by any of its names (see [`bind_faces`]).
 pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<String> {
-    bind_faces(fonts, family, &faces_of(family))
+    bind_faces_with_fallback(fonts, family, &faces_of(family), &[])
+}
+
+pub(crate) fn bind_family_with_fallback(fonts: &mut egui::FontDefinitions, family: &str, fallback: &[String]) -> Vec<String> {
+    bind_faces_with_fallback(fonts, family, &faces_of(family), fallback)
 }
 
 /// The role families currently bound to font data. `cell_family` consults this, so it never names a
@@ -464,11 +473,14 @@ mod tests {
         let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
 
         let mut fonts = egui::FontDefinitions::default();
-        let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));
+        let fallback_key = "sys-cjk-han-zh".to_string();
+        fonts.font_data.insert(fallback_key.clone(), std::sync::Arc::new(egui::FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        let bound = bind_faces_with_fallback(&mut fonts, "Ubuntu", std::slice::from_ref(&face), std::slice::from_ref(&fallback_key));
         assert_eq!(bound.len(), 4, "regular, bold, italic and bold-italic roles");
         for key in &bound {
             let chain = fonts.families.get(&egui::FontFamily::Name(key.as_str().into())).expect("role family");
             assert!(chain.iter().all(|k| fonts.font_data.contains_key(k)), "every chained key has data");
+            assert!(chain.contains(&fallback_key), "configured script fallback is available to installed roles");
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
