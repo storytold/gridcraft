@@ -109,6 +109,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Text in\nSpalten",
         "Link" => "Link",
         "Symbol" => "Symbol",
+        "Equation" => "Formel",
+        "Insert New Equation..." => "Neue Formel einfügen",
         "Sparklines" => "Sparklines",
         "Header & Footer" => "Kopf- und Fußzeile",
         "Draw with ink" => "Mit Freihand zeichnen",
@@ -159,6 +161,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Fehlerüberprüfung",
         "Trace Error" => "Spur zum Fehler",
         "Circular References" => "Zirkelbezüge",
+        "Python Mode" => "Python-Modus",
         "Evaluate Formula" => "Formel auswerten",
         "Watch Window" => "Überwachungsfenster",
         "Calculation\nOptions" => "Berechnungs-\noptionen",
@@ -484,6 +487,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Beenden",
         "New Macro" => "Neues Makro",
         "Show" => "Anzeigen",
+        "Collapse dialog" => "Dialogfeld reduzieren",
+        "Expand dialog" => "Dialogfeld erweitern",
         _ => return None,
     })
 }
