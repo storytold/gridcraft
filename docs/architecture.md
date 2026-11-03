@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode: `xl()` pointing on the shared point mode; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -183,8 +183,15 @@ size). This build runs no Python: `python.set` stores code, and new or changed c
 
 In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
 the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
-(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. A locked cell on
-a protected sheet is refused before a draft exists. Committing a Python edit
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode.
+Point mode works there too: `EditState::can_point` accepts the caret where a value can start,
+outside strings and comments: after `(`, `,`, `=` or an operator, after a keyword that takes a value
+(`return`, `in`, `else`), or at the start of a line outside brackets, never after a completed
+operand followed by a space, such as `value` or `f(a)`; `insert_ref` wraps the reference
+the grid builds in an `xl("…")` call (`editor::python_xl`, which escapes it as a Python string), and
+`pointed_text`/`pointed_range` read it back, so the grid's click, drag, header and arrow handling is
+shared with formulas. A locked cell on a protected sheet is refused before a draft exists.
+Committing a Python edit
 (`commit_python_edit`) runs no command when the code is unchanged (no undo step), and none when
 sheet protection locked the cell while the draft was open (the draft is dropped with the warning).
 With all code deleted it runs `cell.set` with empty input on a Python cell, which clears it, and
@@ -236,6 +243,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Python mode: `xl()` pointing through the shared point mode (`EditState::can_point`, `insert_ref`, `editor::python_xl`) |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
