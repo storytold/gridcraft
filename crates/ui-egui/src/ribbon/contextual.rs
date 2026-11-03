@@ -1,6 +1,8 @@
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep, theme_colors};
 use super::galleries::{paint_table_swatch, table_gallery};
-use super::*;
+use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, color_palette, icon_button, json, keytip_table, vec2};
 
 /// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
@@ -109,7 +111,7 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
 }
 
 pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else { return };
+    let Some(id) = app.selected_chart() else { return };
     let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["chart.set"]) {
         keytip(app, ui, sequence, ae.rect.center_bottom());
@@ -126,6 +128,9 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
                 ("-", "", json!(null)),
                 ("Data Labels: Show", "chart.set", json!({"chart": id, "dataLabels": true})),
                 ("Data Labels: None", "chart.set", json!({"chart": id, "dataLabels": false})),
+                ("Data Table: With Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": true})),
+                ("Data Table: No Legend Keys", "chart.addElement", json!({"chart": id, "element": "dataTable", "dataTableKeys": false})),
+                ("Data Table: None", "chart.addElement", json!({"chart": id, "element": "dataTable", "on": false})),
                 ("Gridlines: Show", "chart.set", json!({"chart": id, "gridlines": true})),
                 ("Gridlines: None", "chart.set", json!({"chart": id, "gridlines": false})),
             ],
@@ -178,13 +183,13 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     control_keytip(app, ui, &__k, "chart.delete");
     if __k.clicked() {
         act(app, "chart.delete", json!({"chart": id}));
-        app.selected_chart = None;
+        app.selected_object = None;
     }
 }
 
 /// Contextual actions available for a selected picture; image editing is still a separate gap.
 pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else { return };
+    let Some(ObjRef { kind: ObjKind::Image, id }) = app.selected_object else { return };
     let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.images.iter().any(|image| image.id == id));
     if !exists {
         return;
@@ -206,13 +211,13 @@ pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
     });
     if big_button(ui, Icon::Delete, "Delete\nPicture", "Delete selected picture", false).clicked() {
         act(app, "object.delete", json!({"kind": "image", "id": id}));
-        app.selected_chart = None;
+        app.selected_object = None;
     }
 }
 
 /// Contextual actions available for a selected shape.
 pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else { return };
+    let Some(ObjRef { kind: ObjKind::Shape, id }) = app.selected_object else { return };
     let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.shapes.iter().any(|shape| shape.id == id));
     if !exists {
         return;
@@ -239,13 +244,13 @@ pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
     });
     if big_button(ui, Icon::Delete, "Delete\nShape", "Delete selected shape", false).clicked() {
         act(app, "object.delete", json!({"kind": "shape", "id": id}));
-        app.selected_chart = None;
+        app.selected_object = None;
     }
 }
 
 /// Contextual filter actions for a selected slicer.
 pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else { return };
+    let Some(ObjRef { kind: ObjKind::Slicer, id }) = app.selected_object else { return };
     let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.slicers.iter().any(|slicer| slicer.id == id));
     if !exists {
         return;
@@ -258,7 +263,7 @@ pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
     if big_button(ui, Icon::Delete, "Delete\nSlicer", "Delete selected slicer", false).clicked() {
         act(app, "slicer.delete", json!({"slicer": id}));
-        app.selected_chart = None;
+        app.selected_object = None;
     }
 }
 

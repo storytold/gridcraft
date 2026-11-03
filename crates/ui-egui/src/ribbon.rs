@@ -1,7 +1,7 @@
 //! Title bar (Quick Access Toolbar), ribbon tabs and ribbon groups, and keyboard shortcuts.
 
 use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use gridcraft_engine::model::{HAlign, Style, VAlign};
+use gridcraft_engine::model::{HAlign, ObjKind, Style, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
@@ -285,21 +285,46 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
-            v.push("Chart Design");
-        }
-        if app.selected_chart.is_some_and(|id| sh.images.iter().any(|image| image.id == id)) {
-            v.push("Picture Format");
-        }
-        if app.selected_chart.is_some_and(|id| sh.shapes.iter().any(|shape| shape.id == id)) {
-            v.push("Shape Format");
-        }
-        if app.selected_chart.is_some_and(|id| sh.slicers.iter().any(|slicer| slicer.id == id)) {
-            v.push("Slicer");
+        if let Some(obj) = app.selected_object.filter(|obj| sh.object_anchor(*obj).is_some()) {
+            match obj.kind {
+                ObjKind::Chart => v.push("Chart Design"),
+                ObjKind::Image => v.push("Picture Format"),
+                ObjKind::Shape => v.push("Shape Format"),
+                ObjKind::Slicer => v.push("Slicer"),
+                ObjKind::Equation => {}
+            }
         }
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
         }
     }
     v
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    /// A ribbon tooltip names its control only; `widgets::tooltip_shortcut` adds the shortcut of
+    /// the platform it runs on. A Command-key glyph written into the text would show on Windows
+    /// and Linux, where the shortcut is a Ctrl or Alt one (AutoSum is Alt+=).
+    #[test]
+    fn tooltips_leave_the_shortcut_to_the_platform_lookup() {
+        let sources = [
+            include_str!("ribbon.rs"),
+            include_str!("ribbon/automate.rs"),
+            include_str!("ribbon/contextual.rs"),
+            include_str!("ribbon/controls.rs"),
+            include_str!("ribbon/data.rs"),
+            include_str!("ribbon/formulas.rs"),
+            include_str!("ribbon/galleries.rs"),
+            include_str!("ribbon/home.rs"),
+            include_str!("ribbon/insert.rs"),
+            include_str!("ribbon/page_layout.rs"),
+            include_str!("ribbon/review.rs"),
+            include_str!("ribbon/shortcuts.rs"),
+            include_str!("ribbon/title_bar.rs"),
+            include_str!("ribbon/view.rs"),
+        ];
+        let mac_only = sources.iter().flat_map(|s| s.lines()).filter(|l| l.contains('\u{2318}')).collect::<Vec<_>>();
+        assert!(mac_only.is_empty(), "Command-key glyph in ribbon text: {mac_only:?}");
+    }
 }
