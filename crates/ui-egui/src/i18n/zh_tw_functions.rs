@@ -123,7 +123,10 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Counts days between two dates on a 360-day year (US or European method).", "按 360 天年（美國或歐洲方法）計算兩個日期之間的天數。"),
     ("Counts empty cells and empty text in a range.", "統計區域中的空儲存格和空文字。"),
     ("Counts how many values fall into each bin, as a vertical array.", "按垂直陣列統計落入各區間的數值個數。"),
-    ("Counts non-blank cells in a field of the matching records (or the matching records).", "統計匹配記錄中某欄位的非空白儲存格數（或匹配記錄數）。"),
+    (
+        "Counts non-blank cells in a field of the matching records (or the matching records).",
+        "統計匹配記錄中某欄位的非空白儲存格數（或匹配記錄數）。",
+    ),
     ("Counts numeric cells in a field of the matching records (or the matching records).", "統計匹配記錄中某欄位的數值儲存格數（或匹配記錄數）。"),
     ("Counts the cells that meet a condition.", "統計滿足條件的儲存格數。"),
     ("Counts the cells that meet every condition.", "統計滿足所有條件的儲存格數。"),

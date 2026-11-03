@@ -333,9 +333,10 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
 
 /// Localized formula syntax is reversible through the canonical XLSX writer and reader.
 #[test]
-fn french_italian_and_portuguese_formulas_round_trip_through_xlsx() {
+fn french_german_italian_and_portuguese_formulas_round_trip_through_xlsx() {
     for (language, ui_language, localized) in [
         ("fr", Language::Fr, "=SIERREUR(SOMME(1,5;2,25);#VALEUR!)"),
+        ("de", Language::De, "=WENNFEHLER(SUMME(1,5;2,25);#WERT!)"),
         ("it", Language::It, "=SE.ERRORE(SOMMA(1,5;2,25);#VALORE!)"),
         ("pt-BR", Language::PtBr, "=SEERRO(SOMA(1,5;2,25);#VALOR!)"),
     ] {

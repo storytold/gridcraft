@@ -456,3 +456,29 @@ pub(crate) const GERMAN_ERRORS: &[(CellError, &str)] = &[
     (CellError::GettingData, "#DATEN_ABRUFEN"),
     (CellError::Spill, "#ÜBERLAUF!"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use crate::{FormulaLocale, parse_input, print, print_input};
+
+    /// Checks every German alias, error spelling and separator against the shared parser.
+    #[test]
+    fn german_formula_syntax_round_trips() {
+        let locale = FormulaLocale::De;
+        for &(canonical, local) in super::GERMAN {
+            let input = format!("{local}(1,25;2)");
+            let expr = parse_input(&input, locale, |_| false).unwrap();
+            assert_eq!(print(&expr), format!("{canonical}(1.25,2)"));
+            assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
+        }
+        for &(error, spelling) in super::GERMAN_ERRORS {
+            let expr = parse_input(&spelling.to_lowercase(), locale, |_| false).unwrap();
+            assert_eq!(print(&expr), error.as_str());
+            assert_eq!(print_input(&expr, locale, |_| false).unwrap(), spelling);
+        }
+        let array = "SUMME({1,5.2,25;3.4};0)";
+        let expr = parse_input(array, locale, |_| false).unwrap();
+        assert_eq!(print(&expr), "SUM({1.5,2.25;3,4},0)");
+        assert_eq!(print_input(&expr, locale, |_| false).unwrap(), array);
+    }
+}

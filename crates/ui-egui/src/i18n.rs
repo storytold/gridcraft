@@ -46,9 +46,9 @@ mod uk_functions;
 mod vi;
 mod vi_functions;
 mod zh;
+mod zh_functions;
 mod zh_tw;
 mod zh_tw_functions;
-mod zh_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

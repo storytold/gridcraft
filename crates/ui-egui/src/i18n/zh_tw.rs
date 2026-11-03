@@ -405,7 +405,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheets" => "工作表",
         "Protect Workbook" => "保護活頁簿",
         "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => "工作表結構已鎖定：無法新增、移動、重新命名或刪除工作表。",
-        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => "鎖定工作表結構，使工作表無法被新增、移動、重新命名或刪除。",
+        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => {
+            "鎖定工作表結構，使工作表無法被新增、移動、重新命名或刪除。"
+        }
         "Properties" => "屬性",
         "Title" => "標題",
         "Subject" => "主題",
@@ -1580,7 +1582,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This operation isn't allowed: it would shift cells in a table on your worksheet." => "不允許此操作：它會移動工作表中表格內的儲存格。",
         "This sheet has no saved Solver model." => "此工作表沒有儲存的規劃求解模型。",
         "To do this, all the merged cells need to be the same size." => "要執行此操作，所有合併儲存格的大小必須相同。",
-        "To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet." => "為避免資料丟失，不能將非空白儲存格移出工作表。",
+        "To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet." => {
+            "為避免資料丟失，不能將非空白儲存格移出工作表。"
+        }
         "To prevent possible loss of data, cells can't be pushed off the end of the worksheet." => "為避免資料丟失，不能將儲存格推出工作表的末端。",
         "To prevent possible loss of data, columns cannot be shifted off of the worksheet." => "為避免資料丟失，不能將列移出工作表。",
         "Too few observations for this many X variables." => "相對於這麼多 X 變數，觀測值太少。",

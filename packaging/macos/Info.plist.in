@@ -29,6 +29,7 @@
     <string>uk</string>
     <string>vi</string>
     <string>zh-Hans</string>
+    <string>zh-Hant</string>
   </array>
   <key>CFBundleDisplayName</key>
   <string>GridCraft</string>
