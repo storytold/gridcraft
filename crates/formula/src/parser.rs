@@ -74,12 +74,31 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
 }
 
+/// A token as the person typed it, for error messages.
 fn describe(t: &Tok) -> String {
     match t {
+        Tok::Number(n) => format!("`{n}`"),
+        Tok::Text(text) => format!("`\"{text}\"`"),
+        Tok::Bool(b) => (if *b { "`TRUE`" } else { "`FALSE`" }).into(),
+        Tok::Error(e) => format!("`{e}`"),
+        Tok::Word(w) => format!("`{w}`"),
+        Tok::Sheet(first, Some(last)) => format!("`{first}:{last}!`"),
+        Tok::Sheet(first, None) => format!("`{first}!`"),
+        Tok::Func(name) => format!("`{name}(`"),
+        Tok::Struct(body) => format!("`[{body}]`"),
+        Tok::Op(op) => format!("`{op}`"),
+        Tok::LParen => "`(`".into(),
         Tok::RParen => "`)`".into(),
+        Tok::LBrace => "`{`".into(),
+        Tok::RBrace => "`}`".into(),
         Tok::Comma => "`,`".into(),
+        Tok::Semicolon => "`;`".into(),
+        Tok::Colon => "`:`".into(),
+        Tok::Trim(TrimMode::Leading) => "`.:`".into(),
+        Tok::Trim(TrimMode::Trailing) => "`:.`".into(),
+        Tok::Trim(TrimMode::All) => "`.:.`".into(),
+        Tok::Space => "a space".into(),
         Tok::Eof => "end of formula".into(),
-        other => format!("{other:?}"),
     }
 }
 
