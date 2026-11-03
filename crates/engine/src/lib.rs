@@ -667,11 +667,13 @@ impl Session {
     /// Runs a command by id. Undoable commands record a history step when the workbook changed,
     /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
+    fn ensure_command_enabled(&self, id: &str, spec: &CommandSpec) -> Result<()> {
+        (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))
+    }
+
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        if let Err(why) = (spec.enabled)(self) {
-            return Err(EngineError::Disabled(id.to_string(), why));
-        }
+        self.ensure_command_enabled(id, spec)?;
         // A debugger whose undo group something else ended locks nothing any more (`macro.debug`
         // itself says that the run had ended).
         if id != "macro.debug" {
