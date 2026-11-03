@@ -655,3 +655,32 @@ fn clear_outline_clears_the_mark_on_a_summary_line_outside_the_range() {
     s.execute("data.clearOutline", json!({})).unwrap();
     assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing left to clear");
 }
+
+#[test]
+fn clear_outline_needs_a_text_range_on_another_sheet() {
+    // `"range": null` is no range: the active sheet's one-cell selection must not clear Sheet2.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:4", "sheet": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1, "range": null})).is_err());
+    assert_eq!(outline_sheet(&s, 1).rows.get(&1).map(|e| e.outline), Some(1), "Sheet2 keeps its outline");
+}
+
+#[test]
+fn clear_outline_keeps_the_mark_of_a_group_that_stays() {
+    // Rows 2:4 collapsed, their summary mark on row 5: clearing A5:B6 leaves the group, so the mark
+    // stays, and with nothing else to clear there is no undo step.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len);
+    s.execute("data.clearOutline", json!({"range": "A5:B6"})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.get(&4).is_some_and(|e| e.collapsed), "{:?}", sh.rows);
+    assert!(sh.rows.get(&1).is_some_and(|e| e.outline == 1 && e.hidden));
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing changed");
+}

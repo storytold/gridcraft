@@ -121,7 +121,7 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
         {
             return Err(bad(CMD, format!("`{t}` names a sheet other than `sheet`")));
         }
-        if si != d.wb.active_sheet() && p.get("range").is_none() {
+        if si != d.wb.active_sheet() && str_param(p, "range").is_none() {
             return Err(bad(CMD, "missing `range`: the selection is on the active sheet"));
         }
     }
@@ -131,40 +131,47 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
         _ => ranges.iter().map(|r| ((r.start.row, r.end.row), (r.start.col, r.end.col))).collect(),
     };
     let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let outlined = |map: &std::collections::BTreeMap<u32, LineInfo>, (a, b): (u32, u32)| map.range(a..=b).any(|(_, e)| e.outline > 0 || e.collapsed);
-    if !spans.iter().any(|(rows, cols)| outlined(&sh.rows, *rows) || outlined(&sh.cols, *cols)) {
+    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true));
+    let cols = cleared(&sh.cols, spans.iter().map(|s| s.1), outline::summary_before(sh, false));
+    if rows == sh.rows && cols == sh.cols {
         return Ok(Json::Null);
     }
     if sh.is_protected() {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
     }
-    let before = (outline::summary_before(sh, true), outline::summary_before(sh, false));
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
-        for (rows, cols) in &spans {
-            for (map, (a, b)) in [(&mut sh.rows, *rows), (&mut sh.cols, *cols)] {
-                for (_, e) in map.range_mut(a..=b) {
-                    if e.outline > 0 && e.hidden {
-                        set_hidden(e, false);
-                    }
-                    e.outline = 0;
-                    e.collapsed = false;
-                }
-            }
-        }
-        // A summary line outside the range keeps its mark only while a group still ends there.
-        for (map, before) in [(&mut sh.rows, before.0), (&mut sh.cols, before.1)] {
-            let summaries: std::collections::BTreeSet<u32> =
-                outline::groups_with(map, before).into_iter().filter(|g| g.has_summary()).map(|g| g.summary()).collect();
-            for (line, e) in map.iter_mut() {
-                if e.collapsed && !summaries.contains(line) {
-                    e.collapsed = false;
-                }
-            }
-        }
+        (sh.rows, sh.cols) = (rows, cols);
         cx.structural = true; // shown rows count again in SUBTOTAL(10x)
         Ok(Json::Null)
     })
+}
+
+/// `lines` with the outline levels of `spans` removed: lines the outline had hidden are shown
+/// again, and a collapsed mark stays only on the summary line of a group that remains (on either
+/// side of the spans), so a group's mark goes with it and a surviving group keeps its own.
+fn cleared(
+    lines: &std::collections::BTreeMap<u32, LineInfo>,
+    spans: impl Iterator<Item = (u32, u32)>,
+    summary_before: bool,
+) -> std::collections::BTreeMap<u32, LineInfo> {
+    let mut map = lines.clone();
+    for (a, b) in spans {
+        for (_, e) in map.range_mut(a..=b) {
+            if e.outline > 0 && e.hidden {
+                set_hidden(e, false);
+            }
+            e.outline = 0;
+        }
+    }
+    let summaries: std::collections::BTreeSet<u32> =
+        outline::groups_with(&map, summary_before).into_iter().filter(|g| g.has_summary()).map(|g| g.summary()).collect();
+    for (line, e) in map.iter_mut() {
+        if e.collapsed && !summaries.contains(line) {
+            e.collapsed = false;
+        }
+    }
+    map
 }
 
 /// Hides or shows an outline line. A line shown with a zero size (files that hide columns as
