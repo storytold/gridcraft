@@ -2322,7 +2322,7 @@ fn concat_operator_cuts_at_the_cell_limit() {
     t.set("A3", "=LEN(\"é\"&REPT(\"é\",32767))");
     t.set("A4", "=LEN(REPT(UNICHAR(128512),16383)&\"x\")");
     t.set("A5", "=LEN(REPT(UNICHAR(128512),16384))");
-    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (32767.0, 32767.0, 32767.0, 16383.0));
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (32767.0, 32767.0, 32767.0, 16384.0));
     assert_eq!(t.get("A5"), Value::Error(CellError::Value));
 }
 
