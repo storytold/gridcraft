@@ -69,11 +69,7 @@ impl SheetApp {
             self.chart_clipboard = None;
             let mut bytes = Vec::new();
             match image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png) {
-                Ok(()) => self.run_or_alert(
-                    "insert.picture",
-                    json!({"base64":gridcraft_engine::io::base64_encode(&bytes),"mime":"image/png",
-                    "width":width as f32/2.0,"height":height as f32/2.0}),
-                ),
+                Ok(()) => self.run_or_alert("insert.picture", json!({"base64":gridcraft_engine::io::base64_encode(&bytes),"mime":"image/png"})),
                 Err(e) => self.alert(e.to_string()),
             }
         }
