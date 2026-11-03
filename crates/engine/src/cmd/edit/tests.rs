@@ -42,6 +42,28 @@ fn go_to_lists_the_named_ranges_of_every_sheet() {
     assert_eq!(list["names"], json!(["Areas", "Local", "Price", "Sheet1!Own", "type"]), "{list}");
 }
 
+/// Thousands of names that alias other names are listed with one lookup per alias, not a scan of
+/// every name for each; aliases resolve through the chain like a single name does.
+#[test]
+fn go_to_lists_many_aliases_and_follows_them() {
+    let mut s = go_to_workbook();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let alias = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+    wb.names.push(alias("Chain0".into(), "Areas".into()));
+    for i in 1..20_000 {
+        wb.names.push(alias(format!("Chain{i}"), format!("Chain{},price", i - 1)));
+    }
+    let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
+    let names: Vec<&str> = list["names"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+    // Chain0..Chain6 are within the name depth Go To follows; longer chains are not ranges.
+    for i in 0..7 {
+        assert!(names.contains(&format!("Chain{i}").as_str()), "Chain{i} in {names:?}");
+    }
+    assert!(!names.contains(&"Chain7"), "{names:?}");
+    let out = s.execute("edit.goTo", json!({"reference": "chain1"})).unwrap();
+    assert_eq!(out["selection"], "A1,C3:C4,B2:B5", "{out}");
+}
+
 #[test]
 fn go_to_a_name_scoped_to_another_sheet_goes_to_that_sheet() {
     let mut s = go_to_workbook();
