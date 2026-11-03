@@ -58,13 +58,15 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
-| `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
+| `ui.inspect` | | UI state: ribbon tab, editor (`python` is true in Python mode; a draft in Python mode or of a Python cell's code has `text` null (a draft typed over a Python cell holds only what was typed and is shown) and `hidden` true while that cell's code is hidden on a protected sheet, or once the draft's sheet is gone; the sheet is found by its identity, whatever was inserted, deleted or moved before it), open dialog, Backstage page, message, selected object, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
+| `ui.object.select` | `{id?, kind?}` | Selects a floating object on the active sheet and replies `{selected, rect}`, the rect in window points; with no `id` it clears the selection and replies `null` |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
 | `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
 | `ui.key` / `ui.text` | `{key, shift?, cmd?, alt?, ctrl?}` / `{text}` | Keyboard input (typing in the grid starts editing); same shared queue limits, and one `ui.text` string may be at most 1 MiB |
 | `ui.edit.begin` / `ui.edit.text` / `ui.edit.commit` / `ui.edit.cancel` | `{text?}` / `{move?: down\|right\|up\|left\|none}` | Drive the cell editor |
 | `ui.ribbon` | `{tab}` | Switch ribbon tab |
-| `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs; `confirm` runs the dialog's command with the same parameters as its OK button |
+| `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs; `confirm` runs the dialog's command with the same parameters as its OK button. `confirm` applies to a dialog whose OK runs a command (Solver, Data Analysis, the form dialogs); a dialog that presses its own OK, such as Goal Seek, answers `this dialog has no OK command; drive it with its own commands` and is driven with that command (`data.goalSeek`). That command does not go back to the dialog's sheet: after a pick on another sheet, read the fields (`ui.inspect` reports the dialog's `values`), `cancel` the dialog (which shows its sheet again), then run `data.goalSeek` with those values, so references without a sheet name mean the dialog's sheet. Once the dialog's own sheet is deleted, `cancel` leaves the sheet shown as it is and replies `{"sheetDeleted": true}` (the sheet is found by identity, so a new sheet given its name does not count); the script then stops instead of running `data.goalSeek`, whose references without a sheet name would mean the sheet shown. A dialog whose reference boxes (RefEdit) picked on another sheet goes back to its own sheet: `cancel` puts the selection from before picking back; `confirm` puts it back before the command runs (so references without a sheet name mean the dialog's sheet). Both fail, with the dialog left open, when a text-box draft on the picked sheet cannot be saved (its worksheet is no longer the active one), and `confirm` also once the dialog's sheet was deleted; the window's own Cancel closes the dialog in that case and shows the reason. |
+| `ui.pythonMode` (via `engine.execute`) | `{on?}` | Python mode on the active cell, in the formula bar (an edit in progress keeps its text); `on: false` turns it off; without `on` it switches. A start that is refused (a locked cell on a protected sheet, a cell or draft inside another cell's spill, code hidden on a protected sheet) is an error with the reason. Opens no dialog |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state. On the native app it works while hidden or occluded when the platform still reports the current content size (the request asks for a hidden paint); a minimized window has no capturable size, so its request stays queued until the window is restored and otherwise reports the 8 s timeout. In a **hidden browser tab** the web runner does not implement that paint request, so the capture waits until the tab is shown again or reports the 8 s timeout. Up to 4 outstanding requests; retained images are limited to 128 MiB each and 256 MiB in total (each request reserves the largest image the ±1-pixel rounding rule can retain), one capture's transient encoding working set to 256 MiB, a base64 reply to 64 MiB, and retained images plus one capture's encoding working set to 512 MiB; a request that would exceed a budget is refused without evicting earlier ones. See [Screenshot budgets](#screenshot-budgets). A resize/DPI/zoom/visibility/occlusion change during capture is retried within the bounded retry budget or reported instead of saving stale pixels; the identity intentionally includes zoom and occlusion even though the expected physical size may be unchanged, so a capture never crosses layout generations. Every reply — success, refusal or timeout — carries the request `token` as `request` |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
@@ -89,6 +91,20 @@ Any other method name that is a command id (e.g. `home.bold`) runs that command.
 include `window` or `doc` to run it in that window, as with `engine.execute`; the window commands
 (`window.*`, `view.newWindow`, `view.hideWindow`, `view.unhideWindow`, `view.switchWindows`) read
 them as their own parameters.
+
+`ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
+where `kind` is `chart`, `image`, `shape`, `equation` or `slicer`; the same names go in the `kind` parameter
+of `object.delete`, `object.move`, `object.setAnchorMode` and the `arrange.*` commands. An
+equation is a shape too, so its id works under `shape`; a plain shape's id given as `equation`,
+a `kind` that is present but not one of these names (`null` included), or an id of no object of
+the kind, is an error. `arrange.align` and `arrange.group` check every id in `ids` the same way;
+with fewer than two ids they change nothing.
+`object.move` and `chart.set` cap `width` and `height` at 10,000 points, or at the object's
+current size when a file made it larger: such an object keeps its size when it is moved and
+shrinks by what a resize asks, but does not grow further.
+`selectedChart` remains for existing clients: the id when the selection is a chart, otherwise
+`null`. With an object selected, `ui.key {key: "Delete"}` (or Backspace) deletes the object
+instead of clearing cells, and Escape clears the selection.
 
 ### Windows
 

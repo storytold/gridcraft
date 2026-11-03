@@ -38,10 +38,17 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
 }
 
 /// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
+/// When the rule's top-left cell goes, its relative formulas are rewritten for the new top-left
+/// cell, so the cells left keep checking the same cells.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
     for dv in validations.iter_mut() {
+        let before = RangeRef::top_left(&dv.ranges);
         for cut in cuts {
             dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        }
+        if let (Some(from), Some(to)) = (before, RangeRef::top_left(&dv.ranges)) {
+            dv.f1 = move_rule_formula(&dv.f1, from, to);
+            dv.f2 = dv.f2.take().map(|f| move_rule_formula(&f, from, to));
         }
     }
     validations.retain(|d| !d.ranges.is_empty());
@@ -145,8 +152,10 @@ fn list_source(f: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
 
-/// List entries of a list validation (literal or from a range).
-pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+/// List entries of a list validation (literal or from a range) for the cell `at`. A relative
+/// source is written for the rule's top-left cell and read from `at`, as in Excel (`=$B1:$B3` on
+/// A1:A9 lists B5:B7 at A5).
+pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> Vec<String> {
     let f = dv.f1.trim();
     if is_literal_list(f) {
         // A quoted list is a string literal: `""` inside stands for one `"`.
@@ -156,8 +165,8 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
         };
         return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
-    let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
-    match gridcraft_calc::evaluate(wb, sheet, at, f) {
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    match gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at)) {
         Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
         v if !v.is_empty() && !v.is_error() => vec![v.display()],
         _ => vec![],
@@ -175,9 +184,10 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         return None;
     }
     let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
-    // The formulas are written for the first cell of the range and see the value being entered,
+    // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
-    let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    let original = wb;
     let entered;
     let wb = if sh.value(at) == v {
         wb
@@ -193,7 +203,9 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
+        // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
+        ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;

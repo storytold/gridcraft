@@ -188,6 +188,12 @@ impl RangeRef {
             end: CellRef::new(self.end.row.max(o.end.row), self.end.col.max(o.end.col)),
         }
     }
+    /// The top-left cell of a list of areas: the lowest row and the lowest column across all of
+    /// them, whatever order they are listed in. Excel writes the relative formulas of a
+    /// multi-area validation or conditional format for this cell. `None` for no areas.
+    pub fn top_left(ranges: &[RangeRef]) -> Option<CellRef> {
+        ranges.iter().copied().reduce(|a, b| a.union(&b)).map(|r| r.start)
+    }
     /// Row-major iterator over the cells. Callers must bound huge ranges themselves.
     pub fn iter(&self) -> impl Iterator<Item = CellRef> + '_ {
         let (r0, r1, c0, c1) = (self.start.row, self.end.row, self.start.col, self.end.col);
@@ -305,6 +311,16 @@ mod tests {
         let r = RangeRef::parse("$1:$3").ok_or_else(|| std::io::Error::other("valid row range"))?;
         assert_eq!((r.start.row, r.end.row), (0, 2));
         Ok(())
+    }
+
+    #[test]
+    fn top_left_spans_every_area_in_any_order() {
+        let areas: Vec<RangeRef> = ["H62:H68", "H26:H27", "H93:H95"].iter().filter_map(|a| RangeRef::parse(a)).collect();
+        assert_eq!(RangeRef::top_left(&areas), CellRef::parse("H26"));
+        // Lowest row and lowest column, even when they come from different areas.
+        let areas: Vec<RangeRef> = ["C5:D6", "E2", "B9"].iter().filter_map(|a| RangeRef::parse(a)).collect();
+        assert_eq!(RangeRef::top_left(&areas), CellRef::parse("B2"));
+        assert_eq!(RangeRef::top_left(&[]), None);
     }
 
     #[test]
