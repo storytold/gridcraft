@@ -382,6 +382,42 @@ fn drag_and_drop_asks_before_replacing_data() {
 }
 
 #[test]
+fn drag_and_drop_asks_before_replacing_spilled_values() {
+    // Cells showing a dynamic array's spilled values hold no cell of their own, but they are data.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("range.setValues", json!({"range": "C2:C3", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    let r = s.execute("range.move", json!({"range": "C2:C3", "to": "A2"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert_eq!(q, "There's already data here. Do you want to replace it?");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 2)), Value::text("Plum"));
+    s.execute("range.move", json!({"range": "C2:C3", "to": "A2", "overwrite": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("Kiwi"));
+}
+
+#[test]
+fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
+    // The move was checked on the range's sheet but pasted on the active one, replacing its data
+    // without asking.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1:B2", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Keep"})).unwrap();
+    s.execute("range.move", json!({"range": "Two!B1:B2", "to": "A1"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let two = wb.sheet_index("Two").unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("Keep"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 0)), Value::text("Kiwi"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(1, 0)), Value::text("Plum"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+}
+
+#[test]
 fn replace_case_insensitive() {
     assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
 }

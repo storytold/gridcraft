@@ -165,8 +165,8 @@ pub(super) fn paste(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Drag and drop (dragging the selection's border): moves `range` so its top-left cell lands on
-/// `to`, as Cut and Paste would. Like Excel, it asks before replacing cells that hold data (other
-/// than the moved cells themselves); run it again with `overwrite: true` to replace them. A
+/// `to`, as Cut and Paste would. Like Excel, it asks before replacing cells that hold data or show a
+/// spilled value (other than the moved cells themselves); run it again with `overwrite: true` to replace them. A
 /// refused or failed move leaves the clipboard as it was.
 pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
@@ -178,11 +178,13 @@ pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
         if bool_param(p, "overwrite") != Some(true)
             && let Some(dest) = dest
             && let Some(sh) = s.doc()?.wb.sheet(sheet)
-            && sh.cells.iter_range(dest).any(|(c, cell)| !src.contains(c) && cell.has_content())
+            && (sh.cells.iter_range(dest).any(|(c, cell)| !src.contains(c) && cell.has_content())
+                || sh.spill.range(dest.start..=dest.end).any(|(c, v)| dest.contains(*c) && !src.contains(*c) && *v != Value::Empty))
         {
             return Err(EngineError::Confirm("There's already data here. Do you want to replace it?".into()));
         }
-        paste(s, &json!({"at": to.a1()}))
+        // On the range's sheet, which `paste` would leave to the active one.
+        paste_special(s, &json!({"what": "all", "at": to.a1(), "sheet": sheet}))
     });
     if moved.is_err() {
         s.clipboard = kept;
