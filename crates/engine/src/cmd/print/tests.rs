@@ -414,6 +414,12 @@ fn pdf_contains_text_and_header_codes_expand() {
     assert_eq!(r.text, "P4/9 9:00 AM");
     assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
     assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    // A megabyte sheet name repeated by 5,000 `&A` codes stops at the section's 64 KiB.
+    let long = HfContext { sheet: "S".repeat(1024 * 1024), ..cx };
+    let [_, c, _] = expand_header_footer(&"&A".repeat(5_000), &long);
+    assert!(c.text.is_empty(), "the name alone is over the limit");
+    let short = HfContext { sheet: "S".repeat(1000), ..Default::default() };
+    assert_eq!(expand_header_footer(&"&A".repeat(5_000), &short)[1].text.len(), 65_000);
 }
 
 #[test]
