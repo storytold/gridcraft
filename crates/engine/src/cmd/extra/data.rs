@@ -70,14 +70,19 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             for o in &arr {
                 if let Some(m) = o.as_object() {
                     for k in m.keys() {
-                        if seen.insert(k.as_str()) {
+                        if !seen.contains(k.as_str()) {
+                            // Stop collecting at the column limit.
+                            if keys.len() >= gridcraft_core::MAX_COLS as usize {
+                                return Err(EngineError::Other("The data has more fields than a sheet has columns.".into()));
+                            }
+                            seen.insert(k.as_str());
                             keys.push(k.clone());
                         }
                     }
                 }
             }
-            if keys.len() > gridcraft_core::MAX_COLS as usize {
-                return Err(EngineError::Other("The data has more fields than a sheet has columns.".into()));
+            if arr.len() as u64 + 1 > u64::from(gridcraft_core::MAX_ROWS) {
+                return Err(EngineError::Other("The data has more rows than a sheet has.".into()));
             }
             if (arr.len() as u64 + 1).saturating_mul(keys.len().max(1) as u64) > MAX_IMPORT_CELLS {
                 return Err(too_many_cells());
