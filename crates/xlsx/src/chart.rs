@@ -268,6 +268,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
+            show_keys: bool_val(t, "showKeys"),
+            horizontal_border: bool_val(t, "showHorzBorder"),
+            vertical_border: bool_val(t, "showVertBorder"),
+            outline: bool_val(t, "showOutline"),
+        }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -360,9 +366,11 @@ fn is_ref(f: &str) -> bool {
 /// when it isn't a name, or names a sheet the workbook doesn't have.
 fn chart_name<'a>(wb: &'a Workbook, si: usize, f: &str) -> Option<(Option<usize>, String, Option<&'a DefinedName>)> {
     let Ok(Expr::Name(n)) = gridcraft_formula::parse(f.trim()) else { return None };
-    match n.split_once('!') {
+    // The parser has already unquoted the sheet (`'Bob''s'!Name` → `Bob's!Name`, #2012): split
+    // at the last `!` (`'a!b'!Name`) and keep the name as is (`' Sales '` keeps its spaces).
+    match n.rsplit_once('!') {
         Some((s, bare)) => {
-            let i = wb.sheet_index(s.trim_matches('\''))?;
+            let i = wb.sheet_index(s)?;
             Some((Some(i), bare.to_string(), wb.name(bare, i)))
         }
         None => {
@@ -865,6 +873,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if secondary.is_some() {
         s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
         s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    }
+    if let Some(t) = &ch.data_table {
+        let _ = write!(
+            s,
+            "<c:dTable><c:showHorzBorder val=\"{}\"/><c:showVertBorder val=\"{}\"/><c:showOutline val=\"{}\"/><c:showKeys val=\"{}\"/></c:dTable>",
+            u8::from(t.horizontal_border),
+            u8::from(t.vertical_border),
+            u8::from(t.outline),
+            u8::from(t.show_keys)
+        );
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
