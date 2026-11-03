@@ -135,8 +135,39 @@ pub(super) fn single(v: Value) -> Option<Value> {
     }
 }
 
+/// Text bytes that one `&` over arrays may produce in all. Each piece is capped on its own, but a
+/// compact formula can broadcast a long text across millions of cells
+/// (`SEQUENCE(4000,4000)&REPT("x",30000)` is 480 GB): past this the whole result is `#NUM!`, the
+/// error for a result too large to hold, before the rest is built.
+pub(super) const MAX_CONCAT_ARRAY_BYTES: usize = 512 * 1024 * 1024;
+
 pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
+    if op == BinOp::Concat && (matches!(x, Value::Array(_)) || matches!(y, Value::Array(_))) {
+        return concat_arrays(x, y, sys, MAX_CONCAT_ARRAY_BYTES);
+    }
     zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+}
+
+/// `x & y` with at least one array operand, giving `#NUM!` once the texts built so far pass `budget`
+/// bytes.
+fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: usize) -> Value {
+    let used = std::cell::Cell::new(0usize);
+    let over = std::cell::Cell::new(false);
+    let r = zip2(x, y, |a, b| {
+        if over.get() {
+            return Value::Empty;
+        }
+        let v = binary_scalar(BinOp::Concat, a, b, sys);
+        if let Value::Text(t) = &v {
+            used.set(used.get().saturating_add(t.len()));
+            if used.get() > budget {
+                over.set(true);
+                return Value::Empty;
+            }
+        }
+        v
+    });
+    if over.get() { Value::Error(CellError::Num) } else { r }
 }
 
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
@@ -187,7 +218,22 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_CELLS, broadcast_len};
+    use super::{Array, BinOp, CellError, MAX_CELLS, Value, broadcast_len, concat_arrays};
+
+    #[test]
+    fn concatenating_arrays_stops_at_the_byte_budget() {
+        let sys = gridcraft_core::DateSystem::default();
+        let col = Value::from(Array::column((0..100).map(|i| Value::number(i as f64)).collect()));
+        let long = Value::text("x".repeat(100));
+        // 100 cells of 101 or 102 bytes each: about 10 KB in all.
+        let r = concat_arrays(&col, &long, sys, 20_000);
+        assert!(matches!(&r, Value::Array(a) if a.data.len() == 100), "{r:?}");
+        assert_eq!(concat_arrays(&col, &long, sys, 5_000), Value::Error(CellError::Num));
+        assert_eq!(concat_arrays(&long, &col, sys, 5_000), Value::Error(CellError::Num));
+        // Through the operator, a small result is unaffected.
+        let r = super::binary_values(BinOp::Concat, &col, &Value::text("a"), sys);
+        assert!(matches!(&r, Value::Array(a) if a.data.first() == Some(&Value::text("0a"))), "{r:?}");
+    }
 
     #[test]
     fn broadcast_len_caps_at_max_cells() {
