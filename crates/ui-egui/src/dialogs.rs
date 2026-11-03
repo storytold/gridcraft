@@ -22,48 +22,35 @@ mod data;
 mod find;
 mod format_cells;
 mod insert_function;
-mod macros;
 mod names;
 mod paste;
+mod ref_edit;
 mod show;
 mod spelling;
 mod zoom;
 
 use analysis::toolpak_defaults;
-pub(crate) use analysis::{dialog_range_picker_active, update_dialog_range_picker};
 use charts::select_chart;
 use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
+pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
 use zoom::zoom_preset;
 
+/// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
+/// (a RefEdit box).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
-    Range { key: &'static str, label: &'static str },
+    Ref { key: &'static str, label: &'static str },
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
     Check { key: &'static str, label: &'static str },
     Note(String),
-}
-
-const ANALYSIS_DOCUMENT_ERROR: &str = "Return to the original workbook to continue this analysis, or cancel.";
-const ANALYSIS_RANGES: &[&str] = &["range", "inputY", "inputX", "range1", "range2", "bins", "output"];
-
-#[derive(Clone, Debug)]
-struct AnalysisContext {
-    document: u64,
-    sheet: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RangePicker {
-    key: String,
-    single_cell: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -83,15 +70,17 @@ pub struct Dialog {
     /// The first text or number field still has to take keyboard focus (set when a form opens,
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
-    analysis_context: Option<AnalysisContext>,
-    pub(crate) range_picker: Option<RangePicker>,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
-    focus_initialized: bool,
+    pub(crate) focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
+    /// The linked cell's initial display text; unchanged text must not replace a number or formula.
+    original_link_text: Option<String>,
+    /// The state of the dialog's reference boxes (RefEdit).
+    refs: ref_edit::RefBoxes,
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -119,51 +108,6 @@ impl Dialog {
         &self.name
     }
 
-    /// Checks that an analysis dialog still belongs to the active document; other dialogs are unchanged.
-    /// On a worksheet switch, qualifies pending relative ranges against the previously recorded sheet
-    /// before remembering the new sheet. Returns an error if the owner is inactive, closed or missing,
-    /// leaving the dialog available for cancellation or recovery when its owner becomes active again.
-    /// Qualified references remain name-based; this does not establish stable worksheet identity.
-    pub(crate) fn prepare_analysis(&mut self, session: &gridcraft_engine::Session) -> Result<(), String> {
-        if self.name != "analysisToolPak" {
-            return Ok(());
-        }
-        let context = self.analysis_context.as_ref().ok_or(ANALYSIS_DOCUMENT_ERROR)?;
-        let doc = session.active().filter(|doc| doc.uid == context.document).ok_or(ANALYSIS_DOCUMENT_ERROR)?;
-        let sheet = doc.wb.active().ok_or(ANALYSIS_DOCUMENT_ERROR)?.name.clone();
-        if sheet != context.sheet {
-            self.qualify_analysis_ranges();
-            if let Some(context) = &mut self.analysis_context {
-                context.sheet = sheet;
-            }
-        }
-        Ok(())
-    }
-
-    /// Anchors bare A1 input/output ranges to the recorded analysis sheet, quoting its name.
-    /// Already qualified, blank and unparseable values are left for normal engine validation;
-    /// dialogs without analysis context are unchanged. Does not run a command or move the selection.
-    fn qualify_analysis_ranges(&mut self) {
-        let Some(context) = &self.analysis_context else { return };
-        for key in ANALYSIS_RANGES {
-            if let Some(text) = self.values.get(*key).and_then(Json::as_str)
-                && RangeRef::parse(text.trim()).is_some()
-            {
-                let qualified = format!("{}!{}", gridcraft_engine::formula::quote_sheet(&context.sheet), text.trim());
-                self.values.insert((*key).into(), json!(qualified));
-            }
-        }
-    }
-
-    /// Prepares the parameters a control-channel confirmation will send to the dialog's command.
-    /// Verifies analysis ownership and freezes relative ranges before the usual per-dialog reshaping.
-    /// An error must keep the dialog open and must not execute its command in the active workbook.
-    pub(crate) fn command_params(&mut self, session: &gridcraft_engine::Session) -> Result<Json, String> {
-        self.prepare_analysis(session)?;
-        self.qualify_analysis_ranges();
-        Ok(build_params(self))
-    }
-
     /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom`
     /// stores, a typed percentage selects Custom, and Fit selection makes OK run
     /// `view.zoomToSelection` (its view size was captured when the dialog opened).
@@ -188,6 +132,39 @@ impl Dialog {
             }
         }
         self.values.insert(key.into(), value);
+    }
+
+    /// The reference box the dialog is collapsed to, if any.
+    pub fn collapsed(&self) -> Option<&str> {
+        self.refs.collapsed.as_deref()
+    }
+
+    /// Collapses the dialog to its reference box `key` and starts picking into it, as the box's
+    /// collapse button does.
+    pub fn collapse_to(&mut self, app: &SheetApp, key: &str) {
+        ref_edit::begin_pick(app, self, key);
+        self.refs.collapsed = Some(key.to_string());
+    }
+
+    /// Ends picking into the dialog's reference boxes and puts back the sheet and selection from
+    /// before picking began, as closing the dialog does. Fails when the dialog's sheet could not
+    /// be shown again (a text-box draft on the picked sheet could not be saved): a dialog about
+    /// to run its command must then stay open instead.
+    pub(crate) fn end_pick(&mut self, app: &mut SheetApp) -> Result<(), String> {
+        ref_edit::end_pick(app, self)
+    }
+
+    /// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+    /// that sheet exists (the sheet [`Self::end_pick`] shows again); `None` otherwise.
+    pub(crate) fn home_sheet_protected(&self, app: &SheetApp) -> Option<bool> {
+        ref_edit::home_sheet_protected(app, self)
+    }
+
+    /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
+    /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
+    /// nothing to refer to.
+    pub(crate) fn home_sheet_deleted(&mut self, app: &SheetApp) -> bool {
+        ref_edit::home_sheet_deleted(app, self)
     }
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
@@ -230,9 +207,7 @@ impl Dialog {
         self.values.insert(pick.key.into(), json!(ed.text));
     }
 
-    /// Creates a field-driven dialog whose OK action submits its values to `command`.
-    /// Object defaults initialize its draft, and the first eligible field takes initial focus.
-    /// The opener binds document ownership and worksheet-picker state where needed.
+    /// Creates a command-backed form with its initial field values.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -246,20 +221,18 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: true,
-            analysis_context: None,
-            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
+            refs: ref_edit::RefBoxes::default(),
         }
     }
 
-    /// Creates a dialog whose custom renderer owns its controls and completion behavior.
-    /// Starts without fields, a command or an initial field-focus request; a specific opener may
-    /// attach a command and document context, as the Analysis ToolPak chooser does.
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    /// Creates a dialog whose body handles its own controls instead of a standard form.
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -272,19 +245,17 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: false,
-            analysis_context: None,
-            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
             focus_initialized: false,
             pick: None,
+            original_link_text: None,
+            refs: ref_edit::RefBoxes::default(),
         }
     }
 
-    /// Builds a named UI dialog using the active workbook and selection for its starting values.
-    /// Returns `None` for an unsupported dialog name. Analysis dialogs capture the document UID
-    /// and qualify their initial ranges here, so later worksheet changes cannot retarget those inputs.
+    /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -572,17 +543,30 @@ impl Dialog {
                     json!({"url": url}),
                 )
             }
-            "insertLink" => Dialog::form(
-                "insertLink",
-                "Insert Hyperlink",
-                "insert.link",
-                vec![
-                    Text { key: "text", label: "Display:" },
-                    Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
-                    Text { key: "tooltip", label: "ScreenTip:" },
-                ],
-                json!({"target": "https://"}),
-            ),
+            "insertLink" => {
+                let mut d = Dialog::form(
+                    "insertLink",
+                    "Insert Hyperlink",
+                    "insert.link",
+                    vec![
+                        Text { key: "text", label: "Display:" },
+                        Text { key: "target", label: "Link to (web address, e-mail or Sheet!A1):" },
+                        Text { key: "tooltip", label: "ScreenTip:" },
+                    ],
+                    json!({"target": "https://"}),
+                );
+                if let Some(doc) = app.session.active()
+                    && let Some(sheet) = doc.wb.active()
+                    && let Some(link) = sheet.hyperlinks.get(&doc.selection.active)
+                {
+                    let text = gridcraft_engine::display::cell_text(&doc.wb, sheet, doc.selection.active);
+                    d.values.insert("target".into(), json!(link.target));
+                    d.values.insert("text".into(), json!(text));
+                    d.values.insert("tooltip".into(), json!(link.tooltip));
+                    d.original_link_text = Some(text);
+                }
+                d
+            }
             "sparkline" => Dialog::form(
                 "sparkline",
                 "Create Sparklines",
@@ -609,14 +593,20 @@ impl Dialog {
                 },
             ),
             "pageSetup" => {
-                // Opens on the active sheet's saved margins, so OK without edits rewrites them unchanged.
-                let m = app.session.active().and_then(|d| d.wb.active()).map(|s| s.print.margins).unwrap_or([0.7, 0.7, 0.75, 0.75, 0.3, 0.3]);
+                // Opens on the active sheet's saved margins and page order, so OK without edits
+                // rewrites them unchanged. One `pageLayout.pageSetup` sets them all: one undo step.
+                let (margins, order) = app
+                    .session
+                    .active()
+                    .and_then(|d| d.wb.active())
+                    .map(|s| (s.print.margins, s.print.page_order))
+                    .unwrap_or(([0.7, 0.7, 0.75, 0.75, 0.3, 0.3], Default::default()));
                 // Round off f32 noise so the form shows 0.1, not 0.10000000149.
-                let [left, right, top, bottom, header, footer] = m.map(|v| (f64::from(v) * 1e4).round() / 1e4);
+                let [left, right, top, bottom, header, footer] = margins.map(|v| (f64::from(v) * 1e4).round() / 1e4);
                 Dialog::form(
                     "pageSetup",
                     "Page Setup",
-                    "pageLayout.margins",
+                    "pageLayout.pageSetup",
                     vec![
                         Number { key: "left", label: "Left margin (in):" },
                         Number { key: "right", label: "Right margin (in):" },
@@ -624,8 +614,13 @@ impl Dialog {
                         Number { key: "bottom", label: "Bottom margin (in):" },
                         Number { key: "header", label: "Header (in):" },
                         Number { key: "footer", label: "Footer (in):" },
+                        Choice {
+                            key: "pageOrder",
+                            label: "Page order",
+                            options: vec![("downThenOver", "Down, then over"), ("overThenDown", "Over, then down")],
+                        },
                     ],
-                    json!({"left": left, "right": right, "top": top, "bottom": bottom, "header": header, "footer": footer}),
+                    json!({"left": left, "right": right, "top": top, "bottom": bottom, "header": header, "footer": footer, "pageOrder": order.id()}),
                 )
             }
             "textToColumns" => Dialog::form(
@@ -674,6 +669,7 @@ impl Dialog {
                 }
                 d
             }
+            "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
@@ -718,28 +714,34 @@ impl Dialog {
                     d.values = toolpak_defaults(&sel, tool);
                 }
                 d.command = Some("data.analysisToolPak");
-                if let Some(doc) = app.session.active()
-                    && let Some(sheet) = doc.wb.active()
-                {
-                    d.analysis_context = Some(AnalysisContext { document: doc.uid, sheet: sheet.name.clone() });
-                    d.qualify_analysis_ranges();
-                }
                 d
             }
             "solver" => {
-                // Starts from the sheet's saved model, else the active cell as objective.
+                // Starts from the sheet's saved model, else the active cell as objective; fields
+                // given when opening it go over either.
                 let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet()));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
-                if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
-                    for (k, x) in m {
-                        v.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                for m in [saved.as_ref(), Some(&params)].into_iter().flatten().filter_map(Json::as_object) {
+                    if let Some(v) = values.as_object_mut() {
+                        for (k, x) in m {
+                            v.insert(
+                                k.clone(),
+                                if k == "value" { json!(x.as_str().map_or_else(|| x.to_string(), str::to_string)) } else { x.clone() },
+                            );
+                        }
                     }
                 }
                 if let Some(v) = values.as_object_mut() {
                     v.insert("newOp".into(), json!("<="));
                 }
+                let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
                 let mut d = Dialog::custom("solver", "Solver Parameters", values);
                 d.command = Some("data.solver");
+                // Straight into the Solver Options: the same setup as the Options button, so the
+                // fields show their defaults and Cancel restores what was there.
+                if options {
+                    analysis::open_solver_options(&mut d);
+                }
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
@@ -917,7 +919,13 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                let mut d = Dialog::custom("insertFunction", "Insert Function", json!({"category": category}));
+                d.focus_first_field = true;
+                d
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
@@ -1029,11 +1037,9 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
-            "macros" => {
-                let mut d = Dialog::custom("macros", "Macros", json!({}));
-                d.result = app.session.run("view.macros", json!({})).ok();
-                d
-            }
+            "macros" => crate::macro_ui::open_dialog(app, &params),
+            "recordMacro" => return crate::macro_ui::open_record(app, &params),
+            "macroEditor" => return crate::macro_editor::open(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();

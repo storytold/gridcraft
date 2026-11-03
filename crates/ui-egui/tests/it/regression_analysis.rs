@@ -1,106 +1,57 @@
-//! Regression range picking and document ownership through actual UI input and control calls.
-use egui::{Event, Modifiers, PointerButton, accesskit::Role, vec2};
+//! Regression-specific form/report integration. Shared picker contracts live in ref_edit.rs.
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{Session, core::CellRef};
 use gridcraft_ui_egui::{
     SheetApp,
     control::{Outcome, handle},
 };
-use serde_json::{Value as Json, json};
+use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, SheetApp>;
-
-fn harness() -> Harness {
-    let mut s = Session::new();
-    s.new_workbook();
-    s.execute("sheet.rename", json!({"name":"Y's data"})).unwrap();
-    s.execute("home.insertSheet", json!({"name":"X's data"})).unwrap();
-    s.execute("sheet.activate", json!({"sheet":"Y's data"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 1000.0)).build_ui_state(
+#[test]
+fn power_model_survives_shared_refedit_collapse_and_control_confirmation() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1","values":[[4,1],[16,2],[36,3],[64,4]]})).unwrap();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 1000.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(session),
     );
-    h.run_steps(6);
+    h.run_steps(4);
     h.state_mut().open_dialog("analysisToolPak", json!({"tool":"regression"}));
-    h.run_steps(6);
-    h
-}
+    h.run_steps(4);
+    h.get_by_label("Linear").click();
+    h.run_steps(3);
+    h.get_by_label("Power / Geometric").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["model"], "power");
+    assert!(h.query_by_label("Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.").is_some());
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 3);
+    h.get_all_by_label("Collapse dialog").nth(1).unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), Some("inputX"));
+    h.get_by_label("Expand dialog").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["model"], "power");
 
-fn control(h: &mut Harness, method: &str, params: Json) -> Json {
+    // Use the same control path as automation; no private picker or confirmation state.
     let ctx = h.ctx.clone();
-    match handle(h.state_mut(), &ctx, method, &params) {
-        Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => panic!("unexpected screenshot"),
+    for (field, value) in [("inputY", "A1:A4"), ("inputX", "B1:B4"), ("newSheet", "Fit")] {
+        let Outcome::Done(result) = handle(h.state_mut(), &ctx, "ui.dialog.set", &json!({"field":field,"value":value})) else {
+            panic!("unexpected screenshot response");
+        };
+        assert_eq!(result["ok"], true);
     }
-}
-
-fn drag(h: &mut Harness, start: CellRef, end: CellRef) {
-    let app = h.state();
-    let sheet = app.session.active().unwrap().wb.active().unwrap();
-    let geo = app.grid.geo.as_ref().unwrap();
-    let (start, end) = (geo.mirror_rect(geo.cell_rect(sheet, start)).center(), geo.mirror_rect(geo.cell_rect(sheet, end)).center());
-    h.input_mut().events.extend([
-        Event::PointerMoved(start),
-        Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
-    ]);
-    h.run_steps(2);
-    h.input_mut().events.push(Event::PointerMoved(end));
-    h.run_steps(3);
-    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
-}
-
-#[test]
-fn regression_picker_tracks_a_drag_after_switching_worksheets_and_finishes() {
-    let mut h = harness();
-    h.get_all_by_role_and_label(Role::Button, "Select…").next().unwrap().click();
-    h.run_steps(3);
-    h.state_mut().run("sheet.activate", json!({"sheet":"X's data"})).unwrap();
-    h.run_steps(3);
-    drag(&mut h, CellRef::new(0, 0), CellRef::new(3, 0));
-    assert_eq!(h.state().dialog.as_ref().unwrap().values["inputY"], "'X''s data'!A1:A4");
-    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "A1:A4");
-    h.get_by_role_and_label(Role::Button, "Finish").click();
-    h.run_steps(3);
-    assert!(h.get_all_by_role_and_label(Role::Button, "Select…").count() >= 3);
-    // Leaving picker mode restores ordinary worksheet selection, not the previous range field.
-    drag(&mut h, CellRef::new(0, 0), CellRef::new(2, 0));
-    assert_eq!(h.state().dialog.as_ref().unwrap().values["inputY"], "'X''s data'!A1:A4");
-}
-
-#[test]
-fn regression_output_picker_uses_one_cell_on_the_selected_sheet() {
-    let mut h = harness();
-    h.get_all_by_role_and_label(Role::Button, "Select…").nth(2).unwrap().click();
-    h.run_steps(3);
-    h.state_mut().run("sheet.activate", json!({"sheet":"X's data"})).unwrap();
-    h.run_steps(3);
-    drag(&mut h, CellRef::new(1, 1), CellRef::new(4, 3));
-    let values = &h.state().dialog.as_ref().unwrap().values;
-    assert_eq!(values["output"], "'X''s data'!B2");
-    assert_eq!(values["outputTo"], "range");
-    assert_eq!(values["inputY"], "'Y''s data'!A1");
-}
-
-#[test]
-fn regression_control_and_ok_refuse_a_different_workbook() {
-    let mut h = harness();
-    let analysis_window = h.state().session.active_window().unwrap_or_default();
-    h.state_mut().session.new_workbook();
-    let before = serde_json::to_value(&h.state().session.active().unwrap().wb).unwrap();
-    let result = control(&mut h, "ui.dialog.confirm", json!({}));
-    assert_eq!(result["ok"], false);
-    assert!(h.state().dialog.is_some());
-    assert_eq!(serde_json::to_value(&h.state().session.active().unwrap().wb).unwrap(), before);
-    assert_eq!(control(&mut h, "ui.dialog.set", json!({"field":"inputY","value":"B1:B3"}))["ok"], false);
-    h.run_steps(4);
-    assert!(h.query_by_role_and_label(Role::Button, "OK").is_none());
-    h.state_mut().session.execute("window.activate", json!({"window": analysis_window})).unwrap();
-    h.run_steps(4);
-    h.get_by_role_and_label(Role::Button, " Cancel ").click();
-    h.run_steps(3);
+    let Outcome::Done(result) = handle(h.state_mut(), &ctx, "ui.dialog.confirm", &json!({})) else {
+        panic!("unexpected screenshot response");
+    };
+    assert_eq!(result["ok"], true);
     assert!(h.state().dialog.is_none());
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    let number = |cell| sheet.value(CellRef::parse(cell).unwrap()).as_f64().unwrap();
+    assert!((number("B17") - 4.0_f64.ln()).abs() < 1e-10);
+    assert!((number("B18") - 2.0).abs() < 1e-10);
+    assert_eq!(sheet.value(CellRef::parse("A3").unwrap()), gridcraft_engine::core::Value::text("Regression Statistics (ln(Y) domain)"));
 }

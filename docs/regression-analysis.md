@@ -1,6 +1,7 @@
 # Analysis ToolPak regression models
 
-Last updated: 2026-10-27.
+Last updated: 2026-11-03. Local reconciliation against main
+`178f3eb745a589c63b61ef97dd7b6b2d6fd48515`; merge pending, no commit created.
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
 
@@ -11,61 +12,114 @@ Last updated: 2026-10-27.
 | `logarithmic` | Y = intercept + b ln(X) | X; exactly one X column |
 | `power` | ln(Y) = intercept + b ln(X) | Y and X; exactly one X column |
 
-For exponential and power models, the reported intercept is **ln(amplitude)**. The amplitude
-in the original equation is `exp(intercept)`. `constantZero: true` constrains the intercept
-in the fitted domain; for these two models it fixes the original amplitude to 1. It does not
-force the original response Y to have a zero intercept.
+For exponential and power models, the reported intercept is **ln(amplitude)**;
+the original amplitude is `exp(intercept)`. `constantZero: true` fixes that amplitude
+to 1. Linear/exponential fits retain the existing maximum of 16 X columns.
 
-Coefficients, their standard errors, t tests, confidence intervals, R², adjusted R², ANOVA,
-predictions, residuals, standardized residuals and probability output all describe the fitted
-domain. In exponential/power reports that domain is ln(Y), and the response headings identify
-it. Predictions are not automatically exponentiated or bias-corrected. These are transformed
-ordinary least-squares fits, not nonlinear least squares on the original Y scale. Logarithmic
-regression keeps Y on its original scale and labels its predictor ln(X).
+Coefficients, standard errors, t tests, confidence intervals, R², adjusted R²,
+ANOVA, predictions, residuals, standardized residuals and probability output
+describe the fitted domain. Exponential/power response headings explicitly name
+ln(Y); logarithmic/power predictor headings name ln(X). Predictions are not
+exponentiated or bias-corrected. This is transformed ordinary least squares,
+not arbitrary nonlinear least squares on the original Y scale.
 
-Reports remain static cell values with the existing output-range/new-worksheet, overwrite,
-undo and redo behavior. The linear model keeps the existing coefficient/statistic positions;
-the previously blank second row now identifies the model.
+Reports remain static cell values with existing output-range/new-sheet,
+overwrite and undo/redo behavior. Linear report positions remain unchanged;
+the formerly blank second row identifies the model. The existing OLS solver
+uses normal equations and has not been replaced by QR. This change does not
+establish accuracy for ill-conditioned data.
 
-## Worksheet range selection
+## Shared reference editing and form scope
 
-Analysis inputs, optional histogram bins and the output cell offer Select… / Finish buttons.
-While picking, the analysis dialog shows the selected field so the worksheet remains available.
-The user may change worksheets within the same workbook. Picked references always include
-the worksheet name, with spaces and apostrophes escaped by the formula printer. Relative
-references already typed into other fields are qualified before a worksheet change, preserving
-the worksheet they originally referred to. Output picking uses the starting cell only.
+Y, X and Output Range use upstream `Field::Ref` / `ref_edit`, including collapse,
+focus, cross-sheet qualification and restoration of the home sheet/selection.
+There is no separate RangePicker, AnalysisContext, document guard or pointer route.
+Output Range follows the upstream range-reference contract; it is not truncated
+by a custom single-cell picker. Engine validation determines valid output input.
 
-The dialog is bound to the original document UID. Switching to another workbook suspends
-picking and blocks both UI confirmation and `ui.dialog.set` / `ui.dialog.confirm`; returning
-to the owner resumes it. Closing the owner does not rebind the dialog to another workbook.
-A drag also records its document and worksheet so a tab switch cannot extend it into another
-worksheet. Invalid or stale references are rejected by the engine.
+The model dropdown, first-row labels and zero-intercept checkbox remain separate,
+with a fitted-domain explanation for exponential/power. The form uses main's
+scroll area and action row. All upstream ToolPak entries, dynamic fields,
+defaults and validators remain: two-factor ANOVA, z-Test, Fourier, random number
+generation and sampling included. Generic dialog resize belongs to separate work.
 
-The model, first-row labels and zero-intercept option are separate controls. Generic window
-resizing, scrolling, chooser layout and dialog footers belong to the responsive-interface PR.
-This change does not require chart formatting, export, model or XLSX changes.
+Implementation: `crates/engine/src/cmd/analysis.rs` holds model transformations and
+report generation; `crates/ui-egui/src/dialogs/analysis.rs` holds model presentation.
+Reference editing is upstream `dialogs/ref_edit.rs`; shared dialog/control/grid
+files retain main's implementation.
 
-## Code layout
+## Independent exact benchmark (not a published dataset)
 
-The regression engine remains in `crates/engine/src/cmd/analysis.rs`. After the shared module
-split (#2690), ToolPak schemas, range editors and picking helpers live in
-`crates/ui-egui/src/dialogs/analysis.rs`; the dialog window and shared form fields live in
-`dialogs/show.rs`. `dialogs.rs` retains the dialog state and document-ownership checks, and
-re-exports the grid-picking helpers. Pointer handling lives in `grid/interact.rs`, with the
-picker's cursor handled in `grid/cursor.rs`. Control-protocol confirmation retains the
-upstream per-window dialog restoration in `control.rs`.
+The synthetic fitted-domain observations are x = [0, 1, 2, 3],
+y = [1, 2, 2, 5]. All expectations below are derived here, independently of
+GridCraft OLS, LINEST and distribution functions. No published benchmark was
+consulted or is claimed. The executable case is
+`regression_models_match_independent_exact_four_observation_benchmark`.
 
-## Validation
+n = 4, x̄ = 3/2, ȳ = 5/2; sum(x²) = 14, sum(xy) = 21, sum(y²) = 34.
+Thus Sxx = 5, Sxy = 6, Syy = 9.
+The minimizer is b = Sxy/Sxx = 6/5, a = ȳ − b x̄ = 7/10.
+Predictions are [7/10, 19/10, 31/10, 43/10], giving residuals
+[3/10, 1/10, −11/10, 7/10].
 
-Regression cases compare noisy transformed fits (including a forced zero intercept)
-with worksheet LINEST, cover domain errors and unchanged workbooks on failure, verify
-overwrite/undo/redo, and exercise cross-worksheet grid input and document ownership.
+| Quantity | Exact result |
+|---|---|
+| Regression / residual / total df | 1 / 2 / 3 |
+| SSR / SSE / SST | 36/5 / 9/5 / 9 |
+| MS regression / MS residual; F | 36/5 / 9/10; 8 |
+| R² / adjusted R² | 4/5 / 7/10 |
+| Regression standard error | sqrt(9/10) |
+| SE(a) / SE(b) | sqrt(63/100) / sqrt(9/50) |
+| t(a) / t(b) | sqrt(7)/3 / sqrt(8) |
+| Two-sided p(a) / p(b) | 1 − sqrt(7)/5 / 1 − 2/sqrt(5) |
+| Significance F | 1 − 2/sqrt(5) |
+| 95% / 90% two-sided t critical, df=2 | sqrt(722/39) / sqrt(162/19) |
+
+For df=2 the normalized t density is (t²+2)^(-3/2). Integrating it gives
+the two-sided tail 1 − |t|/sqrt(t²+2). Solving tail = alpha gives
+t² = 2(1−alpha)²/[alpha(2−alpha)]. Each interval is coefficient ± critical × SE.
+Since F(1,2) is the square of t(2), its upper tail at 8 is the slope's
+two-sided p-value. SE(b)² = MSE/Sxx and SE(a)² = MSE(1/n + x̄²/Sxx).
+Standardized residuals follow the existing report convention,
+residual/sqrt(SSE/(n−1)) = residual/sqrt(3/5); they are not leverage-studentized.
+Probability output sorts [1,2,2,5] at percentiles [12.5,37.5,62.5,87.5].
+
+The same exact problem is supplied to all four models: retain x,y for linear;
+use exp(y),x for exponential; y,exp(x) for logarithmic; exp(y),exp(x) for power.
+The test checks coefficients, ANOVA, inference, intervals, predictions,
+residuals, probability values and transformed labels with absolute tolerance 1e-9
+to accommodate floating-point exp/ln and distribution evaluation.
+
+A zero-intercept rerun uses b = sum(xy)/sum(x²) = 3/2,
+SSE = 5/2, uncentered SST = 34, SSR = 63/2, df = 1/3/4,
+MSE = 5/6, F = 189/5, SE(b) = sqrt(5/84), R² = 63/68 and
+adjusted R² = 46/51. Intercept inference is NA. This also checks the
+amplitude-one constraint for exponential/power.
+
+## Validation status and pending work
+
+No Cargo command, build, test, clippy or screenshot was run during this
+reconciliation. Tests below are authored/preserved, not passing claims.
+Only direct rustfmt, git diff checks and static reading are used in this round.
+
+Existing noisy LINEST comparisons remain as internal consistency checks, not
+independent benchmarks. Domain rejection without workbook mutation, invalid model
+types/defaults, overwrite and undo/redo coverage remain. The model-specific UI
+case checks dropdown selection, the ln(Y) note, shared collapse/expand and report
+confirmation. The duplicate picker tests were removed.
+
+Main's unchanged `crates/ui-egui/tests/it/ref_edit.rs` supplies pointer, keyboard,
+focus, cross-sheet quoting, home-sheet deletion/recreation/rename/undo,
+selection restoration and scripted confirmation/cancellation coverage.
+All of it still requires execution on the final reconciled state.
+
+Commands proposed for a separately authorized validation round:
 
 ```sh
 cargo test -p gridcraft-engine --lib cmd::analysis::tests
 cargo test -p gridcraft-ui-egui --lib dialogs::analysis::tests
 cargo test -p gridcraft-ui-egui --test it regression_analysis::
+cargo test -p gridcraft-ui-egui --test it ref_edit::
 cargo test -p gridcraft-ui-egui --test it interaction::data_analysis_dialog_runs_a_tool_and_asks_before_overwriting
 cargo test -p gridcraft-ui-egui --test it dialog_confirm::
 cargo test -p gridcraft-ui-egui --lib i18n::ja::tests
@@ -76,6 +130,6 @@ cargo check -p gridcraft-ui-egui --target wasm32-unknown-unknown
 
 | Date | Change |
 |---|---|
-| 2026-10-27 | Move ToolPak UI and regression tests into the shared dialog/grid modules; retain document and window ownership; update validation command paths |
-| 2026-10-23 | Sync with main; document production API behavior for regression model validation, fitted-domain reports and analysis dialog ownership |
-| 2026-10-23 | Describe transformed regression diagnostics, range selection and the PR2 validation plan |
+| 2026-11-03 | Reconcile main 178f3eb7 locally; replace private picker with upstream RefEdit; preserve expanded ToolPak; add independent exact benchmark; execution pending |
+| 2026-10-27 | Move ToolPak UI and regression tests into shared dialog modules |
+| 2026-10-23 | Document transformed models, diagnostics and domain validation |

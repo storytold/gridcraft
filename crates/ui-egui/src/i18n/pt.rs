@@ -4,18 +4,12 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
-        "Finish" => "Concluir",
-        "Select…" => "Selecionar…",
         "Regression Type:" => "Tipo de regressão:",
         "Regression method" => "Método de regressão",
-        "Regression options" => "Opções da regressão",
+        "Regression options" => "Opções de regressão",
         "Exponential" => "Exponencial",
         "Logarithmic" => "Logarítmica",
-        "Power / Geometric" => "Potência / Geométrica",
-        "Select a worksheet range, then choose Finish." => "Selecione um intervalo na planilha e clique em Concluir.",
-        "Return to the original workbook to continue this analysis, or cancel." => {
-            "Volte à pasta de trabalho original para continuar esta análise ou cancele."
-        }
+        "Power / Geometric" => "Potencial / Geométrica",
         "Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1." => {
             "Os diagnósticos e o intercepto usam ln(Y); intercepto zero fixa a amplitude em 1."
         }
@@ -122,6 +116,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Texto para\nColunas",
         "Link" => "Vínculo",
         "Symbol" => "Símbolo",
+        "Equation" => "Equação",
+        "Insert New Equation..." => "Inserir Nova Equação",
         "Sparklines" => "Minigráficos",
         "Checkbox" => "Caixa de Seleção",
         "Insert checkboxes in the selected cells" => "Inserir caixas de seleção nas células selecionadas",
@@ -164,7 +160,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Remover Setas",
         "Show Formulas" => "Exibir Fórmulas",
         "Error Checking" => "Verificação de Erros",
+        "Trace Error" => "Rastrear Erro",
         "Circular References" => "Referências Circulares",
+        "Python Mode" => "Modo Python",
         "Evaluate Formula" => "Avaliar Fórmula",
         "Watch Window" => "Janela de Inspeção",
         "Calculation\nOptions" => "Opções de\nCálculo",
@@ -306,11 +304,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Long Date" => "Data Por Extenso",
         "More Number Formats…" => "Mais Formatos de Número…",
         "Financial" => "Financeira",
+        "Recently Used" => "Usadas Recentemente",
         "Logical" => "Lógica",
-        "Date &\nTime" => "Data e\nHora",
-        "Lookup &\nReference" => "Pesquisa e\nReferência",
-        "Math &\nTrig" => "Matemática e\nTrigonometria",
-        "More\nFunctions" => "Mais\nFunções",
+        "More Functions" => "Mais Funções",
         "Page Layout|Orientation" => "Orientação",
         "Display theme" => "Tema de exibição",
         "Animations" => "Animações",
@@ -486,7 +482,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Editar Nome",
         "New Name" => "Novo Nome",
         "Format Cells" => "Formatar Células",
-        "Formula Builder" => "Construtor de Fórmulas",
         "Find and Replace" => "Localizar e Substituir",
         "Go To" => "Ir para",
         "Insert Calculated Field" => "Inserir Campo Calculado",
@@ -590,6 +585,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom margin (in):" => "Margem inferior (pol.):",
         "Header (in):" => "Cabeçalho (pol.):",
         "Footer (in):" => "Rodapé (pol.):",
+        "Page order" => "Ordem das páginas",
+        "Down, then over" => "Para baixo, depois para a direita",
+        "Over, then down" => "Para a direita, depois para baixo",
         "Tab" => "Tabulação",
         "Semicolon" => "Ponto e vírgula",
         "Comma" => "Vírgula",
@@ -997,6 +995,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "Record Macro" => "Gravar Macro",
+        "Stop Recording" => "Parar Gravação",
+        "Use Relative References" => "Usar Referências Relativas",
+        "Run\nMacro" => "Executar Macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Gravando",
+        "New Macro" => "Nova Macro",
+        "Show" => "Mostrar",
+        "Collapse dialog" => "Recolher caixa de diálogo",
+        "Expand dialog" => "Expandir caixa de diálogo",
         _ => return None,
     })
 }
