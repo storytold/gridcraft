@@ -107,6 +107,12 @@ without modifying the workstation settings. No Excel-produced fixtures or vendor
 
 ## Interactive entry follow-up — 2026-11-03
 
+Standard Turkish region and regionless language tags now share comma decimals, dot grouping
+and the numeric short date `d.mm.yyyy` for display and interactive entry. These conventions
+follow the verified CLDR Turkish [number symbols](https://raw.githubusercontent.com/unicode-org/cldr-json/7d2b9cb11cec08f4d333ad73209deb3df0711c3b/cldr-json/cldr-numbers-full/main/tr/numbers.json)
+and [Gregorian short date](https://raw.githubusercontent.com/unicode-org/cldr-json/7d2b9cb11cec08f4d333ad73209deb3df0711c3b/cldr-json/cldr-dates-full/main/tr/ca-gregorian.json). The existing ICU converter expands
+CLDR `d.MM.y` to the four-digit-year Excel pattern; custom OS separators/preferences remain outside this mapping.
+
 `1,234` entered in a Romanian region stores 1.234, not 1234; `04.03.2026` stores 4 March.
 The editor keeps full numeric precision and uses a date spelling only when it reads back to the
 same value. Drafts capture their numeric region independently of the interface/formula language.

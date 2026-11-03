@@ -36,6 +36,7 @@ impl Locale {
         let (decimal, group, date) = match region {
             "CH" | "LI" => ('.', '\'', "dd.mm.yyyy"),
             "DE" | "AT" | "LU" | "RO" => (',', '.', "dd.mm.yyyy"),
+            "TR" => (',', '.', "d.mm.yyyy"),
             "FR" => (',', '\u{202F}', "dd/mm/yyyy"),
             "GB" | "IE" | "SG" => ('.', ',', "dd/mm/yyyy"),
             "IT" | "ES" | "BR" => (',', '.', "dd/mm/yyyy"),
@@ -46,6 +47,7 @@ impl Locale {
                 return match lang.as_str() {
                     "de" => Self::from_tag("de-DE"),
                     "ro" => Self::from_tag("ro-RO"),
+                    "tr" => Self::from_tag("tr-TR"),
                     "fr" => Self::from_tag("en-FR"),
                     "it" | "es" => Self::from_tag("en-IT"),
                     "nl" => Self::from_tag("en-NL"),

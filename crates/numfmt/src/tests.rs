@@ -941,3 +941,25 @@ fn regional_display_formats() {
     // format_value is en-US whatever the region.
     assert_eq!(format_value(&Value::Number(1234.5), &NumberFormat::parse("#,##0.00"), DateSystem::D1900).text, "1,234.50");
 }
+
+/// Turkish region and language tags share CLDR separators and numeric date order in display and entry.
+#[test]
+fn turkish_tags_format_and_parse_with_the_same_numeric_conventions() {
+    for tag in ["tr-TR", "tr_TR.UTF-8", "tr", "tr-Latn-TR", "en-TR"] {
+        let loc = Locale::from_tag(tag);
+        assert_eq!(loc.decimal, ',');
+        assert_eq!(loc.group, '.');
+        assert_eq!(loc.short_date, "d.mm.yyyy");
+        assert_eq!(loc.clone().with_icu_short_date("d.MM.y"), loc);
+        let number = format_value_in(&Value::Number(1234.5), &NumberFormat::parse("#,##0.00"), S, &loc);
+        assert_eq!(number.text, "1.234,50");
+        let date = format_value_in(&Value::Number(45292.0), &NumberFormat::parse("m/d/yyyy"), S, &loc);
+        assert_eq!(date.text, "1.01.2024");
+        for sys in [DateSystem::D1900, DateSystem::D1904] {
+            let number = loc.canonical_input("1,234", sys, "General");
+            assert_eq!(gridcraft_core::parse::parse_input(&number, sys).value, Value::Number(1.234));
+            let date = loc.canonical_input("4.03.2026", sys, &loc.short_date);
+            assert_eq!(gridcraft_core::parse::parse_input(&date, sys).value, gridcraft_core::parse::parse_input("2026-03-04", sys).value);
+        }
+    }
+}

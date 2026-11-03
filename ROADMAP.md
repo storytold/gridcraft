@@ -257,7 +257,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | #2933 interactive follow-up: Romanian-looking numeric input no longer reaches the invariant parser unchanged. Interactive entry, F2, validation, Ctrl+Enter and external text paste share regional normalization; direct commands and imports retain their existing conventions. Synthetic regression and XLSX coverage only; no readiness reassessment. |
+| 2026-11-03 | minor | #2933 interactive follow-up: Romanian-looking numeric input no longer reaches the invariant parser unchanged. Interactive entry, F2, validation, Ctrl+Enter and external text paste share regional normalization; direct commands and imports retain their existing conventions. Standard Turkish region/language tags also avoid the en-US fallback. Synthetic regression and XLSX coverage only; no readiness reassessment. |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-02 | minor | Progress log: Python cells as data |
