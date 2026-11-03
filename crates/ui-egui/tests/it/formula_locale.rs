@@ -141,6 +141,15 @@ fn locale_preserves_text_cells_and_existing_entry_conveniences() {
 }
 
 #[test]
+fn empty_cell_autosum_places_caret_inside_parentheses() {
+    let mut app = app();
+    app.run("formulas.autoSum", json!({"enter": false})).unwrap();
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.text, "=SUM()");
+    assert_eq!(ed.caret, ed.text.chars().count() - 1);
+}
+
+#[test]
 /// Insert Function and AutoSum use `=SUMA(`, while user-supplied formula text is not translated twice.
 fn canonical_engine_templates_enter_the_selected_formula_language() {
     let mut app = app();
