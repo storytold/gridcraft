@@ -20,6 +20,11 @@ const MAX_SUBSET_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SUBSET_GLYPHS: usize = 16_384;
 const SYNTHETIC_BOLD_STROKE: f32 = 30.0;
 
+/// Whether `text` set in `font` is shaped; Symbol keeps its own one-run encoding.
+pub(crate) fn shaped(font: Font, text: &str) -> bool {
+    font != Font::Symbol && needed(text)
+}
+
 pub(crate) fn needed(text: &str) -> bool {
     text.chars().any(|ch| matches!(ch as u32, 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff))
 }
