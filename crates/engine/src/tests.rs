@@ -5572,3 +5572,14 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
 }
+
+#[test]
+fn replace_does_not_search_hidden_formula_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)*7"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let hit = s.execute("edit.replace", json!({"what": "SEQUENCE", "with": "X"})).map_err(|e| e.to_string());
+    let miss = s.execute("edit.replace", json!({"what": "NOSUCHTEXT", "with": "X"})).map_err(|e| e.to_string());
+    assert_eq!(hit, miss);
+}
