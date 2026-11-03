@@ -1,5 +1,6 @@
 //! Reading the workbook part and everything hanging off it.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
@@ -53,8 +54,8 @@ const MAX_STRINGS: usize = 4_000_000;
 /// folded), with the next `(n)` suffix to try for each base, so renaming duplicates stays linear.
 #[derive(Default)]
 pub(crate) struct SheetNames {
-    taken: std::collections::HashSet<String>,
-    next_suffix: std::collections::HashMap<String, usize>,
+    taken: HashSet<String>,
+    next_suffix: HashMap<String, usize>,
 }
 
 impl SheetNames {
@@ -256,6 +257,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         if p.flag("date1904", false) {
             cx.date_system = DateSystem::D1904;
         }
+        wb.remove_personal_info = p.flag("filterPrivacy", false);
         wb.show_objects = match p.attr("showObjects") {
             Some("none") => ShowObjects::None,
             Some("placeholders") => ShowObjects::Placeholders,
@@ -277,6 +279,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
             wb.calc.set_max_change(d);
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
+        wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
@@ -364,7 +367,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     if sheet_els.len() > MAX_SHEETS {
         return Err(IoError::TooLarge(format!("the workbook has more than {MAX_SHEETS} sheets")));
     }
-    let mut rel_by_id: std::collections::HashMap<&str, &Rel> = std::collections::HashMap::with_capacity(wb_rels.len());
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(wb_rels.len());
     for r in &wb_rels {
         // The first of duplicate ids wins, as a linear search would find it.
         rel_by_id.entry(r.id.as_str()).or_insert(r);
