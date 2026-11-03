@@ -143,10 +143,11 @@ impl Precedents<'_> {
             }
             Expr::Name(_) | Expr::Struct(_) => self.dynamic = true,
             Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => self.dynamic = true,
-            // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
-            // the references inside it, not only those references. Both operands are visited once,
+            // A range ending in a function's result (`A1:INDEX(B1:B9,n)`), or a chain of plain
+            // references the parser can't fold into one (`A1:B2:C3`), covers the cells between the
+            // references inside it, not only those references. Both operands are visited once,
             // collecting their bounding boxes on the way, which `Close` then records.
-            Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
+            Expr::Binary(BinOp::Range, a, b) => {
                 let inner = self.boxes.len();
                 self.boxes.push(Vec::new());
                 pending.push(PrecedentStep::Close { inner, outer: boxes });
