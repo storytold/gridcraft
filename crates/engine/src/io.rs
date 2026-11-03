@@ -118,13 +118,142 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted, then takes the workbook's macros out of their hidden names.
+/// Parses bytes that aren't encrypted, then takes the workbook's macros out of their hidden names
+/// and adopts the Python cells they hold (see [`adopt_python`]) within the limits of
+/// [`enforce_python_limits`].
 fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
     warnings.extend(crate::macros::load(&mut wb));
+    warnings.extend(adopt_python(&mut wb));
+    warnings.extend(enforce_python_limits(&mut wb));
     Ok((wb, warnings))
 }
 
+/// The most result cells [`adopt_python`] rebuilds from a file's cached spills, over all its
+/// Python cells (each one is also limited to [`gridcraft_model::python::MAX_RESULT_CELLS`]).
+pub const MAX_ADOPTED_RESULT_CELLS: u64 = 4_000_000;
+
+/// Python cells from a file: a cell whose formula is `PY("…",0|1)` (a format that kept it as a
+/// formula) becomes a Python cell, and a Python cell whose spilled values the file cached gets
+/// them back as its result, so it shows them until it runs again. Results are rebuilt for at most
+/// [`MAX_ADOPTED_RESULT_CELLS`] cells in all; the rest keep only their own cached value, and the
+/// values they spilled stay as plain values. Returns the warnings.
+pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
+    let mut budget = MAX_ADOPTED_RESULT_CELLS;
+    let mut skipped = 0usize;
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let formulas: Vec<(CellRef, gridcraft_model::PyCode)> = sh
+            .cells
+            .iter()
+            .filter_map(|(c, cell)| cell.formula.as_ref().and_then(|f| gridcraft_model::PyCode::from_formula(&f.text)).map(|p| (c, p)))
+            .collect();
+        let max = gridcraft_model::python::MAX_RESULT_CELLS as u64;
+        let spills: Vec<(CellRef, RangeRef)> = sh
+            .spill_ranges
+            .iter()
+            .filter(|(a, r)| r.count() <= max && sh.cell(**a).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_none()))
+            .map(|(a, r)| (*a, *r))
+            .collect();
+        if formulas.is_empty() && spills.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, py) in formulas {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.formula = None;
+                cell.py = Some(std::sync::Arc::new(py));
+            }
+        }
+        for (anchor, range) in spills {
+            let Some(left) = budget.checked_sub(range.count()) else {
+                skipped += 1;
+                // The cell keeps only its own value; the values it spilled stay as plain values, so
+                // nothing shows as a spill that no result holds, and nothing the file showed is lost.
+                sh.settle_spill(anchor);
+                continue;
+            };
+            budget = left;
+            let data: Vec<gridcraft_core::Value> =
+                range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
+            let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
+            if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output =
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+            }
+        }
+    }
+    if skipped == 0 {
+        return Vec::new();
+    }
+    vec![format!(
+        "The file's Python results are larger than {MAX_ADOPTED_RESULT_CELLS} cells in all, so {skipped} Python cell(s) have no result until they run again; the values they spilled were kept as plain values."
+    )]
+}
+
+/// A file is somebody else's work: a Python cell whose code doesn't fit in Excel's
+/// 8,192-character formula keeps only its cached value, and a kept result that is not a
+/// well-formed array of at most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells is dropped
+/// (the cell keeps its value). Either way the values the cell spilled stay as plain values
+/// ([`gridcraft_model::Sheet::settle_spill`]). Returns the warnings.
+pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
+    let mut long = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let mut over = Vec::new();
+        let mut bad_output = Vec::new();
+        for (c, cell) in sh.cells.iter() {
+            let Some(py) = &cell.py else { continue };
+            if !py.fits() {
+                long.push(format!("{}!{}", sh.name, c.a1()));
+                over.push(c);
+            } else if py.output.as_ref().is_some_and(|o| !sane_python_output(&o.value)) {
+                bad_output.push(c);
+            }
+        }
+        if over.is_empty() && bad_output.is_empty() {
+            continue;
+        }
+        let dropped: Vec<CellRef> = over.iter().chain(&bad_output).copied().collect();
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for c in over {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.py = None;
+            }
+        }
+        for c in bad_output {
+            if let Some(py) = sh.cells.get_mut(c).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output = None;
+            }
+        }
+        // A dropped result (or code dropped to its value) leaves the values it spilled as plain
+        // values, as the file showed them, with no live spill.
+        for c in dropped {
+            sh.settle_spill(c);
+        }
+    }
+    let Some(first) = long.first() else { return vec![] };
+    let more = if long.len() > 1 { format!(" (and {} more)", long.len() - 1) } else { String::new() };
+    vec![format!(
+        "A Python cell's code is longer than Excel's {}-character formula limit, so {first}{more} kept only its last calculated value.",
+        gridcraft_model::python::MAX_FORMULA_CHARS
+    )]
+}
+
+/// A Python result a file may hold: a scalar, or an array whose size matches its data and has at
+/// most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells.
+fn sane_python_output(v: &gridcraft_core::Value) -> bool {
+    match v {
+        gridcraft_core::Value::Array(a) => {
+            a.rows >= 1
+                && a.cols >= 1
+                && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS)
+        }
+        _ => true,
+    }
+}
+
+/// Parses bytes that aren't encrypted, as they are.
 fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
@@ -153,7 +282,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+        // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, &gridcraft_calc::is_known_function).map_err(|e| {
             EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
                 (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
                 _ => format!("We can't open '{name}': {e}"),
@@ -182,17 +312,17 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
         _ => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
     }
 }
@@ -304,6 +434,39 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
+/// times as ISO 8601, booleans `TRUE`/`FALSE`, errors as their text, text as stored. Save As CSV
+/// writes displayed text instead ([`save_bytes`]) and stays the default.
+pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
+    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
+    gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
+        gridcraft_core::Value::Number(n) if n.is_finite() => {
+            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
+                Some(((date, time), d)) => iso(&d, date, time),
+                None => n.to_string(),
+            }
+        }
+        gridcraft_core::Value::Text(t) => t.to_string(),
+        v => crate::display::value_text_as(wb, &v, "General"),
+    })
+    .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.
+fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
+    let day = format!("{:04}-{:02}-{:02}", d.year, d.month, d.day);
+    let mut clock = format!("{:02}:{:02}:{:02}", d.hour, d.minute, d.second);
+    if d.milli != 0 {
+        clock.push_str(&format!(".{:03}", d.milli));
+    }
+    match (date, time) {
+        (true, true) => format!("{day}T{clock}"),
+        (false, true) => clock,
+        _ => day,
+    }
 }
 
 pub(crate) fn esc(s: &str) -> String {

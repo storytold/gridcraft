@@ -294,13 +294,26 @@ pub fn has_fallback_face(bold: bool) -> bool {
     faces.get(usize::from(bold)).is_some_and(Option::is_some)
 }
 
-/// The face for regular or bold text, and whether bold must be drawn by stroking the regular one.
+/// The registered faces (regular, bold) as of now. A document keeps the set it was created with,
+/// so registering another font later can't mix two fonts' glyph ids in one embedded font.
+pub(crate) type Faces = [Option<Arc<Face>>; 2];
+
+pub(crate) fn snapshot() -> Faces {
+    match FACES.read() {
+        Ok(g) => g.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+/// The face for regular or bold text now registered, and whether bold must be drawn by stroking
+/// the regular one.
 pub(crate) fn face(bold: bool) -> Option<(Arc<Face>, bool)> {
-    let faces = match FACES.read() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let [regular, bold_face] = &*faces;
+    pick(&snapshot(), bold)
+}
+
+/// [`face`] out of `faces`.
+pub(crate) fn pick(faces: &Faces, bold: bool) -> Option<(Arc<Face>, bool)> {
+    let [regular, bold_face] = faces;
     match (bold, bold_face, regular) {
         (true, Some(b), _) => Some((b.clone(), false)),
         (true, None, Some(r)) => Some((r.clone(), true)),

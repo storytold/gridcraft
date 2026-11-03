@@ -467,6 +467,44 @@ fn a_cell_in_the_fallback_font_sets_latin_and_digits_in_it_too() -> Result<(), B
 }
 
 #[test]
+fn a_document_keeps_the_fonts_registered_when_it_was_created() -> Result<(), Box<dyn Error>> {
+    let _guard = fallback_lock();
+    let first = register_fallback_font(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), false)?;
+    let mut doc = PdfDoc::new();
+    // Another font registered while the document is being drawn must not mix its glyph ids into
+    // the embedded font: the document keeps the first one, in text and in the font file alike.
+    clear_fallback_fonts();
+    register_fallback_font(epaint_default_fonts::HACK_REGULAR.to_vec(), false)?;
+    doc.add_page(200.0, 200.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Привет");
+    doc.add_page(200.0, 200.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Да");
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /CIDFontType2").count(), 1);
+    assert!(find(&pdf, format!("/BaseFont /{first}").as_bytes()).is_some());
+    assert!(find(&pdf, format!("/Length1 {}", epaint_default_fonts::UBUNTU_LIGHT.len()).as_bytes()).is_some());
+    // The next document uses the font registered now.
+    let mut next = PdfDoc::new();
+    next.add_page(200.0, 200.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "abc ©");
+    assert!(find(&next.finish(), b"/FontFile2").is_none(), "WinAnsi text needs no fallback font");
+    Ok(())
+}
+
+#[test]
+fn symbol_text_is_never_routed_to_the_fallback_font() -> Result<(), Box<dyn Error>> {
+    let _guard = fallback_lock();
+    register_fallback_font(epaint_default_fonts::UBUNTU_LIGHT.to_vec(), false)?;
+    let mut doc = PdfDoc::new();
+    doc.add_page(200.0, 200.0).text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}");
+    let width = text_width(Font::Symbol, 10.0, "\u{2211}\u{03B1}");
+    let pdf = doc.finish();
+    assert!(find(&pdf, b"/FontFile2").is_none());
+    assert!(find(&pdf, b"(\\345a\\243\\245) Tj").is_some());
+    let parts = text_width(Font::Symbol, 10.0, "\u{2211}") + text_width(Font::Symbol, 10.0, "\u{03B1}");
+    assert!((width - parts).abs() < 1e-3, "{width} vs {parts}");
+    Ok(())
+}
+
+#[test]
 fn without_a_fallback_font_output_is_unchanged() {
     let _guard = fallback_lock();
     let mut doc = PdfDoc::new();
@@ -520,4 +558,22 @@ fn thai_text_with_a_thai_font() -> Result<(), Box<dyn Error>> {
     // The tone mark and SARA AM stack: three characters are much narrower than three full glyphs.
     assert!(measured < 3.0 * 24.0 * 0.6, "width {measured}");
     Ok(())
+}
+
+#[test]
+fn symbol_font_draws_maths_in_its_own_encoding() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
+    p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
+    let pdf = doc.finish();
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
+    assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
+    // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
+    assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
+    check_xref(&pdf).unwrap();
+    assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
+    assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
 }

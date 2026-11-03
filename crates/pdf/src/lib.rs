@@ -6,7 +6,8 @@
 //!   has them: shaped with harfrust and embedded, so Thai vowels and tone marks sit on their
 //!   consonants and the text stays searchable. Anything else (CJK without a fallback font, for
 //!   example) is set in a predefined, non-embedded Adobe-GB1 CID font with the `UniGB-UTF16-H`
-//!   CMap instead of being replaced by `?`.
+//!   CMap instead of being replaced by `?`. Symbol uses its own built-in encoding
+//!   ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -18,6 +19,9 @@
 
 mod embedded;
 mod metrics;
+mod symbol;
+
+pub use symbol::{symbol_code, symbol_width};
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -55,7 +59,7 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats, plus the registered fallback font
+/// The standard 14 fonts minus ZapfDingbats, plus the registered fallback font
 /// ([`register_fallback_font`]) as a cell's own font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
@@ -72,11 +76,17 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// Greek letters and mathematical symbols, in the font's own encoding.
+    Symbol,
     /// The registered fallback font for all the text it covers, Latin and digits included (a cell
-    /// whose font is that font, "TH SarabunPSK" for example). Text it lacks uses Helvetica.
+    /// whose font is that font, "TH SarabunPSK" for example). What it lacks is set as in
+    /// Helvetica when WinAnsiEncoding has it, and otherwise in the CID font (see `Run::Cid`).
     Fallback,
     FallbackBold,
 }
+
+/// How many fonts a document can use.
+const FONT_COUNT: usize = 13;
 
 /// A font family for [`Font::styled`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -90,7 +100,7 @@ pub enum Family {
 }
 
 impl Font {
-    pub const ALL: [Font; 12] = [
+    pub const ALL: [Font; FONT_COUNT] = [
         Font::Helvetica,
         Font::HelveticaBold,
         Font::HelveticaOblique,
@@ -103,6 +113,7 @@ impl Font {
         Font::CourierBold,
         Font::CourierOblique,
         Font::CourierBoldOblique,
+        Font::Symbol,
     ];
 
     /// PostScript base font name.
@@ -120,6 +131,7 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Symbol => "Symbol",
             Font::Fallback => "Helvetica",
             Font::FallbackBold => "Helvetica-Bold",
         }
@@ -192,8 +204,20 @@ impl Font {
         }
     }
 
+    /// Whether this font can show `c` by itself (in its own encoding; for the text faces,
+    /// without the CID fallback).
+    pub fn can_encode(self, c: char) -> bool {
+        match self {
+            Font::Symbol => symbol_code(c).is_some(),
+            _ => c == '?' || win_ansi(c) != b'?',
+        }
+    }
+
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if self == Font::Symbol {
+            return symbol_code(c).and_then(symbol_width).unwrap_or(500);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique | Font::Fallback => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique | Font::FallbackBold => Some(&metrics::HELVETICA_BOLD),
@@ -234,6 +258,10 @@ impl Font {
 
 /// Width of `text` in points when set in `font` at `size` points.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
+    if font == Font::Symbol {
+        let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+        return units as f32 * size / 1000.0;
+    }
     let face = embedded::face(font.is_bold()).map(|(f, _)| f);
     // u64: a u32 sum overflows for ~8 million characters.
     let units: u64 = runs(text, face.as_deref(), font.is_fallback())
@@ -344,10 +372,16 @@ fn pdf_utf16_string(text: &str) -> String {
 
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
+    pdf_string_in(text, false)
+}
+
+/// A PDF literal string for `text` in WinAnsiEncoding, or in Symbol's encoding (where a
+/// character Symbol lacks becomes `?`).
+fn pdf_string_in(text: &str, symbol: bool) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
     for c in text.chars() {
-        let b = win_ansi(c);
+        let b = if symbol { symbol_code(c).unwrap_or(b'?') } else { win_ansi(c) };
         match b {
             b'(' | b')' | b'\\' => {
                 s.push('\\');
@@ -443,6 +477,8 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    /// The fallback faces the document was created with, which this page draws with.
+    faces: embedded::Faces,
     /// The fallback faces this page drew with (regular, bold) and the glyphs it used.
     embedded: [Option<(Arc<embedded::Face>, embedded::Usage)>; 2],
     images: Vec<ImageData>,
@@ -683,10 +719,27 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        if font == Font::Symbol {
+            if let Some(f) = self.fonts.get_mut(fi) {
+                *f = true;
+            }
+            let _ = writeln!(
+                s,
+                "/F{} {} Tf
+{} Tj",
+                fi + 1,
+                size,
+                pdf_string_in(text, true)
+            );
+            s.push_str("ET");
+            self.op(&s);
+            return;
+        }
         // Runs of WinAnsi text use `font`, runs the fallback font covers use it, and the rest use
         // the CID font. Each `Tj`/`TJ` advances the text position, so the runs follow each other
         // on the baseline.
-        let fallback = embedded::face(font.is_bold());
+        let fallback = embedded::pick(&self.faces, font.is_bold());
         // Synthetic bold strokes the regular face, so it shares the regular slot (embedded once).
         let bold_face = fallback.as_ref().is_some_and(|(_, synthetic)| font.is_bold() && !synthetic);
         for (class, run) in runs(text, fallback.as_ref().map(|(f, _)| f.as_ref()), font.is_fallback()) {
@@ -791,11 +844,18 @@ pub struct Info {
     pub creator: String,
 }
 
-/// A PDF document under construction.
-#[derive(Default)]
+/// A PDF document under construction. It draws with the fallback fonts registered when it was
+/// created ([`register_fallback_font`]); a font registered later applies to the next document.
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    faces: embedded::Faces,
+}
+
+impl Default for PdfDoc {
+    fn default() -> Self {
+        PdfDoc { pages: Vec::new(), info: Info::default(), faces: embedded::snapshot() }
+    }
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -931,6 +991,7 @@ impl PdfDoc {
             height,
             content: String::new(),
             fonts: [false; FONT_SLOTS],
+            faces: self.faces.clone(),
             embedded: [None, None],
             images: Vec::new(),
             links: Vec::new(),
