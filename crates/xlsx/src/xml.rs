@@ -213,6 +213,10 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
+fn descendants(el: &El) -> usize {
+    el.children.iter().map(|c| 1 + descendants(c)).sum()
+}
+
 /// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
 /// kept in the returned tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
@@ -244,6 +248,8 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         match stack.last_mut() {
             Some(parent) => {
                 if split.contains(&el.name.as_str()) {
+                    // Its descendants were counted as kept, but leave the tree here.
+                    *kept = kept.saturating_sub(descendants(&el));
                     cb(el)?;
                 } else {
                     *kept = kept.saturating_add(1);
@@ -565,6 +571,19 @@ mod tests {
         let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
         let err = parse(xml.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    fn streamed_rows_do_not_count_toward_the_node_limit() {
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(10));
+        let xml = format!("<r>{}</r>", row.repeat(MAX_XML_NODES / 10));
+        let mut rows = 0usize;
+        parse_streaming(xml.as_bytes(), &["row"], &mut |_| {
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, MAX_XML_NODES / 10);
     }
 
     #[test]
