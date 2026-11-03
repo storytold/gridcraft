@@ -691,9 +691,14 @@ mod tests {
         assert_eq!(p("23:59").format, Some("h:mm"));
     }
 
+    /// A value under the given conversion options.
+    fn conv_value(s: &str, conv: DataConversion) -> Value {
+        parse_input_with(s, DateSystem::D1900, &conv).value
+    }
+
     #[test]
-    fn data_conversion_options() {
-        let with = |s: &str, conv: DataConversion| parse_input_with(s, DateSystem::D1900, &conv).value;
+    fn data_conversion_defaults_and_leading_zeros() {
+        let with = conv_value;
         let all = DataConversion::default();
         // The default converts as before.
         assert!(all.all());
@@ -713,14 +718,24 @@ mod tests {
         // Only numbers: dates and times with leading zeros still convert.
         assert_eq!(with("01:30", zeros), Value::Number(1.5 / 24.0));
         assert_eq!(with("2026-01-05", zeros), p("2026-01-05").value);
+    }
 
+    #[test]
+    fn data_conversion_digits_around_e() {
+        let with = conv_value;
+        let all = DataConversion::default();
         let e = DataConversion { digits_around_e: false, ..all };
         for kept in ["1244121406E6", "1144121408E7", "1e3", "1.5E-3", "-2E+5"] {
             assert_eq!(with(kept, e), Value::text(kept), "{kept}");
         }
         assert_eq!(with("1244121406FB", e), Value::text("1244121406FB"));
         assert_eq!(with("720.0", e), Value::Number(720.0));
+    }
 
+    #[test]
+    fn data_conversion_long_numbers() {
+        let with = conv_value;
+        let all = DataConversion::default();
         // Box off with the default limit (11): nothing is cut short or shown in scientific
         // notation; the 12-digit part codes of a CAD/CAM cut list stay text, exactly as written.
         let off = DataConversion { keep_first_15_digits: false, ..all };
@@ -756,6 +771,11 @@ mod tests {
         assert_eq!(with("1234567890123456", wild(200)), Value::text("1234567890123456"));
         assert_eq!(with("7", wild(0)), Value::Number(7.0));
         assert_eq!(with("12", wild(0)), Value::text("12"));
+    }
+
+    #[test]
+    fn data_conversion_leaves_apostrophes_and_arithmetic() {
+        let with = conv_value;
         // A leading apostrophe and arithmetic coercion are unaffected.
         let none = DataConversion { remove_leading_zeros: false, keep_first_15_digits: false, long_number_digits: 1, digits_around_e: false };
         assert_eq!(with("'5", none), Value::text("5"));
