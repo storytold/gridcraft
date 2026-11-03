@@ -539,6 +539,18 @@ mod tests {
         }
     }
 
+    /// Generated names should follow the interface language even in smaller catalogs.
+    #[test]
+    fn generated_names_have_translations_in_every_catalog() {
+        for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
+            for key in ["Book", "Sheet", "Generated|Column", "Generated|Row", "Series{n}"] {
+                let fallback = Language::En.tr(key);
+                assert_ne!(language.tr(key), fallback, "{language:?}: {key}");
+            }
+            assert_eq!(language.tr("Series{n}").matches("{n}").count(), 1, "{language:?}");
+        }
+    }
+
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its

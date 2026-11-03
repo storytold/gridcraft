@@ -3,6 +3,7 @@
 /// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Series{n}" => "계열 {n}",
         "3 Arrows" => "3방향 화살표",
         "3 Symbols" => "기호 3개",
         "3 Traffic Lights" => "신호등 3개",

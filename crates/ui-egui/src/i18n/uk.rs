@@ -784,7 +784,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Combo" => "Combo",
         "Chart data range:" => "Chart data range:",
         "Legend Entries (Series)" => "Legend Entries (Series)",
-        "Series{n}" => "Series{n}",
+        "Series{n}" => "Ряд {n}",
         "Keep" => "Keep",
         "Remove" => "Remove",
         "Horizontal (Category) Axis Labels:" => "Horizontal (Category) Axis Labels:",
