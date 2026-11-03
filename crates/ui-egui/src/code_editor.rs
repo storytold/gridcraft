@@ -226,6 +226,45 @@ pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, s
     job
 }
 
+/// Underlines the byte range `mark` of `job` in `color` (an error's position), splitting the
+/// sections it crosses. An empty range marks the character before it (the end of the text, for
+/// an error about missing input). A range past the end of the text is clamped to it, and its
+/// ends are moved out to char boundaries: the mark may come from an earlier version of the text
+/// (the equation editor computes it before this frame's edit), and egui slices the text at every
+/// section boundary.
+pub fn underline(job: &mut egui::text::LayoutJob, mark: Range<usize>, color: egui::Color32) {
+    let text = job.text.as_str();
+    let floor = |i: usize| (0..=i.min(text.len())).rev().find(|&b| text.is_char_boundary(b)).unwrap_or(0);
+    let ceil = |i: usize| (i.min(text.len())..=text.len()).find(|&b| text.is_char_boundary(b)).unwrap_or(text.len());
+    let start = floor(mark.start);
+    let mut mark = start..ceil(mark.end).max(start);
+    if mark.is_empty() {
+        let start = text.get(..mark.start).and_then(|t| t.char_indices().next_back()).map_or(0, |(i, _)| i);
+        mark = start..mark.start.max(start + text.get(start..).and_then(|t| t.chars().next()).map_or(0, char::len_utf8));
+    }
+    let mut out = Vec::with_capacity(job.sections.len() + 2);
+    for sec in job.sections.drain(..) {
+        let r = sec.byte_range.start.0..sec.byte_range.end.0;
+        let (a, b) = (mark.start.clamp(r.start, r.end), mark.end.clamp(r.start, r.end));
+        for (piece, marked) in [(r.start..a, false), (a..b, true), (b..r.end, false)] {
+            if piece.is_empty() {
+                continue;
+            }
+            let mut s = sec.clone();
+            s.byte_range = egui::text::ByteIndex(piece.start)..egui::text::ByteIndex(piece.end);
+            if marked {
+                s.format.underline = egui::Stroke::new(1.5, color);
+                s.format.color = color;
+            }
+            if s.byte_range.start.0 != r.start {
+                s.leading_space = 0.0;
+            }
+            out.push(s);
+        }
+    }
+    job.sections = out;
+}
+
 fn byte_of(text: &str, char_index: usize) -> usize {
     text.char_indices().nth(char_index).map(|(b, _)| b).unwrap_or(text.len())
 }
@@ -371,6 +410,8 @@ pub struct Applied {
     /// The keyboard events held back for the next pass, in order: the editor's first key after
     /// an event the text field acts on, and every keyboard event after that key.
     pub held: Vec<egui::Event>,
+    /// The caller's key the pass stopped at (see [`apply_in_order_until`]).
+    pub stop: Option<egui::Event>,
 }
 
 /// Applies the pass's input to `text` in the order it came. A pass can carry several events
@@ -387,6 +428,22 @@ pub struct Applied {
 /// follows each one, not the key. `sel` is the selection as char indices (anchor, caret),
 /// updated.
 pub fn apply_in_order(events: &mut Vec<egui::Event>, text: &mut String, sel: &mut (usize, usize), lang: Lang) -> Applied {
+    apply_in_order_until(events, text, sel, lang, &|_| false)
+}
+
+/// [`apply_in_order`], stopping at the first event `stop` picks: a key the caller acts on itself
+/// (commit, cancel, a mode switch). It counts as one of the editor's keys for the order: the
+/// typing before it is applied first, and after an event the text field acts on it is held back
+/// for the next pass with the rest. Once the pass stops (`Applied::stop`), the keyboard events
+/// after the stop key are dropped: the caller acts on the text as it was when the key was
+/// pressed, and what followed it was typed after it.
+pub fn apply_in_order_until(
+    events: &mut Vec<egui::Event>,
+    text: &mut String,
+    sel: &mut (usize, usize),
+    lang: Lang,
+    stop: &dyn Fn(&egui::Event) -> bool,
+) -> Applied {
     let mut out = Applied::default();
     // An event the field acts on has gone by: the editor's keys after it wait for the next pass.
     let mut field_seen = false;
@@ -394,8 +451,23 @@ pub fn apply_in_order(events: &mut Vec<egui::Event>, text: &mut String, sel: &mu
     let mut holding = false;
     let mut keep = Vec::with_capacity(events.len());
     for ev in std::mem::take(events) {
+        if out.stop.is_some() {
+            if !is_keyboard(&ev) {
+                keep.push(ev);
+            }
+            continue;
+        }
         if holding && is_keyboard(&ev) {
             out.held.push(ev);
+            continue;
+        }
+        if is_keyboard(&ev) && stop(&ev) {
+            if field_seen {
+                holding = true;
+                out.held.push(ev);
+            } else {
+                out.stop = Some(ev);
+            }
             continue;
         }
         match classify(&ev) {
@@ -501,19 +573,97 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
 /// The code editor. `max_lines` rows are shown before it scrolls; the scroll area follows the
 /// caret.
 pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize) -> Response {
+    code_editor_marked(ui, id, text, lang, max_lines, None)
+}
+
+/// [`code_editor`] with the byte range `mark` underlined in the error colour (see [`underline`]).
+pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize, mark: Option<Range<usize>>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font()));
+    let max_lines = max_lines.clamp(1, 200);
+    let mut response = None;
+    egui::Frame::new().fill(t.input_bg).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
+        let options = FieldOptions { max_height: row_h * max_lines as f32, mark: mark.clone(), ..FieldOptions::new(lang) };
+        response = Some(code_field(ui, id, text, &options).response);
+    });
+    response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
+}
+
+/// How a [`code_field`] is laid out, and the keys its caller takes.
+pub struct FieldOptions<'a> {
+    pub lang: Lang,
+    /// The field's width (`f32::INFINITY`: all there is).
+    pub width: f32,
+    /// The height shown before it scrolls; the scroll area follows the caret.
+    pub max_height: f32,
+    /// Whether it takes input. A dialog or message box over the field has the keyboard.
+    pub interactive: bool,
+    /// Keys the caller acts on itself, in input order (see [`apply_in_order_until`]).
+    pub stop: &'a dyn Fn(&egui::Event) -> bool,
+    /// Esc stays with the field (for a caller that stops at it) instead of releasing the focus.
+    pub keep_escape: bool,
+    /// Puts the caret here (a char index) before the pass's input: the caller changed the text.
+    pub caret: Option<usize>,
+    /// The field's name for screen readers.
+    pub name: &'a str,
+    /// A byte range underlined in the error colour (see [`underline`]).
+    pub mark: Option<Range<usize>>,
+}
+
+impl FieldOptions<'_> {
+    pub fn new(lang: Lang) -> FieldOptions<'static> {
+        FieldOptions {
+            lang,
+            width: f32::INFINITY,
+            max_height: 100.0,
+            interactive: true,
+            stop: &|_| false,
+            keep_escape: false,
+            caret: None,
+            // The editor is a generic code field, so the name is not part of the UI's translated
+            // strings unless the caller gives one.
+            name: "Code Editor",
+            mark: None,
+        }
+    }
+}
+
+/// What a [`code_field`] laid out and did.
+pub struct FieldOutput {
+    pub response: Response,
+    /// The caller's key the pass stopped at, if any.
+    pub stop: Option<egui::Event>,
+    /// Laid-out rows of the text.
+    pub lines: usize,
+    /// The caret on screen, while the field has the focus.
+    pub caret: Option<egui::Rect>,
+    /// The caret and the other end of the selection (char indices).
+    pub selection: (usize, usize),
+}
+
+/// The code editor's text field without a frame: monospace text with syntax colours, Enter that
+/// keeps the indentation, Tab and Shift+Tab, applied in input order (see [`apply_in_order`]).
+pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldOptions<'_>) -> FieldOutput {
     let t = Tokens::get(ui.ctx());
     let font = font();
-    let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
-    let max_lines = max_lines.clamp(1, 200);
+    let lang = options.lang;
     // The input the editor handles itself (Enter with indentation, Tab, Shift+Tab), applied in
     // input order with the typing around it, before the text field sees the rest; what had to
     // wait for the field in the previous pass comes first.
-    let focused = ui.memory(|m| m.has_focus(id));
+    let focused = options.interactive && ui.memory(|m| m.has_focus(id));
     let held = take_held(ui, id, focused);
     let mut edited = None;
+    let mut stop = None;
+    let count = text.chars().count();
+    if let Some(caret) = options.caret {
+        let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let caret = caret.min(count);
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+        state.store(ui.ctx(), id);
+        edited = Some(Edit { anchor: caret, caret });
+    }
     if focused {
         let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-        let count = text.chars().count();
         let mut sel = state.cursor.char_range().map(|r| (r.secondary.index.into(), r.primary.index.into())).unwrap_or((count, count));
         let applied = ui.input_mut(|i| {
             if !held.is_empty() {
@@ -521,7 +671,7 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
                 events.append(&mut i.events);
                 i.events = events;
             }
-            apply_in_order(&mut i.events, text, &mut sel, lang)
+            apply_in_order_until(&mut i.events, text, &mut sel, lang, options.stop)
         });
         if applied.edited {
             state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(sel.0), CCursor::new(sel.1))));
@@ -531,416 +681,53 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
         if !applied.held.is_empty() {
             hold(ui, id, applied.held);
         }
+        stop = applied.stop;
     }
     let syntax = t.syntax;
     let plain = t.text;
+    let danger = t.danger;
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-        let job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
+        let mut job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
+        if let Some(m) = options.mark.clone() {
+            underline(&mut job, m, danger);
+        }
         ui.fonts_mut(|f| f.layout_job(job))
     };
-    let frame_h = row_h * max_lines as f32 + 8.0;
-    let mut response = None;
-    egui::Frame::new().fill(t.input_bg).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(frame_h - 8.0).auto_shrink([false, true]).show(ui, |ui| {
+    let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: options.keep_escape };
+    let scrolled =
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(options.max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
             let out = TextEdit::multiline(text)
                 .id(id)
                 .font(font.clone())
                 .code_editor()
                 .frame(egui::Frame::NONE)
-                .desired_width(f32::INFINITY)
+                .desired_width(options.width)
                 .desired_rows(1)
-                .lock_focus(true)
+                .interactive(options.interactive)
+                .event_filter(filter)
                 .layouter(&mut layouter)
                 .show(ui);
             if let Some(e) = edited {
                 let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
                 ui.scroll_to_rect(caret, None);
             }
-            // The field has no visible label; name it for screen readers and the strict
-            // kittest accessibility check. The editor is a generic code field, so the name is
-            // not part of the UI's translated strings.
-            let mut r = out.response.response.accessible_name("Code Editor");
-            if edited.is_some() {
-                r.mark_changed();
-            }
-            response = Some(r);
+            out
         });
-    });
-    response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
+    let out = scrolled.inner;
+    // The field has no visible label; name it for screen readers and the strict kittest
+    // accessibility check.
+    let mut response = out.response.response.accessible_name(options.name);
+    if edited.is_some() {
+        response.mark_changed();
+    }
+    let selection = out.cursor_range.map(|r| (r.primary.index.into(), r.secondary.index.into())).unwrap_or((count, count));
+    let caret = out
+        .cursor_range
+        .map(|r| out.galley.pos_from_cursor(r.primary).translate(out.galley_pos.to_vec2()))
+        .filter(|_| response.has_focus())
+        .map(|r| r.intersect(scrolled.inner_rect.expand(1.0)));
+    FieldOutput { response, stop, lines: out.galley.rows.len().max(1), caret, selection }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use egui::Modifiers;
-
-    fn spans(text: &str, lang: Lang) -> Vec<(&str, Token)> {
-        highlight(text, lang).into_iter().map(|(r, k)| (text.get(r).unwrap_or("?"), k)).collect()
-    }
-
-    #[test]
-    fn python_tokens() {
-        let s = spans("def f(x):\n    return len(x) + 1.5  # done\nxl(\"A1:B2\")", Lang::Python);
-        assert_eq!(
-            s,
-            vec![
-                ("def", Token::Keyword),
-                ("return", Token::Keyword),
-                ("len", Token::Builtin),
-                ("1.5", Token::Number),
-                ("# done", Token::Comment),
-                ("xl", Token::Builtin),
-                ("\"A1:B2\"", Token::String),
-            ]
-        );
-        assert_eq!(spans("s = '''a\n'b'\nc'''", Lang::Python), vec![("'''a\n'b'\nc'''", Token::String)]);
-        assert_eq!(spans("x = 'it\\'s'", Lang::Python), vec![("'it\\'s'", Token::String)]);
-        assert_eq!(spans("hello", Lang::Plain), vec![]);
-    }
-
-    #[test]
-    fn latex_tokens() {
-        let s = spans("\\frac{a^2}{3} % half\n\\{", Lang::Latex);
-        assert_eq!(
-            s,
-            vec![
-                ("\\frac", Token::Keyword),
-                ("^", Token::Builtin),
-                ("2", Token::Number),
-                ("3", Token::Number),
-                ("% half", Token::Comment),
-                ("\\{", Token::Keyword),
-            ]
-        );
-    }
-
-    #[test]
-    fn hostile_input_never_panics_and_spans_stay_on_char_boundaries() {
-        let inputs = [
-            "",
-            "'",
-            "\"",
-            "'''",
-            "\"\"\"x",
-            "#",
-            "\\",
-            "%",
-            "1",
-            ".",
-            "é'ü\\",
-            "θ = 'π' # ∑",
-            "\u{1F600}'\u{1F600}",
-            "'\\",
-            "\\\u{1F600}",
-            "\u{200B}\n\t'''\n",
-            "0x_é",
-            "a.b.c",
-            "____",
-        ];
-        for text in inputs {
-            for lang in [Lang::Python, Lang::Latex, Lang::Plain] {
-                let mut last = 0;
-                for (r, _) in highlight(text, lang) {
-                    assert!(r.start >= last && r.start <= r.end && r.end <= text.len(), "{text:?} {lang:?} {r:?}");
-                    assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end), "{text:?} {lang:?} {r:?}");
-                    last = r.end;
-                }
-                let job = layout_job(text, lang, &FontId::default(), egui::Color32::BLACK, &Tokens::light().syntax, f32::INFINITY);
-                assert_eq!(job.text, text, "every character is laid out once");
-            }
-        }
-    }
-
-    #[test]
-    fn enter_keeps_indentation_and_indents_after_a_colon() {
-        let mut s = "    x = 1".to_string();
-        let e = newline(&mut s, (9, 9), Lang::Python);
-        assert_eq!(s, "    x = 1\n    ");
-        assert_eq!(e.caret, 14);
-        let mut s = "if x:".to_string();
-        let e = newline(&mut s, (5, 5), Lang::Python);
-        assert_eq!(s, "if x:\n    ");
-        assert_eq!(e.caret, 10);
-        // Plain text keeps the indentation but adds none after a colon.
-        let mut s = "  a:".to_string();
-        newline(&mut s, (4, 4), Lang::Plain);
-        assert_eq!(s, "  a:\n  ");
-        // A selection is replaced; out-of-range carets are clamped.
-        let mut s = "abcdef".to_string();
-        let e = newline(&mut s, (4, 2), Lang::Plain);
-        assert_eq!((s.as_str(), e.caret), ("ab\nef", 3));
-        let mut s = "é".to_string();
-        let e = newline(&mut s, (99, 99), Lang::Plain);
-        assert_eq!((s.as_str(), e.caret), ("é\n", 2));
-    }
-
-    #[test]
-    /// Shift+Tab removes four leading spaces, while a plain Tab still inserts four spaces at the caret.
-    fn shift_tab_in_the_editor_dedents_rather_than_indents() {
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
-            |ui, text: &mut String| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    ui.ctx().set_fonts(theme::pinned_font_definitions());
-                    return;
-                }
-                let id = egui::Id::unique("code");
-                ui.memory_mut(|m| m.request_focus(id));
-                code_editor(ui, id, text, Lang::Python, 5);
-            },
-            "        x".to_string(),
-        );
-        h.run_steps(2);
-        let tab = |modifiers| egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
-        h.input_mut().events.push(tab(Modifiers::SHIFT));
-        h.run_steps(1);
-        assert_eq!(h.state(), "    x");
-        // A plain Tab still inserts spaces at the caret (the end).
-        h.input_mut().events.push(tab(Modifiers::NONE));
-        h.run_steps(1);
-        assert_eq!(h.state(), "    x    ");
-    }
-
-    /// Gives the context the deterministic font set, including the editor's monospace family.
-    fn install_mono(ctx: &egui::Context) {
-        ctx.set_fonts(theme::pinned_font_definitions());
-    }
-
-    /// Builds a 400x300 code-editor harness with pinned mono fonts, focus, two passes and an accessibility check.
-    fn editor_harness(text: &str) -> egui_kittest::Harness<'static, String> {
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
-            |ui, text: &mut String| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    install_mono(ui.ctx());
-                    return;
-                }
-                let id = egui::Id::unique("code");
-                ui.memory_mut(|m| m.request_focus(id));
-                code_editor(ui, id, text, Lang::Python, 5);
-            },
-            text.to_string(),
-        );
-        h.run_steps(2);
-        h.check_accessibility();
-        h
-    }
-
-    fn key(key: Key, modifiers: Modifiers) -> egui::Event {
-        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
-    }
-
-    #[test]
-    fn batched_input_applies_in_order_and_keeps_every_key() {
-        // Events gather between repaints (typing, key repeat). The text typed before an Enter
-        // comes first, and two Enters make two lines.
-        let mut h = editor_harness("");
-        h.input_mut().events.extend([egui::Event::Text("if x:".into()), key(Key::Enter, Modifiers::NONE), key(Key::Enter, Modifiers::NONE)]);
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    \n    ");
-        // Backspace and Tab in the same frame as the typing around them.
-        h.input_mut().events.extend([
-            egui::Event::Text("y = 1".into()),
-            key(Key::Backspace, Modifiers::NONE),
-            egui::Event::Text("2".into()),
-            key(Key::Tab, Modifiers::NONE),
-        ]);
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    \n    y = 2    ");
-        // An event the field acts on (an arrow) keeps the order too: the text typed before it
-        // is applied first, the field moves the caret, and the Enter after it waits for the
-        // next pass, where the editor applies it at the moved caret, with the indentation.
-        h.input_mut().events.extend([egui::Event::Text("a".into()), key(Key::ArrowLeft, Modifiers::NONE), key(Key::Enter, Modifiers::NONE)]);
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    \n    y = 2    a", "the Enter waits for the arrow");
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    \n    y = 2    \n    a");
-    }
-
-    #[test]
-    fn a_selection_ending_at_a_line_start_leaves_that_line_alone() {
-        // Selecting "a\n" in "a\nb" ends at the start of the second line, which is not selected.
-        let mut s = "a\nb".to_string();
-        indent(&mut s, (0, 2), false);
-        assert_eq!(s, "    a\nb");
-        let mut s = "    a\n    b".to_string();
-        indent(&mut s, (0, 6), true);
-        assert_eq!(s, "a\n    b");
-        // One character into the second line, both lines are touched.
-        let mut s = "a\nb".to_string();
-        indent(&mut s, (0, 3), false);
-        assert_eq!(s, "    a\n    b");
-    }
-
-    #[test]
-    fn typed_text_and_deletions_replace_the_selection() {
-        let mut s = "abcd".to_string();
-        assert_eq!(insert(&mut s, (3, 1), "X"), Edit { anchor: 2, caret: 2 });
-        assert_eq!(s, "aXd");
-        assert_eq!(delete(&mut s, (2, 2), true), Edit { anchor: 1, caret: 1 });
-        assert_eq!(s, "ad");
-        assert_eq!(delete(&mut s, (1, 1), false), Edit { anchor: 1, caret: 1 });
-        assert_eq!(s, "a");
-        assert_eq!(delete(&mut s, (0, 0), true), Edit { anchor: 0, caret: 0 });
-        assert_eq!(delete(&mut s, (9, 9), false), Edit { anchor: 1, caret: 1 });
-        assert_eq!(s, "a");
-        let mut s = "éa".to_string();
-        delete(&mut s, (2, 0), true);
-        assert_eq!(s, "");
-        // The queue keeps what the editor does not handle, and everything after it.
-        let mut events = vec![
-            egui::Event::Text("x".into()),
-            egui::Event::Text("\n".into()),
-            key(Key::ArrowLeft, Modifiers::NONE),
-            key(Key::Enter, Modifiers::NONE),
-        ];
-        let (mut s, mut sel) = (String::new(), (0, 0));
-        let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
-        assert!(out.edited);
-        assert_eq!((s.as_str(), sel), ("x", (1, 1)));
-        assert_eq!(events.len(), 2, "the lone newline and the arrow stay for the field: {events:?}");
-        assert_eq!(out.held, vec![key(Key::Enter, Modifiers::NONE)], "the Enter after the arrow waits for the next pass");
-        let mut events = vec![egui::Event::Key { key: Key::Enter, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }];
-        let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
-        assert!(!out.edited && out.held.is_empty(), "a key release is nothing to apply");
-        assert_eq!(events.len(), 1);
-    }
-
-    #[test]
-    fn select_all_then_tab_in_one_pass_indents_every_line() {
-        // Cmd+A is the field's, Tab the editor's: the Tab waits for the pass after the
-        // selection and indents the selected lines, rather than reaching the field, which would
-        // replace the selection with a tab character.
-        let mut h = editor_harness("a\nb");
-        h.input_mut().events.extend([key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE)]);
-        h.run_steps(1);
-        assert_eq!(h.state(), "a\nb", "the Tab waits for the selection");
-        h.run_steps(1);
-        assert_eq!(h.state(), "    a\n    b");
-        h.input_mut().events.extend([key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::SHIFT)]);
-        h.run_steps(2);
-        assert_eq!(h.state(), "a\nb");
-    }
-
-    #[test]
-    fn a_keystroke_sequence_as_the_platform_sends_it_keeps_the_editors_enter() {
-        // egui-winit sends a Key event before each Text event. Those presses are nobody's to
-        // read, so they do not hand the Enter to the field, which knows no indentation.
-        let mut h = editor_harness("");
-        let typed = |k, c: &str, m| [key(k, m), egui::Event::Text(c.into())];
-        let mut events = Vec::new();
-        events.extend(typed(Key::I, "i", Modifiers::NONE));
-        events.extend(typed(Key::F, "f", Modifiers::NONE));
-        events.extend(typed(Key::Space, " ", Modifiers::NONE));
-        events.extend(typed(Key::X, "x", Modifiers::NONE));
-        events.extend(typed(Key::Colon, ":", Modifiers::SHIFT));
-        events.push(key(Key::Enter, Modifiers::NONE));
-        h.input_mut().events.extend(events);
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    ");
-        // A character typed with Option (macOS) comes as a key under that modifier and its text;
-        // the field reads neither the key nor Option, so the Enter after it is still the editor's.
-        h.input_mut().events.extend([key(Key::E, Modifiers::ALT), egui::Event::Text("\u{e9}".into()), key(Key::Enter, Modifiers::NONE)]);
-        h.run_steps(1);
-        assert_eq!(h.state(), "if x:\n    \u{e9}\n    ");
-    }
-
-    #[test]
-    fn tab_and_enter_under_modifiers_never_reach_the_field() {
-        // The field would make a tab character of Ctrl+Tab (in place of the selection) and a
-        // newline of Shift+Enter; Cmd+Enter is nobody's here and stays for a shortcut.
-        let mut events = vec![key(Key::Tab, Modifiers::CTRL), key(Key::Enter, Modifiers::SHIFT), key(Key::Enter, Modifiers::COMMAND)];
-        let (mut s, mut sel) = ("if x:".to_string(), (5, 5));
-        let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
-        assert_eq!(s, "if x:\n    ");
-        assert_eq!(events, vec![key(Key::Enter, Modifiers::COMMAND)]);
-        assert!(out.held.is_empty());
-    }
-
-    #[test]
-    fn events_after_a_held_key_wait_with_it_and_pointer_events_do_not() {
-        let mut events = vec![
-            key(Key::X, Modifiers::NONE),
-            egui::Event::Text("x".into()),
-            key(Key::A, Modifiers::COMMAND),
-            key(Key::Tab, Modifiers::NONE),
-            egui::Event::PointerMoved(egui::Pos2::ZERO),
-            key(Key::ArrowLeft, Modifiers::NONE),
-            egui::Event::Text("y".into()),
-        ];
-        let (mut s, mut sel) = (String::new(), (0, 0));
-        let out = apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
-        assert_eq!((s.as_str(), sel), ("x", (1, 1)), "the typing before the select-all is applied");
-        assert_eq!(events, vec![key(Key::X, Modifiers::NONE), key(Key::A, Modifiers::COMMAND), egui::Event::PointerMoved(egui::Pos2::ZERO)]);
-        assert_eq!(out.held, vec![key(Key::Tab, Modifiers::NONE), key(Key::ArrowLeft, Modifiers::NONE), egui::Event::Text("y".into())]);
-    }
-
-    #[test]
-    /// Events held by the previous pass are applied once in the next pass; older held events are dropped and cleared.
-    fn held_back_events_land_in_the_next_pass_only() {
-        let mut h = editor_harness("");
-        let id = egui::Id::unique("code");
-        let held = |pass, c: &str| Held { pass, events: vec![egui::Event::Text(c.into())] };
-        // What the pass just completed held back comes in with the next one.
-        let last = h.ctx.cumulative_pass_nr() - 1;
-        h.ctx.data_mut(|d| d.insert_temp(held_id(id), held(last, "a")));
-        h.run_steps(1);
-        assert_eq!(h.state(), "a");
-        // Anything older is dropped rather than typed out of context, and cleared.
-        h.ctx.data_mut(|d| d.insert_temp(held_id(id), held(last, "b")));
-        h.run_steps(1);
-        assert_eq!(h.state(), "a");
-        assert!(h.ctx.data(|d| d.get_temp::<Held>(held_id(id))).is_none());
-    }
-
-    #[test]
-    /// Held keyboard input does not land in the next focused text field once the code editor has lost focus.
-    fn held_back_events_go_nowhere_once_the_editor_lost_the_focus() {
-        // Typed into the editor, they must not land in whatever has the focus next.
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
-            |ui, s: &mut (String, String, bool)| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    install_mono(ui.ctx());
-                    return;
-                }
-                let (code, other) = (egui::Id::unique("code"), egui::Id::unique("other"));
-                ui.memory_mut(|m| m.request_focus(if s.2 { code } else { other }));
-                code_editor(ui, code, &mut s.0, Lang::Python, 5);
-                ui.add(TextEdit::singleline(&mut s.1).id(other)).accessible_name("Other field");
-            },
-            (String::new(), String::new(), true),
-        );
-        h.run_steps(2);
-        h.input_mut().events.extend([key(Key::ArrowLeft, Modifiers::NONE), egui::Event::Text("x".into())]);
-        h.run_steps(1);
-        assert_eq!(h.state().0, "", "the x waits for the arrow");
-        h.state_mut().2 = false;
-        h.run_steps(2);
-        assert_eq!((h.state().0.as_str(), h.state().1.as_str()), ("", ""));
-    }
-
-    #[test]
-    /// A discard-triggered repeat pass receives held keys with the selection made by the first pass.
-    fn a_repeat_pass_of_the_frame_counts_as_the_next_pass() {
-        // When a widget asks egui to discard and repeat the pass, the repeat pass gets the
-        // held-back keys, with the selection the field made in the first pass.
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
-            |ui, s: &mut (String, bool)| {
-                if ui.ctx().cumulative_pass_nr() == 0 {
-                    install_mono(ui.ctx());
-                    return;
-                }
-                let id = egui::Id::unique("code");
-                ui.memory_mut(|m| m.request_focus(id));
-                code_editor(ui, id, &mut s.0, Lang::Python, 5);
-                if std::mem::take(&mut s.1) {
-                    ui.ctx().request_discard("the test repeats this pass");
-                }
-            },
-            ("a\nb".to_string(), false),
-        );
-        h.run_steps(2);
-        h.state_mut().1 = true;
-        h.input_mut().events.extend([key(Key::A, Modifiers::COMMAND), key(Key::Tab, Modifiers::NONE)]);
-        h.run_steps(1);
-        assert_eq!(h.state().0, "    a\n    b");
-    }
-}
+mod tests;
