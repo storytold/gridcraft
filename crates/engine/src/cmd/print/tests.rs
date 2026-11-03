@@ -1285,3 +1285,55 @@ fn a_missing_picture_part_is_reported_and_the_rest_prints_and_saves() {
         }
     }
 }
+
+#[test]
+fn only_page_kinds_the_printed_pages_use_are_decoded() {
+    let mut s = s();
+    // One page, Different First Page and Different Odd & Even Pages on: that page is the first
+    // page, so neither the odd-page nor the even-page picture prints.
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute(
+        "pageLayout.headerFooter",
+        json!({"header": "&L&G", "firstHeader": "&C&G", "evenHeader": "&R&G", "differentFirst": true, "differentOddEven": true}),
+    )
+    .unwrap();
+    keep_hf_pictures(
+        &mut s,
+        &[
+            ("LH", "width:20pt;height:20pt", png(4, 4)),
+            ("CHFIRST", "width:20pt;height:20pt", png(5, 5)),
+            ("RHEVEN", "width:20pt;height:20pt", png(6, 6)),
+        ],
+    );
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(pages, 1);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "{text}");
+    assert!(text.contains("/Width 5 /Height 5"), "only the first-page picture");
+}
+
+#[test]
+fn the_same_picture_on_several_sheets_is_one_image_object() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G"})).unwrap();
+    let logo = png(8, 4);
+    keep_hf_pictures(&mut s, &[("LH", "width:40pt;height:20pt", logo.clone())]);
+    // A second sheet with the same logo, read from its own part (bytes equal, not shared).
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "two"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let mut kept = wb.sheet(0).unwrap().preserved.as_deref().unwrap().clone();
+    for p in &mut kept.parts {
+        p.data = std::sync::Arc::from(p.data.to_vec());
+    }
+    let two = wb.sheet_index("Two").unwrap();
+    wb.sheet_mut(two).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(pages, 2);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once for both sheets");
+    assert_eq!(text.matches(" cm /Sh1 Do").count(), 2, "drawn on both sheets' pages");
+}
